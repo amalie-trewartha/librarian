@@ -206,12 +206,19 @@ if traj exists 2>/dev/null; then
     before_last=$(_last_live_id) || before_last=""
 fi
 
+# shellm writes its run header's step_id here, so the fallback idle can carry
+# run_id and the timeline can pair it with the run that went quiet. Exact even
+# when concurrent runs interleave in the root trajectory; empty file means the
+# run died before appending its header.
+run_id_file=$(mktemp)
+
 # One shellm agentic run (writes to the root trajectory). Model via --model so
 # it cannot be shadowed by env/.env layers (see design/model-resolution.md).
 printf '  routing (%s)...\n' "${trigger_type:-none}" >&2
 run_rc=0
 run_response=$(SHELLM_NO_BANNER=1 \
     SHELLM_TRIGGER_STEP_ID="$trigger_step_id" \
+    SHELLM_RUN_ID_OUT="$run_id_file" \
     shellm --model "$THINK_MODEL" --traj "$TRAJ_ID" \
     "${shellm_flags[@]}" \
     "$route_prompt") || run_rc=$?
@@ -228,13 +235,19 @@ fi
 if [[ "$after_last" == "$before_last" ]]; then
     printf '  run appended nothing (rc=%s) — emitting fallback idle to keep the loop alive\n' "$run_rc" >&2
     [[ "$run_rc" -ne 0 ]] && sleep 1   # brief backoff so a failing run does not tight-loop
+    # Stamp the idle with the run that produced nothing (empty when the run
+    # died before appending its header — then the idle stays unpinned).
+    idle_run_id=$(cat "$run_id_file" 2>/dev/null) || idle_run_id=""
     jq -nc \
         --arg source "$THINKER_NAME" \
         --arg trigger "$trigger_step_id" \
+        --arg run_id "$idle_run_id" \
         '{type:"idle", content:"idle", source:$source}
-         + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
+         + (if $trigger == "" then {} else {trigger_step: $trigger} end)
+         + (if $run_id == "" then {} else {run_id: $run_id} end)' \
         | traj append >/dev/null || true
 fi
+rm -f "$run_id_file"
 
 if [[ -n "$run_response" ]]; then
     printf '  [monolith] %s\n' "$(printf '%s' "$run_response" | head -1)"

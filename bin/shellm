@@ -1948,6 +1948,10 @@ run_loop() {
     # interleave in one shared trajectory)
     local _run_step_id
     _run_step_id=$(printf '%s' "$_shellm_run_json" | traj append --traj_dir "$_run_traj_dir" "$_run_traj_id")
+    # Launcher opt-in: report this run's header step_id to the given file so
+    # the caller can pair its own steps with this exact run — the trajectory
+    # alone can't tell whose header is whose when concurrent runs interleave.
+    [[ -n "${SHELLM_RUN_ID_OUT:-}" ]] && printf '%s' "$_run_step_id" > "$SHELLM_RUN_ID_OUT" || true
 
     if [[ -z "$_use_traj" ]]; then
         # New trajectory — kick off async run-summary generation
@@ -2161,8 +2165,10 @@ exit \$__shellm_rc
             _SHELLM_PARENT_RUN="$run_name"
             _SHELLM_PARENT_TRAJ_ID="$_run_traj_id"
             # blank so nested shellm runs don't inherit this run's trigger/launcher
+            # or clobber the launcher's run-id report file
             SHELLM_TRIGGER_STEP_ID=""
             SHELLM_LAUNCHED_BY=""
+            SHELLM_RUN_ID_OUT=""
             # traj append stamps this as run_id on steps the executed code
             # writes (observations etc.), linking them to this run exactly
             SHELLM_RUN_STEP_ID="$_run_step_id"
