@@ -321,7 +321,8 @@ fn help_text() -> Vec<String> {
         "  (traj)      tail -n 5          -> traj tail -n 5".into(),
         "".into(),
         "Keys:".into(),
-        "  Ctrl+C/D       Exit".into(),
+        "  Ctrl+C         Exit (press twice)".into(),
+        "  Ctrl+D         Delete char at cursor (exit if input empty)".into(),
         "  Shift+Enter    Newline in input".into(),
         "  Up/Down        Command history (from top/bottom line)".into(),
         "  Enter (empty)  Return to live view after a command (thinkers/traj)".into(),
@@ -411,7 +412,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Slash commands (available in any mode):");
                 println!("  /chat  /thinkers  /traj  /identities  /help\n");
                 println!("Keys:");
-                println!("  Ctrl+C/D       Exit");
+                println!("  Ctrl+C         Exit (press twice)");
+                println!("  Ctrl+D         Delete char at cursor (exit if input empty)");
                 println!("  Shift+Enter    Newline in input");
                 println!("  PageUp/Down    Scroll output");
                 println!("  Ctrl+G         Toggle mouse (scroll vs. text select)");
@@ -855,6 +857,17 @@ async fn run(
                         let len = app.input.chars().count();
                         if app.cursor < len {
                             app.cursor += 1;
+                        }
+                    }
+                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Readline delete-char; EOF (exit) on empty input
+                        if app.input.is_empty() {
+                            break;
+                        }
+                        let len = app.input.chars().count();
+                        if app.cursor < len {
+                            let pos = byte_pos(&app.input, app.cursor);
+                            app.input.remove(pos);
                         }
                     }
                     KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
