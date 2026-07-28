@@ -274,15 +274,19 @@ function ModelRow({
 /** Quick model setup: the commonly-overridden model knobs with curated
  * choices, so a fresh identity gets a sane config without hand-typing env
  * vars. Writes the same identity .env as the table below. */
+/* The label must LEAD with the id: Firefox's datalist popup shows only the
+ * label (never the value), so a details-only label renders as anonymous
+ * price rows there. Chrome shows value + label side by side and repeats the
+ * id — cosmetic, and the price it pays for working in both. */
 function modelOptionLabel(model: OpenRouterModels["models"][number]): string {
-  const parts: string[] = [];
+  const parts: string[] = [model.id];
   if (model.prompt_usd_per_m != null && model.completion_usd_per_m != null)
     parts.push(
       `$${model.prompt_usd_per_m}/M in · $${model.completion_usd_per_m}/M out`
     );
   if (model.context_length)
     parts.push(`${Math.round(model.context_length / 1000)}k ctx`);
-  return parts.join(" · ");
+  return parts.join(" — ");
 }
 
 export function ModelConfigSection({
