@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# monolith/step — The whole mind in one thinker.
+#
+# Runs solo. Every wakeup it either:
+#   (a) FAST-REPLY path — the trigger is a chat message addressed to us, so it
+#       replies IMMEDIATELY with a single llm call + `chat reply`, no thinking
+#       step and no tools/agentic loop. Lowest latency the single process can
+#       give. Follow-up work (if any) happens on a later wakeup via `act`.
+#   (b) ROUTER path — one shellm agentic run whose prompt is a function menu
+#       (think / act / learn / recall / goals / values / idle). The model picks
+#       exactly one function and carries it out in the same run.
+#
+# Because it subscribes with trigger_self, the loop is perpetual: the router
+# path is guaranteed to append at least one step per wakeup (liveness net at
+# the end), so the dispatcher always re-fires. See design/monolith_thinker.md.
+
+THINKER_NAME="monolith"
+SCRIPT_DIR="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
+
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/../_lib/common.sh"
+
+_require_env
+
+THINK_MODEL="${THINK_MODEL:-${SHELLM_MODEL:-claude-opus-4-7}}"
+THINK_CONTEXT_TAIL="${THINK_CONTEXT_TAIL:-20}"
+# The reply path may use a faster model to shave latency; defaults to the
+# main model so behavior is unsurprising until explicitly tuned.
+REPLY_MODEL="${MONOLITH_REPLY_MODEL:-$THINK_MODEL}"
+
+# Idle backoff bounds (seconds). State persists in run_dir across wakeups.
+IDLE_BACKOFF_START="${MONOLITH_IDLE_BACKOFF:-5}"
+IDLE_BACKOFF_MAX="${MONOLITH_IDLE_BACKOFF_MAX:-60}"
+
+run_dir="$IDENTITY_DIR/workdir"
+mkdir -p "$run_dir"
+backoff_file="$run_dir/monolith_idle_backoff"
+
+# Read the triggering step from stdin (context still comes from the traj).
+step_json=$(cat)
+[[ -z "$step_json" ]] && exit 0
+trigger_type=$(printf '%s' "$step_json" | jq -r '.type // empty' 2>/dev/null) || true
+trigger_content=$(printf '%s' "$step_json" | jq -r '.content // empty' 2>/dev/null) || true
+trigger_step_id=$(printf '%s' "$step_json" | jq -r '.step_id // empty' 2>/dev/null) || true
+
+# ---------------------------------------------------------------------------
+# Idle backoff pacing
+# ---------------------------------------------------------------------------
+# When we are re-fired by our OWN idle step, back off (doubling, capped) so the
+# solo loop does not burn tokens at rest. Any non-idle trigger resets the
+# backoff, so a new message or external action wakes us at full speed.
+if [[ "$trigger_type" == "idle" ]]; then
+    backoff=$(cat "$backoff_file" 2>/dev/null) || backoff="$IDLE_BACKOFF_START"
+    [[ "$backoff" =~ ^[0-9]+$ ]] || backoff="$IDLE_BACKOFF_START"
+    printf '  idle — backing off %ss\n' "$backoff" >&2
+    sleep "$backoff"
+    next=$(( backoff * 2 ))
+    (( next > IDLE_BACKOFF_MAX )) && next="$IDLE_BACKOFF_MAX"
+    printf '%s' "$next" > "$backoff_file"
+else
+    printf '%s' "$IDLE_BACKOFF_START" > "$backoff_file"
+fi
+
+# ---------------------------------------------------------------------------
+# (a) FAST-REPLY path — a chat message addressed to us
+# ---------------------------------------------------------------------------
+# `chat` stamps source:"chat" on BOTH incoming and outgoing messages, so an
+# outgoing reply is itself a message step that would re-trigger us. Guard on
+# direction: only reply when the message is addressed TO us. Our own outgoing
+# messages (from == us) are context, not a prompt to act on.
+if [[ "$trigger_type" == "message" ]]; then
+    msg_to=$(printf '%s' "$step_json" | jq -r '.to // empty' 2>/dev/null) || true
+    if [[ "$msg_to" != "$IDENTITY_NAME" ]]; then
+        exit 0  # our own outgoing message (or not for us) — context only
+    fi
+    msg_from=$(printf '%s' "$step_json" | jq -r '.from // "human"' 2>/dev/null) || true
+    [[ -z "$trigger_content" ]] && exit 0
+
+    # Compose the reply directly from identity + recent stream. ONE llm call,
+    # no tools, no thinking step — this is the whole point of the reply route.
+    system_prompt=$(_build_system_prompt)
+    recent_context=""
+    if traj exists 2>/dev/null; then
+        recent_context=$(_recent_stream "$THINK_CONTEXT_TAIL") || recent_context=""
+    fi
+
+    reply_prompt="<context>
+$system_prompt
+
+Recent stream (last $THINK_CONTEXT_TAIL steps):
+$recent_context
+</context>
+
+A message just arrived for you in chat.
+MESSAGE from $msg_from: $trigger_content
+
+Reply as $IDENTITY_NAME — first person, natural, conversational. Answer with
+what you already know from the context above; do NOT stall for lookups. If it
+needs real work, reply briefly acknowledging it (you will follow up), and the
+work will happen separately."
+
+    printf '  replying to %s...\n' "$msg_from" >&2
+    reply=$(printf '%s' "$reply_prompt" | \
+        llm -m "$REPLY_MODEL" \
+        -s "You are $IDENTITY_NAME. Output ONLY the reply message text — no preamble, no quotes, no explanation.") || true
+
+    if [[ -n "$reply" ]] && printf '%s' "$reply" | chat reply "$msg_from"; then
+        # `chat reply` already appended the outgoing message step. Record a
+        # brief observation too: it tells the mind it replied (so it does not
+        # reply again) and re-fires the loop so the router can decide what to
+        # do next. This is bookkeeping, not part of composing the reply.
+        jq -nc \
+            --arg content "Replied to $msg_from: $(printf '%.200s' "$reply")" \
+            --arg source "$THINKER_NAME" \
+            --arg trigger "$trigger_step_id" \
+            '{type:"observation", content:$content, source:$source}
+             + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
+            | traj append >/dev/null || true
+        printf '  [reply -> %s] %s\n' "$msg_from" "$(printf '%s' "$reply" | head -1)"
+        exit 0
+    fi
+
+    # Reply failed (empty model output or chat error). Surface it as an
+    # observation so the mind can decide what to do, and keep the loop alive.
+    printf '  reply failed — appending failure observation\n' >&2
+    jq -nc \
+        --arg content "reply failed: could not send a reply to $msg_from (empty model output or chat error — see monolith log). Their message was: $(printf '%.200s' "$trigger_content")" \
+        --arg source "$THINKER_NAME" \
+        --arg trigger "$trigger_step_id" \
+        '{type:"observation", content:$content, source:$source}
+         + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
+        | traj append >/dev/null || true
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# (b) ROUTER path — one agentic run over the function menu
+# ---------------------------------------------------------------------------
+system_prompt=$(_build_system_prompt)
+
+recent_context=""
+if traj exists 2>/dev/null; then
+    recent_context=$(_recent_stream "$THINK_CONTEXT_TAIL") || recent_context=""
+fi
+
+# Cheap deterministic routing hints (nudges, not rules — the model decides).
+hints=""
+last_three=$(printf '%s\n' "$recent_context" | tail -n 3)
+if printf '%s' "$recent_context" | tail -n 1 | jq -e 'select(.type == "action")' >/dev/null 2>&1; then
+    hints="${hints}- The most recent step is an ACTION that has no observation yet — it may need carrying out (act).
+"
+fi
+if [[ $(printf '%s\n' "$last_three" | jq -r '.type' 2>/dev/null | sort -u | tr '\n' ' ') == "thought " ]]; then
+    hints="${hints}- The last few steps are all thoughts — the stream may be circling; consider acting, recalling, or advancing decisively.
+"
+fi
+[[ -z "$hints" ]] && hints="- (no special signals — pick what best serves the mind right now)"
+
+prompt_file="$SCRIPT_DIR/prompt.md"
+[[ -f "$prompt_file" ]] || { printf 'monolith/step: error: prompt.md not found at %s\n' "$prompt_file" >&2; exit 1; }
+goals=$(get_goals "$MEM_DIR")
+think_prompt=$(load_prompt "$prompt_file" "$IDENTITY_NAME" "$goals")
+
+# Build shellm flags (includes traj/mem/chat/etc. in --bin).
+shellm_flags=()
+while IFS= read -r _flag; do
+    [[ -n "$_flag" ]] && shellm_flags+=("$_flag")
+done < <(_build_shellm_flags "$IDENTITY_DIR" "$run_dir")
+
+route_prompt="<context>
+$system_prompt
+
+Recent stream (last $THINK_CONTEXT_TAIL steps):
+$recent_context
+
+Routing signals:
+$hints
+
+$think_prompt
+</context>
+
+Choose ONE function for this wakeup and carry it out now."
+
+# Liveness accounting. We must know whether the run appended a step that will
+# RE-TRIGGER us — i.e. one of our subscribed types. shellm always appends its
+# own machinery steps (prompt, shellm-run, ...) even when the model produces
+# nothing useful, and those are NOT subscribed, so a naive "did the last
+# step_id change?" check is fooled by them and the self-trigger loop dies
+# silently. Track the last SUBSCRIBED-type step id instead.
+# -R reads each line as a raw STRING so fromjson can parse it and corrupt
+# lines are skipped (matches _recent_stream). Without -R, jq parses the line
+# as JSON itself and fromjson then fails on every object, silently yielding
+# empty — which would make the net fire on every wakeup.
+_last_live_id() {
+    traj cat "${ROOT_TRAJ_ID:-$TRAJ_ID}" --raw 2>/dev/null \
+        | jq -Rr 'fromjson? // empty
+            | select(.type == "thought" or .type == "action" or .type == "observation"
+                     or .type == "merge" or .type == "message" or .type == "idle")
+            | .step_id // empty' 2>/dev/null \
+        | tail -n 1
+}
+before_last=""
+if traj exists 2>/dev/null; then
+    before_last=$(_last_live_id) || before_last=""
+fi
+
+# One shellm agentic run (writes to the root trajectory). Model via --model so
+# it cannot be shadowed by env/.env layers (see design/model-resolution.md).
+printf '  routing (%s)...\n' "${trigger_type:-none}" >&2
+run_rc=0
+run_response=$(SHELLM_NO_BANNER=1 \
+    SHELLM_TRIGGER_STEP_ID="$trigger_step_id" \
+    shellm --model "$THINK_MODEL" --traj "$TRAJ_ID" \
+    "${shellm_flags[@]}" \
+    "$route_prompt") || run_rc=$?
+
+# Liveness net: the loop is perpetual only if every wakeup appends a step of a
+# subscribed type (one that re-fires us). If the agentic run produced only
+# machinery steps or nothing (crash, refusal, empty run), emit a fallback idle
+# step so trigger_self re-fires and the mind does not go dark.
+after_last=""
+if traj exists 2>/dev/null; then
+    after_last=$(_last_live_id) || after_last=""
+fi
+
+if [[ "$after_last" == "$before_last" ]]; then
+    printf '  run appended nothing (rc=%s) — emitting fallback idle to keep the loop alive\n' "$run_rc" >&2
+    [[ "$run_rc" -ne 0 ]] && sleep 1   # brief backoff so a failing run does not tight-loop
+    jq -nc \
+        --arg source "$THINKER_NAME" \
+        --arg trigger "$trigger_step_id" \
+        '{type:"idle", content:"idle", source:$source}
+         + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
+        | traj append >/dev/null || true
+fi
+
+if [[ -n "$run_response" ]]; then
+    printf '  [monolith] %s\n' "$(printf '%s' "$run_response" | head -1)"
+fi
