@@ -19,6 +19,8 @@ import type {
   Recap,
   SelfUpdateResult,
   SubTrajectory,
+  ThinkerSyncResult,
+  ThinkerSyncStatus,
   ThinkersStatus,
   TreeNode,
 } from "~/lib/types";
@@ -164,6 +166,22 @@ export function refreshRecap(
 
 export function fetchThinkers(identityId: string): Promise<ThinkersStatus> {
   return getJson(`/api/identities/${encodeURIComponent(identityId)}/thinkers`);
+}
+
+export function fetchThinkerSync(identityId: string): Promise<ThinkerSyncStatus> {
+  return getJson(
+    `/api/identities/${encodeURIComponent(identityId)}/thinker-sync`
+  );
+}
+
+export function pullThinkerSync(
+  identityId: string,
+  names: string[] = []
+): Promise<ThinkerSyncResult> {
+  return postJson(
+    `/api/identities/${encodeURIComponent(identityId)}/thinker-sync`,
+    { names }
+  );
 }
 
 export function startThinkers(

@@ -30,6 +30,7 @@ from shellm_web import (
     logs,
     openrouter,
     safety,
+    thinker_sync,
     thinkers,
     trajectory,
     tree,
@@ -97,6 +98,10 @@ class ThinkerActionBody(BaseModel):
     names: list[str] = []
     no_self_trigger: bool = False
     force: bool = False  # stop only: kill in-flight steps instead of draining
+
+
+class ThinkerSyncBody(BaseModel):
+    names: list[str] = []
 
 
 class ChatSendBody(BaseModel):
@@ -477,6 +482,23 @@ def create_app(
             entry["log_mtime"] = _iso(entry["log_mtime"])
         result["identity"] = {"id": identity.id, "name": identity.name}
         return result
+
+    @app.get("/api/identities/{identity_id}/thinker-sync")
+    def thinker_sync_status(identity_id: str) -> dict:
+        identity = _identity_or_404(root, identity_id)
+        return thinker_sync.status(identity.path)
+
+    @app.post("/api/identities/{identity_id}/thinker-sync")
+    def thinker_sync_pull(identity_id: str, body: ThinkerSyncBody) -> dict:
+        _require_controls()
+        identity = _identity_or_404(root, identity_id)
+        for name in body.names:
+            if not thinker_sync.SYNC_NAME_RE.match(name):
+                raise HTTPException(status_code=422, detail=f"Invalid thinker name: {name}")
+        try:
+            return thinker_sync.sync(identity.path, body.names)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/identities/{identity_id}/thinkers/start")
     def thinkers_start(identity_id: str, body: ThinkerActionBody) -> dict:

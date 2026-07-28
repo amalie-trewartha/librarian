@@ -132,6 +132,30 @@ export interface EnvEntry {
   overridden?: boolean; // inherited entries only
 }
 
+export type ThinkerSyncState =
+  | "in_sync"
+  | "outdated"
+  | "not_installed"
+  | "local_only";
+
+export interface ThinkerSyncEntry {
+  name: string;
+  status: ThinkerSyncState;
+  changed_files: string[];
+  bundled_version: string | null; // "shorthash · date" of the bundled copy
+}
+
+export interface ThinkerSyncStatus {
+  bundled_root: string | null;
+  thinkers: ThinkerSyncEntry[];
+  note: string;
+}
+
+export interface ThinkerSyncResult {
+  ok: boolean;
+  results: { name: string; action: string; files: string[] }[];
+}
+
 export interface OpenRouterModel {
   id: string;
   name: string | null;
