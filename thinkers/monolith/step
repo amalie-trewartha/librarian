@@ -72,10 +72,28 @@ fi
 # messages (from == us) are context, not a prompt to act on.
 if [[ "$trigger_type" == "message" ]]; then
     msg_to=$(printf '%s' "$step_json" | jq -r '.to // empty' 2>/dev/null) || true
+    msg_from=$(printf '%s' "$step_json" | jq -r '.from // "human"' 2>/dev/null) || true
     if [[ "$msg_to" != "$IDENTITY_NAME" ]]; then
         exit 0  # our own outgoing message (or not for us) — context only
     fi
-    msg_from=$(printf '%s' "$step_json" | jq -r '.from // "human"' 2>/dev/null) || true
+    # A message FROM us TO us is a self-message (`chat send` with no
+    # recipient targets yourself). Replying would re-trigger this path on
+    # our own reply — the perpetual self-chat loop of 2026-07-28. Never
+    # reply to ourselves. Surface the drop as an observation: it re-fires
+    # the loop (a bare exit would leave no pending trigger — the message
+    # step already satisfied the liveness net) and tells the mind how to
+    # course-correct.
+    if [[ "$msg_from" == "$IDENTITY_NAME" ]]; then
+        printf '  self-message — dropping with observation\n' >&2
+        jq -nc \
+            --arg content "self-message dropped: you chat-sent a message to yourself and it will not be replied to (replying would loop). If you meant to keep a note for later, write it as a thought step instead. Your message was: $(printf '%.200s' "$trigger_content")" \
+            --arg source "$THINKER_NAME" \
+            --arg trigger "$trigger_step_id" \
+            '{type:"observation", content:$content, source:$source}
+             + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
+            | traj append >/dev/null || true
+        exit 0
+    fi
     [[ -z "$trigger_content" ]] && exit 0
 
     # Compose the reply directly from identity + recent stream. ONE llm call,
