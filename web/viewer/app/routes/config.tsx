@@ -5,6 +5,7 @@ import { useParams } from "react-router";
 import { toast } from "sonner";
 
 import { IdentityTabs } from "~/components/identity-tabs";
+import { ModelConfigSection } from "~/components/model-config";
 import { useControlsEnabled } from "~/components/thinker-controls";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -271,6 +272,8 @@ export default function ConfigPage() {
         active="config"
       />
       <div className="mx-auto w-full max-w-4xl">
+
+      <ModelConfigSection identityId={identityId} env={env} />
 
       <section className="mb-8">
         <div className="mb-2 flex items-baseline gap-3">
