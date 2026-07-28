@@ -24,7 +24,7 @@ USAGE
 
 die() { printf 'vitals: error: %s\n' "$*" >&2; exit 1; }
 
-HEADER='label,steps,thoughts,actions,observations,messages,dup_thoughts,dup_thought_rate,follow_through,cmd_fail_rate,max_gap_s,mem_files,log_errors'
+HEADER='label,steps,thoughts,actions,observations,messages,dup_thoughts,dup_thought_rate,follow_through,cmd_fail_rate,max_gap_s,mem_files,log_errors,steps_per_min'
 
 TRAJ_FILE=""
 LABEL=""
@@ -91,7 +91,7 @@ cmd_fail_rate=$(awk -v f="$cmd_fails" -v c="$cmds" 'BEGIN { printf (c>0 ? "%.2f"
 # slicing the offset off before mktime turned that into a phantom gap the size
 # of the offset. Parse the offset and normalize to epoch, then sort, since the
 # file order of concurrent appenders is not guaranteed chronological.
-max_gap=$(valid_steps \
+read -r max_gap span_s < <(valid_steps \
     | jq -rs '
         def epoch:
           capture("^(?<b>\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2})(?:\\.\\d+)?(?<o>Z|[+-]\\d{2}:?\\d{2})?")
@@ -101,9 +101,17 @@ max_gap=$(valid_steps \
                                   | (if $o[0:1] == "-" then -1 else 1 end)
                                     * (($o[1:3] | tonumber) * 3600 + ($o[3:5] | tonumber) * 60)
                              end);
-        map(.ts // empty | try epoch catch empty) | sort
-        | if length < 2 then 0
-          else . as $t | [range(1; length) | $t[.] - $t[.-1]] | max end')
+        (map(.ts // empty | try epoch catch empty) | sort) as $t
+        | if ($t | length) < 2 then "0 0"
+          else ([range(1; $t | length) | $t[.] - $t[.-1]] | max | tostring)
+               + " " + ((($t | last) - ($t | first)) | tostring) end')
+
+# Thinking budget: steps per real minute over the session span. Two runs of
+# the same wall-clock length can carry very different amounts of thinking, so
+# comparing agents needs this rate to show whether they got a comparable
+# budget (divide by a clock scale to get steps per simulated hour).
+steps_per_min=$(awk -v n="$steps" -v s="$span_s" \
+    'BEGIN { printf (s>0 ? "%.1f" : "na"), (s>0 ? n/(s/60) : 0) }')
 
 # Learning: memories on disk after the session.
 mem_files="na"
@@ -128,12 +136,13 @@ Vitals: $LABEL
   commands run       $cmds (failed: $cmd_fails, rate: $cmd_fail_rate)
   messages           $messages
   max step gap       ${max_gap}s
+  steps per minute   $steps_per_min
   memory files       $mem_files
   thinker log errors $log_errors
 REPORT
 else
-    printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+    printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
         "$LABEL" "$steps" "$thoughts" "$actions" "$observations" "$messages" \
         "$dup_thoughts" "$dup_rate" "$follow_through" "$cmd_fail_rate" \
-        "$max_gap" "$mem_files" "$log_errors"
+        "$max_gap" "$mem_files" "$log_errors" "$steps_per_min"
 fi
