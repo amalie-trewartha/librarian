@@ -15,6 +15,7 @@ import type {
   LogTail,
   MemoryInfo,
   Mindlog,
+  OpenRouterModels,
   Recap,
   SelfUpdateResult,
   SubTrajectory,
@@ -264,6 +265,10 @@ export async function importIdentities(
     throw new Error(message);
   }
   return response.json() as Promise<ImportResult>;
+}
+
+export function fetchOpenRouterModels(): Promise<OpenRouterModels> {
+  return getJson("/api/openrouter/models");
 }
 
 export function fetchIdentityEnv(identityId: string): Promise<IdentityEnv> {

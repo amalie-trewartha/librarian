@@ -28,6 +28,7 @@ from shellm_web import (
     liveness,
     llm_health,
     logs,
+    openrouter,
     safety,
     thinkers,
     trajectory,
@@ -659,6 +660,11 @@ def create_app(
         """Active check: one tiny real LLM call (costs a fraction of a cent)."""
         _require_controls()
         return control.llm_probe(root)
+
+    @app.get("/api/openrouter/models")
+    def openrouter_models() -> dict:
+        """Model catalog for the config screen's model pickers (cached)."""
+        return openrouter.available_models(root)
 
     @app.get("/api/identities/{identity_id}/env")
     def identity_env_get(identity_id: str) -> dict:

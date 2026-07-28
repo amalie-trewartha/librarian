@@ -1,6 +1,6 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Info, RotateCcw } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { Badge } from "~/components/ui/badge";
@@ -21,8 +21,8 @@ import {
   TooltipTrigger,
 } from "~/components/ui/tooltip";
 import { useControlsEnabled } from "~/components/thinker-controls";
-import { deleteEnvVar, putEnvVar } from "~/lib/api";
-import type { IdentityEnv } from "~/lib/types";
+import { deleteEnvVar, fetchOpenRouterModels, putEnvVar } from "~/lib/api";
+import type { IdentityEnv, OpenRouterModels } from "~/lib/types";
 
 /* Knob semantics from design/model-resolution.md — keep the two in sync. */
 const MODEL_KNOBS: { key: string; label: string; tip: string }[] = [
@@ -77,15 +77,18 @@ const CUSTOM = "__custom__";
 const ALL_OPTION_VALUES = new Set(
   MODEL_OPTIONS.flatMap((g) => g.models)
 );
+const OPENROUTER_DATALIST_ID = "openrouter-model-ids";
 
 function ModelRow({
   identityId,
   knob,
   env,
+  catalog,
 }: {
   identityId: string;
   knob: (typeof MODEL_KNOBS)[number];
   env: IdentityEnv;
+  catalog?: OpenRouterModels;
 }) {
   const controlsEnabled = useControlsEnabled();
   const queryClient = useQueryClient();
@@ -102,6 +105,13 @@ function ModelRow({
       : "default";
 
   const [customDraft, setCustomDraft] = useState<string | null>(null);
+
+  // Only meaningful when the catalog is the key-filtered list: a configured
+  // OpenRouter-style model (vendor/name) missing from it won't work.
+  const unavailable =
+    catalog?.source === "key" &&
+    effective.includes("/") &&
+    !catalog.models.some((m) => m.id === effective);
 
   const save = useMutation({
     mutationFn: (value: string) => putEnvVar(identityId, knob.key, value),
@@ -146,7 +156,12 @@ function ModelRow({
               autoFocus
               value={customDraft}
               onChange={(event) => setCustomDraft(event.target.value)}
-              placeholder="vendor/model or claude-…"
+              placeholder={
+                catalog?.source === "key"
+                  ? `type to search ${catalog.count} models on this key…`
+                  : "vendor/model or claude-…"
+              }
+              list={OPENROUTER_DATALIST_ID}
               className="h-8 flex-1 font-mono text-xs"
             />
             <Button type="submit" size="sm" disabled={save.isPending}>
@@ -186,15 +201,25 @@ function ModelRow({
                 {MODEL_OPTIONS.map((group) => (
                   <SelectGroup key={group.group}>
                     <SelectLabel className="text-[11px]">{group.group}</SelectLabel>
-                    {group.models.map((model) => (
-                      <SelectItem
-                        key={model}
-                        value={model}
-                        className="font-mono text-xs"
-                      >
-                        {model}
-                      </SelectItem>
-                    ))}
+                    {group.models
+                      // With a key-filtered catalog, drop curated OpenRouter
+                      // entries (vendor/name) the key can't use. Direct
+                      // (claude-*) entries are not OpenRouter's to veto.
+                      .filter(
+                        (model) =>
+                          catalog?.source !== "key" ||
+                          !model.includes("/") ||
+                          catalog.models.some((m) => m.id === model)
+                      )
+                      .map((model) => (
+                        <SelectItem
+                          key={model}
+                          value={model}
+                          className="font-mono text-xs"
+                        >
+                          {model}
+                        </SelectItem>
+                      ))}
                   </SelectGroup>
                 ))}
                 <SelectItem value={CUSTOM} className="text-xs">
@@ -205,6 +230,20 @@ function ModelRow({
             <Badge variant="outline" className="text-[10px]">
               {source}
             </Badge>
+            {unavailable && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge variant="destructive" className="text-[10px]">
+                    not on this key
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs text-xs">
+                  OpenRouter's model list for this key does not include{" "}
+                  {effective} — check the model id, or your org's OpenRouter
+                  model/provider settings.
+                </TooltipContent>
+              </Tooltip>
+            )}
             {controlsEnabled && identityEntry && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -235,6 +274,17 @@ function ModelRow({
 /** Quick model setup: the commonly-overridden model knobs with curated
  * choices, so a fresh identity gets a sane config without hand-typing env
  * vars. Writes the same identity .env as the table below. */
+function modelOptionLabel(model: OpenRouterModels["models"][number]): string {
+  const parts: string[] = [];
+  if (model.prompt_usd_per_m != null && model.completion_usd_per_m != null)
+    parts.push(
+      `$${model.prompt_usd_per_m}/M in · $${model.completion_usd_per_m}/M out`
+    );
+  if (model.context_length)
+    parts.push(`${Math.round(model.context_length / 1000)}k ctx`);
+  return parts.join(" · ");
+}
+
 export function ModelConfigSection({
   identityId,
   env,
@@ -242,6 +292,34 @@ export function ModelConfigSection({
   identityId: string;
   env: IdentityEnv;
 }) {
+  const { data: catalog } = useQuery({
+    queryKey: ["openrouter-models"],
+    queryFn: fetchOpenRouterModels,
+    staleTime: 10 * 60 * 1000,
+    retry: 1,
+  });
+
+  const datalist = useMemo(
+    () =>
+      (catalog?.models ?? []).map((model) => (
+        <option
+          key={model.id}
+          value={model.id}
+          label={modelOptionLabel(model)}
+        />
+      )),
+    [catalog]
+  );
+
+  const catalogNote =
+    catalog?.source === "key"
+      ? `${catalog.count} OpenRouter models available to this key.`
+      : catalog?.source === "public"
+        ? `${catalog.count} models in the public OpenRouter catalog (no key configured — availability not checked).`
+        : catalog?.error
+          ? "OpenRouter catalog unavailable — Custom entry still works."
+          : null;
+
   return (
     <section className="mb-8">
       <div className="mb-2 flex items-baseline gap-3">
@@ -251,7 +329,7 @@ export function ModelConfigSection({
         <span className="text-[11px] text-muted-foreground">
           Common model knobs (written to identity .env). Running thinkers keep
           the environment they started with — restart thinkers after changing
-          these.
+          these.{catalogNote ? ` ${catalogNote}` : ""}
         </span>
       </div>
       <div className="rounded-lg border">
@@ -261,9 +339,11 @@ export function ModelConfigSection({
             identityId={identityId}
             knob={knob}
             env={env}
+            catalog={catalog}
           />
         ))}
       </div>
+      <datalist id={OPENROUTER_DATALIST_ID}>{datalist}</datalist>
     </section>
   );
 }

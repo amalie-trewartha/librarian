@@ -132,6 +132,23 @@ export interface EnvEntry {
   overridden?: boolean; // inherited entries only
 }
 
+export interface OpenRouterModel {
+  id: string;
+  name: string | null;
+  context_length: number | null;
+  prompt_usd_per_m: number | null;
+  completion_usd_per_m: number | null;
+}
+
+export interface OpenRouterModels {
+  source: "key" | "public" | null; // "key": filtered to this org's key
+  has_key: boolean;
+  count: number;
+  models: OpenRouterModel[];
+  error: string | null;
+  fetched_at: string;
+}
+
 export interface IdentityEnv {
   identity: { id: string; name: string };
   env: EnvEntry[];
