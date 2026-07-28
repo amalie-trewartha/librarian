@@ -150,7 +150,7 @@ while [[ $# -gt 0 ]]; do
         -h|--help)       usage 0 ;;
         -m|--model)      LLM_MODEL="${2:?--model requires a value}"; shift 2 ;;
         -s|--system-prompt) LLM_SYSTEM="${2:?--system-prompt requires a value}"; shift 2 ;;
-        --system-prompt-file) local _spf="${2:?--system-prompt-file requires a path}"; [[ -f "$_spf" ]] || die "System prompt file not found: $_spf"; LLM_SYSTEM=$(cat "$_spf"); shift 2 ;;
+        --system-prompt-file) _spf="${2:?--system-prompt-file requires a path}"; [[ -f "$_spf" ]] || die "System prompt file not found: $_spf"; LLM_SYSTEM=$(cat "$_spf"); shift 2 ;;
         -t|--max-tokens) LLM_MAX_TOKENS="${2:?--max-tokens requires a value}"; shift 2 ;;
         -M|--messages)   LLM_MESSAGES="${2:?--messages requires a value}"; shift 2 ;;
         --stream)        LLM_STREAM=1; shift ;;
@@ -414,6 +414,35 @@ extract_text_gemini() {
 extract_text_openrouter() { extract_text_openai; }
 
 # ---------------------------------------------------------------------------
+# Response failure checks (non-streaming)
+# ---------------------------------------------------------------------------
+# A 200 body can still be a failure. OpenRouter in particular relays upstream
+# provider errors inside a 200 response — a top-level .error, an .error on the
+# choice, or finish_reason "error" beside whatever partial text arrived before
+# the provider gave up — and extracting the text of one of those looks like a
+# short successful answer. Each checker prints one line describing the failure,
+# or nothing when the response is sound.
+
+check_response_anthropic() {
+    jq -r 'if .type == "error" then .error.message // "unknown error" else empty end' 2>/dev/null
+}
+
+check_response_openai() {
+    jq -r '[
+        (.error.message // empty),
+        (.choices[0].error.message // empty),
+        (if (.choices[0].finish_reason // "") == "error"
+         then "finish_reason \"error\" (provider failed mid-generation)" else empty end)
+      ] | .[0] // empty' 2>/dev/null
+}
+
+check_response_gemini() {
+    jq -r '.error.message // empty' 2>/dev/null
+}
+
+check_response_openrouter() { check_response_openai; }
+
+# ---------------------------------------------------------------------------
 # Streaming handlers
 # ---------------------------------------------------------------------------
 
@@ -601,6 +630,21 @@ else
             rm -f "$local_resp"
             sleep $(( LLM_RETRY_BACKOFF * _attempt ))
             continue
+        fi
+
+        # A 2xx can still carry an embedded failure (see the checkers above).
+        # Nothing has been emitted yet on this path, so retrying is safe.
+        if [[ "$http_code" != "000" && "$http_code" -lt 400 ]]; then
+            embedded_err=$("check_response_${LLM_PROVIDER}" < "$local_resp")
+            if [[ -n "$embedded_err" ]]; then
+                rm -f "$local_resp"
+                if [[ "$_attempt" -lt "$_max_attempts" ]]; then
+                    echo "llm: transient API failure (attempt $_attempt/$_max_attempts): $embedded_err — retrying" >&2
+                    sleep $(( LLM_RETRY_BACKOFF * _attempt ))
+                    continue
+                fi
+                die "API error: $embedded_err"
+            fi
         fi
         break
     done

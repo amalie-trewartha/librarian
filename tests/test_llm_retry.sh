@@ -72,6 +72,10 @@ case "$mode" in
         printf '{"choices":[{"message":{"content":"ok"}}]}' > "$out_file"
         printf '200'
         ;;
+    finish-error)   # HTTP 200, partial text, provider died mid-generation
+        printf '{"choices":[{"message":{"content":"partial judgm"},"finish_reason":"error"}]}' > "$out_file"
+        printf '200'
+        ;;
 esac
 EOF
 chmod +x "$WORK/bin/curl"
@@ -145,6 +149,23 @@ rc=$?
 check "400 fails"                     test "$rc" -ne 0
 check "400 not retried"               test "$(calls)" = "1"
 check "400 message surfaced"          grep -q "bad request" "$WORK/stderr"
+
+# ---------------------------------------------------------------------------
+# Non-streaming: embedded failures inside a 200 body are not silent successes
+# ---------------------------------------------------------------------------
+
+reset $'err-body\nhttp-200'
+out=$(LLM_RETRIES=2 run_llm --no-stream)
+check "200-with-error retried"        test "$out" = "ok"
+check "two calls (error then ok)"     test "$(calls)" = "2"
+
+reset "finish-error"
+out=$(LLM_RETRIES=1 run_llm --no-stream)
+rc=$?
+check "finish_reason error fails"     test "$rc" -ne 0
+check "partial text not printed"      test -z "$out"
+check "finish_reason error retried"   test "$(calls)" = "2"
+check "finish_reason msg surfaced"    grep -q 'finish_reason "error"' "$WORK/stderr"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
