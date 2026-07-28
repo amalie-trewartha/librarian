@@ -83,9 +83,38 @@ function blockTitle(block: TimelineBlock): string {
   const cmd = block.run.command;
   const idx = cmd.lastIndexOf("ACTION:");
   if (idx >= 0) return cmd.slice(idx + 7).replace(/\s+/g, " ").trim();
+  // The final response beats the prompt: reuse-traj runs (the monolith
+  // router) share one boilerplate prompt every wakeup, so the outcome is
+  // the only text that distinguishes one run from the next.
+  const final = block.members.filter((m) => m.type === "final").at(-1);
+  if (final?.preview) return final.preview;
   const prompt = block.members.find((m) => m.type === "prompt");
   if (prompt?.preview) return prompt.preview;
   return cmd.replace(/\s+/g, " ").trim() || "shellm run";
+}
+
+/* What the run DID, from the steps it wrote back to the mind log — the
+ * monolith's route choice (reply/act/think/idle) in one word. Priority
+ * order: an outward message outranks a mere observation, etc. */
+const ROUTE_BY_WROTE: [string, string][] = [
+  ["message", "reply"],
+  ["observation", "act"],
+  ["thought", "think"],
+  ["idle", "idle"],
+];
+
+function blockRoute(
+  block: TimelineBlock,
+  cells: TimelineCell[]
+): string | null {
+  const wrote = new Set<string>();
+  for (const cell of cells) {
+    if (cell.step.raw.run_id === block.run.run_id) wrote.add(cell.step.type);
+  }
+  for (const [type, label] of ROUTE_BY_WROTE) {
+    if (wrote.has(type)) return label;
+  }
+  return null;
 }
 
 /** Orthogonal polyline with rounded corners. */
@@ -657,7 +686,11 @@ export function TimelineView({
                           height: clickH,
                         }
                   }
-                  title={`[${cell.step.type}] ${cell.step.preview}`}
+                  title={
+                    cell.idleCount
+                      ? `[idle ×${cell.idleCount}] ${cell.idleSpan} quiet`
+                      : `[${cell.step.type}] ${cell.step.preview}`
+                  }
                 >
                   <span
                     className={cn(
@@ -688,7 +721,9 @@ export function TimelineView({
                           : "text-slate-300/90"
                       )}
                     >
-                      {cell.step.preview || cell.step.type}
+                      {cell.idleCount
+                        ? `idle ×${cell.idleCount} · ${cell.idleSpan}`
+                        : cell.step.preview || cell.step.type}
                     </span>
                   )}
                 </button>
@@ -703,6 +738,7 @@ export function TimelineView({
               if (!r || r.collapsed) return null;
               const iters = block.members.filter((m) => m.type === "shell-output").length;
               const duration = durationOf(block.run.started_ts, block.run.ended_ts);
+              const route = blockRoute(block, layout.cells);
               return (
                 <div
                   key={`chip-${block.run.run_id}`}
@@ -735,6 +771,9 @@ export function TimelineView({
                       {blockTitle(block)}
                     </span>
                     <span className="w-full truncate font-mono text-[9px] leading-4 text-cyan-300/60">
+                      {route && (
+                        <span className="text-fuchsia-300/90">→ {route} · </span>
+                      )}
                       {block.open && !block.run.ended_ts
                         ? live
                           ? "running"

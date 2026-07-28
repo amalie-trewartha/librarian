@@ -31,6 +31,10 @@ export interface TimelineCell {
   row: number;
   /** step written from inside a run whose block covers this cell — render nested */
   inBlock?: boolean;
+  /** first idle of a collapsed chain: how many idles it stands for */
+  idleCount?: number;
+  /** wall-clock span of the collapsed chain, e.g. "12m 4s" */
+  idleSpan?: string;
 }
 
 export interface TimelineBlock {
@@ -154,6 +158,41 @@ export function buildTimeline(mindlog: Pick<Mindlog, "steps" | "runs">): Timelin
   }
   for (const id of LANE_PRIORITY) if (sourcesSeen.has(id)) laneFor(id);
 
+  // Collapse runs of consecutive idle steps (uninterrupted by any other
+  // row-producing step) into their first idle — a mind at rest with idle
+  // backoff would otherwise paint a row per wakeup. The chain's count and
+  // wall-clock span render on the surviving cell.
+  const idleChain = new Map<string, { count: number; spanMs: number }>();
+  const idleSkip = new Set<string>();
+  {
+    let head: NormalizedStep | null = null;
+    let tail: NormalizedStep | null = null;
+    let count = 0;
+    const flush = () => {
+      if (head && tail && count > 1) {
+        idleChain.set(head.step_id, {
+          count,
+          spanMs: Math.max(0, epoch(tail.ts) - epoch(head.ts)),
+        });
+      }
+      head = tail = null;
+      count = 0;
+    };
+    for (const step of steps) {
+      if (step.type === "trajectory") continue;
+      if (memberOf.has(step.step_id) && step.type !== "shellm-run") continue;
+      if (step.type === "idle") {
+        if (head) idleSkip.add(step.step_id);
+        else head = step;
+        tail = step;
+        count += 1;
+      } else {
+        flush();
+      }
+    }
+    flush();
+  }
+
   // --- rows ---
   const cells: TimelineCell[] = [];
   const blocks: TimelineBlock[] = [];
@@ -180,6 +219,14 @@ export function buildTimeline(mindlog: Pick<Mindlog, "steps" | "runs">): Timelin
     if (step.type === "trajectory") continue; // file preamble, not an event
     const run = memberOf.get(step.step_id);
     if (run && step.type !== "shellm-run") continue; // inside a block
+    if (idleSkip.has(step.step_id)) {
+      // collapsed into its chain head; still advances the clock so the
+      // following gap divider measures silence after the chain, not from
+      // its start
+      const ms = step.ts ? epoch(step.ts) : 0;
+      if (ms) prevMs = ms;
+      continue;
+    }
 
     // gap divider
     const stepMs = step.ts ? epoch(step.ts) : 0;
@@ -217,7 +264,12 @@ export function buildTimeline(mindlog: Pick<Mindlog, "steps" | "runs">): Timelin
               ? MID_ROW_H
               : ROW_H;
       const row = pushRow(h, step.ts);
-      const cell = { step, lane, row };
+      const cell: TimelineCell = { step, lane, row };
+      const chain = idleChain.get(step.step_id);
+      if (chain) {
+        cell.idleCount = chain.count;
+        cell.idleSpan = fmtGap(chain.spanMs);
+      }
       cells.push(cell);
       cellByStepId.set(step.step_id, cell);
     }
