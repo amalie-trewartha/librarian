@@ -242,7 +242,12 @@ get_model_max_tokens() {
         # Google Gemini (caps from ListModels API; 1.5 family retired in 2026)
         gemini-2.0-flash*) echo 8192 ;;
         gemini-*)          echo 65536 ;;
-        # OpenRouter (vendor-prefixed) — caps vary per model; mid default
+        # OpenRouter (vendor-prefixed) — caps vary per model; mid default.
+        # Anthropic models get their native larger cap: reasoning tokens count
+        # against max_tokens, so 16384 starves any answer that needed heavy
+        # thinking first — the visible text just stops at finish_reason
+        # "length", possibly at zero characters.
+        anthropic/*) echo 64000 ;;
         */*) echo 16384 ;;
         # Conservative fallback for unknown models
         *) echo 4096 ;;
@@ -442,6 +447,33 @@ check_response_gemini() {
 
 check_response_openrouter() { check_response_openai; }
 
+# Truncation is its own silent failure mode: a 200 whose finish reason says
+# the output hit max_tokens looks complete to a caller reading stdout, and on
+# reasoning models the budget includes the (invisible) thinking tokens, so the
+# text can stop mid-sentence or never start. The response is still delivered —
+# a capped answer may be exactly what the caller asked for — but a warning
+# goes to stderr so nobody debugs "short output" blind again.
+
+check_truncated_anthropic() {
+    jq -r 'if .stop_reason == "max_tokens" then "y" else empty end' 2>/dev/null
+}
+
+check_truncated_openai() {
+    jq -r 'if (.choices[0].finish_reason // "") == "length" then "y" else empty end' 2>/dev/null
+}
+
+check_truncated_gemini() {
+    jq -r 'if (.candidates[0].finishReason // "") == "MAX_TOKENS" then "y" else empty end' 2>/dev/null
+}
+
+check_truncated_openrouter() { check_truncated_openai; }
+
+# Shared by the non-streaming path and the streaming handlers (stderr passes
+# straight through the handler subshell, so this works from either).
+warn_truncated() {
+    echo "llm: warning: output truncated at max_tokens=$LLM_MAX_TOKENS (reasoning tokens count against it) — raise with -t" >&2
+}
+
 # ---------------------------------------------------------------------------
 # Streaming handlers
 # ---------------------------------------------------------------------------
@@ -474,6 +506,11 @@ stream_anthropic() {
                     ;;
                 *'"content_block_stop"'*)
                     _block=""
+                    ;;
+                *'"message_delta"'*)
+                    if [[ "$(printf '%s' "$json" | jq -r '.delta.stop_reason // empty' 2>/dev/null)" == "max_tokens" ]]; then
+                        warn_truncated
+                    fi
                     ;;
                 *'"type":"error"'*)
                     local err_msg
@@ -514,6 +551,13 @@ stream_openai() {
                 mark_emitted
                 printf '%s' "$_chunk"
             fi
+            # Only the final chunk carries a non-null finish_reason; the glob
+            # keeps jq off the hot per-delta path.
+            if [[ "$json" == *'"finish_reason"'* && "$json" != *'"finish_reason":null'* ]]; then
+                if [[ "$(printf '%s' "$json" | jq -r '.choices[0].finish_reason // empty' 2>/dev/null)" == "length" ]]; then
+                    warn_truncated
+                fi
+            fi
         elif [[ "$_saw_data" -eq 0 ]]; then
             _err_buf="${_err_buf}${line}
 "
@@ -541,6 +585,12 @@ stream_gemini() {
             if [[ -n "$_chunk" ]]; then
                 mark_emitted
                 printf '%s' "$_chunk"
+            fi
+            # finishReason appears only on the final chunk.
+            if [[ "$json" == *'"finishReason"'* ]]; then
+                if [[ "$(printf '%s' "$json" | jq -r '.candidates[0].finishReason // empty' 2>/dev/null)" == "MAX_TOKENS" ]]; then
+                    warn_truncated
+                fi
             fi
         elif [[ "$_saw_data" -eq 0 ]]; then
             _err_buf="${_err_buf}${line}
@@ -656,6 +706,10 @@ else
             die "API error (HTTP $http_code): $error_msg"
         fi
         die "API error (HTTP $http_code)"
+    fi
+
+    if [[ -n "$("check_truncated_${LLM_PROVIDER}" < "$local_resp")" ]]; then
+        warn_truncated
     fi
 
     if [[ "$LLM_RAW" -eq 1 ]]; then

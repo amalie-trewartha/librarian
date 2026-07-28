@@ -25,8 +25,9 @@ check_not() { local label="$1"; shift; if "$@" >/dev/null 2>&1; then bad "$label
 
 # --- curl stub ---------------------------------------------------------------
 # $CURL_MODE_FILE holds one mode per line; line N applies to call N (last
-# line repeats). Modes: err-body | sse-ok | sse-midstream-fail | http-500 |
-# http-400 | http-200
+# line repeats). Modes: err-body | sse-ok | sse-midstream-fail |
+# sse-finish-length | http-500 | http-400 | http-200 | finish-error |
+# finish-length
 mkdir -p "$WORK/bin"
 cat > "$WORK/bin/curl" <<'EOF'
 #!/usr/bin/env bash
@@ -75,6 +76,16 @@ case "$mode" in
     finish-error)   # HTTP 200, partial text, provider died mid-generation
         printf '{"choices":[{"message":{"content":"partial judgm"},"finish_reason":"error"}]}' > "$out_file"
         printf '200'
+        ;;
+    finish-length)  # HTTP 200, output capped by max_tokens
+        printf '{"choices":[{"message":{"content":"truncated tex"},"finish_reason":"length"}]}' > "$out_file"
+        printf '200'
+        ;;
+    sse-finish-length)  # streamed output whose final chunk reports the cap
+        printf 'data: {"choices":[{"delta":{"content":"truncated te"},"finish_reason":null}]}\n\n'
+        printf 'data: {"choices":[{"delta":{"content":"x"},"finish_reason":null}]}\n\n'
+        printf 'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n'
+        printf 'data: [DONE]\n'
         ;;
 esac
 EOF
@@ -166,6 +177,30 @@ check "finish_reason error fails"     test "$rc" -ne 0
 check "partial text not printed"      test -z "$out"
 check "finish_reason error retried"   test "$(calls)" = "2"
 check "finish_reason msg surfaced"    grep -q 'finish_reason "error"' "$WORK/stderr"
+
+# ---------------------------------------------------------------------------
+# Non-streaming: max_tokens truncation is delivered but warned about
+# ---------------------------------------------------------------------------
+
+reset "finish-length"
+out=$(LLM_RETRIES=2 run_llm --no-stream)
+rc=$?
+check "truncated output succeeds"     test "$rc" -eq 0
+check "truncated text delivered"      test "$out" = "truncated tex"
+check "truncation not retried"        test "$(calls)" = "1"
+check "truncation warned on stderr"   grep -q "output truncated at max_tokens" "$WORK/stderr"
+
+# ---------------------------------------------------------------------------
+# Streaming: max_tokens truncation is delivered but warned about
+# ---------------------------------------------------------------------------
+
+reset "sse-finish-length"
+out=$(LLM_RETRIES=2 run_llm)
+rc=$?
+check "stream truncation succeeds"    test "$rc" -eq 0
+check "stream truncated text intact"  test "$out" = "truncated tex"
+check "stream truncation not retried" test "$(calls)" = "1"
+check "stream truncation warned"      grep -q "output truncated at max_tokens" "$WORK/stderr"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
