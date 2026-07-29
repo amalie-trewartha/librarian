@@ -34,6 +34,22 @@ trigger_step_id=$(printf '%s' "$step_json" | jq -r '.step_id // empty' 2>/dev/nu
 if [[ "$trigger_type" == "message" ]]; then
     msg_to=$(printf '%s' "$step_json" | jq -r '.to // empty' 2>/dev/null) || true
     [[ "$msg_to" == "$IDENTITY_NAME" ]] || exit 0
+    # A message FROM us TO us is a self-message (`chat send` with no recipient
+    # targets yourself). Replying would re-trigger this thinker on its own
+    # reply — the perpetual self-chat loop of 2026-07-28. Same guard as
+    # monolith/step: drop it with a course-correcting observation.
+    msg_from=$(printf '%s' "$step_json" | jq -r '.from // empty' 2>/dev/null) || true
+    if [[ "$msg_from" == "$IDENTITY_NAME" ]]; then
+        printf '  self-message — dropping with observation\n' >&2
+        jq -nc \
+            --arg content "self-message dropped: you chat-sent a message to yourself and it will not be replied to (replying would loop). To message someone else use: chat reply <their-name> <message>. To keep a note for later, write it as a thought step instead. Your message was: $(printf '%.200s' "$trigger_content")" \
+            --arg source "$THINKER_NAME" \
+            --arg trigger "$trigger_step_id" \
+            '{type:"observation", content:$content, source:$source}
+             + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
+            | traj append >/dev/null || true
+        exit 0
+    fi
 fi
 
 # Build system prompt with identity context

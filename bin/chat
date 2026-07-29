@@ -72,6 +72,14 @@ Create a .chatrc file with:
     # Default --to to IDENTITY_NAME
     [[ -z "$to" ]] && die "No --to specified and IDENTITY_NAME not set."
 
+    # A self-addressed message re-triggers the identity's own message
+    # subscriptions, which can loop it into replying to itself forever.
+    # `chat send` with no --to targets the identity, so an agent using it to
+    # 'send' ends up messaging itself — the correct tool is `chat reply`.
+    [[ "$from" == "$to" ]] && die "refusing to send a message from '$from' to itself.
+To message someone else: chat reply <their-name> <message>
+To keep a note for yourself, append a thought step instead of a message."
+
     # Append message step to trajectory
     printf '{"type":"message","content":%s,"from":%s,"to":%s,"source":"chat"}' \
         "$(printf '%s' "$message" | jq -Rsa .)" \
@@ -98,6 +106,10 @@ cmd_reply() {
 
     local from="${IDENTITY_NAME:-}"
     [[ -z "$from" ]] && die "IDENTITY_NAME not set. Run: identity shell <name>"
+
+    # Replying to yourself loops your own message subscriptions (see cmd_send).
+    [[ "$to_name" == "$from" ]] && die "refusing to reply to yourself ('$from').
+Use the name of the person you mean to reach: chat reply <their-name> <message>"
 
     printf '{"type":"message","content":%s,"from":%s,"to":%s,"source":"chat"}' \
         "$(printf '%s' "$message" | jq -Rsa .)" \
