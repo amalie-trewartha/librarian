@@ -121,8 +121,12 @@ if [[ -n "$IDENTITY_HOME" ]]; then
     mem_files=$(find "$IDENTITY_HOME/memories" -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
     log_errors=0
     if [[ -d "$IDENTITY_HOME/run/logs" ]]; then
+        # Count only harness-emitted error lines. The logs also carry the
+        # model's reasoning and full command output, so a bare 'error' grep
+        # counts the subject merely working with error-shaped text (test
+        # fixtures, log tooling) as hundreds of failures.
         log_errors=$(cat "$IDENTITY_HOME/run/logs"/*.log 2>/dev/null \
-            | grep -ci 'error' || true)
+            | grep -cE 'shellm: error:|llm: error:|llm: transient API failure|action failed:' || true)
     fi
 fi
 
