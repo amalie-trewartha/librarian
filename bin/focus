@@ -12,6 +12,13 @@ case "${1:-}" in -h|--help|help) ;; *)
     [[ -n "$MEM_DIR" ]] || die "MEM_DIR not set. Run: identity shell <name>"
     ;; esac
 
+# In-place sed: GNU sed takes -i with no argument; BSD sed needs -i ''.
+if sed --version >/dev/null 2>&1; then
+    _sed_i() { sed -i "$@"; }
+else
+    _sed_i() { sed -i '' "$@"; }
+fi
+
 # Read a frontmatter field from a file
 _fm_field() {
     awk -v field="$2" 'NR==1 && /^---$/{f=1; next} f && /^---$/{exit} f && $0 ~ "^"field":"{sub("^"field":[[:space:]]*", ""); print}' "$1"
@@ -23,9 +30,9 @@ _set_fm_field() {
     local existing
     existing=$(_fm_field "$file" "$field")
     if [[ -n "$existing" ]]; then
-        sed -i '' "s/^${field}:.*/${field}: ${value}/" "$file"
+        _sed_i "s/^${field}:.*/${field}: ${value}/" "$file"
     else
-        sed -i '' "1,/^---$/ { /^---$/a\\
+        _sed_i "1 { /^---$/a\\
 ${field}: ${value}
 }" "$file"
     fi
@@ -34,7 +41,7 @@ ${field}: ${value}
 # Remove a frontmatter field from a file
 _rm_fm_field() {
     local file="$1" field="$2"
-    sed -i '' "/^${field}:.*/d" "$file"
+    _sed_i "/^${field}:.*/d" "$file"
 }
 
 # Find a goal file by ID prefix query. Prints the file path.
