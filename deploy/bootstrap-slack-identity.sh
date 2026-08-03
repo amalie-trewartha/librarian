@@ -37,9 +37,17 @@ if [[ ! -f "$IDENTITY_DIR/$name/core_identity_prompt.md" && -f "$APP_DIR/deploy/
     cp "$APP_DIR/deploy/slack-persona.md" "$IDENTITY_DIR/$name/core_identity_prompt.md"
 fi
 
-# Activate the identity (exports IDENTITY_NAME, TRAJ_DIR, THINKERS_DIR, ...)
+# Activate the identity (exports IDENTITY_NAME, TRAJ_DIR, THINKERS_DIR, ...).
+# activate is written for interactive shells: its internal greps (e.g. for an
+# absent think_model= line) legitimately fail, which is fatal under this
+# script's set -euo pipefail — so relax the guards around the source.
+set +eu
+set +o pipefail
 # shellcheck disable=SC1091
 source "$IDENTITY_DIR/$name/activate"
+set -eu
+set -o pipefail
+[[ -n "${IDENTITY_NAME:-}" ]] || { echo "error: activate did not set IDENTITY_NAME" >&2; exit 1; }
 
 if thinkers status 2>/dev/null | grep -q 'Dispatcher: running'; then
     echo "==> Dispatcher already running"
