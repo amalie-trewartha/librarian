@@ -50,3 +50,16 @@ def test_chunk_hard_split_when_no_boundary():
     parts = chunk(text, limit=3900)
     assert "".join(parts) == text
     assert all(len(p) <= 3900 for p in parts)
+
+
+def test_recent_posts_dedupe():
+    from shellm_slack.outbound import RecentPosts
+
+    recent = RecentPosts(window=300)
+    assert not recent.is_duplicate("slack-U1-C2-3.4", "hello", now=1000)
+    assert recent.is_duplicate("slack-U1-C2-3.4", "hello", now=1010)
+    assert not recent.is_duplicate("slack-U1-C2-3.4", "different", now=1020)
+    assert not recent.is_duplicate("slack-U1-D9", "hello", now=1030)
+    recent2 = RecentPosts(window=300)
+    assert not recent2.is_duplicate("slack-U1-C2-3.4", "hello", now=1000)
+    assert not recent2.is_duplicate("slack-U1-C2-3.4", "hello", now=1400)  # outside window

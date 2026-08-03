@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Any
 
 from . import mindlog, naming
@@ -18,6 +19,27 @@ from .slackfmt import chunk, strip_leaked_command, to_mrkdwn
 from .state import ActiveThreads
 
 log = logging.getLogger(__name__)
+
+DUPLICATE_WINDOW_SECONDS = 300
+
+
+class RecentPosts:
+    """Transport-level dedupe: agents occasionally send the same reply twice
+    (e.g. an agentic run re-executing its chat command). Posting an identical
+    message to the same conversation twice within the window is never right.
+    """
+
+    def __init__(self, window: float = DUPLICATE_WINDOW_SECONDS):
+        self._window = window
+        self._last: dict[str, tuple[str, float]] = {}
+
+    def is_duplicate(self, conversation: str, text: str, now: float | None = None) -> bool:
+        now = time.time() if now is None else now
+        previous = self._last.get(conversation)
+        if previous and previous[0] == text and now - previous[1] < self._window:
+            return True
+        self._last[conversation] = (text, now)
+        return False
 
 
 def run(
@@ -28,6 +50,7 @@ def run(
 ) -> None:
     traj = mindlog.find_trajectory(cfg.identity_dir)
     cursor = cfg.state_dir / "cursor"
+    recent = RecentPosts()
     log.info("following %s", traj)
     for step in mindlog.follow(traj, cursor, should_stop=stop_event.is_set):
         if step.get("type") != "message" or step.get("from") != cfg.identity:
@@ -38,6 +61,9 @@ def run(
         conv = naming.decode(to)
         text = to_mrkdwn(strip_leaked_command(str(step.get("content") or ""))).strip()
         if not text:
+            continue
+        if recent.is_duplicate(to, text):
+            log.warning("skipping duplicate post to %s", to)
             continue
         threads.touch(conv.channel, conv.thread_ts)
         for part in chunk(text):
