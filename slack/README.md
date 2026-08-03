@@ -24,7 +24,7 @@ format.
 ## Running
 
 ```bash
-export SLACK_BOT_TOKEN=xoxb-...     # see deploy/slack-manifest.yaml
+export SLACK_BOT_TOKEN=xoxb-...     # see "Slack app lifecycle" below
 export SLACK_APP_TOKEN=xapp-...
 export SHELLM_SLACK_IDENTITY=audel  # default
 bin/shellm-slack-bridge [ROOT]      # ROOT = serve root, default repo root
@@ -42,6 +42,30 @@ web server run as systemd units on the dedicated box (see
 Other settings: `SHELLM_SLACK_STATE_DIR` (cursor + thread state, default
 `<identity>/run/slack-bridge/`), `SLACK_THREAD_FOLLOWUPS=1` (answer
 un-mentioned replies in threads the bot is already part of).
+
+## Slack app lifecycle (Slack CLI)
+
+`manifest.json` in this directory is the app's source of truth; manage the
+Slack-side lifecycle with the [Slack CLI](https://docs.slack.dev/tools/slack-cli/)
+from this directory:
+
+```bash
+cd slack
+slack login                      # once per developer
+slack app link --environment deployed   # once: attach the workspace app (or
+                                        # let the CLI create it from manifest.json)
+slack manifest validate          # after editing manifest.json
+slack app install --environment deployed  # push manifest + reinstall (new scopes)
+slack run                        # local dev: CLI-managed dev app + tokens,
+                                 # runs the bridge against the repo root
+```
+
+Scope changes become: edit `manifest.json` → `slack manifest validate` →
+`slack app install`. Production still uses the long-lived `xoxb-`/`xapp-`
+tokens from app settings, stored in the box's SSM env parameter — the CLI
+does not replace that step (app-level tokens are minted once under Basic
+Information → App-Level Tokens, scope `connections:write`). Box-side day-2
+(deploys, restarts) stays with `deploy/scripts/*`.
 
 ## Tests
 

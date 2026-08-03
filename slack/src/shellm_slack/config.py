@@ -42,8 +42,10 @@ def _find_identity_dir(serve_root: Path, name: str) -> Path:
 
 
 def load(serve_root: Path) -> Config:
-    bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
-    app_token = os.environ.get("SLACK_APP_TOKEN", "")
+    # SLACK_CLI_* fallbacks: `slack run` provides tokens under these names
+    # when it drives the bridge as the project's start hook.
+    bot_token = os.environ.get("SLACK_BOT_TOKEN") or os.environ.get("SLACK_CLI_XOXB", "")
+    app_token = os.environ.get("SLACK_APP_TOKEN") or os.environ.get("SLACK_CLI_XAPP", "")
     if not bot_token or not app_token:
         raise SystemExit(
             "shellm-slack-bridge: SLACK_BOT_TOKEN and SLACK_APP_TOKEN are required"

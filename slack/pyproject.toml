@@ -14,6 +14,7 @@ shellm-slack-bridge = "shellm_slack.cli:main"
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "slack-cli-hooks>=0.3",
 ]
 
 [build-system]
