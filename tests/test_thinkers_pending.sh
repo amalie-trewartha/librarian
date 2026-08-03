@@ -50,7 +50,7 @@ printf '%s\n' "$json" >> "$IDENTITY_DIR/record"
 sleep 3
 EOF
     chmod +x "$TMP/id/thinkers/slowpoke/step"
-    printf '{"types":["action","message"]}\n' > "$TMP/id/thinkers/slowpoke/subscriptions.jsonl"
+    printf '{"types":["action","message","observation"]}\n' > "$TMP/id/thinkers/slowpoke/subscriptions.jsonl"
 }
 
 append_step() {
@@ -180,6 +180,47 @@ test_per_type_flags() {
 }
 
 # ---------------------------------------------------------------------------
+# Test 3a: self-wake step types (observation, idle, ...) coalesce last-wins
+# while busy — only the LATEST replays, so perpetual-loop thinkers never
+# build a backlog of stale wakeups (message/action still queue FIFO)
+# ---------------------------------------------------------------------------
+test_selfwake_coalesce() {
+    setup_identity
+    start_thinkers
+
+    append_step '{"type":"action","content":"A","source":"test"}'
+    sleep 1   # slowpoke picks up A and sleeps
+    append_step '{"type":"observation","content":"O1","source":"test"}'
+    append_step '{"type":"observation","content":"O2","source":"test"}'
+    sleep 1
+
+    local obs_files
+    obs_files=$(ls "$TMP/id/run/pending" 2>/dev/null | grep -c '^slowpoke\.observation\.')
+    if [[ "$obs_files" -eq 1 ]]; then
+        ok "self-wake observations coalesce to one pending file"
+    else
+        bad "self-wake observations coalesce to one pending file" "count: $obs_files"
+    fi
+
+    wait_for_record 2
+    local rec
+    rec=$(cat "$TMP/id/record" 2>/dev/null)
+    if [[ "$(record_count)" -eq 2 ]] && printf '%s' "$rec" | grep -q '"O2"' && ! printf '%s' "$rec" | grep -q '"O1"'; then
+        ok "only latest self-wake replays (O1 superseded by O2)"
+    else
+        bad "only latest self-wake replays" "record: $(printf '%s' "$rec" | tr '\n' ' ')"
+    fi
+
+    if grep -q 'superseded' "$TMP/id/run/logs/dispatcher.log" 2>/dev/null; then
+        ok "supersede logged"
+    else
+        bad "supersede logged"
+    fi
+
+    stop_thinkers
+}
+
+# ---------------------------------------------------------------------------
 # Test 3b: the per-(thinker,type) queue is capped at 16 — overflow drops the
 # oldest entry and logs it, instead of growing without bound
 # ---------------------------------------------------------------------------
@@ -288,6 +329,7 @@ printf 'test_thinkers_pending: using tmp dir %s\n' "$TMP"
 test_pending_replay
 test_fifo_replay
 test_per_type_flags
+test_selfwake_coalesce
 test_queue_cap
 test_cleared_on_stop
 test_singleton_token

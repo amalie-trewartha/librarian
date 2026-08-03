@@ -331,12 +331,13 @@ _start_dispatcher() {
         }
 
         # Fire pending re-triggers for thinkers that have freed up.
-        # run/pending/<name>.<type>.<epoch>.<seq> files queue the steps that
-        # matched <name> while it was busy (FIFO per thinker+type, capped).
-        # Fixed-width epoch+seq means glob order == arrival order, and firing
-        # a step makes the thinker busy again, so at most one queued step
-        # fires per thinker per pass. Thinker names and step types must not
-        # contain dots.
+        # run/pending/<name>.<type>.<epoch>.<seq> files queue message/action
+        # steps that matched <name> while it was busy (FIFO per thinker+type,
+        # capped); <name>.<type>.coalesced holds the latest self-wake step of
+        # other types (last-wins). Fixed-width epoch+seq means glob order ==
+        # arrival order, and firing a step makes the thinker busy again, so
+        # at most one queued step fires per thinker per pass. Thinker names
+        # and step types must not contain dots.
         _fire_pending() {
             local _pfile _pbase _pname _ptype _pjson _pactive
             for _pfile in "$run_dir/pending"/*; do
@@ -427,26 +428,43 @@ _start_dispatcher() {
                     continue
                 fi
 
-                # Per-thinker concurrency: thinker busy => queue a pending
-                # trigger (FIFO per thinker+type, capped) so a burst of steps
-                # all get re-fired in arrival order as the thinker frees up
+                # Per-thinker concurrency while busy: semantics depend on the
+                # step type. message/action steps each carry a distinct
+                # payload that deserves its own wakeup — queue them FIFO
+                # (capped) so none is silently lost. Everything else (idle,
+                # observation, thought, ...) is a self-wake signal where only
+                # "wake again" matters — last-wins, one pending file, so a
+                # perpetual-loop thinker never builds a backlog of stale
+                # wakeups it then burns tokens draining.
                 if _thinker_busy "$_name"; then
-                    _pend_count=0
-                    for _pend_file in "$run_dir/pending/${_name}.${_step_type}."*; do
-                        [[ -f "$_pend_file" ]] && _pend_count=$((_pend_count + 1))
-                    done
-                    if [[ "$_pend_count" -ge 16 ]]; then
-                        for _pend_file in "$run_dir/pending/${_name}.${_step_type}."*; do
-                            printf '[dispatcher]   pending %s.%s queue full — dropping oldest\n' "$_name" "$_step_type" >&2
-                            rm -f "$_pend_file"
-                            _pend_count=$((_pend_count - 1))
-                            break
-                        done
-                    fi
-                    _pend_seq=$(( ${_pend_seq:-0} + 1 ))
-                    _pend_file="$run_dir/pending/${_name}.${_step_type}.$(date +%s).$(printf '%06d' "$_pend_seq")"
-                    printf '%s' "$_step_json" > "$_pend_file"
-                    printf '[dispatcher]   pending -> %s (type=%s, queued=%d)\n' "$_name" "$_step_type" "$((_pend_count + 1))" >&2
+                    case "$_step_type" in
+                        message|action)
+                            _pend_count=0
+                            for _pend_file in "$run_dir/pending/${_name}.${_step_type}."*; do
+                                [[ -f "$_pend_file" ]] && _pend_count=$((_pend_count + 1))
+                            done
+                            if [[ "$_pend_count" -ge 16 ]]; then
+                                for _pend_file in "$run_dir/pending/${_name}.${_step_type}."*; do
+                                    printf '[dispatcher]   pending %s.%s queue full — dropping oldest\n' "$_name" "$_step_type" >&2
+                                    rm -f "$_pend_file"
+                                    _pend_count=$((_pend_count - 1))
+                                    break
+                                done
+                            fi
+                            _pend_seq=$(( ${_pend_seq:-0} + 1 ))
+                            _pend_file="$run_dir/pending/${_name}.${_step_type}.$(date +%s).$(printf '%06d' "$_pend_seq")"
+                            printf '%s' "$_step_json" > "$_pend_file"
+                            printf '[dispatcher]   pending -> %s (type=%s, queued=%d)\n' "$_name" "$_step_type" "$((_pend_count + 1))" >&2
+                            ;;
+                        *)
+                            _pend_file="$run_dir/pending/${_name}.${_step_type}.coalesced"
+                            if [[ -f "$_pend_file" ]]; then
+                                printf '[dispatcher]   pending %s.%s superseded (last-wins)\n' "$_name" "$_step_type" >&2
+                            fi
+                            printf '%s' "$_step_json" > "$_pend_file"
+                            printf '[dispatcher]   pending -> %s (type=%s, coalesced)\n' "$_name" "$_step_type" >&2
+                            ;;
+                    esac
                     continue
                 fi
 
