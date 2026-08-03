@@ -14,7 +14,7 @@ from typing import Any
 
 from . import mindlog, naming
 from .config import Config
-from .slackfmt import chunk, to_mrkdwn
+from .slackfmt import chunk, strip_leaked_command, to_mrkdwn
 from .state import ActiveThreads
 
 log = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ def run(
         if not naming.is_slack_name(to):
             continue
         conv = naming.decode(to)
-        text = to_mrkdwn(str(step.get("content") or "")).strip()
+        text = to_mrkdwn(strip_leaked_command(str(step.get("content") or ""))).strip()
         if not text:
             continue
         threads.touch(conv.channel, conv.thread_ts)

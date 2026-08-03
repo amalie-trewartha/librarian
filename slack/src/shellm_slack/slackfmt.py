@@ -28,6 +28,15 @@ def to_mrkdwn(text: str) -> str:
     return "".join(p if p.startswith("`") else _convert_prose(p) for p in parts)
 
 
+def strip_leaked_command(text: str) -> str:
+    """Drop a leading 'chat reply <name>' the model echoed into its reply.
+
+    The mind-log side also strips this; keeping a bridge-side guard means a
+    leak never reaches Slack even if an agent-typed reply slips through.
+    """
+    return re.sub(r"^\s*chat reply [A-Za-z0-9._-]+\s*", "", text, count=1)
+
+
 def clean_inbound(text: str, bot_user_id: str | None = None) -> str:
     """Normalize a Slack message body for the mind log."""
     if bot_user_id:

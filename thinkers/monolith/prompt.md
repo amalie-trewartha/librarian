@@ -18,7 +18,7 @@ Replying to incoming chat messages is NOT your job here — that is handled on a
 
 ## How to write steps
 
-Append with `traj append` using `--field`, or pipe JSON. Always set `source` to `monolith`. Examples:
+Append with `traj append` using `--field`, or pipe JSON. Always set `source` to the literal string `monolith` — NEVER your identity name or anything else (source names the process that wrote the step, and viewers lane steps by it; a wrong source also changes how the dispatcher routes triggers). Examples:
 
 ```bash
 # a thought

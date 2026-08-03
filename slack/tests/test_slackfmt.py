@@ -1,4 +1,11 @@
-from shellm_slack.slackfmt import chunk, clean_inbound, to_mrkdwn
+from shellm_slack.slackfmt import chunk, clean_inbound, strip_leaked_command, to_mrkdwn
+
+
+def test_strip_leaked_command():
+    leaked = "chat reply slack-U0BNK8YBF7A-C0BMUKCR44C-1785790643.112419 Right where Max left them"
+    assert strip_leaked_command(leaked) == "Right where Max left them"
+    assert strip_leaked_command("no leak here") == "no leak here"
+    assert strip_leaked_command("mid-text chat reply foo stays") == "mid-text chat reply foo stays"
 
 
 def test_bold_and_links():

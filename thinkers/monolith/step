@@ -114,17 +114,23 @@ $recent_context
 A message just arrived for you in chat.
 MESSAGE from $msg_from: $trigger_content
 
-Reply as $IDENTITY_NAME — first person, natural, conversational. Answer the
-question COMPLETELY with what you already know from the context above and your
-own knowledge; do NOT stall for lookups you don't need. Only if it genuinely
-requires running tools or looking something up should you instead briefly say
-you're on it (the work will happen separately) — in that case do not guess at
-an answer."
+Reply as $IDENTITY_NAME — first person, natural, conversational. Answer THIS
+message only — earlier messages in the stream that already have your reply are
+settled; never re-answer them. Answer the question COMPLETELY with what you
+already know from the context above and your own knowledge; do NOT stall for
+lookups you don't need. Only if it genuinely requires running tools or looking
+something up should you instead briefly say you're on it (the work will happen
+separately) — in that case do not guess at an answer."
 
     printf '  replying to %s...\n' "$msg_from" >&2
     reply=$(printf '%s' "$reply_prompt" | \
         llm -m "$REPLY_MODEL" \
-        -s "You are $IDENTITY_NAME. Output ONLY the reply message text — no preamble, no quotes, no explanation.") || true
+        -s "You are $IDENTITY_NAME. Output ONLY the reply message text — no preamble, no quotes, no explanation, and no commands. Delivery is automatic: never write 'chat reply' or the recipient's address in your output.") || true
+
+    # Models sometimes echo the delivery command when message headers mention
+    # it (e.g. a bridge's 'reply with: chat reply <name>' coaching for the
+    # agentic path) — the leaked prefix would be sent as literal text. Strip it.
+    reply=$(printf '%s' "$reply" | sed -E '1s/^[[:space:]]*chat reply [A-Za-z0-9._-]+[[:space:]]*//')
 
     if [[ -n "$reply" ]] && printf '%s' "$reply" | chat reply "$msg_from"; then
         # `chat reply` already appended the outgoing message step. Record a
