@@ -49,11 +49,15 @@ set -eu
 set -o pipefail
 [[ -n "${IDENTITY_NAME:-}" ]] || { echo "error: activate did not set IDENTITY_NAME" >&2; exit 1; }
 
+# Always (re)start the thinkers so the dispatcher runs with the environment
+# THIS invocation sourced. On first boot the unit starts before the SSM .env
+# lands; skipping a running dispatcher would leave it alive with the stale
+# pre-.env environment (wrong model, no keys) after the post-.env restart.
 if thinkers status 2>/dev/null | grep -q 'Dispatcher: running'; then
-    echo "==> Dispatcher already running"
-else
-    echo "==> Starting monolith thinker"
-    thinkers start monolith
+    echo "==> Restarting thinkers with current environment"
+    thinkers stop || true
 fi
+echo "==> Starting monolith thinker"
+thinkers start monolith
 
 echo "==> Persona '$name' ready"
