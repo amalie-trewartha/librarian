@@ -18,7 +18,9 @@
         "im:read",
         "im:write",
         "channels:history",
+        "channels:read",
         "groups:history",
+        "groups:read",
         "users:read"
       ]
     }

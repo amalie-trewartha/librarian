@@ -155,7 +155,13 @@ class Inbound:
         content = clean_inbound(msg.text, self.bot_user_id)
         if not content:
             return
-        header = f"(Slack: {self.names.user(msg.user)} in {self.names.place(msg.channel)})"
+        # The reply-to name is spelled out because agent-typed replies (the
+        # agentic path, unlike the mechanical fast-reply) must use the full
+        # routing key, not the human display name.
+        header = (
+            f"(Slack: {self.names.user(msg.user)} in {self.names.place(msg.channel)}"
+            f" — reply with: chat reply {msg.from_name})"
+        )
         body = {"content": f"{header} {content}", "from_name": msg.from_name}
         for attempt in range(1, DELIVERY_ATTEMPTS + 1):
             try:
