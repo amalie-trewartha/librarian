@@ -1,0 +1,11 @@
+{
+  "apps": {
+    "E0BMSSAQPMX": {
+      "app_id": "A0BMR0GP6JW",
+      "enterprise_id": "E0BMSSAQPMX",
+      "team_domain": "laude-app-dev-sandbox",
+      "team_id": "E0BMSSAQPMX"
+    }
+  },
+  "default": "laude-app-dev-sandbox"
+}
