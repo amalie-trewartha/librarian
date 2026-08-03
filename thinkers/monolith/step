@@ -114,10 +114,12 @@ $recent_context
 A message just arrived for you in chat.
 MESSAGE from $msg_from: $trigger_content
 
-Reply as $IDENTITY_NAME — first person, natural, conversational. Answer with
-what you already know from the context above; do NOT stall for lookups. If it
-needs real work, reply briefly acknowledging it (you will follow up), and the
-work will happen separately."
+Reply as $IDENTITY_NAME — first person, natural, conversational. Answer the
+question COMPLETELY with what you already know from the context above and your
+own knowledge; do NOT stall for lookups you don't need. Only if it genuinely
+requires running tools or looking something up should you instead briefly say
+you're on it (the work will happen separately) — in that case do not guess at
+an answer."
 
     printf '  replying to %s...\n' "$msg_from" >&2
     reply=$(printf '%s' "$reply_prompt" | \
@@ -165,6 +167,22 @@ fi
 
 # Cheap deterministic routing hints (nudges, not rules — the model decides).
 hints=""
+# Reply-state of the latest inbound message: the fast-reply path answers
+# messages immediately, and the router re-waking on its bookkeeping tends to
+# reply AGAIN (the double-reply loop of 2026-08-03). Tell it outright.
+reply_state=$(printf '%s\n' "$recent_context" | jq -Rn --arg me "$IDENTITY_NAME" '
+    [inputs | fromjson? // empty] as $steps
+    | ([$steps | to_entries[] | select(.value.type == "message" and .value.to == $me)] | last) as $in
+    | if $in == null then "none"
+      elif ([$steps[($in.key + 1):][] | select(.type == "message" and .from == $me)] | length) > 0
+      then "answered" else "unanswered" end' 2>/dev/null) || reply_state="none"
+if [[ "$reply_state" == "answered" ]]; then
+    hints="${hints}- The latest incoming chat message has ALREADY been replied to. Do NOT send another reply unless you have completed real work since then that produced genuinely new information for that person.
+"
+elif [[ "$reply_state" == "unanswered" ]]; then
+    hints="${hints}- The latest incoming chat message appears to have NO reply yet (the fast-reply may have failed) — consider act: reply to it.
+"
+fi
 last_three=$(printf '%s\n' "$recent_context" | tail -n 3)
 if printf '%s' "$recent_context" | tail -n 1 | jq -e 'select(.type == "action")' >/dev/null 2>&1; then
     hints="${hints}- The most recent step is an ACTION that has no observation yet — it may need carrying out (act).
