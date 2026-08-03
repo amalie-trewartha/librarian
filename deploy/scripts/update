@@ -61,6 +61,6 @@ if [[ "$dry_run" -eq 1 ]]; then
     exit 0
 fi
 
-info "Updating the box (frontend rebuild takes ~1-2 min)"
-run_on_box "sudo bash /opt/shellm/app/deploy/update.sh"
+info "Updating the box (frontend rebuild takes ~1-2 min; output prints when done)"
+run_script_on_box "bash /opt/shellm/app/deploy/update.sh"
 info "Dashboard: $(tf output -raw url)"

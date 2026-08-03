@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# deploy/scripts/watch — follow a service's journal on the box from your
+# laptop. Ctrl-C detaches; the service keeps running.
+#
+# Usage: deploy/scripts/watch [web|bridge|persona]   (default: web)
+
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+case "${1:-}" in
+    -h|--help) sed -n '2,5p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
+case "${1:-web}" in
+    web)     unit="shellm-web" ;;
+    bridge)  unit="shellm-slack-bridge" ;;
+    persona) unit="shellm-slack-agent" ;;
+    *) die "unknown target '${1}' (web|bridge|persona)" ;;
+esac
+
+require_tools terraform aws session-manager-plugin jq
+require_state
+require_aws
+
+state=$(instance_state)
+[[ "$state" == "running" ]] || die "instance is '$state' — start it with deploy/scripts/start"
+
+info "Following $unit on $(instance_id) (Ctrl-C detaches)"
+run_on_box "sudo journalctl -u '$unit' -n 50 -f"

@@ -55,7 +55,56 @@ instance_state() {
         --query 'Reservations[0].Instances[0].State.Name' --output text
 }
 
-# Run one command on the box over SSM, streaming its output.
+# Run a multi-line bash script on the box as root and print its output once
+# it finishes. The script travels base64-encoded so bashisms and multi-line
+# quoting survive the trip.
+#
+# This uses SSM RunCommand (send-command, then poll for the result) rather
+# than an interactive session. The interactive channel is a terminal stream
+# that wedges at session open when a stale session-manager-plugin lingers,
+# and drops output chunks nondeterministically; RunCommand is a plain API
+# call with the output fetched afterwards. Its one limit: output is capped
+# at 24KB per stream — keep data small.
+run_script_on_box() {
+    require_tools jq
+    local b64 cmd_id status tries
+    b64=$(printf '%s' "$1" | base64 | tr -d '\n')
+    cmd_id=$(aws ssm send-command --region "$(region)" \
+        --instance-ids "$(instance_id)" \
+        --document-name AWS-RunShellScript \
+        --parameters "$(jq -n --arg c "echo $b64 | base64 -d | bash" '{commands: [$c]}')" \
+        --query 'Command.CommandId' --output text) || return 1
+    # Poll until the invocation leaves the queue. The invocation can take a
+    # moment to exist after send-command, which reads as Pending here.
+    tries=0
+    while :; do
+        status=$(aws ssm get-command-invocation --region "$(region)" \
+            --command-id "$cmd_id" --instance-id "$(instance_id)" \
+            --query Status --output text 2>/dev/null) || status=Pending
+        case "$status" in
+            Pending|InProgress|Delayed)
+                tries=$((tries + 1))
+                [[ "$tries" -gt 450 ]] && { echo "run_script_on_box: timed out after 15m (command $cmd_id still $status)" >&2; return 1; }
+                sleep 2 ;;
+            *) break ;;
+        esac
+    done
+    local out err
+    out=$(aws ssm get-command-invocation --region "$(region)" \
+        --command-id "$cmd_id" --instance-id "$(instance_id)" \
+        --query StandardOutputContent --output text)
+    err=$(aws ssm get-command-invocation --region "$(region)" \
+        --command-id "$cmd_id" --instance-id "$(instance_id)" \
+        --query StandardErrorContent --output text)
+    [[ -n "$out" && "$out" != "None" ]] && printf '%s' "$out"
+    [[ -n "$err" && "$err" != "None" ]] && printf '%s' "$err" >&2
+    [[ "$status" == "Success" ]]
+}
+
+# Run one command on the box over SSM, streaming its output as it happens.
+# Only for commands that genuinely stream (deploy/scripts/watch's
+# journalctl -f) or need a terminal; one-shot commands belong in
+# run_script_on_box, which uses the reliable non-interactive channel.
 run_on_box() {
     require_tools session-manager-plugin jq
     # JSON form: the shorthand parser would split the command on commas.
