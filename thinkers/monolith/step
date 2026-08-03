@@ -96,43 +96,78 @@ if [[ "$trigger_type" == "message" ]]; then
     fi
     [[ -z "$trigger_content" ]] && exit 0
 
-    # Compose the reply directly from identity + recent stream. ONE llm call,
-    # no tools, no thinking step — this is the whole point of the reply route.
+    # Idempotency: replies stamp reply_to with the step id they answer, so
+    # "already answered" is exact. A redelivered trigger (pending replay,
+    # dispatcher restart) must never produce a second reply.
+    if [[ -n "$trigger_step_id" ]]; then
+        already=$(traj cat "${ROOT_TRAJ_ID:-$TRAJ_ID}" --raw 2>/dev/null \
+            | jq -Rr --arg me "$IDENTITY_NAME" --arg t "$trigger_step_id" \
+                'fromjson? // empty
+                 | select(.type == "message" and .from == $me and (.reply_to // "") == $t)
+                 | .step_id' 2>/dev/null | head -n 1) || already=""
+        if [[ -n "$already" ]]; then
+            printf '  already replied to step %s — skipping\n' "$trigger_step_id" >&2
+            exit 0
+        fi
+    fi
+
+    # Compose the reply with ONE llm call, no tools, no thinking step — this
+    # is the whole point of the reply route. The conversation with this sender
+    # is presented as an actual message array (their messages = user turns,
+    # our replies = assistant turns) rather than a blob of raw steps: models
+    # continue well-formed transcripts instead of parroting their own earlier
+    # replies out of an undifferentiated stream (the repeat bugs of
+    # 2026-08-03). Everything else from the stream rides along as inner
+    # context in the system prompt.
     system_prompt=$(_build_system_prompt)
     recent_context=""
     if traj exists 2>/dev/null; then
         recent_context=$(_recent_stream "$THINK_CONTEXT_TAIL") || recent_context=""
     fi
 
-    reply_prompt="<context>
-$system_prompt
+    convo_json=$(printf '%s\n' "$recent_context" | jq -cRn \
+        --arg me "$IDENTITY_NAME" --arg them "$msg_from" '
+        [inputs | fromjson? // empty
+         | select(.type == "message")
+         | if .from == $them and .to == $me then {role:"user", content:(.content|tostring)}
+           elif .from == $me and .to == $them then {role:"assistant", content:(.content|tostring)}
+           else empty end]
+        | .[-12:]' 2>/dev/null) || convo_json="[]"
+    # The triggering message must be the final user turn (it may be missing
+    # from a short/filtered stream), and some providers reject a leading
+    # assistant turn.
+    convo_json=$(printf '%s' "$convo_json" | jq -c --arg c "$trigger_content" '
+        (if length == 0 or .[-1].role != "user" then . + [{role:"user", content:$c}] else . end)
+        | (if (.[0].role // "user") == "assistant" then .[1:] else . end)')
 
-Recent stream (last $THINK_CONTEXT_TAIL steps):
-$recent_context
-</context>
+    inner_context=$(printf '%s\n' "$recent_context" | jq -Rr \
+        'fromjson? // empty | select(.type != "message")
+         | "[\(.type)] \(.content|tostring)"' 2>/dev/null | tail -n 8) || inner_context=""
 
-A message just arrived for you in chat.
-MESSAGE from $msg_from: $trigger_content
+    reply_system="$system_prompt
 
-Reply as $IDENTITY_NAME — first person, natural, conversational. Answer THIS
-message only — earlier messages in the stream that already have your reply are
-settled; never re-answer them. Answer the question COMPLETELY with what you
-already know from the context above and your own knowledge; do NOT stall for
-lookups you don't need. Only if it genuinely requires running tools or looking
-something up should you instead briefly say you're on it (the work will happen
-separately) — in that case do not guess at an answer."
+You are in a live chat conversation with $msg_from. The messages are the real
+back-and-forth so far; reply to their newest message — first person, natural,
+conversational, concise. Never repeat or rephrase an earlier reply of yours.
+Answer completely from what you already know; only if it genuinely requires
+running tools or looking something up should you instead briefly say you're on
+it (the work happens separately) — in that case do not guess.
+
+Your recent inner life (context only, not part of the conversation):
+$inner_context
+
+Output ONLY the reply message text — no preamble, no quotes, no commands.
+Delivery is automatic: never write 'chat reply' or the recipient's address."
 
     printf '  replying to %s...\n' "$msg_from" >&2
-    reply=$(printf '%s' "$reply_prompt" | \
-        llm -m "$REPLY_MODEL" \
-        -s "You are $IDENTITY_NAME. Output ONLY the reply message text — no preamble, no quotes, no explanation, and no commands. Delivery is automatic: never write 'chat reply' or the recipient's address in your output.") || true
+    reply=$(llm -m "$REPLY_MODEL" -M "$convo_json" -s "$reply_system") || true
 
-    # Models sometimes echo the delivery command when message headers mention
-    # it (e.g. a bridge's 'reply with: chat reply <name>' coaching for the
-    # agentic path) — the leaked prefix would be sent as literal text. Strip it.
+    # Defense in depth: strip a leaked delivery command if a model echoes one.
     reply=$(printf '%s' "$reply" | sed -E '1s/^[[:space:]]*chat reply [A-Za-z0-9._-]+[[:space:]]*//')
 
-    if [[ -n "$reply" ]] && printf '%s' "$reply" | chat reply "$msg_from"; then
+    reply_args=()
+    [[ -n "$trigger_step_id" ]] && reply_args+=(--reply-to "$trigger_step_id")
+    if [[ -n "$reply" ]] && printf '%s' "$reply" | chat reply ${reply_args[@]+"${reply_args[@]}"} "$msg_from"; then
         # `chat reply` already appended the outgoing message step. Record a
         # brief observation too: it tells the mind it replied (so it does not
         # reply again) and re-fires the loop so the router can decide what to
@@ -176,11 +211,18 @@ hints=""
 # Reply-state of the latest inbound message: the fast-reply path answers
 # messages immediately, and the router re-waking on its bookkeeping tends to
 # reply AGAIN (the double-reply loop of 2026-08-03). Tell it outright.
+# A reply that stamps reply_to is matched exactly against the inbound step
+# id; replies without the stamp (agent-typed) fall back to "any later
+# outgoing message to that sender".
 reply_state=$(printf '%s\n' "$recent_context" | jq -Rn --arg me "$IDENTITY_NAME" '
     [inputs | fromjson? // empty] as $steps
     | ([$steps | to_entries[] | select(.value.type == "message" and .value.to == $me)] | last) as $in
     | if $in == null then "none"
-      elif ([$steps[($in.key + 1):][] | select(.type == "message" and .from == $me)] | length) > 0
+      elif ([$steps[($in.key + 1):][]
+             | select(.type == "message" and .from == $me
+                      and (if (.reply_to // "") != ""
+                           then .reply_to == ($in.value.step_id // "")
+                           else .to == ($in.value.from // "") end))] | length) > 0
       then "answered" else "unanswered" end' 2>/dev/null) || reply_state="none"
 if [[ "$reply_state" == "answered" ]]; then
     hints="${hints}- The latest incoming chat message has ALREADY been replied to. Do NOT send another reply unless you have completed real work since then that produced genuinely new information for that person.

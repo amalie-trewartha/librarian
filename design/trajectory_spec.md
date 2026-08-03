@@ -391,6 +391,11 @@ A message between named parties (human or agent).
 
 The file-transfer variant (`chat file`) adds `"filename":"<name>"`.
 
+An optional `"reply_to":"<step_id>"` (stamped by `chat reply --reply-to`)
+names the message step this one answers, making "has this message been
+answered" a fact in the log rather than an ordering heuristic. Readers that
+don't know the field ignore it; writers that can't supply it omit it.
+
 #### `human-msg` / `agent-msg` (legacy)
 
 Predecessors of `message` — a human message into the thought stream and
