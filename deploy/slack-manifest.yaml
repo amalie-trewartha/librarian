@@ -1,0 +1,39 @@
+# Slack app manifest for the shellm bridge (Socket Mode).
+#
+# Create the app at https://api.slack.com/apps -> "Create New App" ->
+# "From a manifest", paste this file, and install it to the workspace.
+# Then, under "Basic Information" -> "App-Level Tokens", generate a token
+# with the connections:write scope (manifests cannot create app-level
+# tokens). You end up with two secrets for the .env:
+#   SLACK_BOT_TOKEN=xoxb-...   (OAuth & Permissions -> Bot User OAuth Token)
+#   SLACK_APP_TOKEN=xapp-...   (Basic Information -> App-Level Tokens)
+display_information:
+  name: Audel
+  description: "shellm agent — DM me or @mention me in a channel"
+features:
+  bot_user:
+    display_name: audel
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read   # app_mention events
+      - chat:write          # post replies
+      - im:history          # message.im events (DMs)
+      - im:read
+      - im:write
+      - channels:history    # thread follow-ups in public channels
+      - groups:history      # same, private channels the bot is invited to
+      - users:read          # display names for message headers
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention
+      - message.im
+      - message.channels
+      - message.groups
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

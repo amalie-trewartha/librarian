@@ -28,6 +28,27 @@ if [[ -f "$UNIT_SRC" ]]; then
     fi
 fi
 
+# Optional component: Slack bridge (installed on boxes provisioned with
+# SHELLM_INSTALL_SLACK_BRIDGE=1). Re-sync its units + deps and restart the
+# bridge; the persona bootstrap (oneshot) is left alone so the running
+# dispatcher is untouched.
+if [[ -f /etc/systemd/system/shellm-slack-bridge.service ]]; then
+    echo "==> Updating Slack bridge"
+    for unit in shellm-slack-agent shellm-slack-bridge; do
+        unit_src="$APP_DIR/deploy/$unit.service"
+        if [[ -f "$unit_src" ]]; then
+            rendered=$(sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$unit_src")
+            if ! printf '%s\n' "$rendered" | cmp -s - "/etc/systemd/system/$unit.service" 2>/dev/null; then
+                echo "==> Unit file changed — re-installing $unit"
+                printf '%s\n' "$rendered" | sudo tee "/etc/systemd/system/$unit.service" >/dev/null
+                sudo systemctl daemon-reload
+            fi
+        fi
+    done
+    sudo -u shellm bash -c "export PATH=\"\$HOME/.local/bin:\$PATH\"; cd '$APP_DIR/slack' && uv sync"
+    sudo systemctl restart shellm-slack-bridge
+fi
+
 echo "==> Forcing frontend rebuild on restart"
 sudo -u shellm rm -rf "$APP_DIR/web/src/shellm_web/static"
 

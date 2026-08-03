@@ -1,0 +1,28 @@
+# Copy to terraform.tfvars and fill in. No secrets belong here — the box's
+# .env (API keys + Slack tokens) lives in the SSM parameter; see README.
+# Gitignored anyway, and the state file DOES hold secrets (tunnel token).
+#
+# Seed the env parameter before terraform apply:
+#   aws ssm put-parameter --name /shellm-slack/env --type SecureString \
+#       --value "$(cat .env.slack)" --overwrite --region <region>
+# where .env.slack holds the LLM API key(s) plus:
+#   SLACK_BOT_TOKEN=xoxb-...
+#   SLACK_APP_TOKEN=xapp-...
+#   SHELLM_SLACK_IDENTITY=audel
+
+aws_region = "us-east-1"
+
+# Cloudflare — IDs are on the zone overview page / Zero Trust dashboard
+cloudflare_account_id = "REPLACE_ME"
+cloudflare_zone_id    = "REPLACE_ME"
+domain                = "example.com"
+subdomain             = "slack"
+
+# The Slack box keeps its own env parameter, separate from the demo box's
+env_parameter = "/shellm-slack/env"
+
+# Dash access (observability) — Slack traffic itself never enters here;
+# the bridge dials out via Socket Mode
+allowed_emails = [
+  "nick@jalbert.io",
+]

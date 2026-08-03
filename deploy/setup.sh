@@ -87,6 +87,23 @@ sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$SCRIPT_DIR/shellm-web.service" \
 systemctl daemon-reload
 systemctl enable --now shellm-web
 
+# Optional component: the Slack bridge (persona bootstrap + Socket Mode
+# client). Off by default — core deploys are unaffected unless the flag is
+# set (the terraform-slack stack sets it in user_data).
+if [[ "${SHELLM_INSTALL_SLACK_BRIDGE:-0}" == "1" ]]; then
+    echo "==> Installing Slack bridge (SHELLM_INSTALL_SLACK_BRIDGE=1)"
+    sudo -u "$SHELLM_USER" bash -c "
+        export PATH=\"\$HOME/.local/bin:\$PATH\"
+        cd '$APP_DIR/slack' && uv sync
+    "
+    for unit in shellm-slack-agent shellm-slack-bridge; do
+        sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$SCRIPT_DIR/$unit.service" \
+            > "/etc/systemd/system/$unit.service"
+    done
+    systemctl daemon-reload
+    systemctl enable --now shellm-slack-agent shellm-slack-bridge
+fi
+
 echo
 echo "Done. shellm-web is running on 127.0.0.1:8080 (not publicly reachable)."
 echo

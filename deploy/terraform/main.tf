@@ -1,3 +1,6 @@
+# NOTE: deploy/terraform-slack is an intentional sibling copy of this stack
+# (see the header there). If you fix something here, fix it there too.
+
 terraform {
   required_version = ">= 1.5"
 
