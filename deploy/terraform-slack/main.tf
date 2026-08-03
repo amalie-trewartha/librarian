@@ -81,10 +81,15 @@ resource "cloudflare_record" "shellm" {
 
 # Email OTP login: allow-listed users enter their email and get a 6-digit
 # code — no Cloudflare account needed.
-resource "cloudflare_zero_trust_access_identity_provider" "otp" {
+#
+# DELTA from the demo stack: onetimepin providers are account-level singletons
+# (creating a second one errors with access.api.error.conflict), and the demo
+# stack already owns ours — so this stack looks it up instead of creating it.
+# If the demo stack is ever destroyed, its IdP goes with it and this lookup
+# breaks; recreate the IdP (or move ownership here) before that.
+data "cloudflare_zero_trust_access_identity_provider" "otp" {
   account_id = var.cloudflare_account_id
   name       = "Email one-time PIN"
-  type       = "onetimepin"
 }
 
 resource "cloudflare_zero_trust_access_application" "shellm" {
@@ -95,7 +100,7 @@ resource "cloudflare_zero_trust_access_application" "shellm" {
   session_duration = var.access_session_duration
 
   # Pin to OTP and skip the login-method picker entirely.
-  allowed_idps              = [cloudflare_zero_trust_access_identity_provider.otp.id]
+  allowed_idps              = [data.cloudflare_zero_trust_access_identity_provider.otp.id]
   auto_redirect_to_identity = true
 }
 
