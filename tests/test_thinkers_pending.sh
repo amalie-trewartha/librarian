@@ -85,10 +85,10 @@ test_pending_replay() {
     append_step '{"type":"action","content":"B","source":"test"}'
     sleep 1
 
-    if [[ -f "$TMP/id/run/pending/slowpoke.action" ]]; then
-        ok "pending flag set while thinker busy"
+    if compgen -G "$TMP/id/run/pending/slowpoke.action.*" >/dev/null; then
+        ok "pending trigger queued while thinker busy"
     else
-        bad "pending flag set while thinker busy"
+        bad "pending trigger queued while thinker busy"
     fi
 
     wait_for_record 2
@@ -99,20 +99,20 @@ test_pending_replay() {
     fi
 
     sleep 1
-    if [[ ! -f "$TMP/id/run/pending/slowpoke.action" ]]; then
-        ok "pending flag cleared after fire"
+    if ! compgen -G "$TMP/id/run/pending/slowpoke.action.*" >/dev/null; then
+        ok "pending trigger cleared after fire"
     else
-        bad "pending flag cleared after fire"
+        bad "pending trigger cleared after fire"
     fi
 
     stop_thinkers
 }
 
 # ---------------------------------------------------------------------------
-# Test 2: several same-type steps while busy coalesce — only the latest
-# replays, and the supersede is logged
+# Test 2: several same-type steps while busy queue up and ALL replay, in
+# arrival order (FIFO — nothing is silently dropped)
 # ---------------------------------------------------------------------------
-test_supersede_last_wins() {
+test_fifo_replay() {
     setup_identity
     start_thinkers
 
@@ -122,19 +122,23 @@ test_supersede_last_wins() {
     sleep 1
     append_step '{"type":"action","content":"C","source":"test"}'
 
-    wait_for_record 2
+    # A (~3s) then B (~3s) then C (~3s), fired by 1s ticks in between
+    wait_for_record 3 25
     local rec
     rec=$(cat "$TMP/id/record" 2>/dev/null)
-    if [[ "$(record_count)" -eq 2 ]] && printf '%s' "$rec" | tail -1 | grep -q '"C"' && ! printf '%s' "$rec" | grep -q '"B"'; then
-        ok "same-type steps coalesce to latest (B superseded by C)"
+    if [[ "$(record_count)" -eq 3 ]] \
+        && sed -n 1p "$TMP/id/record" | grep -q '"A"' \
+        && sed -n 2p "$TMP/id/record" | grep -q '"B"' \
+        && sed -n 3p "$TMP/id/record" | grep -q '"C"'; then
+        ok "same-type steps all replay in arrival order (A, B, C)"
     else
-        bad "same-type steps coalesce to latest" "record: $(printf '%s' "$rec" | tr '\n' ' ')"
+        bad "same-type steps all replay in arrival order" "record: $(printf '%s' "$rec" | tr '\n' ' ')"
     fi
 
-    if grep -q 'superseded' "$TMP/id/run/logs/dispatcher.log" 2>/dev/null; then
-        ok "supersede logged"
+    if grep -q 'queued=' "$TMP/id/run/logs/dispatcher.log" 2>/dev/null; then
+        ok "queueing logged"
     else
-        bad "supersede logged"
+        bad "queueing logged"
     fi
 
     stop_thinkers
@@ -155,11 +159,11 @@ test_per_type_flags() {
     sleep 1
 
     local flags
-    flags=$(ls "$TMP/id/run/pending" 2>/dev/null | sort | tr '\n' ' ')
-    if [[ "$flags" == "slowpoke.action slowpoke.message " ]]; then
-        ok "per-type pending flags set (action + message)"
+    flags=$(ls "$TMP/id/run/pending" 2>/dev/null | sed -E 's/^slowpoke\.([^.]+)\..*/\1/' | sort -u | tr '\n' ' ')
+    if [[ "$flags" == "action message " ]]; then
+        ok "per-type pending queues set (action + message)"
     else
-        bad "per-type pending flags set" "flags: $flags"
+        bad "per-type pending queues set" "flags: $flags"
     fi
 
     # A (~3s) then B (~3s) then M (~3s), fired by 1s ticks in between
@@ -170,6 +174,39 @@ test_per_type_flags() {
         ok "action and message both replayed"
     else
         bad "action and message both replayed" "record: $(printf '%s' "$rec" | tr '\n' ' ')"
+    fi
+
+    stop_thinkers
+}
+
+# ---------------------------------------------------------------------------
+# Test 3b: the per-(thinker,type) queue is capped at 16 — overflow drops the
+# oldest entry and logs it, instead of growing without bound
+# ---------------------------------------------------------------------------
+test_queue_cap() {
+    setup_identity
+    start_thinkers
+
+    append_step '{"type":"action","content":"A","source":"test"}'
+    sleep 1   # slowpoke picks up A and sleeps
+    local i
+    for i in $(seq 1 18); do
+        append_step "{\"type\":\"action\",\"content\":\"Q$i\",\"source\":\"test\"}"
+    done
+    sleep 2
+
+    local count
+    count=$(ls "$TMP/id/run/pending" 2>/dev/null | grep -c '^slowpoke\.action\.')
+    if [[ "$count" -le 16 ]]; then
+        ok "pending queue capped at 16 (got $count)"
+    else
+        bad "pending queue capped at 16" "count: $count"
+    fi
+
+    if grep -q 'queue full' "$TMP/id/run/logs/dispatcher.log" 2>/dev/null; then
+        ok "queue-full drop logged"
+    else
+        bad "queue-full drop logged"
     fi
 
     stop_thinkers
@@ -249,8 +286,9 @@ test_singleton_token() {
 
 printf 'test_thinkers_pending: using tmp dir %s\n' "$TMP"
 test_pending_replay
-test_supersede_last_wins
+test_fifo_replay
 test_per_type_flags
+test_queue_cap
 test_cleared_on_stop
 test_singleton_token
 
