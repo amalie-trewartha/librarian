@@ -71,12 +71,14 @@ The dispatcher is a background process launched by `thinkers start`. It:
 
 ## Pending Re-Triggers
 
-A step that matches a thinker which is **busy** (already has a running step) is not dropped. Instead the dispatcher writes the step JSON to `$IDENTITY_DIR/run/pending/<name>.<type>` (last-writer-wins per thinker+type). On every FIFO line — including the 1-second `TICK` heartbeat — the dispatcher checks pending flags: if the flagged thinker has finished its step (and the global concurrency cap allows), the stored step is dispatched to it and the flag is removed.
+A step that matches a thinker which is **busy** (already has a running step) is not dropped. It is stored under `$IDENTITY_DIR/run/pending/` with semantics that depend on the step type. On every FIFO line — including the 1-second `TICK` heartbeat — the dispatcher checks pending entries: if a flagged thinker has finished its step (and the global concurrency cap allows), the stored step is dispatched to it and the entry is removed.
 
 Semantics:
-- Delivery is coalesced per `(thinker, type)`: if several same-type steps arrive while a thinker is busy, only the **latest** is replayed (each supersede is logged). Thinkers are level-triggered — a trigger means "look at the trajectory" — so intermediate wakeups are redundant. Thinkers that consume the trigger's payload (e.g. the actor) get the most recent step's JSON on stdin.
-- A thinker's own output never sets its own pending flag (the self-trigger check runs first).
-- Pending flags are cleared on `thinkers start` and `thinkers stop`.
+- **`message` and `action` steps queue FIFO** in `pending/<name>.<type>.<epoch>.<seq>` files, capped at 16 per `(thinker, type)` (overflow drops the oldest, logged). Each such step carries a distinct payload — a human message that deserves its own reply, an action to carry out — so none may be silently coalesced away. Fixed-width epoch+seq makes glob order equal arrival order, and firing a step makes the thinker busy again, so at most one queued step fires per thinker per pass — replays happen in arrival order. (Before 2026-08-03 all types were last-writer-wins, which silently dropped concurrent chat messages.)
+- **All other types coalesce last-wins** in a single `pending/<name>.<type>.coalesced` file (each supersede is logged). These are self-wake signals — `idle`, `observation`, `thought`, ... — where a trigger means "look at the trajectory"; queueing them builds a backlog of stale wakeups that a perpetual-loop thinker then burns tokens draining.
+- Thinker names and step types must not contain dots (the pending filename encodes them dot-separated).
+- A thinker's own output never sets its own pending entry (the self-trigger check runs first) — unless it subscribes with `trigger_self: true`.
+- Pending entries are cleared on `thinkers start` and `thinkers stop`.
 
 ## Self-Triggering Prevention
 
@@ -92,7 +94,8 @@ $IDENTITY_DIR/run/
   dispatch.fifo         # Named pipe for step routing
   tail_pids             # One PID per line for tail -F and ticker processes
   pending/
-    <name>.<type>       # Pending re-trigger flag: step JSON awaiting replay
+    <name>.<type>.<epoch>.<seq>  # Queued message/action step awaiting FIFO replay
+    <name>.<type>.coalesced      # Latest self-wake step of this type (last-wins)
   logs/
     inner_monologue.log # Per-thinker step output
     actor.log

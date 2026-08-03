@@ -86,17 +86,31 @@ one loop stays well-behaved:
   it landed; never re-send a variant. New messages that arrive mid-run are NOT
   answered in this run; the dispatcher re-triggers us for them separately.
 
+  This rule needs mechanical support, not just prompt text: the fast-reply's
+  bookkeeping observation re-wakes the router (trigger_self), which then sees
+  the conversation as the freshest thing in context and — across every model
+  tried — tends to reply AGAIN with a paraphrase (the double-reply loop of
+  2026-08-03). The step therefore computes a deterministic routing signal
+  from the recent stream: whether the latest inbound message already has a
+  reply after it. "Already replied" tells the router a re-reply is noise
+  (only new work results justify another message); "no reply yet" tells it
+  the fast-reply may have failed and it should cover. The fast-reply prompt
+  likewise answers fully when it can, acknowledging-and-deferring ONLY when
+  tool work is genuinely required — otherwise every simple question produces
+  a contentless ack followed by the router's real answer.
+
 **Self-loop guard.** `chat` stamps `source:"chat"` on BOTH incoming and
 outgoing messages, so an outgoing reply is itself a `message` step that would
 re-trigger us. Guard exactly as the actor does today: only treat a `message`
 trigger as something to reply to when `to == IDENTITY_NAME`. Our own replies
 (`from == IDENTITY_NAME`) are context, not triggers.
 
-Latency note: because chat shares the single agentic-run path, a reply is not
-as low-latency as a dedicated fast-model chat thinker would be. That is the
-accepted tradeoff for keeping one simple process. If reply latency becomes a
-problem, the reply path can later be split into its own thinker (see History) —
-but we are deliberately not doing that now.
+Latency note: replies no longer share the agentic-run path — the implemented
+step has a dedicated FAST-REPLY path that short-circuits before the router
+when the trigger is a message addressed to us: one `llm` call (optionally a
+faster `MONOLITH_REPLY_MODEL`), no tools, straight to `chat reply`. The
+router's `reply`/`act` routes remain for follow-ups that deliver results of
+real work. The single process is kept; only the first response is fast-pathed.
 
 ## Routing hints, not rules
 
