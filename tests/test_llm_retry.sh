@@ -56,6 +56,20 @@ case "$mode" in
     sse-ok)
         printf 'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n'
         ;;
+    ws-body)    # HTTP 200 whose body is only whitespace keep-alive padding
+        if [[ -n "$out_file" ]]; then
+            printf '   \n\n  \n' > "$out_file"
+            printf '200'
+        else
+            printf '   \n\n  \n'
+        fi
+        ;;
+    empty-body) # HTTP 200 with a zero-byte body
+        if [[ -n "$out_file" ]]; then
+            : > "$out_file"
+            printf '200'
+        fi
+        ;;
     sse-midstream-fail)
         printf 'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'
         echo "curl: (18) transfer closed with outstanding read data remaining" >&2
@@ -201,6 +215,48 @@ check "stream truncation succeeds"    test "$rc" -eq 0
 check "stream truncated text intact"  test "$out" = "truncated tex"
 check "stream truncation not retried" test "$(calls)" = "1"
 check "stream truncation warned"      grep -q "output truncated at max_tokens" "$WORK/stderr"
+
+# ---------------------------------------------------------------------------
+# Whitespace-only 200 body (provider died, keep-alive padding) is an error,
+# not an empty success — retried, and fatal when persistent
+# ---------------------------------------------------------------------------
+
+reset $'ws-body\nhttp-200'
+out=$(LLM_RETRIES=2 run_llm --no-stream)
+check "non-stream ws-body retried"    test "$out" = "ok"
+check "two calls (ws then ok)"        test "$(calls)" = "2"
+
+reset "ws-body"
+out=$(LLM_RETRIES=1 run_llm --no-stream)
+rc=$?
+check "persistent ws-body fails"      test "$rc" -ne 0
+check "ws-body no output"             test -z "$out"
+check "ws-body msg surfaced"          grep -q "whitespace-only response body" "$WORK/stderr"
+
+reset $'ws-body\nsse-ok'
+out=$(LLM_RETRIES=2 run_llm)
+check "stream ws-body retried"        test "$out" = "ok"
+check "stream two calls (ws then ok)" test "$(calls)" = "2"
+
+reset "ws-body"
+out=$(LLM_RETRIES=1 run_llm)
+rc=$?
+check "persistent stream ws fails"    test "$rc" -ne 0
+check "stream ws no output"           test -z "$out"
+check "stream ws is an API error"     grep -q "llm: error: API error" "$WORK/stderr"
+
+reset "empty-body"
+out=$(LLM_RETRIES=1 run_llm)
+rc=$?
+check "empty stream body fails"       test "$rc" -ne 0
+check "empty stream no output"        test -z "$out"
+check "empty stream retried"          test "$(calls)" = "2"
+check "empty stream msg surfaced"     grep -q "stream ended without emitting" "$WORK/stderr"
+
+reset $'empty-body\nhttp-200'
+out=$(LLM_RETRIES=2 run_llm --no-stream)
+check "non-stream empty retried"      test "$out" = "ok"
+check "empty is whitespace error"     test "$(calls)" = "2"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
