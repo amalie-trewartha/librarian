@@ -9,7 +9,10 @@ set -euo pipefail
 
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPTS_DIR/../.." && pwd)"
-TF_DIR="$REPO_ROOT/deploy/terraform"
+# Which stack to drive: SHELLM_TF_STACK=terraform-slack targets the Slack
+# box; default is the demo stack.
+TF_DIR="$REPO_ROOT/deploy/${SHELLM_TF_STACK:-terraform}"
+[[ -d "$TF_DIR" ]] || { echo "error: no such stack dir: $TF_DIR" >&2; exit 1; }
 
 die()  { echo "error: $*" >&2; exit 1; }
 info() { printf '==> %s\n' "$*"; }
