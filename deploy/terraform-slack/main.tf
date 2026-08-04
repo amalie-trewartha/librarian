@@ -92,6 +92,24 @@ data "cloudflare_zero_trust_access_identity_provider" "otp" {
   name       = "Email one-time PIN"
 }
 
+# Google SSO for whole-domain access (allowed_email_domains). The OAuth
+# client is created manually in Google Cloud console — redirect URI
+# https://<team>.cloudflareaccess.com/cdn-cgi/access/callback, consent
+# screen "Internal" so only workspace accounts can even reach Access (the
+# email_domain policy below is the second gate). Empty client id = no
+# Google IdP, stack stays OTP-only.
+resource "cloudflare_zero_trust_access_identity_provider" "google" {
+  count      = var.google_oauth_client_id != "" ? 1 : 0
+  account_id = var.cloudflare_account_id
+  name       = "Google (${local.hostname})"
+  type       = "google"
+
+  config {
+    client_id     = var.google_oauth_client_id
+    client_secret = var.google_oauth_client_secret
+  }
+}
+
 resource "cloudflare_zero_trust_access_application" "shellm" {
   zone_id          = var.cloudflare_zone_id
   name             = "shellm (${local.hostname})"
@@ -99,9 +117,13 @@ resource "cloudflare_zero_trust_access_application" "shellm" {
   type             = "self_hosted"
   session_duration = var.access_session_duration
 
-  # Pin to OTP and skip the login-method picker entirely.
-  allowed_idps              = [data.cloudflare_zero_trust_access_identity_provider.otp.id]
-  auto_redirect_to_identity = true
+  # OTP always; Google when configured. With a single IdP, skip the
+  # login-method picker entirely; with both, the picker must show.
+  allowed_idps = concat(
+    [data.cloudflare_zero_trust_access_identity_provider.otp.id],
+    cloudflare_zero_trust_access_identity_provider.google[*].id,
+  )
+  auto_redirect_to_identity = var.google_oauth_client_id == ""
 }
 
 resource "cloudflare_zero_trust_access_policy" "allowlist" {
@@ -113,6 +135,13 @@ resource "cloudflare_zero_trust_access_policy" "allowlist" {
 
   include {
     email = var.allowed_emails
+  }
+
+  dynamic "include" {
+    for_each = length(var.allowed_email_domains) > 0 ? [1] : []
+    content {
+      email_domain = var.allowed_email_domains
+    }
   }
 }
 

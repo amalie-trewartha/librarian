@@ -26,3 +26,11 @@ env_parameter = "/shellm-slack/env"
 allowed_emails = [
   "nick@jalbert.io",
 ]
+
+# Optional: let a whole Google Workspace domain SSO into the dash. Create an
+# OAuth client in Google Cloud console first (type Web application, redirect
+# URI https://<team>.cloudflareaccess.com/cdn-cgi/access/callback, consent
+# screen "Internal") — see README. Leave unset for OTP-only.
+# allowed_email_domains      = ["laude.org"]
+# google_oauth_client_id     = "1234-abc.apps.googleusercontent.com"
+# google_oauth_client_secret = "GOCSPX-..."   # tfvars is gitignored; state holds it too
