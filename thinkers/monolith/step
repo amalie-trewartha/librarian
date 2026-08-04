@@ -96,15 +96,28 @@ if [[ "$trigger_type" == "message" ]]; then
     fi
     [[ -z "$trigger_content" ]] && exit 0
 
-    # Idempotency: replies stamp reply_to with the step id they answer, so
-    # "already answered" is exact. A redelivered trigger (pending replay,
-    # dispatcher restart) must never produce a second reply.
+    # Idempotency: a redelivered or late-queued trigger (pending replay,
+    # dispatcher restart, a trigger that waited behind a busy agentic run)
+    # must never produce a second reply. Stamped replies (reply_to) match the
+    # trigger exactly; as a net for replies that somehow missed the stamp,
+    # ANY outgoing message to this sender appended AFTER the trigger step
+    # also counts as the answer — positionally, same definition the router
+    # hint uses. The unstamped agentic reply was the reworded double-reply
+    # of 2026-08-03.
     if [[ -n "$trigger_step_id" ]]; then
         already=$(traj cat "${ROOT_TRAJ_ID:-$TRAJ_ID}" --raw 2>/dev/null \
-            | jq -Rr --arg me "$IDENTITY_NAME" --arg t "$trigger_step_id" \
-                'fromjson? // empty
-                 | select(.type == "message" and .from == $me and (.reply_to // "") == $t)
-                 | .step_id' 2>/dev/null | head -n 1) || already=""
+            | jq -Rrn --arg me "$IDENTITY_NAME" --arg them "$msg_from" --arg t "$trigger_step_id" '
+                [inputs | fromjson? // empty] as $steps
+                | ([$steps | to_entries[] | select(.value.step_id == $t)] | last) as $in
+                | [$steps[] | select(.type == "message" and .from == $me
+                                     and (.reply_to // "") == $t)]
+                  + (if $in == null then []
+                     else [$steps[($in.key + 1):][]
+                           | select(.type == "message" and .from == $me and .to == $them)]
+                     end)
+                | if length == 0 then empty
+                  else (.[0].step_id // "unstamped") end' 2>/dev/null \
+            | head -n 1) || already=""
         if [[ -n "$already" ]]; then
             printf '  already replied to step %s — skipping\n' "$trigger_step_id" >&2
             exit 0
@@ -153,6 +166,12 @@ Answer completely from what you already know; only if it genuinely requires
 running tools or looking something up should you instead briefly say you're on
 it (the work happens separately) — in that case do not guess.
 
+Not every message needs a reply. If their newest message is already answered
+(a reply of yours addressing it is visible above), is a bare acknowledgment
+like \"thanks\" or \"ok\", or anything you could say would only repeat you,
+output exactly NO_REPLY on its own line and nothing else. Staying quiet is
+better than a duplicate or a contentless reply.
+
 Your recent inner life (context only, not part of the conversation):
 $inner_context
 
@@ -164,6 +183,24 @@ Delivery is automatic: never write 'chat reply' or the recipient's address."
 
     # Defense in depth: strip a leaked delivery command if a model echoes one.
     reply=$(printf '%s' "$reply" | sed -E '1s/^[[:space:]]*chat reply [A-Za-z0-9._-]+[[:space:]]*//')
+
+    # The model may judge that no reply is needed (already answered, bare
+    # acknowledgment). Honor it: post nothing, but record the decision — the
+    # decision:"no-reply" stamp lets the router hint below distinguish
+    # "declined" from "the fast-reply failed", and the observation re-fires
+    # the loop.
+    first_line=$(printf '%s' "$reply" | head -n 1 | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')
+    if [[ "$first_line" == "NO_REPLY" ]]; then
+        printf '  model declined to reply (NO_REPLY)\n' >&2
+        jq -nc \
+            --arg content "Chose not to reply to $msg_from — their message needed no reply (already answered, or a bare acknowledgment). Their message was: $(printf '%.200s' "$trigger_content")" \
+            --arg source "$THINKER_NAME" \
+            --arg trigger "$trigger_step_id" \
+            '{type:"observation", content:$content, source:$source, decision:"no-reply"}
+             + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
+            | traj append >/dev/null || true
+        exit 0
+    fi
 
     reply_args=()
     [[ -n "$trigger_step_id" ]] && reply_args+=(--reply-to "$trigger_step_id")
@@ -223,9 +260,16 @@ reply_state=$(printf '%s\n' "$recent_context" | jq -Rn --arg me "$IDENTITY_NAME"
                       and (if (.reply_to // "") != ""
                            then .reply_to == ($in.value.step_id // "")
                            else .to == ($in.value.from // "") end))] | length) > 0
-      then "answered" else "unanswered" end' 2>/dev/null) || reply_state="none"
+      then "answered"
+      elif ([$steps[($in.key + 1):][]
+             | select((.decision // "") == "no-reply"
+                      and (.trigger_step // "") == ($in.value.step_id // ""))] | length) > 0
+      then "declined" else "unanswered" end' 2>/dev/null) || reply_state="none"
 if [[ "$reply_state" == "answered" ]]; then
     hints="${hints}- The latest incoming chat message has ALREADY been replied to. Do NOT send another reply unless you have completed real work since then that produced genuinely new information for that person.
+"
+elif [[ "$reply_state" == "declined" ]]; then
+    hints="${hints}- The latest incoming chat message was seen and deliberately NOT replied to (it needed no reply). Do NOT reply to it now unless something has genuinely changed.
 "
 elif [[ "$reply_state" == "unanswered" ]]; then
     hints="${hints}- The latest incoming chat message appears to have NO reply yet (the fast-reply may have failed) — consider act: reply to it.

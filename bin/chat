@@ -118,9 +118,28 @@ cmd_reply() {
     [[ "$to_name" == "$from" ]] && die "refusing to reply to yourself ('$from').
 Use the name of the person you mean to reach: chat reply <their-name> <message>"
 
-    # reply_to (optional) stamps which message step this reply answers, making
-    # "has this message been answered" a fact in the log rather than an
-    # ordering heuristic. Additive — readers that don't know it ignore it.
+    # A reply answers something. When the caller doesn't say what (--reply-to),
+    # infer it: the latest message FROM the recipient TO us that no stamped
+    # reply has answered yet. Stamping here, at the transport, keeps "has this
+    # message been answered" a fact in the log no matter which path (or model)
+    # sent the reply. A reply that answers nothing (every inbound already
+    # answered) stays unstamped.
+    if [[ -z "$reply_to" ]]; then
+        reply_to=$(traj cat "${ROOT_TRAJ_ID:-$TRAJ_ID}" --raw 2>/dev/null \
+            | jq -Rrn --arg me "$from" --arg them "$to_name" '
+                [inputs | fromjson? // empty] as $steps
+                | [$steps[] | select(.type == "message" and .from == $me
+                                     and (.reply_to // "") != "") | .reply_to] as $answered
+                | [$steps[]
+                   | select(.type == "message" and .from == $them and .to == $me)
+                   | .step_id // "" | select(. != "")
+                   | select(. as $id | $answered | index($id) | not)]
+                | last // ""' 2>/dev/null) || reply_to=""
+    fi
+
+    # reply_to stamps which message step this reply answers, making "has this
+    # message been answered" a fact in the log rather than an ordering
+    # heuristic. Additive — readers that don't know it ignore it.
     jq -nc \
         --arg content "$message" \
         --arg from "$from" \
@@ -217,8 +236,11 @@ Usage:
                              default_send_from, to defaults to $IDENTITY_NAME)
   chat send-file [--from <name>] [--to <name>] <file>
                              Send a file's contents as a message
-  chat reply <to_name> <message>
-                             Agent sends a reply (from is $IDENTITY_NAME)
+  chat reply [--reply-to <step_id>] <to_name> <message>
+                             Agent sends a reply (from is $IDENTITY_NAME).
+                             Stamps reply_to with the step it answers —
+                             inferred (latest unanswered message from
+                             <to_name>) unless --reply-to overrides.
   chat history [N]           Show last N messages (default 20)
   chat repl                  Interactive chat (shows agent replies inline)
 

@@ -90,14 +90,37 @@ one loop stays well-behaved:
   bookkeeping observation re-wakes the router (trigger_self), which then sees
   the conversation as the freshest thing in context and — across every model
   tried — tends to reply AGAIN with a paraphrase (the double-reply loop of
-  2026-08-03). The step therefore computes a deterministic routing signal
-  from the recent stream: whether the latest inbound message already has a
-  reply after it. "Already replied" tells the router a re-reply is noise
-  (only new work results justify another message); "no reply yet" tells it
-  the fast-reply may have failed and it should cover. The fast-reply prompt
-  likewise answers fully when it can, acknowledging-and-deferring ONLY when
-  tool work is genuinely required — otherwise every simple question produces
-  a contentless ack followed by the router's real answer.
+  2026-08-03). The support is layered, separating the FACT "this message has
+  been answered" (machinery) from the JUDGMENT "does this message need a
+  reply" (model):
+
+  1. **The fact lives in the log.** `chat reply` stamps `reply_to` at the
+     transport — inferred (latest unanswered inbound from the recipient)
+     when the caller doesn't pass `--reply-to` — so a reply is a matchable
+     fact no matter which path (fast-reply or an agentic run typing `chat
+     reply`) sent it. See design/trajectory_spec.md.
+  2. **The fast-reply's idempotency check trusts position as a net.** A
+     redelivered or late-queued message trigger (e.g. one that waited FIFO
+     behind a busy agentic run whose run answered the message meanwhile —
+     the reworded double-reply of 2026-08-03) is skipped when a stamped
+     reply matches the trigger exactly OR any outgoing message to that
+     sender was appended after the trigger step.
+  3. **The router gets a deterministic reply-state signal** computed from
+     the recent stream: "answered" (a re-reply is noise; only new work
+     results justify another message), "declined" (the fast-reply model
+     chose NO_REPLY — don't reply unless something changed), or
+     "unanswered" (the fast-reply may have failed — cover it).
+  4. **The judgment belongs to the model.** The fast-reply prompt may output
+     `NO_REPLY` instead of a message when the newest message is already
+     answered, is a bare acknowledgment, or a reply would only repeat an
+     earlier one. The decline is recorded as an observation stamped
+     `decision:"no-reply"` (that's what feeds state 3), so staying quiet is
+     a visible decision in the mind, not a silent drop.
+
+  The fast-reply prompt likewise answers fully when it can, acknowledging-
+  and-deferring ONLY when tool work is genuinely required — otherwise every
+  simple question produces a contentless ack followed by the router's real
+  answer.
 
 **Self-loop guard.** `chat` stamps `source:"chat"` on BOTH incoming and
 outgoing messages, so an outgoing reply is itself a `message` step that would

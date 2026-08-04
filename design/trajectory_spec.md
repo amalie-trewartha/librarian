@@ -391,10 +391,15 @@ A message between named parties (human or agent).
 
 The file-transfer variant (`chat file`) adds `"filename":"<name>"`.
 
-An optional `"reply_to":"<step_id>"` (stamped by `chat reply --reply-to`)
-names the message step this one answers, making "has this message been
-answered" a fact in the log rather than an ordering heuristic. Readers that
-don't know the field ignore it; writers that can't supply it omit it.
+An optional `"reply_to":"<step_id>"` names the message step this one
+answers, making "has this message been answered" a fact in the log rather
+than an ordering heuristic. `chat reply` stamps it at the transport: the
+caller may pass `--reply-to <step_id>` explicitly, otherwise the stamp is
+inferred as the latest message from the recipient to the sender that no
+stamped reply has answered yet (a reply that answers nothing stays
+unstamped). Stamping at the transport means the fact does not depend on
+which code path — or which model — sent the reply. Readers that don't know
+the field ignore it.
 
 #### `human-msg` / `agent-msg` (legacy)
 
