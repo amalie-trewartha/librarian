@@ -5,6 +5,11 @@
       "enterprise_id": "E0BMSSAQPMX",
       "team_domain": "laude-app-dev-sandbox",
       "team_id": "E0BMSSAQPMX"
+    },
+    "T06283AE6P2": {
+      "app_id": "A0BMY5RFGMB",
+      "team_domain": "laudesters",
+      "team_id": "T06283AE6P2"
     }
   },
   "default": "laude-app-dev-sandbox"
