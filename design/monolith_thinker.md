@@ -172,6 +172,14 @@ in the same stream the monolith reads back each wakeup.
   (default 5, doubling to a cap of ~60) before running; any non-idle trigger
   (a message, an external action) resets the backoff. Keeps the solo loop from
   burning tokens at rest while staying instantly responsive to real input.
+- The backoff sleep is pre-emptible: it runs in 1s slices, each checking the
+  dispatcher's pending dir for a queued message/action trigger (sleeping
+  counts as busy, so the dispatcher queues rather than dispatches). If one is
+  waiting the step exits without running the router — the dispatcher fires
+  the queued trigger on its next tick and the fast-reply path handles it.
+  Without this, a message arriving mid-rest waited out the remaining sleep
+  plus a full router run before its reply. Pre-empt skips the doubling; the
+  message trigger resets the backoff anyway.
 - Concurrency: solo by definition — the dispatcher serializes per-thinker, so
   at most one monolith run at a time. This also means a long agentic `act` run
   blocks the next wakeup until it finishes; acceptable for a single-mind model.
