@@ -43,6 +43,10 @@ Other settings: `SHELLM_SLACK_STATE_DIR` (cursor + thread state, default
 `<identity>/run/slack-bridge/`), `SLACK_THREAD_FOLLOWUPS=1` (answer
 un-mentioned replies in threads the bot is already part of).
 
+For the end-to-end procedure of installing Audel into a new workspace
+(Slack app, tokens, SSM env, rebuild, verification), see
+[PLAYBOOK.md](PLAYBOOK.md).
+
 ## Slack app lifecycle (Slack CLI)
 
 `manifest.json` in this directory is the app's source of truth; manage the
