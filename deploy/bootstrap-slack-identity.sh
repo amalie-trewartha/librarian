@@ -49,14 +49,18 @@ set -eu
 set -o pipefail
 [[ -n "${IDENTITY_NAME:-}" ]] || { echo "error: activate did not set IDENTITY_NAME" >&2; exit 1; }
 
-# Always (re)start the thinkers so the dispatcher runs with the environment
-# THIS invocation sourced. On first boot the unit starts before the SSM .env
-# lands; skipping a running dispatcher would leave it alive with the stale
-# pre-.env environment (wrong model, no keys) after the post-.env restart.
-if thinkers status 2>/dev/null | grep -q 'Dispatcher: running'; then
-    echo "==> Restarting thinkers with current environment"
-    thinkers stop || true
-fi
+# Always stop, then start, so the dispatcher runs with the environment THIS
+# invocation sourced. On first boot the unit starts before the SSM .env
+# lands; a surviving dispatcher keeps that stale environment (wrong model,
+# no keys) forever. Stop unconditionally — `thinkers stop` is idempotent.
+# An earlier version detected a running dispatcher first with
+# `thinkers status | grep -q`, which under pipefail loses a SIGPIPE race
+# (grep -q exits at first match, status dies writing the rest, the matched
+# check reads as false) — that silent miss left Audel keyless in laudesters
+# on 2026-08-04 until manually cycled. Detection is exactly the kind of
+# step that fails silently; don't detect, just stop.
+echo "==> Restarting thinkers with current environment"
+thinkers stop || true
 echo "==> Starting monolith thinker"
 thinkers start monolith
 
