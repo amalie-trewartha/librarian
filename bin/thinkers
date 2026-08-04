@@ -20,6 +20,12 @@ SHELLM_HOME="${SHELLM_HOME:-}"
 THINK_MODEL="${THINK_MODEL:-${SHELLM_MODEL:-claude-opus-4-7}}"
 THINK_CONTEXT_TAIL="${THINK_CONTEXT_TAIL:-30}"
 THINKERS_MAX_CONCURRENT="${THINKERS_MAX_CONCURRENT:-20}"
+# Liveness watchdog: a trigger_self thinker that has been free of running
+# steps, queued work, and dispatches for this many seconds gets a synthetic
+# idle trigger. Per-thinker override via watchdog_secs in subscriptions.jsonl
+# (0 disables). Default applies only to trigger_self subscriptions — reactive
+# thinkers are legitimately silent for long stretches.
+THINKERS_WATCHDOG_SECS="${THINKERS_WATCHDOG_SECS:-300}"
 VERBOSE=0
 NO_SELF_TRIGGER=0
 
@@ -214,6 +220,21 @@ _start_dispatcher() {
                 sub_trigger_self="false"
             fi
 
+            # Watchdog window: explicit watchdog_secs wins; otherwise default
+            # for perpetual-loop (trigger_self) subscriptions, off for the
+            # rest. Resolved AFTER the --no-self-trigger override so a
+            # non-perpetual run does not get watchdog wakeups either.
+            local sub_watchdog
+            sub_watchdog=$(printf '%s' "$sub_line" | jq -r '.watchdog_secs // empty' 2>/dev/null) || true
+            if [[ -z "$sub_watchdog" ]]; then
+                if [[ "$sub_trigger_self" == "true" ]]; then
+                    sub_watchdog="$THINKERS_WATCHDOG_SECS"
+                else
+                    sub_watchdog=0
+                fi
+            fi
+            [[ "$sub_watchdog" =~ ^[0-9]+$ ]] || sub_watchdog=0
+
             # Default traj_id to $TRAJ_ID
             if [[ -z "$sub_traj_id" ]]; then sub_traj_id="$TRAJ_ID"; fi
 
@@ -231,7 +252,7 @@ _start_dispatcher() {
 }${traj_file}" ;;
             esac
 
-            sub_map="${sub_map}${thinker_name}	${traj_file}	${sub_types}	${sub_trigger_self}
+            sub_map="${sub_map}${thinker_name}	${traj_file}	${sub_types}	${sub_trigger_self}	${sub_watchdog}
 "
         done < "$sub_file"
     done < <(_list_thinker_dirs)
@@ -289,6 +310,48 @@ _start_dispatcher() {
         # Track thinker step PIDs as "name:pid" pairs (space-separated, bash 3.2 compat)
         _step_entries=""
 
+        # Liveness watchdog. The perpetual loop is a chain of triggers, and a
+        # single broken link kills the mind: a step that crashes before
+        # appending, silently consumes its trigger, or is killed leaves no
+        # wake source (the 2026-08-04 stall — an agentic run's outgoing
+        # message re-triggered monolith, the own-message guard consumed it,
+        # and nothing remained to fire). Liveness is therefore guaranteed
+        # HERE, not by thinker code paths: a watched thinker that has been
+        # free of running steps, queued pending work, and dispatches for its
+        # whole watchdog window gets a synthetic idle trigger. The thinker's
+        # own idle pacing (backoff) applies to it like any real idle. At
+        # rest a healthy idle chain re-fires far inside the window, so the
+        # watchdog costs nothing until the chain is actually broken.
+        # _wd_conf: "name:window_secs" for thinkers with a nonzero window
+        # (smallest window wins across a thinker's subscription lines);
+        # _wd_last: "name:SECONDS-stamp" of last observed activity.
+        _wd_conf=""
+        while IFS=$'\t' read -r _wname _ _ _ _wsecs; do
+            [[ -z "$_wname" ]] && continue
+            [[ "${_wsecs:-0}" =~ ^[0-9]+$ ]] || continue
+            [[ "$_wsecs" -eq 0 ]] && continue
+            _wd_new="" _wd_seen=0
+            for _wd_e in $_wd_conf; do
+                if [[ "${_wd_e%%:*}" == "$_wname" ]]; then
+                    _wd_seen=1
+                    [[ "$_wsecs" -lt "${_wd_e#*:}" ]] && _wd_e="${_wname}:${_wsecs}"
+                fi
+                _wd_new="${_wd_new}${_wd_new:+ }${_wd_e}"
+            done
+            [[ "$_wd_seen" -eq 0 ]] && _wd_new="${_wd_new}${_wd_new:+ }${_wname}:${_wsecs}"
+            _wd_conf="$_wd_new"
+        done < "$run_dir/sub_map"
+
+        _wd_last=""
+        _wd_touch() {
+            local _tname="$1" _e _new=""
+            for _e in $_wd_last; do
+                [[ "${_e%%:*}" == "$_tname" ]] && continue
+                _new="${_new}${_new:+ }${_e}"
+            done
+            _wd_last="${_new}${_new:+ }${_tname}:${SECONDS}"
+        }
+
         # Reap finished entries; print count of still-active ones
         _count_active_steps() {
             local _count=0 _entry
@@ -328,6 +391,44 @@ _start_dispatcher() {
             ) >> "$_dlog" 2>&1 &
             _step_entries="${_step_entries}${_step_entries:+ }${_dname}:$!"
             printf '%s %s\n' "$!" "$_dname" >> "$run_dir/step_pids"
+            _wd_touch "$_dname"
+        }
+
+        # Fire the watchdog for watched thinkers whose window elapsed with no
+        # activity. Busy thinkers and thinkers with queued pending work are
+        # "active" — their clock refreshes each tick, so the window measures
+        # quiet-while-free time (a long agentic run never triggers a spurious
+        # wake the moment it ends). At the global concurrency cap, defer to a
+        # later tick like _fire_pending does.
+        _watchdog_check() {
+            local _c _cname _csecs _l _last _pf _f
+            for _c in $_wd_conf; do
+                _cname="${_c%%:*}"
+                _csecs="${_c#*:}"
+                grep -qx "$_cname" "$run_dir/active_thinkers" 2>/dev/null || continue
+                _pf=""
+                for _f in "$run_dir/pending/${_cname}."*; do
+                    [[ -f "$_f" ]] && { _pf=1; break; }
+                done
+                if [[ -n "$_pf" ]] || _thinker_busy "$_cname"; then
+                    _wd_touch "$_cname"
+                    continue
+                fi
+                _last=""
+                for _l in $_wd_last; do
+                    [[ "${_l%%:*}" == "$_cname" ]] && _last="${_l#*:}"
+                done
+                if [[ -z "$_last" ]]; then
+                    _wd_touch "$_cname"
+                    continue
+                fi
+                if (( SECONDS - _last >= _csecs )); then
+                    if [[ "$(_count_active_steps)" -ge "$THINKERS_MAX_CONCURRENT" ]]; then continue; fi
+                    printf '[dispatcher]   watchdog -> %s (quiet %ss)\n' "$_cname" "$((SECONDS - _last))" >&2
+                    _dispatch_step "$_cname" "$(jq -nc --arg source "$_cname" \
+                        '{type:"idle", content:"idle", source:$source, synthetic:"watchdog"}')"
+                fi
+            done
         }
 
         # Fire pending re-triggers for thinkers that have freed up.
@@ -382,6 +483,7 @@ _start_dispatcher() {
                     exit 0
                 fi
                 _fire_pending
+                _watchdog_check
                 continue
             fi
             if [[ -z "$_step_json" ]]; then continue; fi
@@ -399,7 +501,7 @@ _start_dispatcher() {
             printf '[dispatcher] step: type=%s source=%s\n' "$_step_type" "$_step_source" >&2
 
             # Find matching thinkers by scanning sub_map
-            while IFS=$'\t' read -r _name _straj _stypes _sself; do
+            while IFS=$'\t' read -r _name _straj _stypes _sself _swd; do
                 if [[ -z "$_name" ]]; then continue; fi
 
                 # Check traj match

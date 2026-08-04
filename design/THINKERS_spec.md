@@ -49,6 +49,7 @@ Fields:
 - **traj_id** (optional): Trajectory UUID to watch. Defaults to `$TRAJ_ID` (the identity's root trajectory).
 - **types** (optional): Array of step types to match. If absent, matches ALL step types.
 - **trigger_self** (optional, default `false`): When `false`, the dispatcher skips delivering a step to the thinker named in the step's `source` field. When `true`, the thinker receives its own output.
+- **watchdog_secs** (optional): Liveness watchdog window — see Liveness Watchdog below. Defaults to `$THINKERS_WATCHDOG_SECS` (300) for `trigger_self` subscriptions, `0` (off) otherwise; `0` disables. If a thinker's subscription lines disagree, the smallest nonzero window wins.
 
 ## Dispatcher Behavior
 
@@ -60,7 +61,7 @@ The dispatcher is a background process launched by `thinkers start`. It:
 4. For each unique trajectory file, starts `tail -n 0 -F <file>` piped through a tagger that prefixes each line with the trajectory ID, all writing to the FIFO
 5. Starts a ticker that writes a `TICK` heartbeat line into the FIFO every second
 6. Main loop reads from FIFO:
-   - On a `TICK` line: fire any pending re-triggers (see below), continue
+   - On a `TICK` line: fire any pending re-triggers, run the liveness watchdog check (see below), continue
    - Parse step JSON
    - Extract `type` and `source` fields
    - Find all thinkers whose subscription matches the step type and trajectory
@@ -79,6 +80,35 @@ Semantics:
 - Thinker names and step types must not contain dots (the pending filename encodes them dot-separated).
 - A thinker's own output never sets its own pending entry (the self-trigger check runs first) — unless it subscribes with `trigger_self: true`.
 - Pending entries are cleared on `thinkers start` and `thinkers stop`.
+
+## Liveness Watchdog
+
+A perpetual loop (`trigger_self`) is a chain of triggers, and a single broken
+link kills the mind: a step that crashes before appending anything, silently
+consumes its trigger (e.g. monolith's own-outgoing-message guard), or is
+killed leaves no wake source behind. That happened live on 2026-08-04 — an
+agentic run's only mind-step was an outgoing message, the message's re-trigger
+was consumed by a bare `exit 0`, and the mind slept until manually restarted.
+
+Liveness is therefore a **dispatcher guarantee**, not a property thinker code
+paths must each preserve. On every `TICK`, for each thinker with a nonzero
+`watchdog_secs` window:
+
+- If the thinker is **busy** or has **queued pending work**, its activity
+  clock refreshes — the window measures quiet-while-free time, so a long
+  agentic run never triggers a spurious wake the moment it ends.
+- Dispatching to the thinker (real or watchdog) also refreshes the clock.
+- If the thinker has been free and quiet for the whole window, the dispatcher
+  synthesizes an idle trigger — `{"type":"idle","content":"idle","source":
+  "<name>","synthetic":"watchdog"}` — and dispatches it (deferred at the
+  global concurrency cap, like pending re-triggers). The thinker's own idle
+  pacing (e.g. monolith's backoff) applies to it like any real idle trigger.
+
+At rest a healthy idle chain re-fires far inside the default window, so the
+watchdog costs nothing until the chain is actually broken; every liveness bug,
+present or future, degrades to a ≤window wake-up delay instead of a dead mind.
+Known gap: a step that *hangs* keeps the thinker busy and holds the watchdog
+off — deliberate, since long agentic runs are legitimate.
 
 ## Self-Triggering Prevention
 

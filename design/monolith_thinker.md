@@ -157,6 +157,16 @@ in the same stream the monolith reads back each wakeup.
 
 - The monolith must append ≥1 step per wakeup even on LLM failure (placeholder
   thought + brief sleep, exactly like inner_monologue today).
+- The perpetual loop is NOT guaranteed by this step script alone. Several
+  paths deliberately consume a trigger without appending anything (own
+  outgoing message re-trigger, already-replied skip, empty content), and an
+  agentic run whose only mind-step is an outgoing message leaves such a
+  consumed re-trigger as the last link — no wake source remains (the
+  2026-08-04 03:17 UTC stall). The dispatcher's liveness watchdog (see
+  THINKERS_spec.md) is the backstop: after `watchdog_secs` of quiet it
+  synthesizes an idle trigger, which lands in the normal idle-backoff path
+  here. Bare `exit 0` on a do-nothing wakeup is therefore correct — liveness
+  is the dispatcher's job; the fast paths only owe latency.
 - Idle backoff: when the TRIGGERING step is `idle` (i.e. we idled and are now
   re-fired by our own idle step), sleep `MONOLITH_IDLE_BACKOFF` seconds
   (default 5, doubling to a cap of ~60) before running; any non-idle trigger
