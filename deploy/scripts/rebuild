@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# deploy/scripts/rebuild — replace the instance: fresh box from origin + SSM env.
+#
+# Usage: deploy/scripts/rebuild [-y]
+# DESTROYS the box and its identity (mind log) — `identity export` first if
+# continuity matters. The new box self-provisions from origin/main and the
+# current SSM env parameter, then this script waits for it to come healthy.
+# Needs CLOUDFLARE_API_TOKEN in the environment (terraform apply touches the
+# tunnel); see the stack's envrc.example. -y skips both confirmations.
+
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+yes=0
+case "${1:-}" in
+    -h|--help) sed -n '2,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -y) yes=1 ;;
+esac
+
+require_tools terraform aws
+require_state
+require_aws
+[[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] \
+    || die "CLOUDFLARE_API_TOKEN not set — terraform apply needs it (see $TF_DIR/envrc.example)"
+
+info "Stack:    ${SHELLM_TF_STACK:-terraform} ($TF_DIR)"
+info "Instance: $(instance_id) ($(region)) — will be DESTROYED and replaced"
+if [[ "$yes" -ne 1 ]]; then
+    read -r -p "Burn it down and rebuild from origin + SSM env? [y/N] " answer
+    [[ "$answer" == y || "$answer" == Y ]] || die "aborted"
+fi
+
+apply_args=(-replace=aws_instance.shellm)
+[[ "$yes" -eq 1 ]] && apply_args+=(-auto-approve)
+tf apply "${apply_args[@]}"
+
+info "Waiting for the new box to come healthy (first boot takes a few minutes)"
+tries=0
+while :; do
+    tries=$((tries + 1))
+    if out=$(run_script_on_box 'curl -fsS localhost:8080/api/health 2>/dev/null' 2>/dev/null) \
+        && [[ "$out" == *'"ok"'* ]]; then
+        info "Healthy: $out"
+        break
+    fi
+    [[ "$tries" -ge 30 ]] && die "box not healthy after ~10m — check deploy/scripts/status"
+    sleep 20
+done
+
+"$SCRIPTS_DIR/status"

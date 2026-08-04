@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# deploy/scripts/env-push — push a local .env file to this stack's SSM parameter.
+#
+# Usage: deploy/scripts/env-push [-y] [FILE]
+# FILE defaults to ~/.env.slack for the terraform-slack stack. Validates the
+# file, shows what would change, and pushes on confirm (-y skips the prompt).
+# The box only reads the parameter at first boot, so follow with
+# deploy/scripts/rebuild (fresh box + identity) for the new env to take effect.
+
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+yes=0
+case "${1:-}" in
+    -h|--help) sed -n '2,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -y) yes=1; shift ;;
+esac
+
+file="${1:-}"
+if [[ -z "$file" ]]; then
+    [[ "${SHELLM_TF_STACK:-}" == "terraform-slack" ]] \
+        || die "no FILE given and no default for this stack — pass the env file path"
+    file="$HOME/.env.slack"
+fi
+[[ -s "$file" ]] || die "env file missing or empty: $file"
+
+require_tools terraform aws
+require_state
+require_aws
+
+param=$(tfvar env_parameter)
+[[ -n "$param" ]] || die "no env_parameter in $TF_DIR/terraform.tfvars"
+
+# Sanity checks: catch a truncated or half-edited file before it bricks a
+# rebuild. Slack stack needs the token pair and the identity name; every
+# stack needs an LLM key of some kind.
+need_line() {
+    grep -qE "$2" "$file" || die "$file: missing or malformed $1 (no line matching: $2)"
+}
+if [[ "${SHELLM_TF_STACK:-}" == "terraform-slack" ]]; then
+    need_line SLACK_BOT_TOKEN '^SLACK_BOT_TOKEN=xoxb-'
+    need_line SLACK_APP_TOKEN '^SLACK_APP_TOKEN=xapp-'
+    need_line SHELLM_SLACK_IDENTITY '^SHELLM_SLACK_IDENTITY=.'
+fi
+grep -qE '^[A-Za-z_]*API_KEY=.' "$file" \
+    || info "warning: no *API_KEY line in $file — the agent needs an LLM key"
+
+cur_ver=$(aws ssm get-parameter --region "$(region)" --name "$param" \
+    --query Parameter.Version --output text 2>/dev/null) || cur_ver="none"
+
+info "Parameter: $param ($(region)), current version: $cur_ver"
+info "Keys in $file (values hidden):"
+sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/  \1/p' "$file"
+
+if [[ "$yes" -ne 1 ]]; then
+    read -r -p "Push to $param? [y/N] " answer
+    [[ "$answer" == y || "$answer" == Y ]] || die "aborted"
+fi
+
+aws ssm put-parameter --region "$(region)" --name "$param" \
+    --type SecureString --overwrite --value "$(cat "$file")" >/dev/null
+new_ver=$(aws ssm get-parameter --region "$(region)" --name "$param" \
+    --query Parameter.Version --output text)
+info "Pushed: $param is now version $new_ver"
+info "Takes effect on next rebuild: deploy/scripts/rebuild"

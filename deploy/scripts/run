@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# deploy/scripts/run — run one command on the box and print its output.
+#
+# Usage: deploy/scripts/run '<command>'
+# Uses the reliable non-interactive SSM channel (output capped at 24KB).
+
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+case "${1:-}" in
+    -h|--help|"") sed -n '2,5p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
+require_tools terraform aws
+require_state
+require_aws
+
+run_script_on_box "$1"
