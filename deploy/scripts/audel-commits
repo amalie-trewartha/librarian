@@ -1,0 +1,269 @@
+#!/usr/bin/env bash
+# deploy/scripts/audel-commits — review the agent's box commits one at a time.
+#
+# Usage: deploy/scripts/audel-commits list
+#        deploy/scripts/audel-commits pull [sha]
+#        deploy/scripts/audel-commits reject <sha> [reason...]
+#        deploy/scripts/audel-commits reconcile [-y]
+#
+# list       show box commits not on origin/main, oldest first, with
+#            dispositions (pending / pulled / applied / rejected)
+# pull       apply one commit's diff to the local working tree UNSTAGED for
+#            review; default is the oldest pending commit. Saves the commit
+#            message (+ Co-authored-by trailer) to .git/AUDEL_MSG and prints
+#            the commands to stage and commit.
+# reject     record a commit as rejected without applying it
+# reconcile  after pushing accepted commits: rebase the box onto origin/main
+#            (drops commits whose patch is already upstream, keeps the rest)
+#
+# SHAs never match across the two repos (commits are re-authored locally), so
+# "already applied" is detected by git patch-id; amended or rejected commits
+# are tracked in .audel-pulled (repo root, untracked — the review log).
+
+export SHELLM_TF_STACK="${SHELLM_TF_STACK:-terraform-slack}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+BOX_REPO=/opt/shellm/app
+STATE_FILE="$REPO_ROOT/.audel-pulled"
+GIT_DIR="$(git -C "$REPO_ROOT" rev-parse --absolute-git-dir)"
+
+usage() { sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+# One round trip: the box's unmerged series (oldest first), the patch-id of
+# each commit, and the working-tree status. Fetches first so origin/main is
+# current after a local push.
+fetch_series() {
+    run_script_on_box '
+        g() { sudo -u shellm git -C /opt/shellm/app "$@"; }
+        g fetch --quiet origin 2>/dev/null || echo "warning: box git fetch failed — origin/main may be stale" >&2
+        echo "=== LOG ==="
+        g log --reverse --format="%H %s" origin/main..main
+        echo "=== PATCHIDS ==="
+        g format-patch --stdout origin/main..main | g patch-id --stable
+        echo "=== STATUS ==="
+        g status --short
+    '
+}
+
+section() { awk -v s="=== $1 ===" '$0==s{f=1;next} /^=== /{f=0} f' <<<"$2"; }
+
+# Patch-ids of recent local commits — a box commit whose patch-id appears
+# here has already been applied (possibly re-authored) on this side.
+local_patch_ids() {
+    git -C "$REPO_ROOT" log -p -n 300 --no-merges HEAD 2>/dev/null \
+        | git patch-id --stable | awk '{print $1}'
+}
+
+state_of() { # $1 = full sha -> disposition recorded in the state file, if any
+    [[ -f "$STATE_FILE" ]] || return 0
+    awk -v s="$1" '$1==s{print $2; exit}' "$STATE_FILE"
+}
+
+record_state() { # $1 = sha, $2 = disposition, rest = note
+    local sha="$1" disp="$2"; shift 2
+    [[ -f "$STATE_FILE" ]] && grep -v "^$sha " "$STATE_FILE" > "$STATE_FILE.tmp" || : > "$STATE_FILE.tmp"
+    mv "$STATE_FILE.tmp" "$STATE_FILE"
+    printf '%s %s %s %s\n' "$sha" "$disp" "$(date +%F)" "$*" >> "$STATE_FILE"
+}
+
+# Resolve a user-supplied (possibly short) sha against the box series.
+resolve_sha() { # $1 = prefix, $2 = box log ("sha subject" lines)
+    local hit
+    hit=$(awk -v p="$1" 'index($1, p) == 1 {print $1}' <<<"$2")
+    [[ -n "$hit" ]] || die "'$1' does not match any unmerged box commit (see: audel-commits list)"
+    [[ $(wc -l <<<"$hit") -eq 1 ]] || die "'$1' is ambiguous on the box"
+    printf '%s' "$hit"
+}
+
+cmd_list() {
+    require_tools jq git
+    require_state; require_aws
+    local series log patchids status lpids
+    series=$(fetch_series)
+    log=$(section LOG "$series")
+    patchids=$(section PATCHIDS "$series")
+    status=$(section STATUS "$series")
+    if [[ -z "$log" ]]; then
+        info "box is level with origin/main — nothing to review"
+    else
+        lpids=$(local_patch_ids)
+        info "box commits not on origin/main (oldest first):"
+        local n=0 default="" sha subject pid disp
+        while read -r sha subject; do
+            n=$((n + 1))
+            pid=$(awk -v s="$sha" '$2==s{print $1}' <<<"$patchids")
+            disp=$(state_of "$sha")
+            if [[ -n "$pid" ]] && grep -qx "$pid" <<<"$lpids"; then
+                disp=applied
+            fi
+            : "${disp:=pending}"
+            [[ -z "$default" && "$disp" == pending ]] && default="$sha"
+            printf '  %2d  %s  %-8s %s\n' "$n" "${sha:0:7}" "$disp" "$subject"
+        done <<<"$log"
+        if [[ -n "$default" ]]; then
+            printf '\n  next pull (default): %s\n' "${default:0:7}"
+        else
+            printf '\n  nothing pending — all commits dispositioned\n'
+        fi
+    fi
+    if [[ -n "$status" ]]; then
+        info "box working tree is DIRTY (uncommitted agent work — reconcile stashes tracked changes):"
+        sed 's/^/  /' <<<"$status"
+    else
+        info "box working tree clean"
+    fi
+}
+
+cmd_pull() {
+    require_tools jq git
+    require_state; require_aws
+    git -C "$REPO_ROOT" diff --quiet && git -C "$REPO_ROOT" diff --cached --quiet \
+        || die "local working tree has uncommitted changes — commit or stash them first (untracked files are fine)"
+
+    local series log sha subject default cur
+    series=$(fetch_series)
+    log=$(section LOG "$series")
+    [[ -n "$log" ]] || die "box is level with origin/main — nothing to pull"
+
+    # Default target: oldest commit that is neither dispositioned nor
+    # patch-id-equivalent to something already local.
+    default=""
+    local lpids pid disp
+    lpids=$(local_patch_ids)
+    while read -r cur subject; do
+        pid=$(awk -v s="$cur" '$2==s{print $1}' < <(section PATCHIDS "$series"))
+        disp=$(state_of "$cur")
+        [[ -n "$pid" ]] && grep -qx "$pid" <<<"$lpids" && disp=applied
+        [[ -z "$disp" ]] && { default="$cur"; break; }
+    done <<<"$log"
+
+    if [[ -n "${1:-}" ]]; then
+        sha=$(resolve_sha "$1" "$log")
+        if [[ -n "$default" && "$sha" != "$default" ]]; then
+            echo "warning: skipping ahead — oldest pending is ${default:0:7}; this diff may not apply cleanly" >&2
+        fi
+    else
+        sha="$default"
+        [[ -n "$sha" ]] || die "nothing pending — all box commits are dispositioned (see: audel-commits list)"
+    fi
+    subject=$(awk -v s="$sha" '$1==s{sub($1 FS, ""); print; exit}' <<<"$log")
+
+    info "pulling ${sha:0:7}  $subject"
+    local b64 patch="$GIT_DIR/AUDEL_PATCH"
+    b64=$(run_script_on_box "sudo -u shellm git -C $BOX_REPO format-patch --stdout -1 $sha | gzip -9 | base64 | tr -d '\n'")
+    printf '%s' "$b64" | base64 -d | gunzip > "$patch" \
+        || die "patch retrieval failed (SSM output is capped at 24KB — is this commit huge?)"
+
+    # Split the mbox into message + diff; build the prefilled commit message.
+    local body="$GIT_DIR/AUDEL_BODY" diff="$GIT_DIR/AUDEL_DIFF" msg="$GIT_DIR/AUDEL_MSG"
+    local minfo author email msubject
+    minfo=$(git mailinfo "$body" "$diff" < "$patch")
+    author=$(sed -n 's/^Author: //p' <<<"$minfo")
+    email=$(sed -n 's/^Email: //p' <<<"$minfo")
+    msubject=$(sed -n 's/^Subject: //p' <<<"$minfo")
+    {
+        printf '%s\n\n' "$msubject"
+        if [[ -s "$body" ]]; then cat "$body"; printf '\n'; fi
+        printf 'Co-authored-by: %s <%s>\n' "${author:-audel}" "${email:-audel@local}"
+    } > "$msg"
+
+    git -C "$REPO_ROOT" apply --check "$diff" \
+        || die "patch does not apply — pull earlier pending commits first, or resolve by hand: git apply --3way $diff"
+    git -C "$REPO_ROOT" apply "$diff"
+    record_state "$sha" pulled "$msubject"
+
+    info "applied to working tree (unstaged):"
+    git -C "$REPO_ROOT" apply --stat "$diff" | sed 's/^/  /'
+    local files
+    files=$(git -C "$REPO_ROOT" apply --numstat "$diff" | cut -f3- | tr '\n' ' ')
+    cat <<EOF
+
+Review, then commit (message prefilled with audel as co-author):
+
+  git diff
+  git add -- $files
+  git commit -eF .git/AUDEL_MSG
+
+To back out instead:  git checkout -- $files   (plus rm for new files)
+Then record it:       deploy/scripts/audel-commits reject ${sha:0:7} <reason>
+EOF
+}
+
+cmd_reject() {
+    [[ -n "${1:-}" ]] || usage 1
+    require_tools jq git
+    require_state; require_aws
+    local log sha
+    log=$(section LOG "$(fetch_series)")
+    sha=$(resolve_sha "$1" "$log"); shift
+    record_state "$sha" rejected "$@"
+    info "recorded ${sha:0:7} as rejected${1:+ ($*)}"
+    echo "note: the box still runs this commit until you reconcile (it will survive the rebase — rewind it by hand if it must go)"
+}
+
+cmd_reconcile() {
+    local yes=0
+    [[ "${1:-}" == "-y" ]] && yes=1
+    require_tools jq git
+    require_state; require_aws
+
+    info "checking the box against origin/main..."
+    local check cherry status
+    check=$(run_script_on_box '
+        g() { sudo -u shellm git -C /opt/shellm/app "$@"; }
+        g fetch --quiet origin
+        echo "=== CHERRY ==="
+        g cherry origin/main main
+        echo "=== STATUS ==="
+        g status --short
+    ')
+    cherry=$(section CHERRY "$check")
+    status=$(section STATUS "$check")
+    if [[ -z "$cherry" ]]; then
+        info "box is already level with origin/main — nothing to reconcile"
+        return 0
+    fi
+    echo "  '-' = patch already upstream, drops in the rebase; '+' = survives on top:"
+    sed 's/^/  /' <<<"$cherry"
+    [[ -n "$status" ]] && { echo "  box tree is dirty — tracked changes will be stashed and re-applied:"; sed 's/^/  /' <<<"$status"; }
+    if grep -q '^+' <<<"$cherry" && [[ -f "$STATE_FILE" ]] && grep -q ' rejected ' "$STATE_FILE"; then
+        echo "  note: rejected commits are among the survivors — the rebase does NOT remove them"
+    fi
+    if [[ "$yes" -ne 1 ]]; then
+        read -r -p "Rebase the box onto origin/main now? [y/N] " ans
+        [[ "$ans" == y || "$ans" == Y ]] || { echo "aborted — box unchanged"; return 1; }
+    fi
+
+    run_script_on_box '
+        g() { sudo -u shellm git -C /opt/shellm/app "$@"; }
+        stashed=0
+        if [ -n "$(g status --porcelain | grep -v "^??")" ]; then
+            g stash push -m audel-commits-reconcile >/dev/null && stashed=1
+        fi
+        if ! g rebase origin/main; then
+            g rebase --abort || true
+            [ "$stashed" -eq 1 ] && { g stash pop || true; }
+            echo "rebase CONFLICT — aborted, box left as it was" >&2
+            exit 1
+        fi
+        [ "$stashed" -eq 1 ] && { g stash pop || echo "warning: stash pop conflicted — agent WIP left in the stash" >&2; }
+        echo "=== AFTER ==="
+        g log --reverse --oneline origin/main..main
+        g status --short
+    ' || die "reconcile failed — box unchanged"
+
+    info "reconciled. If any commit was amended or rejected, the running agent still has the old code baked in:"
+    cat <<EOF
+  SHELLM_TF_STACK=$SHELLM_TF_STACK deploy/scripts/run 'sudo systemctl restart shellm-slack-agent'
+  plus thinker-sync (dash sync button, or POST /api/identities/.identities~audel/thinker-sync)
+EOF
+}
+
+case "${1:-}" in
+    list)       shift; cmd_list "$@" ;;
+    pull)       shift; cmd_pull "$@" ;;
+    reject)     shift; cmd_reject "$@" ;;
+    reconcile)  shift; cmd_reconcile "$@" ;;
+    -h|--help|"") usage ;;
+    *) usage 1 ;;
+esac
