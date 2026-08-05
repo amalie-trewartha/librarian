@@ -16,14 +16,18 @@ provisioning, and day-2 instructions all apply here, with these deltas:
   installs the `shellm-slack-agent` (persona bootstrap) and
   `shellm-slack-bridge` (Socket Mode client) units alongside `shellm-web`.
 - Optional Google SSO for the dash: set `allowed_email_domains` +
-  `google_oauth_client_id`/`_secret` in tfvars (see
-  `terraform.tfvars.example`). Manual prerequisite in Google Cloud console:
-  an OAuth client (type Web application) whose redirect URI is
-  `https://<team>.cloudflareaccess.com/cdn-cgi/access/callback` — the team
-  name is under Zero Trust → Settings → Custom Pages. Make the consent
-  screen "Internal" so only workspace accounts can authenticate at all; the
-  Access policy's domain check is the second gate. OTP stays enabled either
-  way (the login picker appears once both IdPs exist).
+  `google_oauth_client_id` in tfvars (see `terraform.tfvars.example`) and
+  the client secret via `TF_VAR_google_oauth_client_secret` in `.envrc`
+  (see `envrc.example`). Manual prerequisite in Google Cloud console: an
+  OAuth client (type Web application, no JavaScript origins) whose redirect
+  URI is `https://<team>.cloudflareaccess.com/cdn-cgi/access/callback` —
+  the team name is under Zero Trust → Settings → Custom Pages. The client
+  can live in any GCP project: with a consent screen inside the Workspace
+  org, pick "Internal" (only org accounts can authenticate); in a personal
+  project, "External" + published works fine — anyone can authenticate, but
+  the Access policy's email/domain check is the gate that matters either
+  way. OTP stays enabled regardless (the login picker appears once both
+  IdPs exist).
 
 Day-2 via the shared scripts: `SHELLM_TF_STACK=terraform-slack
 deploy/scripts/update` (likewise `status` / `shell` / `stop` / `start`).

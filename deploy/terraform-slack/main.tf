@@ -94,10 +94,11 @@ data "cloudflare_zero_trust_access_identity_provider" "otp" {
 
 # Google SSO for whole-domain access (allowed_email_domains). The OAuth
 # client is created manually in Google Cloud console — redirect URI
-# https://<team>.cloudflareaccess.com/cdn-cgi/access/callback, consent
-# screen "Internal" so only workspace accounts can even reach Access (the
-# email_domain policy below is the second gate). Empty client id = no
-# Google IdP, stack stays OTP-only.
+# https://<team>.cloudflareaccess.com/cdn-cgi/access/callback. Any GCP
+# project works ("Internal" consent screen adds a Google-side gate;
+# "External"/published does not) — either way the email/email_domain
+# policy below is the gate that matters. Empty client id = no Google IdP,
+# stack stays OTP-only.
 resource "cloudflare_zero_trust_access_identity_provider" "google" {
   count      = var.google_oauth_client_id != "" ? 1 : 0
   account_id = var.cloudflare_account_id
