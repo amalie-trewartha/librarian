@@ -54,6 +54,25 @@ variable "allowed_emails" {
   type        = list(string)
 }
 
+variable "allowed_email_domains" {
+  description = "Whole email domains allowed through Cloudflare Access (e.g. [\"laude.org\"]); pair with the Google IdP so domain users get SSO instead of OTP"
+  type        = list(string)
+  default     = []
+}
+
+variable "google_oauth_client_id" {
+  description = "Google OAuth client id for the Access Google IdP; empty leaves the stack OTP-only. See README for the manual Google Cloud setup."
+  type        = string
+  default     = ""
+}
+
+variable "google_oauth_client_secret" {
+  description = "Secret for google_oauth_client_id"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "access_session_duration" {
   description = "How long an Access login lasts"
   type        = string
