@@ -136,6 +136,7 @@ export default function TalkChat() {
   const pendingKey = useRef(0);
   const lastSentAtRef = useRef<number | null>(null);
   lastSentAtRef.current = lastSentAt;
+  const awaitingRef = useRef(false);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const nearBottomRef = useRef(true);
@@ -153,9 +154,9 @@ export default function TalkChat() {
     queryFn: () => fetchChat(identityId, 200, myName),
     refetchInterval: () => {
       const sent = lastSentAtRef.current;
-      return sent && Date.now() - sent < FAST_POLL_WINDOW_MS
-        ? FAST_POLL_MS
-        : IDLE_POLL_MS;
+      const awaiting =
+        awaitingRef.current && sent && Date.now() - sent < FAST_POLL_WINDOW_MS;
+      return awaiting ? FAST_POLL_MS : IDLE_POLL_MS;
     },
     enabled: !!myName,
   });
@@ -163,11 +164,13 @@ export default function TalkChat() {
   const { data: thinkerStatus } = useQuery({
     queryKey: ["thinkers", identityId],
     queryFn: () => fetchThinkers(identityId),
-    refetchInterval: 5000,
+    // Faster while awaiting a reply — this feed is what turns the dots on.
+    refetchInterval: () => (awaitingRef.current ? 1000 : 5000),
   });
   const dispatcherRunning = thinkerStatus?.dispatcher.running ?? true;
 
   const messages = useMemo(() => chat?.messages ?? [], [chat]);
+  const outcomes = chat?.outcomes ?? {};
 
   // A reply arriving ends the "waiting" state (fast poll + typing dots).
   const lastMessage = messages[messages.length - 1];
@@ -200,15 +203,41 @@ export default function TalkChat() {
     return () => clearTimeout(timer);
   }, [lastSentAt]);
 
+  // The last message I sent this session, and what the mind log says
+  // happened to it: "replied" / "no-reply" / "failed" / undefined (undecided).
+  const lastMine = [...messages].reverse().find((m) => m.from === myName);
+  const lastOutcome = lastMine?.step_id ? outcomes[lastMine.step_id] : undefined;
+
   const waitingForReply =
     lastSentAt !== null &&
+    lastOutcome === undefined &&
     (visiblePending.some((p) => !p.failed) ||
       (lastMessage ? lastMessage.from === myName : false));
-  const showTyping = waitingForReply && !typingExpired;
-  const showNoReplyNote = waitingForReply && typingExpired;
+
+  // Dots only when the agent is verifiably on it: dispatcher up AND a
+  // thinker either mid-step or with a queued message. No theater.
+  const thinkerBusy = (thinkerStatus?.thinkers ?? []).some(
+    (t) => t.steps_in_flight > 0 || t.pending.includes("message")
+  );
+  const showTyping =
+    waitingForReply && dispatcherRunning && thinkerBusy && !typingExpired;
+  const showDeclinedNote =
+    lastSentAt !== null &&
+    lastOutcome === "no-reply" &&
+    (lastMessage ? lastMessage.from === myName : false);
+  const showFailedNote =
+    lastSentAt !== null &&
+    lastOutcome === "failed" &&
+    (lastMessage ? lastMessage.from === myName : false);
+  const showNoReplyNote =
+    waitingForReply && typingExpired && !showDeclinedNote && !showFailedNote;
+  awaitingRef.current = waitingForReply;
 
   // Follow new messages only when already reading the latest ones.
-  const itemCount = messages.length + visiblePending.length + (showTyping ? 1 : 0);
+  const itemCount =
+    messages.length +
+    visiblePending.length +
+    (showTyping || showDeclinedNote || showFailedNote || showNoReplyNote ? 1 : 0);
   useEffect(() => {
     if (itemCount === 0) return;
     if (!didInitialScroll.current) {
@@ -315,9 +344,19 @@ export default function TalkChat() {
               />
             ))}
             {showTyping && <TypingBubble />}
+            {showDeclinedNote && (
+              <div className="py-2 text-center font-mono text-[10px] text-muted-foreground">
+                {identityName} read it and chose not to answer
+              </div>
+            )}
+            {showFailedNote && (
+              <div className="py-2 text-center font-mono text-[10px] text-muted-foreground">
+                {identityName} tried to reply but it failed — try again
+              </div>
+            )}
             {showNoReplyNote && (
               <div className="py-2 text-center font-mono text-[10px] text-muted-foreground">
-                no reply yet — {identityName} may have chosen not to answer
+                no reply yet — {identityName} may still be busy
               </div>
             )}
           </>

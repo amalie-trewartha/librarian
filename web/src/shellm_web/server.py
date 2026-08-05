@@ -578,10 +578,12 @@ def create_app(
         if with_ is not None and not safety.CHAT_FROM_RE.match(with_):
             raise HTTPException(status_code=422, detail="Invalid conversation name")
         status = liveness.identity_status(identity.path, traj_dir / "trajectory.jsonl")
+        view = chat.chat_view(traj_dir, identity.name, tail, with_)
         return {
             "identity": {"id": identity.id, "name": identity.name},
             "live": status["live"],
-            "messages": chat.chat_messages(traj_dir, identity.name, tail, with_),
+            "messages": view["messages"],
+            "outcomes": view["outcomes"],
         }
 
     @app.post("/api/identities/{identity_id}/chat")

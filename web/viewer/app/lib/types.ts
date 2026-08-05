@@ -124,6 +124,8 @@ export interface ChatLog {
   identity: { id: string; name: string };
   live: boolean;
   messages: ChatMessage[];
+  // sent step_id -> "replied" | "no-reply" | "failed"; absent = undecided
+  outcomes: Record<string, string>;
 }
 
 export interface EnvEntry {

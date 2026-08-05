@@ -41,6 +41,25 @@ def chat_identity(tmp_path: Path) -> Path:
         _msg("m4", "chatty", "slack-U1-C1", "hi slack", reply_to="m3"),
         _msg("m5", "pwa-boss", "chatty", "boss checking in"),
         _msg("m6", "chatty", "pwa-boss", "hello boss", reply_to="m5"),
+        _msg("m7", "pwa-nick", "chatty", "just an ack, thanks"),
+        {
+            "type": "observation",
+            "step_id": "o1",
+            "source": "monolith",
+            "content": "Chose not to reply to pwa-nick — bare acknowledgment",
+            "decision": "no-reply",
+            "trigger_step": "m7",
+            "ts": "to1",
+        },
+        _msg("m8", "pwa-boss", "chatty", "does this work?"),
+        {
+            "type": "observation",
+            "step_id": "o2",
+            "source": "monolith",
+            "content": "reply failed: could not send a reply to pwa-boss",
+            "trigger_step": "m8",
+            "ts": "to2",
+        },
     ]
     # Enough slack chatter that an unfiltered tail would push out the pwa
     # conversation — proves the filter runs before the tail slice.
@@ -68,7 +87,7 @@ def test_chat_with_filters_conversation(client: TestClient):
     body = client.get(
         "/api/identities/.identities~chatty/chat", params={"with": "pwa-nick"}
     ).json()
-    assert [m["step_id"] for m in body["messages"]] == ["m1", "m2"]
+    assert [m["step_id"] for m in body["messages"]] == ["m1", "m2", "m7"]
     for m in body["messages"]:
         assert "pwa-nick" in (m["from"], m["to"])
 
@@ -78,7 +97,7 @@ def test_chat_with_filter_applies_before_tail(client: TestClient):
         "/api/identities/.identities~chatty/chat",
         params={"with": "pwa-boss", "tail": 5},
     ).json()
-    assert [m["step_id"] for m in body["messages"]] == ["m5", "m6"]
+    assert [m["step_id"] for m in body["messages"]] == ["m5", "m6", "m8"]
 
 
 def test_chat_reply_to_surfaced(client: TestClient):
@@ -88,6 +107,18 @@ def test_chat_reply_to_surfaced(client: TestClient):
     by_id = {m["step_id"]: m for m in body["messages"]}
     assert by_id["m1"]["reply_to"] is None
     assert by_id["m2"]["reply_to"] == "m1"
+
+
+def test_chat_outcomes(client: TestClient):
+    body = client.get(
+        "/api/identities/.identities~chatty/chat", params={"with": "pwa-nick"}
+    ).json()
+    # m1 was replied to (m2 stamps reply_to), m7 was explicitly declined,
+    # m8 hit a reply failure. Absent = still undecided.
+    assert body["outcomes"]["m1"] == "replied"
+    assert body["outcomes"]["m7"] == "no-reply"
+    assert body["outcomes"]["m8"] == "failed"
+    assert "s0" not in body["outcomes"]
 
 
 def test_chat_with_rejects_bad_name(client: TestClient):
