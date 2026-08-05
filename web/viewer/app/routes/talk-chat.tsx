@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, SendHorizontal } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -19,6 +19,19 @@ export function meta() {
   return [{ title: "Audel" }];
 }
 
+// After a send: poll fast for this long so the reply lands near-instantly.
+const FAST_POLL_WINDOW_MS = 30_000;
+const FAST_POLL_MS = 700;
+const IDLE_POLL_MS = 2000;
+// The agent may legitimately choose not to reply — stop the dots eventually.
+const TYPING_TIMEOUT_MS = 45_000;
+
+interface PendingMessage {
+  key: number;
+  content: string;
+  failed: boolean;
+}
+
 function messageTime(ts: string | null): string {
   if (!ts) return "";
   const date = new Date(ts);
@@ -28,7 +41,7 @@ function messageTime(ts: string | null): string {
 
 function Bubble({ message, mine }: { message: ChatMessage; mine: boolean }) {
   return (
-    <div className={cn("flex", mine ? "justify-end" : "justify-start")}>
+    <div className={cn("msg-in flex", mine ? "justify-end" : "justify-start")}>
       <div
         className={cn(
           "max-w-[85%] rounded-2xl px-3.5 py-2",
@@ -61,13 +74,72 @@ function Bubble({ message, mine }: { message: ChatMessage; mine: boolean }) {
   );
 }
 
+function PendingBubble({
+  message,
+  onRetry,
+}: {
+  message: PendingMessage;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="msg-in flex justify-end">
+      <div
+        className={cn(
+          "max-w-[85%] rounded-2xl rounded-br-md bg-primary px-3.5 py-2 text-primary-foreground",
+          !message.failed && "opacity-70"
+        )}
+      >
+        <div className="whitespace-pre-wrap break-words text-sm">
+          {message.content}
+        </div>
+        {message.failed ? (
+          <button
+            type="button"
+            className="mt-0.5 block w-full text-right font-mono text-[10px] text-red-200 underline"
+            onClick={onRetry}
+          >
+            failed to send — tap to retry
+          </button>
+        ) : (
+          <div className="mt-0.5 text-right font-mono text-[10px] text-primary-foreground/60">
+            sending…
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TypingBubble() {
+  return (
+    <div className="msg-in flex justify-start">
+      <div className="rounded-2xl rounded-bl-md border bg-card px-4 py-3">
+        <div className="flex gap-1">
+          <span className="typing-dot h-1.5 w-1.5 rounded-full bg-muted-foreground" />
+          <span className="typing-dot h-1.5 w-1.5 rounded-full bg-muted-foreground" />
+          <span className="typing-dot h-1.5 w-1.5 rounded-full bg-muted-foreground" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function TalkChat() {
   const { identityId = "" } = useParams();
   const navigate = useNavigate();
   const controlsEnabled = useControlsEnabled();
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState("");
+  const [pending, setPending] = useState<PendingMessage[]>([]);
+  const [lastSentAt, setLastSentAt] = useState<number | null>(null);
+  const [typingExpired, setTypingExpired] = useState(false);
+  const pendingKey = useRef(0);
+  const lastSentAtRef = useRef<number | null>(null);
+  lastSentAtRef.current = lastSentAt;
+  const scrollerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const nearBottomRef = useRef(true);
+  const didInitialScroll = useRef(false);
 
   const name = getPwaName();
   useEffect(() => {
@@ -79,7 +151,12 @@ export default function TalkChat() {
   const { data: chat, isLoading } = useQuery({
     queryKey: ["chat", identityId, myName],
     queryFn: () => fetchChat(identityId, 200, myName),
-    refetchInterval: 2000,
+    refetchInterval: () => {
+      const sent = lastSentAtRef.current;
+      return sent && Date.now() - sent < FAST_POLL_WINDOW_MS
+        ? FAST_POLL_MS
+        : IDLE_POLL_MS;
+    },
     enabled: !!myName,
   });
 
@@ -90,26 +167,90 @@ export default function TalkChat() {
   });
   const dispatcherRunning = thinkerStatus?.dispatcher.running ?? true;
 
-  const messages = chat?.messages ?? [];
-  const messageCount = messages.length;
+  const messages = useMemo(() => chat?.messages ?? [], [chat]);
+
+  // A reply arriving ends the "waiting" state (fast poll + typing dots).
+  const lastMessage = messages[messages.length - 1];
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ block: "end" });
-  }, [messageCount]);
+    if (lastMessage && lastMessage.from !== myName) setLastSentAt(null);
+  }, [lastMessage, myName]);
+
+  // Optimistic bubbles disappear once the server echoes the real message.
+  const confirmedContents = useMemo(
+    () => new Set(messages.filter((m) => m.from === myName).map((m) => m.content)),
+    [messages, myName]
+  );
+  useEffect(() => {
+    setPending((prev) =>
+      prev.filter((p) => p.failed || !confirmedContents.has(p.content))
+    );
+  }, [confirmedContents]);
+  const visiblePending = pending.filter(
+    (p) => p.failed || !confirmedContents.has(p.content)
+  );
+
+  // Typing dots time out — NO_REPLY is a legitimate outcome.
+  useEffect(() => {
+    if (lastSentAt === null) {
+      setTypingExpired(false);
+      return;
+    }
+    setTypingExpired(false);
+    const timer = setTimeout(() => setTypingExpired(true), TYPING_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [lastSentAt]);
+
+  const waitingForReply =
+    lastSentAt !== null &&
+    (visiblePending.some((p) => !p.failed) ||
+      (lastMessage ? lastMessage.from === myName : false));
+  const showTyping = waitingForReply && !typingExpired;
+  const showNoReplyNote = waitingForReply && typingExpired;
+
+  // Follow new messages only when already reading the latest ones.
+  const itemCount = messages.length + visiblePending.length + (showTyping ? 1 : 0);
+  useEffect(() => {
+    if (itemCount === 0) return;
+    if (!didInitialScroll.current) {
+      didInitialScroll.current = true;
+      bottomRef.current?.scrollIntoView({ block: "end" });
+      return;
+    }
+    if (nearBottomRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+  }, [itemCount]);
 
   const sendMutation = useMutation({
     mutationFn: (content: string) => sendChat(identityId, content, myName),
-    onSuccess: () => {
+    onMutate: (content: string) => {
+      const key = ++pendingKey.current;
+      setPending((prev) => [...prev, { key, content, failed: false }]);
       setDraft("");
+      setLastSentAt(Date.now());
+      return { key };
+    },
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["chat", identityId, myName] });
     },
-    onError: (error: Error) => toast.error(error.message),
+    onError: (error: Error, _content, context) => {
+      setPending((prev) =>
+        prev.map((p) => (p.key === context?.key ? { ...p, failed: true } : p))
+      );
+      toast.error(error.message);
+    },
   });
+
+  const retryPending = (message: PendingMessage) => {
+    setPending((prev) => prev.filter((p) => p.key !== message.key));
+    sendMutation.mutate(message.content);
+  };
 
   const identityName = chat?.identity.name ?? identityId.split("~").pop();
 
   return (
     <div className="flex h-dvh flex-col">
-      <header className="flex items-center gap-1 border-b px-2 pb-2 pt-[calc(env(safe-area-inset-top)+0.5rem)]">
+      <header className="flex select-none items-center gap-1 border-b px-2 pb-2 pt-[calc(env(safe-area-inset-top)+0.5rem)]">
         <Link
           to="/talk?pick=1"
           className="flex h-9 w-9 items-center justify-center rounded-full active:bg-accent"
@@ -139,30 +280,54 @@ export default function TalkChat() {
         </div>
       )}
 
-      <div className="flex-1 space-y-2 overflow-y-auto px-3 py-3">
+      <div
+        ref={scrollerRef}
+        className="flex-1 space-y-2 overflow-y-auto px-3 py-3"
+        onScroll={() => {
+          const el = scrollerRef.current;
+          if (!el) return;
+          nearBottomRef.current =
+            el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+        }}
+      >
         {isLoading ? (
           <div className="flex justify-center py-10">
             <LoadingDots />
           </div>
-        ) : messages.length === 0 ? (
+        ) : messages.length === 0 && visiblePending.length === 0 ? (
           <div className="py-10 text-center text-sm text-muted-foreground">
             No messages yet. Say hello.
           </div>
         ) : (
-          messages.map((message, idx) => (
-            <Bubble
-              key={message.step_id ?? idx}
-              message={message}
-              mine={message.from === myName}
-            />
-          ))
+          <>
+            {messages.map((message, idx) => (
+              <Bubble
+                key={message.step_id ?? idx}
+                message={message}
+                mine={message.from === myName}
+              />
+            ))}
+            {visiblePending.map((message) => (
+              <PendingBubble
+                key={`pending-${message.key}`}
+                message={message}
+                onRetry={() => retryPending(message)}
+              />
+            ))}
+            {showTyping && <TypingBubble />}
+            {showNoReplyNote && (
+              <div className="py-2 text-center font-mono text-[10px] text-muted-foreground">
+                no reply yet — {identityName} may have chosen not to answer
+              </div>
+            )}
+          </>
         )}
         <div ref={bottomRef} />
       </div>
 
       {controlsEnabled && (
         <form
-          className="flex items-center gap-2 border-t px-3 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)]"
+          className="flex select-none items-center gap-2 border-t px-3 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)]"
           onSubmit={(event) => {
             event.preventDefault();
             const content = draft.trim();

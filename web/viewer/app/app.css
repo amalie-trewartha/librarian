@@ -152,7 +152,50 @@ html.dark {
   }
   body {
     @apply bg-background text-foreground font-sans;
+    /* No rubber-band / pull-to-refresh at the page edge; scrollable panes
+       (chat list, tables) keep their own natural scrolling. */
+    overscroll-behavior-y: none;
+    /* No gray flash on taps (Android Chrome). */
+    -webkit-tap-highlight-color: transparent;
   }
+}
+
+/* New chat bubbles ease in instead of popping. */
+@keyframes msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.msg-in {
+  animation: msg-in 200ms ease-out;
+}
+
+/* Typing indicator: three dots pulsing in sequence. */
+@keyframes typing-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+    transform: none;
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+.typing-dot {
+  animation: typing-dot 1.2s ease-in-out infinite;
+}
+.typing-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.typing-dot:nth-child(3) {
+  animation-delay: 0.3s;
 }
 
 /* Prose headings */
