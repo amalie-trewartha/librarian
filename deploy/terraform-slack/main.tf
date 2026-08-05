@@ -181,6 +181,36 @@ resource "cloudflare_zero_trust_access_application" "chat" {
   auto_redirect_to_identity = var.google_oauth_client_id == ""
 }
 
+# Chrome's WebAPK minting service (Google-side) fetches the manifest and
+# icons without the user's Access cookie; if Access blocks them, Android
+# "Install app" silently degrades to a homescreen shortcut. These paths are
+# branding bytes only — safe to expose.
+resource "cloudflare_zero_trust_access_application" "chat_public_assets" {
+  count   = var.chat_subdomain != "" ? 1 : 0
+  zone_id = var.cloudflare_zone_id
+  name    = "shellm chat public assets (${local.chat_hostname})"
+  domain  = "${local.chat_hostname}/manifest.webmanifest"
+  self_hosted_domains = [
+    "${local.chat_hostname}/manifest.webmanifest",
+    "${local.chat_hostname}/icons/",
+  ]
+  type             = "self_hosted"
+  session_duration = var.access_session_duration
+}
+
+resource "cloudflare_zero_trust_access_policy" "chat_public_assets_bypass" {
+  count          = var.chat_subdomain != "" ? 1 : 0
+  application_id = cloudflare_zero_trust_access_application.chat_public_assets[0].id
+  zone_id        = var.cloudflare_zone_id
+  name           = "public PWA assets"
+  precedence     = 1
+  decision       = "bypass"
+
+  include {
+    everyone = true
+  }
+}
+
 resource "cloudflare_zero_trust_access_policy" "chat_allowlist" {
   count          = var.chat_subdomain != "" ? 1 : 0
   application_id = cloudflare_zero_trust_access_application.chat[0].id
