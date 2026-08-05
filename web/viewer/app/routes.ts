@@ -2,6 +2,8 @@ import { type RouteConfig, index, route } from "@react-router/dev/routes";
 
 export default [
   index("routes/home.tsx"),
+  route("talk", "routes/talk.tsx"),
+  route("talk/:identityId", "routes/talk-chat.tsx"),
   route("i/:identityId", "routes/timeline.tsx"),
   route("i/:identityId/recap", "routes/recap.tsx"),
   route("i/:identityId/mindlog", "routes/identity.tsx"),

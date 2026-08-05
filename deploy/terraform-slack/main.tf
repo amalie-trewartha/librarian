@@ -37,7 +37,8 @@ provider "aws" {
 provider "cloudflare" {}
 
 locals {
-  hostname = "${var.subdomain}.${var.domain}"
+  hostname      = "${var.subdomain}.${var.domain}"
+  chat_hostname = var.chat_subdomain != "" ? "${var.chat_subdomain}.${var.domain}" : ""
 }
 
 # ---------------------------------------------------------------------------
@@ -64,6 +65,14 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "shellm" {
       hostname = local.hostname
       service  = "http://localhost:8080"
     }
+    # Phone chat PWA: same app, second hostname with its own Access app.
+    dynamic "ingress_rule" {
+      for_each = local.chat_hostname != "" ? [1] : []
+      content {
+        hostname = local.chat_hostname
+        service  = "http://localhost:8080"
+      }
+    }
     # Catch-all required by Cloudflare: anything else gets a 404
     ingress_rule {
       service = "http_status:404"
@@ -74,6 +83,15 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "shellm" {
 resource "cloudflare_record" "shellm" {
   zone_id = var.cloudflare_zone_id
   name    = var.subdomain
+  type    = "CNAME"
+  content = "${cloudflare_zero_trust_tunnel_cloudflared.shellm.id}.cfargotunnel.com"
+  proxied = true
+}
+
+resource "cloudflare_record" "chat" {
+  count   = var.chat_subdomain != "" ? 1 : 0
+  zone_id = var.cloudflare_zone_id
+  name    = var.chat_subdomain
   type    = "CNAME"
   content = "${cloudflare_zero_trust_tunnel_cloudflared.shellm.id}.cfargotunnel.com"
   proxied = true
@@ -131,6 +149,43 @@ resource "cloudflare_zero_trust_access_policy" "allowlist" {
   application_id = cloudflare_zero_trust_access_application.shellm.id
   zone_id        = var.cloudflare_zone_id
   name           = "shellm email allowlist"
+  precedence     = 1
+  decision       = "allow"
+
+  include {
+    email = var.allowed_emails
+  }
+
+  dynamic "include" {
+    for_each = length(var.allowed_email_domains) > 0 ? [1] : []
+    content {
+      email_domain = var.allowed_email_domains
+    }
+  }
+}
+
+# The chat PWA hostname gets its own Access app (own login session and
+# cookie) but the same allowlist.
+resource "cloudflare_zero_trust_access_application" "chat" {
+  count            = var.chat_subdomain != "" ? 1 : 0
+  zone_id          = var.cloudflare_zone_id
+  name             = "shellm chat (${local.chat_hostname})"
+  domain           = local.chat_hostname
+  type             = "self_hosted"
+  session_duration = var.access_session_duration
+
+  allowed_idps = concat(
+    [data.cloudflare_zero_trust_access_identity_provider.otp.id],
+    cloudflare_zero_trust_access_identity_provider.google[*].id,
+  )
+  auto_redirect_to_identity = var.google_oauth_client_id == ""
+}
+
+resource "cloudflare_zero_trust_access_policy" "chat_allowlist" {
+  count          = var.chat_subdomain != "" ? 1 : 0
+  application_id = cloudflare_zero_trust_access_application.chat[0].id
+  zone_id        = var.cloudflare_zone_id
+  name           = "shellm chat email allowlist"
   precedence     = 1
   decision       = "allow"
 

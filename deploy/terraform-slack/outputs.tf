@@ -3,6 +3,11 @@ output "url" {
   value       = "https://${local.hostname}"
 }
 
+output "chat_url" {
+  description = "Phone chat PWA (empty if chat_subdomain is disabled)"
+  value       = local.chat_hostname != "" ? "https://${local.chat_hostname}" : ""
+}
+
 output "instance_id" {
   description = "EC2 instance ID"
   value       = aws_instance.shellm.id

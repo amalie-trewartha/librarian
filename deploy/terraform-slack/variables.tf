@@ -49,6 +49,12 @@ variable "subdomain" {
   default     = "agents"
 }
 
+variable "chat_subdomain" {
+  description = "Extra hostname for the phone chat PWA (chat -> chat.example.com), served by the same box and tunnel with its own Access app. Set to \"\" to disable."
+  type        = string
+  default     = "chat"
+}
+
 variable "allowed_emails" {
   description = "Emails allowed through Cloudflare Access"
   type        = list(string)

@@ -116,6 +116,7 @@ export interface ChatMessage {
   from: string;
   to: string;
   content: string;
+  reply_to: string | null;
   filename: string | null;
 }
 

@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
 import { NuqsAdapter } from "nuqs/adapters/react-router/v7";
+import { useEffect } from "react";
 import {
   isRouteErrorResponse,
   Links,
@@ -8,6 +9,8 @@ import {
   Outlet,
   Scripts,
   ScrollRestoration,
+  useLocation,
+  useNavigate,
 } from "react-router";
 import { Toaster } from "sonner";
 
@@ -23,7 +26,18 @@ export function Layout({ children }: { children: React.ReactNode }) {
     <html lang="en" suppressHydrationWarning>
       <head>
         <meta charSet="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1, viewport-fit=cover"
+        />
+        <link rel="manifest" href="/manifest.webmanifest" />
+        <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta
+          name="apple-mobile-web-app-status-bar-style"
+          content="black-translucent"
+        />
+        <meta name="theme-color" content="#0a0a0a" />
         <Meta />
         <Links />
       </head>
@@ -37,13 +51,43 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  // The /talk* routes are the phone-first PWA: no dash navbar, no page
+  // padding — each screen owns the full viewport.
+  const talkMode = location.pathname.startsWith("/talk");
+
+  useEffect(() => {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(() => {
+        // Not installable (e.g. dev over http) — the app works fine without.
+      });
+    }
+  }, []);
+
+  // chat.* is the messaging hostname: land on /talk instead of the dash.
+  useEffect(() => {
+    if (
+      window.location.hostname.startsWith("chat.") &&
+      location.pathname === "/"
+    ) {
+      navigate("/talk", { replace: true });
+    }
+  }, [location.pathname, navigate]);
+
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
         <NuqsAdapter>
           <div className="min-h-screen flex flex-col">
-            <Navbar />
-            <main className="flex flex-1 min-h-0 flex-col px-0 pt-4 pb-10 sm:px-4">
+            {!talkMode && <Navbar />}
+            <main
+              className={
+                talkMode
+                  ? "flex flex-1 min-h-0 flex-col"
+                  : "flex flex-1 min-h-0 flex-col px-0 pt-4 pb-10 sm:px-4"
+              }
+            >
               <Outlet />
             </main>
           </div>

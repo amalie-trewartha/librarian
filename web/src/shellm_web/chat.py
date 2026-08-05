@@ -7,7 +7,12 @@ from shellm_web.trajectory import parse_jsonl
 MESSAGE_TYPES = {"message", "human-msg", "agent-msg"}
 
 
-def chat_messages(traj_dir: Path, identity_name: str, tail: int = 200) -> list[dict]:
+def chat_messages(
+    traj_dir: Path,
+    identity_name: str,
+    tail: int = 200,
+    with_name: str | None = None,
+) -> list[dict]:
     steps = parse_jsonl(traj_dir / "trajectory.jsonl")
     messages = []
     for raw in steps:
@@ -26,6 +31,8 @@ def chat_messages(traj_dir: Path, identity_name: str, tail: int = 200) -> list[d
         else:  # agent-msg
             from_name = identity_name
             to_name = raw.get("to") or ""
+        if with_name is not None and with_name not in (from_name, to_name):
+            continue
         messages.append(
             {
                 "ts": raw.get("ts"),
@@ -33,6 +40,7 @@ def chat_messages(traj_dir: Path, identity_name: str, tail: int = 200) -> list[d
                 "from": from_name,
                 "to": to_name,
                 "content": content,
+                "reply_to": raw.get("reply_to"),
                 "filename": raw.get("filename"),
             }
         )

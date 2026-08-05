@@ -14,6 +14,7 @@ THINKER_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 # Same rule `identity new` enforces.
 IDENTITY_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 CHAT_FROM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+ICON_NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]+\.png$")
 
 
 def contained_path(base: Path, *parts: str) -> Path:

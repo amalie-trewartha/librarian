@@ -226,9 +226,14 @@ export function setThinkerEnabled(
   );
 }
 
-export function fetchChat(identityId: string, tail = 200): Promise<ChatLog> {
+export function fetchChat(
+  identityId: string,
+  tail = 200,
+  withName?: string
+): Promise<ChatLog> {
+  const withParam = withName ? `&with=${encodeURIComponent(withName)}` : "";
   return getJson(
-    `/api/identities/${encodeURIComponent(identityId)}/chat?tail=${tail}`
+    `/api/identities/${encodeURIComponent(identityId)}/chat?tail=${tail}${withParam}`
   );
 }
 

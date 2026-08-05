@@ -569,15 +569,19 @@ def create_app(
 
     @app.get("/api/identities/{identity_id}/chat")
     def identity_chat(
-        identity_id: str, tail: int = Query(default=200, ge=1, le=2000)
+        identity_id: str,
+        tail: int = Query(default=200, ge=1, le=2000),
+        with_: str | None = Query(default=None, alias="with"),
     ) -> dict:
         identity = _identity_or_404(root, identity_id)
         traj_dir = _root_traj_dir_or_404(identity)
+        if with_ is not None and not safety.CHAT_FROM_RE.match(with_):
+            raise HTTPException(status_code=422, detail="Invalid conversation name")
         status = liveness.identity_status(identity.path, traj_dir / "trajectory.jsonl")
         return {
             "identity": {"id": identity.id, "name": identity.name},
             "live": status["live"],
-            "messages": chat.chat_messages(traj_dir, identity.name, tail),
+            "messages": chat.chat_messages(traj_dir, identity.name, tail, with_),
         }
 
     @app.post("/api/identities/{identity_id}/chat")
@@ -741,6 +745,34 @@ def create_app(
         @app.get("/favicon.ico")
         def favicon() -> FileResponse:
             return FileResponse(static_dir / "favicon.ico")
+
+        # PWA files must bypass the SPA catch-all: the manifest and service
+        # worker need their real bytes (and the SW needs root scope).
+        @app.get("/manifest.webmanifest")
+        def manifest() -> FileResponse:
+            return FileResponse(
+                static_dir / "manifest.webmanifest",
+                media_type="application/manifest+json",
+            )
+
+        @app.get("/sw.js")
+        def service_worker() -> FileResponse:
+            return FileResponse(static_dir / "sw.js", media_type="text/javascript")
+
+        # iOS probes this exact root path regardless of <link> tags.
+        @app.get("/apple-touch-icon.png")
+        def apple_touch_icon() -> FileResponse:
+            return FileResponse(
+                static_dir / "icons" / "apple-touch-icon.png", media_type="image/png"
+            )
+
+        @app.get("/icons/{name}")
+        def icon(name: str) -> FileResponse:
+            safety.checked_name(name, safety.ICON_NAME_RE)
+            icon_path = safety.contained_path(static_dir / "icons", name)
+            if not icon_path.is_file():
+                raise HTTPException(status_code=404, detail="Not found")
+            return FileResponse(icon_path, media_type="image/png")
 
         @app.get("/{path:path}")
         def serve_spa(path: str) -> FileResponse:
