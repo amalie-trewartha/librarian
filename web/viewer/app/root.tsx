@@ -68,9 +68,12 @@ export default function App() {
 
   useEffect(() => {
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js").catch(() => {
-        // Not installable (e.g. dev over http) — the app works fine without.
-      });
+      navigator.serviceWorker
+        .register("/sw.js", { updateViaCache: "none" })
+        .then((reg) => reg.update())
+        .catch(() => {
+          // Not installable (e.g. dev over http) — the app works fine without.
+        });
     }
   }, []);
 

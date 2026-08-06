@@ -793,7 +793,13 @@ def create_app(
 
         @app.get("/sw.js")
         def service_worker() -> FileResponse:
-            return FileResponse(static_dir / "sw.js", media_type="text/javascript")
+            # no-store: a cached service worker delays push/behavior updates
+            # on installed apps by up to a day.
+            return FileResponse(
+                static_dir / "sw.js",
+                media_type="text/javascript",
+                headers={"Cache-Control": "no-store"},
+            )
 
         # iOS probes this exact root path regardless of <link> tags.
         @app.get("/apple-touch-icon.png")
