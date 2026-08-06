@@ -21,3 +21,4 @@ web/viewer/build/
 web/viewer/node_modules/
 web/.venv/
 web/viewer/.react-router/
+.web-push/

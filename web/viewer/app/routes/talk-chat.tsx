@@ -6,6 +6,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
 
+import { PushBell } from "~/components/push-bell";
 import { useControlsEnabled } from "~/components/thinker-controls";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
@@ -299,6 +300,7 @@ export default function TalkChat() {
             title={chat?.live ? "live" : "idle"}
           />
         </div>
+        {myName && <PushBell name={myName} />}
         <span className="pr-2 font-mono text-[10px] text-muted-foreground">
           {myName}
         </span>

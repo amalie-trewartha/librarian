@@ -127,6 +127,10 @@ def _run_production(root: Path, host: str, port: int, rebuild: bool, read_only: 
     if rebuild or not (STATIC_DIR / "index.html").is_file():
         _build_frontend()
     app = create_app(root, STATIC_DIR, read_only=read_only)
+    if not read_only:
+        from shellm_web.push import PushWatcher
+
+        PushWatcher(root).start()
     print(f"shellm-web serving {root} at http://{host}:{port}", file=sys.stderr)
     uvicorn.run(app, host=host, port=port, log_level="info")
 

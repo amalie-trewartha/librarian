@@ -29,6 +29,7 @@ from shellm_web import (
     llm_health,
     logs,
     openrouter,
+    push,
     safety,
     thinker_sync,
     thinkers,
@@ -107,6 +108,15 @@ class ThinkerSyncBody(BaseModel):
 class ChatSendBody(BaseModel):
     content: str
     from_name: str
+
+
+class PushSubscribeBody(BaseModel):
+    name: str
+    subscription: dict
+
+
+class PushUnsubscribeBody(BaseModel):
+    endpoint: str
 
 
 class NewIdentityBody(BaseModel):
@@ -595,6 +605,30 @@ def create_app(
         if not safety.CHAT_FROM_RE.match(body.from_name):
             raise HTTPException(status_code=422, detail="Invalid sender name")
         return control.chat_send(root, identity, body.content, body.from_name)
+
+    # -- Web push ----------------------------------------------------------
+    # Keys/subscriptions live in <root>/.web-push; the sender thread is
+    # started by cli.py in production, not here (tests stay thread-free).
+
+    @app.get("/api/push/key")
+    def push_key() -> dict:
+        return {"key": push.vapid_public_key(root)}
+
+    @app.post("/api/push/subscriptions")
+    def push_subscribe(body: PushSubscribeBody) -> dict:
+        _require_controls()
+        if not body.name.startswith(push.SUBSCRIBABLE_PREFIX) or not safety.CHAT_FROM_RE.match(body.name):
+            raise HTTPException(status_code=422, detail="Invalid sender name")
+        if not body.subscription.get("endpoint", "").startswith("https://"):
+            raise HTTPException(status_code=422, detail="Invalid subscription")
+        count = push.add_subscription(root, body.name, body.subscription)
+        return {"ok": True, "name": body.name, "subscriptions": count}
+
+    @app.post("/api/push/unsubscribe")
+    def push_unsubscribe(body: PushUnsubscribeBody) -> dict:
+        _require_controls()
+        removed = push.remove_subscription(root, body.endpoint)
+        return {"ok": True, "removed": removed}
 
     # -- Import / export ---------------------------------------------------
     # Archives are produced/consumed by `identity export` / `identity import`

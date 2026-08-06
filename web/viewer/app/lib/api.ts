@@ -248,6 +248,23 @@ export function sendChat(
   });
 }
 
+export function fetchPushKey(): Promise<{ key: string }> {
+  return getJson("/api/push/key");
+}
+
+export function subscribePush(
+  name: string,
+  subscription: PushSubscriptionJSON
+): Promise<{ ok: boolean; subscriptions: number }> {
+  return postJson("/api/push/subscriptions", { name, subscription });
+}
+
+export function unsubscribePush(
+  endpoint: string
+): Promise<{ ok: boolean; removed: boolean }> {
+  return postJson("/api/push/unsubscribe", { endpoint });
+}
+
 export function createIdentity(name: string): Promise<{ id: string; name: string }> {
   return postJson("/api/identities", { name });
 }
