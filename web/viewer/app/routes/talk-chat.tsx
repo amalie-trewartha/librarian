@@ -20,11 +20,13 @@ export function meta() {
 }
 
 // After a send: poll fast for this long so the reply lands near-instantly.
-const FAST_POLL_WINDOW_MS = 30_000;
+const FAST_POLL_WINDOW_MS = 60_000;
 const FAST_POLL_MS = 700;
 const IDLE_POLL_MS = 2000;
-// The agent may legitimately choose not to reply — stop the dots eventually.
-const TYPING_TIMEOUT_MS = 45_000;
+// Backstop only: the dots are already gated on verifiable thinker activity,
+// and slow replies (a busy monolith, a long task) can legitimately take
+// minutes. Declines surface instantly via outcome stamps, not this timer.
+const TYPING_TIMEOUT_MS = 180_000;
 
 interface PendingMessage {
   key: number;
