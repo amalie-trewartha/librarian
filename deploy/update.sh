@@ -49,6 +49,34 @@ if [[ -f /etc/systemd/system/shellm-slack-bridge.service ]]; then
     sudo systemctl restart shellm-slack-bridge
 fi
 
+# Optional component: Telegram bridge. Enabled post-hoc on a live box by
+# writing /etc/shellm/telegram.env (root:root 600 with TELEGRAM_BOT_TOKEN +
+# TELEGRAM_ADMIN_ID) — there is no bootstrap flag because user_data must
+# never change (instance replacement). See telegram/README.md.
+if [[ -f /etc/shellm/telegram.env ]]; then
+    echo "==> Updating Telegram bridge"
+    sudo chown root:root /etc/shellm/telegram.env
+    sudo chmod 600 /etc/shellm/telegram.env
+    # Dedicated user: keeps the bot token and the allowlist out of the
+    # agent's reach (the agent runs as shellm). Group shellm grants
+    # read-only access to the identity's trajectory.
+    if ! id -u shellm-telegram >/dev/null 2>&1; then
+        sudo useradd --system --no-create-home --shell /usr/sbin/nologin shellm-telegram
+    fi
+    sudo usermod -aG shellm shellm-telegram
+    sudo chmod g+rx "$SHELLM_HOME"
+    sudo -u shellm bash -c "export PATH=\"\$HOME/.local/bin:\$PATH\"; cd '$APP_DIR/telegram' && uv sync"
+    unit_src="$APP_DIR/deploy/shellm-telegram-bridge.service"
+    rendered=$(sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$unit_src")
+    if ! printf '%s\n' "$rendered" | cmp -s - /etc/systemd/system/shellm-telegram-bridge.service 2>/dev/null; then
+        echo "==> Unit file changed — re-installing shellm-telegram-bridge"
+        printf '%s\n' "$rendered" | sudo tee /etc/systemd/system/shellm-telegram-bridge.service >/dev/null
+        sudo systemctl daemon-reload
+    fi
+    sudo systemctl enable --now shellm-telegram-bridge >/dev/null 2>&1 || true
+    sudo systemctl restart shellm-telegram-bridge
+fi
+
 echo "==> Forcing frontend rebuild on restart"
 sudo -u shellm rm -rf "$APP_DIR/web/src/shellm_web/static"
 
