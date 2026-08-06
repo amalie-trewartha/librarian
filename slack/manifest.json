@@ -4,6 +4,10 @@
     "description": "Audel, the Laude shellm agent — DM me or @mention me in a channel"
   },
   "features": {
+    "app_home": {
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    },
     "bot_user": {
       "display_name": "audel",
       "always_online": true
