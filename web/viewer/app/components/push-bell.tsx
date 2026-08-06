@@ -37,12 +37,17 @@ export function PushBell({ name }: { name: string }) {
       if (Notification.permission === "denied") return setState("denied");
       const reg = await navigator.serviceWorker.ready;
       const sub = await reg.pushManager.getSubscription();
+      if (sub) {
+        // Re-register on every launch: upsert is idempotent, and it heals
+        // the box after a prune, rebuild, or subscription rotation.
+        subscribePush(name, sub.toJSON()).catch(() => {});
+      }
       if (!cancelled) setState(sub ? "on" : "off");
     })().catch(() => !cancelled && setState("unsupported"));
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [name]);
 
   const enable = async () => {
     setState("loading");

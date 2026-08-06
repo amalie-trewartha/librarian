@@ -26,20 +26,17 @@ self.addEventListener("push", (event) => {
   const url = data.url || "/talk";
   event.waitUntil(
     (async () => {
-      // Skip the banner when that conversation is already open and focused.
-      const wins = await self.clients.matchAll({
-        type: "window",
-        includeUncontrolled: true,
-      });
-      if (wins.some((w) => w.focused && new URL(w.url).pathname === url)) {
-        return;
-      }
+      // Always show: Chrome replaces any push that doesn't produce a
+      // notification with a generic "site updated in the background"
+      // banner, so suppressing while the chat is focused backfires.
       await self.registration.showNotification(data.title || "shellm", {
         body: data.body || "New message",
         icon: "/icons/icon-192.png",
-        badge: "/icons/icon-192.png",
+        badge: "/icons/badge-96.png",
         tag: data.tag || url,
         data: { url },
+        timestamp: Date.now(),
+        vibrate: [100, 50, 100],
       });
     })()
   );
