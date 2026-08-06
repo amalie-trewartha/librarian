@@ -213,7 +213,7 @@ cmd_reconcile() {
         g() { sudo -u shellm git -C /opt/shellm/app "$@"; }
         g fetch --quiet origin
         echo "=== CHERRY ==="
-        g cherry origin/main main
+        g cherry -v origin/main main
         echo "=== STATUS ==="
         g status --short
     ')
@@ -223,7 +223,12 @@ cmd_reconcile() {
         info "box is already level with origin/main — nothing to reconcile"
         return 0
     fi
-    echo "  '-' = patch already upstream, drops in the rebase; '+' = survives on top:"
+    local total drops keeps
+    total=$(wc -l <<<"$cherry" | tr -d ' ')
+    drops=$(grep -c '^-' <<<"$cherry" || true)
+    keeps=$(grep -c '^+' <<<"$cherry" || true)
+    info "box is $total commit(s) ahead of origin/main: $drops drop in the rebase (patch already upstream), $keeps survive"
+    echo "  '-' = drops, '+' = survives:"
     sed 's/^/  /' <<<"$cherry"
     [[ -n "$status" ]] && { echo "  box tree is dirty — tracked changes will be stashed and re-applied:"; sed 's/^/  /' <<<"$status"; }
     if grep -q '^+' <<<"$cherry" && [[ -f "$STATE_FILE" ]] && grep -q ' rejected ' "$STATE_FILE"; then
