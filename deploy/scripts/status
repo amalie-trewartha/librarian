@@ -18,6 +18,23 @@ info "Instance:  $(instance_id) ($(region)) — $state"
 info "Dashboard: $(tf output -raw url)"
 
 if [[ "$state" == "running" ]]; then
+    # Telegram is enabled post-hoc via /etc/shellm/telegram.env, which does
+    # NOT survive a rebuild — on the slack stack a missing env is worth a
+    # loud reminder, on other stacks telegram only shows when installed.
+    telegram_check='
+        if [ -f /etc/systemd/system/shellm-telegram-bridge.service ]; then
+            echo "telegram: $(systemctl is-active shellm-telegram-bridge)"
+        fi'
+    if [[ "${SHELLM_TF_STACK:-}" == "terraform-slack" ]]; then
+        telegram_check='
+        if [ -f /etc/systemd/system/shellm-telegram-bridge.service ]; then
+            echo "telegram: $(systemctl is-active shellm-telegram-bridge)"
+        elif [ -f /etc/shellm/telegram.env ]; then
+            echo "telegram: env present but unit missing — run deploy/scripts/update"
+        else
+            echo "telegram: NOT SET UP (env file is lost on rebuild) — run deploy/scripts/telegram-env, then deploy/scripts/update"
+        fi'
+    fi
     run_script_on_box '
         echo "health:   $(curl -fsS localhost:8080/api/health 2>/dev/null || echo DOWN)"
         echo "service:  $(systemctl is-active shellm-web)"
@@ -25,7 +42,8 @@ if [[ "$state" == "running" ]]; then
         if [ -f /etc/systemd/system/shellm-slack-bridge.service ]; then
             echo "bridge:   $(systemctl is-active shellm-slack-bridge)"
             echo "persona:  $(systemctl is-active shellm-slack-agent)"
-        fi'
+        fi'"$telegram_check"
+    echo  # box output arrives without a trailing newline (--output text strips it)
 else
     info "start it with: deploy/scripts/start"
 fi

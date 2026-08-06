@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# deploy/scripts/telegram-env — write /etc/shellm/telegram.env on the box.
+#
+# Usage: deploy/scripts/telegram-env [-y]
+#
+# Prompts for the bot token (hidden) and the admin's numeric Telegram user
+# id, then creates the root-owned env file the Telegram bridge reads. Run
+# deploy/scripts/update afterwards to install/restart the bridge.
+#
+# The token is prompted, not an argument, so it stays out of your shell
+# history. It does transit SSM RunCommand, whose command history is
+# readable in this AWS account for ~30 days — acceptable for a bot token
+# you can revoke via @BotFather; type it by hand in deploy/scripts/shell
+# instead if that ever stops being true (see telegram/README.md).
+
+export SHELLM_TF_STACK="${SHELLM_TF_STACK:-terraform-slack}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+yes=0
+case "${1:-}" in
+    -h|--help) sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -y) yes=1; shift ;;
+esac
+
+require_tools terraform aws jq
+require_state
+require_aws
+
+read -rs -p "Telegram bot token (from @BotFather, hidden): " token; echo
+# Token shape is <bot id>:<secret>; validating it also guarantees the value
+# is shell-safe to embed in the remote script below.
+[[ "$token" =~ ^[0-9]+:[A-Za-z0-9_-]{30,}$ ]] \
+    || die "that doesn't look like a bot token (expected <digits>:<35-char secret>)"
+read -r -p "Admin numeric Telegram user id (from @userinfobot): " admin_id
+[[ "$admin_id" =~ ^[0-9]+$ ]] || die "admin id must be digits only"
+
+info "Will write /etc/shellm/telegram.env (root:root 600) on $(instance_id) ($(region))"
+if [[ "$yes" -ne 1 ]]; then
+    read -r -p "Proceed? [y/N] " answer
+    [[ "$answer" == y || "$answer" == Y ]] || die "aborted"
+fi
+
+run_script_on_box "
+    set -euo pipefail
+    umask 077
+    mkdir -p /etc/shellm
+    printf 'TELEGRAM_BOT_TOKEN=%s\nTELEGRAM_ADMIN_ID=%s\n' '$token' '$admin_id' \
+        > /etc/shellm/telegram.env
+    chown root:root /etc/shellm/telegram.env
+    chmod 600 /etc/shellm/telegram.env
+    echo 'written:'
+    ls -l /etc/shellm/telegram.env
+    sed 's/=.*/=.../' /etc/shellm/telegram.env
+" || die "writing the env file failed — box unchanged or partially written; check output above"
+
+info "Done. Next: deploy/scripts/update (installs + starts the bridge),"
+info "or if the bridge is already installed: deploy/scripts/run 'sudo systemctl restart shellm-telegram-bridge'"

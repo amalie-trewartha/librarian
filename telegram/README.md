@@ -68,7 +68,17 @@ whenever `/etc/shellm/telegram.env` exists on the box.
 
 1. Create the bot. Message @BotFather, `/newbot`, and save the token.
 2. Find your numeric user id, e.g. by messaging @userinfobot.
-3. In an SSM session on the box, write the env file as root:
+3. Write the env file on the box:
+
+   ```bash
+   deploy/scripts/telegram-env
+   ```
+
+   The script prompts for the token (hidden) and the admin id, then
+   creates the file root owned with mode 600. The token does transit
+   the SSM command channel, whose history is readable in the AWS
+   account for about 30 days. If that is ever a problem, open
+   `deploy/scripts/shell` instead and write the file by hand:
 
    ```bash
    sudo mkdir -p /etc/shellm
@@ -87,7 +97,9 @@ whenever `/etc/shellm/telegram.env` exists on the box.
    the identity's reply in the chat.
 
 The env file does not survive an instance rebuild. After a rebuild,
-repeat step 3 and 4. To turn the bridge off, `sudo systemctl stop
+repeat step 3 and 4. `deploy/scripts/status` (which `rebuild` runs at
+the end) prints a loud `telegram: NOT SET UP` reminder on the slack
+stack whenever the env file is missing. To turn the bridge off, `sudo systemctl stop
 shellm-telegram-bridge` mutes it without touching the agent, and
 removing `/etc/shellm/telegram.env` keeps it from coming back on the
 next deploy.
