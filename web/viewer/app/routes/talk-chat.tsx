@@ -35,6 +35,33 @@ interface PendingMessage {
   failed: boolean;
 }
 
+/** iOS doesn't shrink the layout viewport for the keyboard — it pans the
+ * page and (in installed PWAs) often leaves it panned after dismiss,
+ * stranding the chat with phantom margins. Track visualViewport (which
+ * does follow the keyboard) into a CSS var, and snap the pan back when
+ * the keyboard goes away. No-op on browsers without the API. */
+function useKeyboardViewport() {
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const root = document.documentElement;
+    const update = () => {
+      root.style.setProperty("--talk-height", `${vv.height}px`);
+      if (vv.height >= window.innerHeight - 1) {
+        window.scrollTo(0, 0);
+      }
+    };
+    update();
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+    return () => {
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+      root.style.removeProperty("--talk-height");
+    };
+  }, []);
+}
+
 function messageTime(ts: string | null): string {
   if (!ts) return "";
   const date = new Date(ts);
@@ -131,6 +158,7 @@ export default function TalkChat() {
   const { identityId = "" } = useParams();
   const navigate = useNavigate();
   const controlsEnabled = useControlsEnabled();
+  useKeyboardViewport();
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<PendingMessage[]>([]);
@@ -281,7 +309,10 @@ export default function TalkChat() {
   const identityName = chat?.identity.name ?? identityId.split("~").pop();
 
   return (
-    <div className="flex h-dvh flex-col">
+    <div
+      className="flex h-dvh flex-col"
+      style={{ height: "var(--talk-height, 100dvh)" }}
+    >
       <header className="flex select-none items-center gap-1 border-b px-2 pb-2 pt-[calc(env(safe-area-inset-top)+0.5rem)]">
         <Link
           to="/talk?pick=1"
