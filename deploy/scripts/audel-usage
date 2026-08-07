@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# deploy/scripts/audel-usage — usage report for Audel: messages/week, users.
+#
+# Usage: deploy/scripts/audel-usage [--cached] [--no-open]
+#
+# Pulls per-day message counts from the box's mind log (aggregated on the box
+# because SSM output is capped at 24KB), caches the data in .usage/, and
+# renders a self-contained HTML report (weekly messages by channel, distinct/
+# new/returning users, per-user table).
+#
+# --cached   re-render from the last pull, no AWS calls
+# --no-open  don't open the report in a browser
+#
+# Identity defaults to audel; override with SHELLM_USAGE_IDENTITY.
+
+export SHELLM_TF_STACK="${SHELLM_TF_STACK:-terraform-slack}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+IDENT="${SHELLM_USAGE_IDENTITY:-audel}"
+OUT_DIR="$REPO_ROOT/.usage"
+DATA="$OUT_DIR/$IDENT-usage.json"
+HTML="$OUT_DIR/$IDENT-usage.html"
+
+cached=0 open=1
+for arg in "$@"; do
+    case "$arg" in
+        --cached)  cached=1 ;;
+        --no-open) open=0 ;;
+        -h|--help) sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) die "unknown flag: $arg (see --help)" ;;
+    esac
+done
+
+require_tools python3
+mkdir -p "$OUT_DIR"
+
+if [[ "$cached" -eq 0 ]]; then
+    require_tools terraform aws jq
+    require_state
+    require_aws
+
+    # The box-side extractor: walk the identity's root trajectory, count
+    # messages per (utc day, channel, user), recover display names from the
+    # bridge headers, and ship the aggregate back as gzip+base64. The peer
+    # name encodes the channel; the stable user id is dash-segment 2 for
+    # slack/telegram (channel + thread vary per conversation, so raw names
+    # badly overcount users), the whole suffix for pwa.
+    onbox_script="IDENT_DIR=/opt/shellm/app/.identities/$IDENT
+$(cat <<'ONBOX'
+set -euo pipefail
+[ -d "$IDENT_DIR" ] || { echo "no identity dir on box: $IDENT_DIR" >&2; exit 1; }
+python3 - "$IDENT_DIR" <<'PYEOF'
+import base64, glob, gzip, json, os, re, sys
+from datetime import datetime, timezone
+
+ident_dir = sys.argv[1]
+ident = os.path.basename(ident_dir.rstrip("/"))
+
+def log_path():
+    try:
+        with open(os.path.join(ident_dir, "info.txt"), encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if line.startswith("root_trajectory="):
+                    root = line.split("=", 1)[1].strip()
+                    hits = glob.glob(os.path.join(ident_dir, "trajectories", root[:8] + "-*", "trajectory.jsonl"))
+                    if hits:
+                        return hits[0]
+    except OSError:
+        pass
+    hits = sorted(glob.glob(os.path.join(ident_dir, "trajectories", "*-root", "trajectory.jsonl")))
+    return hits[0] if hits else None
+
+path = log_path()
+if not path:
+    sys.stderr.write("no root trajectory found under " + ident_dir + "\n")
+    sys.exit(1)
+
+OFFSET_FIX = re.compile(r"([+-][0-9]{2})([0-9]{2})$")
+HEADER = re.compile(r"^[(](Slack|Telegram): (.+?) — reply with: chat reply ")
+
+def utc_day(ts):
+    ts = ts.strip()
+    if ts.endswith("Z"):
+        ts = ts[:-1] + "+00:00"
+    ts = OFFSET_FIX.sub(r"\1:\2", ts)
+    dt = datetime.fromisoformat(ts)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).date().isoformat()
+
+def peer_key(name):
+    if name.startswith("slack-"):
+        bits = name.split("-")
+        return "slack", "slack " + (bits[1] if len(bits) > 1 else name)
+    if name.startswith("telegram-"):
+        bits = name.split("-")
+        return "telegram", "telegram " + (bits[1] if len(bits) > 1 else name)
+    if name.startswith("pwa-"):
+        return "pwa", "pwa " + name[4:]
+    return "other", "other " + name
+
+rows = {}
+names = {}
+count = 0
+skipped = 0
+with open(path, encoding="utf-8", errors="replace") as fh:
+    for line in fh:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            step = json.loads(line)
+        except ValueError:
+            skipped += 1
+            continue
+        if step.get("type") != "message":
+            continue
+        frm = step.get("from") or ""
+        to = step.get("to") or ""
+        if frm == ident and to and to != ident:
+            direction, peer = "out", to
+        elif to == ident and frm and frm != ident:
+            direction, peer = "in", frm
+        else:
+            continue
+        try:
+            day = utc_day(step.get("ts") or "")
+        except (ValueError, TypeError):
+            skipped += 1
+            continue
+        chan, user = peer_key(peer)
+        cell = rows.setdefault((day, chan, user), [0, 0])
+        cell[0 if direction == "in" else 1] += 1
+        count += 1
+        if direction == "in" and chan in ("slack", "telegram"):
+            m = HEADER.match(step.get("content") or "")
+            if m:
+                label = m.group(2)
+                if m.group(1) == "Slack" and " in " in label:
+                    label = label.rsplit(" in ", 1)[0]
+                names[user] = label
+
+out = {
+    "identity": ident,
+    "log": path,
+    "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "messages": count,
+    "skipped": skipped,
+    "names": names,
+    "rows": [[d, c, u, v[0], v[1]] for (d, c, u), v in sorted(rows.items())],
+}
+blob = base64.b64encode(gzip.compress(json.dumps(out, separators=(",", ":")).encode())).decode()
+if len(blob) > 23000:
+    sys.stderr.write("warning: payload " + str(len(blob)) + "B is near the 24KB SSM cap\n")
+print("AUDEL_USAGE_BEGIN")
+for i in range(0, len(blob), 76):
+    print(blob[i : i + 76])
+print("AUDEL_USAGE_END")
+PYEOF
+ONBOX
+)"
+
+    info "pulling $IDENT usage data from the box ($SHELLM_TF_STACK)..."
+    payload=$(run_script_on_box "$onbox_script")
+    b64=$(awk '/^AUDEL_USAGE_BEGIN$/{f=1;next} /^AUDEL_USAGE_END$/{f=0} f' <<<"$payload")
+    [[ -n "$b64" ]] || die "no data in box output:
+$payload"
+    printf '%s' "$b64" | base64 -d | gunzip > "$DATA" || die "payload decode failed"
+    info "cached $(wc -c < "$DATA" | tr -d ' ') bytes -> $DATA"
+else
+    [[ -f "$DATA" ]] || die "no cached data at $DATA — run once without --cached"
+fi
+
+python3 "$SCRIPTS_DIR/audel-usage-render.py" "$DATA" "$HTML"
+info "report: $HTML"
+[[ "$open" -eq 1 ]] && command -v open >/dev/null 2>&1 && open "$HTML"
+exit 0

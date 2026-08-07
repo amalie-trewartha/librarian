@@ -22,3 +22,6 @@ web/viewer/node_modules/
 web/.venv/
 web/viewer/.react-router/
 .web-push/
+
+# Pulled usage data + rendered reports (deploy/scripts/audel-usage)
+.usage/
