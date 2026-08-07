@@ -1,6 +1,6 @@
 import { Link, useParams } from "react-router";
 
-import { LiveBadge } from "~/components/live-badge";
+import { ActivityBadge } from "~/components/activity-badge";
 import { cn } from "~/lib/utils";
 
 const TABS = [
@@ -8,6 +8,7 @@ const TABS = [
   { key: "recap", label: "Recap", path: "/recap" },
   { key: "mindlog", label: "Mind log", path: "/mindlog" },
   { key: "thinkers", label: "Thinkers", path: "/thinkers" },
+  { key: "health", label: "Health", path: "/health" },
   { key: "chat", label: "Chat", path: "/chat" },
   { key: "memories", label: "Memories", path: "/memories" },
   { key: "config", label: "Config", path: "/config" },
@@ -36,7 +37,7 @@ export function IdentityTabs({
       </Link>
       <span className="text-muted-foreground">/</span>
       <h1 className="font-mono text-lg font-semibold">{displayName}</h1>
-      {live && <LiveBadge />}
+      <ActivityBadge identityId={identityId} live={live} />
       <nav className="ml-auto flex items-center gap-1 rounded-lg border p-0.5">
         {TABS.map((tab) => (
           <Link

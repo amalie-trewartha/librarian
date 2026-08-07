@@ -9,6 +9,7 @@ export default [
   route("i/:identityId/mindlog", "routes/identity.tsx"),
   route("i/:identityId/t/:trajId", "routes/sub-traj.tsx"),
   route("i/:identityId/thinkers", "routes/thinkers.tsx"),
+  route("i/:identityId/health", "routes/health.tsx"),
   route("i/:identityId/chat", "routes/chat.tsx"),
   route("i/:identityId/memories", "routes/memories.tsx"),
   route("i/:identityId/config", "routes/config.tsx"),

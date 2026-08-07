@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from shellm_web import (
+    activity,
     chat,
     control,
     discovery,
@@ -36,6 +37,10 @@ from shellm_web import (
     trajectory,
     tree,
 )
+
+# Direct import: the bare module name would be shadowed inside create_app
+# by the GET /api/health route function.
+from shellm_web.health import response_stats
 
 logger = logging.getLogger(__name__)
 
@@ -289,6 +294,29 @@ def create_app(
         status["step_count"] = _count_steps(jsonl) if jsonl else 0
         status["mindlog_mtime"] = _iso(status["mindlog_mtime"])
         return status
+
+    @app.get("/api/identities/{identity_id}/activity")
+    def identity_activity(identity_id: str) -> dict:
+        """Working-vs-stalled classification: is the identity actually
+        making progress, or busy-but-quiet? See activity.py."""
+        identity = _identity_or_404(root, identity_id)
+        return activity.identity_activity(identity)
+
+    @app.get("/api/identities/{identity_id}/health")
+    def identity_health(identity_id: str) -> dict:
+        """Health page payload: current activity + reply_to-paired message
+        response stats over the recent window. See health.py."""
+        identity = _identity_or_404(root, identity_id)
+        traj_dir = discovery.find_root_traj_dir(identity)
+        return {
+            "identity": {"id": identity.id, "name": identity.name},
+            "activity": activity.identity_activity(identity),
+            "responses": (
+                response_stats(traj_dir, identity.name)
+                if traj_dir is not None
+                else None
+            ),
+        }
 
     @app.get("/api/identities/{identity_id}/mindlog")
     def mindlog(

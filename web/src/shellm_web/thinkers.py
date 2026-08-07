@@ -69,7 +69,12 @@ def _live_steps_by_thinker(run_dir: Path) -> dict[str, int]:
 
 
 def _pending_by_thinker(run_dir: Path) -> dict[str, list[str]]:
-    """run/pending/<name>.<type> flags -> {name: [types]}."""
+    """run/pending/<name>.<type>[.<epoch>.<seq>|.coalesced] -> {name: [types]}.
+
+    The dispatcher suffixes queued flags (epoch + sequence, or "coalesced"
+    for last-wins types), so parse from the left — the old rpartition
+    parse filed every suffixed flag under a nonexistent thinker name.
+    """
     pending: dict[str, list[str]] = {}
     pending_dir = run_dir / "pending"
     if not pending_dir.is_dir():
@@ -77,7 +82,7 @@ def _pending_by_thinker(run_dir: Path) -> dict[str, list[str]]:
     for flag in sorted(pending_dir.iterdir()):
         if not flag.is_file() or "." not in flag.name:
             continue
-        name, _, step_type = flag.name.rpartition(".")
+        name, step_type = flag.name.split(".", 2)[:2]
         pending.setdefault(name, []).append(step_type)
     return pending
 

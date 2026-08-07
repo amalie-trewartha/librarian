@@ -11,7 +11,7 @@ import { useControlsEnabled } from "~/components/thinker-controls";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { LoadingDots } from "~/components/ui/loading-dots";
-import { fetchChat, fetchThinkers, sendChat } from "~/lib/api";
+import { fetchActivity, fetchChat, fetchThinkers, sendChat } from "~/lib/api";
 import type { ChatMessage } from "~/lib/types";
 import { getPwaName, pwaSender, setLastIdentity } from "~/lib/pwa";
 import { cn } from "~/lib/utils";
@@ -200,6 +200,17 @@ export default function TalkChat() {
   });
   const dispatcherRunning = thinkerStatus?.dispatcher.running ?? true;
 
+  const { data: activity } = useQuery({
+    queryKey: ["activity", identityId],
+    queryFn: () => fetchActivity(identityId),
+    refetchInterval: () => (awaitingRef.current ? 2000 : 5000),
+  });
+  // My message is sitting in the pending queue behind a busy run — say so
+  // instead of letting the typing dots silently expire.
+  const queuedMine =
+    (activity?.state === "working" || activity?.state === "stalled") &&
+    (activity?.queued_messages ?? []).some((m) => m.from === myName);
+
   const messages = useMemo(() => chat?.messages ?? [], [chat]);
   const outcomes = chat?.outcomes ?? {};
 
@@ -341,6 +352,12 @@ export default function TalkChat() {
         <div className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
           {identityName} is asleep (thinkers stopped) — messages will wait
           until it wakes.
+        </div>
+      )}
+      {dispatcherRunning && queuedMine && (
+        <div className="border-b border-sky-300 bg-sky-50 px-4 py-2 text-xs text-sky-900 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-200">
+          {identityName} is mid-task — your message is queued and will be
+          seen when the current run finishes.
         </div>
       )}
 

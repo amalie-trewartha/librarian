@@ -244,6 +244,54 @@ export interface IdentityStatus {
   step_count: number;
 }
 
+export type ActivityState = "working" | "stalled" | "idle" | "asleep";
+
+export interface QueuedMessage {
+  thinker: string;
+  from: string | null;
+  preview: string | null;
+  ts: string | null;
+  age_s: number | null;
+}
+
+export interface IdentityActivity {
+  state: ActivityState;
+  dispatcher_running: boolean;
+  steps_in_flight: number;
+  busy_thinkers: string[];
+  last_step_ts: string | null;
+  last_step_age_s: number | null;
+  run_seconds: number | null;
+  stall_after_s: number;
+  cadence_s: number | null;
+  queued_messages: QueuedMessage[];
+  pending_total: number;
+}
+
+export interface ResponseEvent {
+  ts: string | null;
+  from: string;
+  outcome: "replied" | "declined";
+  response_s: number;
+}
+
+export interface ResponseStats {
+  window_days: number;
+  replied: number;
+  declined: number;
+  undecided: number;
+  median_s: number | null;
+  p90_s: number | null;
+  max_s: number | null;
+  recent: ResponseEvent[];
+}
+
+export interface IdentityHealth {
+  identity: { id: string; name: string };
+  activity: IdentityActivity;
+  responses: ResponseStats | null;
+}
+
 export type StepType =
   | "trajectory"
   | "thought"

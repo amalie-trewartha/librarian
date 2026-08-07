@@ -5,7 +5,9 @@ import type {
   DispatchEvent,
   EnvEntry,
   Identity,
+  IdentityActivity,
   IdentityEnv,
+  IdentityHealth,
   ImportResult,
   LlmHealth,
   LlmProbeResult,
@@ -87,6 +89,14 @@ export function fetchIdentities(): Promise<Identity[]> {
 
 export function fetchIdentityStatus(identityId: string): Promise<IdentityStatus> {
   return getJson(`/api/identities/${encodeURIComponent(identityId)}/status`);
+}
+
+export function fetchActivity(identityId: string): Promise<IdentityActivity> {
+  return getJson(`/api/identities/${encodeURIComponent(identityId)}/activity`);
+}
+
+export function fetchHealth(identityId: string): Promise<IdentityHealth> {
+  return getJson(`/api/identities/${encodeURIComponent(identityId)}/health`);
 }
 
 export function fetchMindlog(

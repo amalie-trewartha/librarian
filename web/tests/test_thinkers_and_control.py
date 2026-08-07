@@ -89,7 +89,10 @@ def test_status_running_mix(control_identity: Path):
     (run / "active_thinkers").write_text("alpha\n")
     # one live step (our own pid), one dead
     (run / "step_pids").write_text(f"{os.getpid()} alpha\n999999 alpha\n")
-    (run / "pending" / "alpha.message").write_text("{}")
+    # dispatcher formats: queued (epoch.seq), coalesced, and legacy bare
+    (run / "pending" / "alpha.message.1786136238.000294").write_text("{}")
+    (run / "pending" / "alpha.merge.coalesced").write_text("{}")
+    (run / "pending" / "beta_two.message").write_text("{}")
 
     status = thinkers.thinkers_status(control_identity)
     assert status["dispatcher"]["running"] is True
@@ -97,10 +100,11 @@ def test_status_running_mix(control_identity: Path):
     beta = next(t for t in status["thinkers"] if t["name"] == "beta_two")
     assert alpha["state"] == "active"
     assert alpha["steps_in_flight"] == 1
-    assert alpha["pending"] == ["message"]
+    assert alpha["pending"] == ["merge", "message"]
+    assert beta["pending"] == ["message"]
     assert beta["state"] == "stopped"  # not in active_thinkers
     assert status["steps_in_flight"] == 1
-    assert status["pending_total"] == 1
+    assert status["pending_total"] == 3
 
 
 def test_status_dead_dispatcher(control_identity: Path):
