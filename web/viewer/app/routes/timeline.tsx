@@ -41,7 +41,8 @@ export default function TimelinePage() {
   });
   const live = status?.live ?? false;
 
-  const { data: mindlog, isLoading } = useMindlog(identityId, live);
+  const { data: mindlog, isLoading, loadOlder, loadingOlder, hiddenOlder } =
+    useMindlog(identityId, live);
 
   const layout = useMemo(
     () => (mindlog ? buildTimeline(mindlog) : null),
@@ -84,8 +85,21 @@ export default function TimelinePage() {
         />
         <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
           <span className="text-sm text-muted-foreground">
-            {mindlog.step_count} steps · {mindlog.runs.length} runs
+            {hiddenOlder > 0
+              ? `last ${mindlog.steps.length} of ${mindlog.step_count} steps`
+              : `${mindlog.step_count} steps`}{" "}
+            · {mindlog.runs.length} runs
           </span>
+          {hiddenOlder > 0 && (
+            <button
+              type="button"
+              className="text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50"
+              disabled={loadingOlder}
+              onClick={() => void loadOlder()}
+            >
+              {loadingOlder ? "loading…" : "load older"}
+            </button>
+          )}
           <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1">
             {typesPresent.map((type) => (
               <span

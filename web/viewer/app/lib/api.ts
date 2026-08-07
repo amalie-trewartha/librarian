@@ -101,11 +101,24 @@ export function fetchHealth(identityId: string): Promise<IdentityHealth> {
 
 export function fetchMindlog(
   identityId: string,
-  since?: number
+  params: { since?: number; until?: number; tail?: number } = {}
 ): Promise<Mindlog> {
-  const suffix = since !== undefined ? `?since=${since}` : "";
+  const search = new URLSearchParams();
+  if (params.since !== undefined) search.set("since", String(params.since));
+  if (params.until !== undefined) search.set("until", String(params.until));
+  if (params.tail !== undefined) search.set("tail", String(params.tail));
+  const qs = search.toString();
   return getJson(
-    `/api/identities/${encodeURIComponent(identityId)}/mindlog${suffix}`
+    `/api/identities/${encodeURIComponent(identityId)}/mindlog${qs ? `?${qs}` : ""}`
+  );
+}
+
+export function fetchRunCommand(
+  identityId: string,
+  runId: string
+): Promise<{ run_id: string; command: string }> {
+  return getJson(
+    `/api/identities/${encodeURIComponent(identityId)}/runs/${encodeURIComponent(runId)}/command`
   );
 }
 

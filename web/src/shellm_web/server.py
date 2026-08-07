@@ -320,12 +320,18 @@ def create_app(
 
     @app.get("/api/identities/{identity_id}/mindlog")
     def mindlog(
-        identity_id: str, since: int | None = Query(default=None, ge=0)
+        identity_id: str,
+        since: int | None = Query(default=None, ge=0),
+        until: int | None = Query(default=None, ge=0),
+        tail: int | None = Query(default=None, ge=1),
     ) -> dict:
-        """Full mind log, or — with ?since=<steps already held> — only the
-        steps after that index (runs metadata always ships whole: run groups
-        mutate as their sub-runs progress). Backed by the append-aware parse
-        cache, so a poll costs O(new steps), not O(log)."""
+        """Mind log steps, windowed. ?tail=N returns only the last N steps
+        (the response's `since` echoes the effective start index — a
+        20k-step log ships whole otherwise, hundreds of MB). ?since=A polls
+        for steps after A; ?since=A&until=B loads the older [A, B) window.
+        Runs ship filtered to those touched at/after the window start.
+        Backed by the append-aware parse cache, so a poll costs O(new
+        steps), not O(log)."""
         identity = _identity_or_404(root, identity_id)
         traj_dir = discovery.find_root_traj_dir(identity)
         if traj_dir is None:
@@ -335,12 +341,15 @@ def create_app(
         status = liveness.identity_status(identity.path, jsonl)
         steps = cached["steps"]
         runs = cached["runs"]
+        if since is None and tail is not None:
+            since = max(0, cached["step_count"] - tail)
         if since is not None:
-            # Only runs touched by a step the client hasn't seen — the rest
-            # are unchanged and heavy (command embeds the whole prompt)
+            # Only runs touched by a step at/after the window start — the
+            # rest are unchanged and heavy (command embeds the whole prompt)
             runs = [run for run in runs if run["last_touch"] >= since]
+            steps = steps[since:until] if until is not None else steps[since:]
         return {
-            "steps": steps if since is None else steps[since:],
+            "steps": steps,
             "runs": runs,
             "traj_id": cached["traj_id"],
             "step_count": cached["step_count"],
@@ -349,6 +358,17 @@ def create_app(
             "dir_rel": traj_dir.relative_to(identity.path).as_posix(),
             "identity": {"id": identity.id, "name": identity.name},
         }
+
+    @app.get("/api/identities/{identity_id}/runs/{run_id}/command")
+    def run_command(identity_id: str, run_id: str) -> dict:
+        """Full (untruncated) command of one run — fetched on demand when
+        the run detail is opened; the mindlog payload truncates it."""
+        identity = _identity_or_404(root, identity_id)
+        traj_dir = _root_traj_dir_or_404(identity)
+        command = trajectory.CACHE.run_command(traj_dir, run_id)
+        if command is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        return {"run_id": run_id, "command": command}
 
     def _root_traj_dir_or_404(identity: discovery.IdentityInfo):
         traj_dir = discovery.find_root_traj_dir(identity)

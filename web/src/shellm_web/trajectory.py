@@ -29,6 +29,25 @@ MACHINERY_TYPES = {
 
 _WS_RE = re.compile(r"\s+")
 
+# Run commands embed the whole prompt (100s of KB each) and thousands of
+# runs ship on an initial mindlog load — truncate on the wire, keeping the
+# head and the tail (the trailing "ACTION: ..." is what titles a run). The
+# full text stays in the cache, served by the per-run command endpoint.
+_CMD_HEAD = 800
+_CMD_TAIL = 1200
+
+
+def _truncate_command(command: str) -> tuple[str, bool]:
+    if len(command) <= _CMD_HEAD + _CMD_TAIL + 200:
+        return command, False
+    omitted = len(command) - _CMD_HEAD - _CMD_TAIL
+    return (
+        command[:_CMD_HEAD]
+        + f"\n[… {omitted} chars truncated …]\n"
+        + command[-_CMD_TAIL:],
+        True,
+    )
+
 
 def _collapse(text: str, limit: int = 200) -> str:
     return _WS_RE.sub(" ", text).strip()[:limit]
@@ -94,6 +113,7 @@ class RunGroup:
     last_touch: int = 0
 
     def to_dict(self) -> dict[str, Any]:
+        command, truncated = _truncate_command(self.command)
         return {
             "run_id": self.run_id,
             "trigger_step_id": self.trigger_step_id,
@@ -102,7 +122,8 @@ class RunGroup:
             "started_ts": self.started_ts,
             "ended_ts": self.ended_ts,
             "status": self.status,
-            "command": self.command,
+            "command": command,
+            "command_truncated": truncated,
             "model": self.model,
             "tldr": self.tldr,
             "last_touch": self.last_touch,
@@ -283,30 +304,43 @@ class TrajectoryCache:
         self._lock = threading.Lock()
         self._max_entries = max_entries
 
+    def _fresh_entry(self, traj_dir: Path) -> _CacheEntry:
+        """Get-or-create the entry and refresh it. Caller holds the lock."""
+        entry = self._entries.get(traj_dir)
+        if entry is None:
+            if len(self._entries) >= self._max_entries:
+                # Drop the entry with the fewest parsed steps (cheapest
+                # to rebuild); good enough for a handful of identities.
+                victim = min(
+                    self._entries, key=lambda k: len(self._entries[k].normalizer.steps)
+                )
+                del self._entries[victim]
+            entry = _CacheEntry(traj_dir)
+            self._entries[traj_dir] = entry
+        self._refresh(entry, traj_dir)
+        return entry
+
     def load(self, traj_dir: Path) -> dict[str, Any]:
         """Wire dict like load_trajectory; steps list is shared with the
         cache — callers must treat it as read-only and build their own
         response envelope."""
         traj_dir = traj_dir.resolve()
         with self._lock:
-            entry = self._entries.get(traj_dir)
-            if entry is None:
-                if len(self._entries) >= self._max_entries:
-                    # Drop the entry with the fewest parsed steps (cheapest
-                    # to rebuild); good enough for a handful of identities.
-                    victim = min(
-                        self._entries, key=lambda k: len(self._entries[k].normalizer.steps)
-                    )
-                    del self._entries[victim]
-                entry = _CacheEntry(traj_dir)
-                self._entries[traj_dir] = entry
-            self._refresh(entry, traj_dir)
+            entry = self._fresh_entry(traj_dir)
             return {
                 "steps": entry.normalizer.steps,
                 "runs": [run.to_dict() for run in entry.normalizer.runs],
                 "traj_id": entry.traj_id,
                 "step_count": len(entry.normalizer.steps),
             }
+
+    def run_command(self, traj_dir: Path, run_id: str) -> str | None:
+        """Full (untruncated) command of one run, for on-demand fetches."""
+        traj_dir = traj_dir.resolve()
+        with self._lock:
+            entry = self._fresh_entry(traj_dir)
+            run = entry.normalizer._runs_by_id.get(run_id)
+            return run.command if run is not None else None
 
     def _refresh(self, entry: _CacheEntry, traj_dir: Path) -> None:
         jsonl = traj_dir / "trajectory.jsonl"

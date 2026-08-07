@@ -351,7 +351,10 @@ export interface RunGroup {
   started_ts: string;
   ended_ts: string | null;
   status: "running" | "done";
+  /** Truncated on the wire when huge (head + trailing ACTION kept);
+   * fetch the full text via fetchRunCommand when command_truncated. */
   command: string;
+  command_truncated?: boolean;
   model: string | null;
   tldr: string | null;
   /** Step index of the last step that mutated this run (delta filtering). */
@@ -362,11 +365,12 @@ export interface Mindlog {
   traj_id: string;
   dir_rel: string;
   step_count: number;
-  /** Full when fetched without ?since; the delta tail otherwise (the
-   * useMindlog hook merges deltas into the cached full list). */
+  /** The requested window (initial ?tail, ?since polls, or ?since+?until
+   * history loads); the useMindlog hook stitches windows together. */
   steps: NormalizedStep[];
   runs: RunGroup[];
   live: boolean;
+  /** Effective start index of `steps` in the full log (null = 0). */
   since?: number | null;
   identity: { id: string; name: string };
 }

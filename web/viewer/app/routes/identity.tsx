@@ -63,7 +63,8 @@ export default function IdentityPage() {
   });
   const live = status?.live ?? false;
 
-  const { data: mindlog, isLoading } = useMindlog(identityId, live);
+  const { data: mindlog, isLoading, loadOlder, loadingOlder, hiddenOlder } =
+    useMindlog(identityId, live);
 
   const hidden = useMemo(
     () => new Set(hideParam.split(",").filter(Boolean)),
@@ -178,7 +179,10 @@ export default function IdentityPage() {
         />
         <div className="mb-3 flex items-center gap-3">
           <span className="text-sm text-muted-foreground">
-            {mindlog.step_count} steps · {mindlog.runs.length} runs
+            {hiddenOlder > 0
+              ? `last ${mindlog.steps.length} of ${mindlog.step_count} steps`
+              : `${mindlog.step_count} steps`}{" "}
+            · {mindlog.runs.length} runs
           </span>
           <div className="ml-auto">
             <Button
@@ -259,6 +263,21 @@ export default function IdentityPage() {
           </aside>
 
           <div className="min-w-0 flex-1 rounded-lg border bg-card px-2 py-2">
+            {hiddenOlder > 0 && (
+              <div className="flex justify-center py-1.5">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-xs"
+                  disabled={loadingOlder}
+                  onClick={() => void loadOlder()}
+                >
+                  {loadingOlder
+                    ? "loading…"
+                    : `load older (${hiddenOlder} earlier steps)`}
+                </Button>
+              </div>
+            )}
             <StreamItems items={visible} expandAll={expandAll} live={live} />
           </div>
         </div>

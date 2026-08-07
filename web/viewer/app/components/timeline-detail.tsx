@@ -5,16 +5,36 @@
 // related item's modal. A modal (not inline expansion) so the live timeline
 // never reflows.
 
+import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, CornerDownRight, Play, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ExpandableText } from "~/components/expandable-text";
 import { StepCard } from "~/components/step-card";
 import { Badge } from "~/components/ui/badge";
+import { fetchRunCommand } from "~/lib/api";
 import { stepColor } from "~/lib/step-colors";
 import type { TimelineBlock } from "~/lib/timeline-model";
-import type { NormalizedStep } from "~/lib/types";
+import { useTrajContext } from "~/lib/traj-context";
+import type { NormalizedStep, RunGroup } from "~/lib/types";
 import { cn } from "~/lib/utils";
+
+/** The mindlog payload truncates huge run commands; fetch the full text
+ * when the detail opens. Falls back to the truncated copy (e.g. runs in
+ * sub-trajectories, which the command endpoint doesn't cover). */
+function RunCommand({ run }: { run: RunGroup }) {
+  const traj = useTrajContext();
+  const { data } = useQuery({
+    queryKey: ["run-command", traj?.identityId, run.run_id],
+    queryFn: () => fetchRunCommand(traj?.identityId ?? "", run.run_id),
+    enabled: Boolean(run.command_truncated && traj?.identityId),
+    staleTime: Infinity,
+    retry: false,
+  });
+  return (
+    <ExpandableText text={data?.command ?? run.command} expandAll={false} mono />
+  );
+}
 
 export type TimelineSelection =
   | { kind: "step"; step: NormalizedStep }
@@ -241,7 +261,7 @@ function RunModal({
         </div>
         {run.tldr && <p className="mb-1 text-sm italic">{run.tldr}</p>}
         <div className="mb-2 text-muted-foreground">
-          <ExpandableText text={run.command} expandAll={false} mono />
+          <RunCommand run={run} />
         </div>
         {(trigger || result) && (
           <div className="mb-2 space-y-1 border-t pt-2">

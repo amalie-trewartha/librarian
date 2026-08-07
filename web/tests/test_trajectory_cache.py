@@ -154,3 +154,61 @@ def test_mindlog_since(ident_root: Path):
     assert client.get(f"{url}?since=999").json()["steps"] == []
     # negative rejected
     assert client.get(f"{url}?since=-1").status_code == 422
+
+
+def test_mindlog_tail_and_window(ident_root: Path):
+    client = TestClient(create_app(ident_root))
+    url = "/api/identities/.identities~scaly/mindlog"
+
+    # ?tail=N ships only the newest N; `since` echoes the window start
+    tail = client.get(f"{url}?tail=2").json()
+    assert tail["step_count"] == 6
+    assert tail["since"] == 4
+    assert [s["step_id"] for s in tail["steps"]] == ["s0004", "s0005"]
+
+    # a tail larger than the log is the whole log
+    assert len(client.get(f"{url}?tail=99").json()["steps"]) == 6
+
+    # ?since+?until loads an older [A, B) window
+    window = client.get(f"{url}?since=1&until=3").json()
+    assert [s["step_id"] for s in window["steps"]] == ["s0001", "s0002"]
+    assert window["since"] == 1
+
+    # explicit since wins over tail
+    both = client.get(f"{url}?since=5&tail=2").json()
+    assert [s["step_id"] for s in both["steps"]] == ["s0005"]
+
+
+def test_run_command_truncated_and_fetchable(ident_root: Path):
+    jsonl = (
+        ident_root / ".identities" / "scaly" / "trajectories"
+        / "fbfbfbfb-root" / "trajectory.jsonl"
+    )
+    big = "PROMPT " * 1000 + "ACTION: do the dance"  # ~7KB
+    _write(jsonl, [
+        {"type": "shellm-run", "step_id": "runbig", "command": big, "ts": "t"},
+        {"type": "shellm-run", "step_id": "runsmall", "command": "shellm tiny", "ts": "t"},
+    ], append=True)
+    client = TestClient(create_app(ident_root))
+
+    runs = client.get("/api/identities/.identities~scaly/mindlog").json()["runs"]
+    by_id = {r["run_id"]: r for r in runs}
+    assert by_id["runsmall"]["command"] == "shellm tiny"
+    assert by_id["runsmall"]["command_truncated"] is False
+    truncated = by_id["runbig"]
+    assert truncated["command_truncated"] is True
+    assert len(truncated["command"]) < 3000
+    # head and the titling ACTION tail both survive truncation
+    assert truncated["command"].startswith("PROMPT ")
+    assert truncated["command"].endswith("ACTION: do the dance")
+
+    full = client.get(
+        "/api/identities/.identities~scaly/runs/runbig/command"
+    ).json()
+    assert full["command"] == big
+    assert (
+        client.get(
+            "/api/identities/.identities~scaly/runs/nope/command"
+        ).status_code
+        == 404
+    )
