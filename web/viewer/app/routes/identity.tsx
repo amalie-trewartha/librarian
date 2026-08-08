@@ -44,8 +44,16 @@ export function scrollToStep(step: {
     (step.run_id ? document.getElementById(`step-${step.run_id}`) : null);
   el?.scrollIntoView({ behavior: "smooth", block: "center" });
   if (el) {
-    el.classList.add("bg-primary/10");
-    setTimeout(() => el.classList.remove("bg-primary/10"), 1500);
+    // Loud on purpose: after a jump from search the reader needs to spot
+    // one step among hundreds.
+    const flash = [
+      "ring-2",
+      "ring-amber-400",
+      "bg-amber-100",
+      "dark:bg-amber-950/40",
+    ];
+    el.classList.add(...flash);
+    setTimeout(() => el.classList.remove(...flash), 3000);
   }
 }
 
@@ -180,6 +188,13 @@ export default function IdentityPage() {
           live={live}
           active="mindlog"
           name={mindlog.identity.name}
+          actions={
+            <MindlogSearch
+              identityId={identityId}
+              windowStart={hiddenOlder}
+              onJump={scrollToStep}
+            />
+          }
         />
         <div className="mb-3 flex items-center gap-3">
           <span className="text-sm text-muted-foreground">
@@ -188,12 +203,7 @@ export default function IdentityPage() {
               : `${mindlog.step_count} steps`}{" "}
             · {mindlog.runs.length} runs
           </span>
-          <div className="ml-auto flex items-center gap-2">
-            <MindlogSearch
-              identityId={identityId}
-              windowStart={hiddenOlder}
-              onJump={scrollToStep}
-            />
+          <div className="ml-auto">
             <Button
               variant="outline"
               size="sm"

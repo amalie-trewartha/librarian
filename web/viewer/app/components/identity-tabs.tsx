@@ -20,11 +20,15 @@ export function IdentityTabs({
   live,
   active,
   name,
+  actions,
 }: {
   identityId: string;
   live: boolean;
   active: (typeof TABS)[number]["key"];
   name?: string;
+  /** Page-specific controls (e.g. mind-log search) — rendered at the far
+   * right of this sticky header so they stay reachable at any scroll. */
+  actions?: React.ReactNode;
 }) {
   useParams(); // keep router context
   const base = `/i/${encodeURIComponent(identityId)}`;
@@ -54,6 +58,7 @@ export function IdentityTabs({
           </Link>
         ))}
       </nav>
+      {actions}
     </div>
   );
 }

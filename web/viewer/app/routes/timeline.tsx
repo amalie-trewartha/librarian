@@ -87,6 +87,18 @@ export default function TimelinePage() {
           live={live}
           active="timeline"
           name={mindlog.identity.name}
+          actions={
+            <MindlogSearch
+              identityId={identityId}
+              windowStart={hiddenOlder}
+              onJump={(hit) => {
+                const step = mindlog.steps.find(
+                  (s) => s.step_id === hit.step_id
+                );
+                if (step) setSearchStep({ step });
+              }}
+            />
+          }
         />
         <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
           <span className="text-sm text-muted-foreground">
@@ -105,14 +117,6 @@ export default function TimelinePage() {
               {loadingOlder ? "loading…" : "load older"}
             </button>
           )}
-          <MindlogSearch
-            identityId={identityId}
-            windowStart={hiddenOlder}
-            onJump={(hit) => {
-              const step = mindlog.steps.find((s) => s.step_id === hit.step_id);
-              if (step) setSearchStep({ step });
-            }}
-          />
           <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1">
             {typesPresent.map((type) => (
               <span
