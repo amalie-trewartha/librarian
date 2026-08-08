@@ -32,6 +32,7 @@ from shellm_web import (
     openrouter,
     push,
     safety,
+    search,
     thinker_sync,
     thinkers,
     trajectory,
@@ -358,6 +359,42 @@ def create_app(
             "dir_rel": traj_dir.relative_to(identity.path).as_posix(),
             "identity": {"id": identity.id, "name": identity.name},
         }
+
+    @app.get("/api/identities/{identity_id}/mindlog/search")
+    def mindlog_search(
+        identity_id: str,
+        q: str = Query(min_length=2, max_length=200),
+        scope: str = Query(default="thoughts", pattern="^(thoughts|all)$"),
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> dict:
+        """Substring search over the mind log (read-only). scope=thoughts
+        skips run machinery (prompts, reasoning, shell output); scope=all
+        searches everything. See search.py."""
+        identity = _identity_or_404(root, identity_id)
+        traj_dir = _root_traj_dir_or_404(identity)
+        cached = trajectory.CACHE.load(traj_dir)
+        result = search.search_steps(cached["steps"], q, scope, limit)
+        result["step_count"] = cached["step_count"]
+        result["identity"] = {"id": identity.id, "name": identity.name}
+        return result
+
+    @app.get("/api/identities/{identity_id}/step/{step_id}")
+    def mindlog_step(identity_id: str, step_id: str) -> dict:
+        """One normalized step by id, plus its run header — how a search
+        hit older than the client's loaded window gets displayed."""
+        identity = _identity_or_404(root, identity_id)
+        traj_dir = _root_traj_dir_or_404(identity)
+        cached = trajectory.CACHE.load(traj_dir)
+        steps = cached["steps"]
+        for index in range(len(steps) - 1, -1, -1):
+            step = steps[index]
+            if step.get("step_id") == step_id:
+                run = next(
+                    (r for r in cached["runs"] if r["run_id"] == step.get("run_id")),
+                    None,
+                )
+                return {"step": step, "index": index, "run": run}
+        raise HTTPException(status_code=404, detail="Step not found")
 
     @app.get("/api/identities/{identity_id}/runs/{run_id}/command")
     def run_command(identity_id: str, run_id: str) -> dict:

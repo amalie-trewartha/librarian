@@ -375,6 +375,35 @@ export interface Mindlog {
   identity: { id: string; name: string };
 }
 
+export interface SearchHit {
+  /** Absolute step index in the full log — >= the loaded window's start
+   * means the step is on the page and can be scrolled to. */
+  index: number;
+  step_id: string;
+  ts: string | null;
+  type: string;
+  source: string | null;
+  run_id: string | null;
+  /** Which field matched (content, thought, cmd, stdout, …). */
+  field: string;
+  snippet: string;
+}
+
+export interface MindlogSearchResult {
+  q: string;
+  scope: "thoughts" | "all";
+  total: number;
+  hits: SearchHit[];
+  step_count: number;
+  identity: { id: string; name: string };
+}
+
+export interface StepDetail {
+  step: NormalizedStep;
+  index: number;
+  run: RunGroup | null;
+}
+
 export interface TreeNode {
   traj_id: string;
   slug: string;

@@ -7,6 +7,7 @@ import { Link, useParams } from "react-router";
 import { FollowPin } from "~/components/follow-pin";
 import { ForkTree } from "~/components/fork-tree";
 import { IdentityTabs } from "~/components/identity-tabs";
+import { MindlogSearch } from "~/components/mindlog-search";
 import { assembleStream, StreamItems } from "~/components/stream";
 import { TimelineBar } from "~/components/timeline-bar";
 import { Button } from "~/components/ui/button";
@@ -34,7 +35,10 @@ export function meta() {
   return [{ title: "shellm · mind log" }];
 }
 
-export function scrollToStep(step: NormalizedStep) {
+export function scrollToStep(step: {
+  step_id: string | null;
+  run_id?: string | null;
+}) {
   const el =
     document.getElementById(`step-${step.step_id}`) ??
     (step.run_id ? document.getElementById(`step-${step.run_id}`) : null);
@@ -184,7 +188,12 @@ export default function IdentityPage() {
               : `${mindlog.step_count} steps`}{" "}
             · {mindlog.runs.length} runs
           </span>
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-2">
+            <MindlogSearch
+              identityId={identityId}
+              windowStart={hiddenOlder}
+              onJump={scrollToStep}
+            />
             <Button
               variant="outline"
               size="sm"

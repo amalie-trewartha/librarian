@@ -17,9 +17,11 @@ import type {
   LogTail,
   MemoryInfo,
   Mindlog,
+  MindlogSearchResult,
   OpenRouterModels,
   Recap,
   SelfUpdateResult,
+  StepDetail,
   SubTrajectory,
   ThinkerSyncResult,
   ThinkerSyncStatus,
@@ -119,6 +121,27 @@ export function fetchRunCommand(
 ): Promise<{ run_id: string; command: string }> {
   return getJson(
     `/api/identities/${encodeURIComponent(identityId)}/runs/${encodeURIComponent(runId)}/command`
+  );
+}
+
+export function searchMindlog(
+  identityId: string,
+  q: string,
+  scope: "thoughts" | "all",
+  limit = 50
+): Promise<MindlogSearchResult> {
+  const params = new URLSearchParams({ q, scope, limit: String(limit) });
+  return getJson(
+    `/api/identities/${encodeURIComponent(identityId)}/mindlog/search?${params}`
+  );
+}
+
+export function fetchStep(
+  identityId: string,
+  stepId: string
+): Promise<StepDetail> {
+  return getJson(
+    `/api/identities/${encodeURIComponent(identityId)}/step/${encodeURIComponent(stepId)}`
   );
 }
 
