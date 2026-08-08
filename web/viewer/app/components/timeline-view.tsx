@@ -145,12 +145,20 @@ function roundedPath(points: { x: number; y: number }[], r = 7): string {
 export function TimelineView({
   layout,
   live,
+  openStep,
 }: {
   layout: TimelineLayout;
   live: boolean;
+  /** Externally requested step detail (e.g. a search hit) — a fresh
+   * wrapper object per request so repeat clicks reopen the modal. */
+  openStep?: { step: NormalizedStep } | null;
 }) {
   const [hovered, setHovered] = useState<string | null>(null);
   const [selected, setSelected] = useState<TimelineSelection | null>(null);
+
+  useEffect(() => {
+    if (openStep) setSelected({ kind: "step", step: openStep.step });
+  }, [openStep]);
 
   // Lane display state (all URL-persisted, comma-separated lane ids)
   const [collapsedParam, setCollapsedParam] = useQueryState(

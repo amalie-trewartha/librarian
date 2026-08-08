@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useParams } from "react-router";
 
 import { IdentityTabs } from "~/components/identity-tabs";
+import { MindlogSearch } from "~/components/mindlog-search";
 import { TimelineView } from "~/components/timeline-view";
 import {
   Empty,
@@ -43,6 +44,10 @@ export default function TimelinePage() {
 
   const { data: mindlog, isLoading, loadOlder, loadingOlder, hiddenOlder } =
     useMindlog(identityId, live);
+  // A search hit inside the loaded window opens the step's detail modal.
+  const [searchStep, setSearchStep] = useState<{
+    step: NonNullable<typeof mindlog>["steps"][number];
+  } | null>(null);
 
   const layout = useMemo(
     () => (mindlog ? buildTimeline(mindlog) : null),
@@ -100,6 +105,14 @@ export default function TimelinePage() {
               {loadingOlder ? "loading…" : "load older"}
             </button>
           )}
+          <MindlogSearch
+            identityId={identityId}
+            windowStart={hiddenOlder}
+            onJump={(hit) => {
+              const step = mindlog.steps.find((s) => s.step_id === hit.step_id);
+              if (step) setSearchStep({ step });
+            }}
+          />
           <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1">
             {typesPresent.map((type) => (
               <span
@@ -138,7 +151,7 @@ export default function TimelinePage() {
             </span>
           </div>
         </div>
-        <TimelineView layout={layout} live={live} />
+        <TimelineView layout={layout} live={live} openStep={searchStep} />
       </div>
     </TrajContext.Provider>
   );
