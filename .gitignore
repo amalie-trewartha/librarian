@@ -25,3 +25,6 @@ web/viewer/.react-router/
 
 # Pulled usage data + rendered reports (deploy/scripts/audel-usage)
 .usage/
+
+# Pulled metrics data + snapshots (deploy/scripts/audel-metrics)
+.metrics/
