@@ -563,6 +563,28 @@ _start_dispatcher() {
                             _pend_file="$run_dir/pending/${_name}.${_step_type}.$(date +%s).$(printf '%06d' "$_pend_seq")"
                             printf '%s' "$_step_json" > "$_pend_file"
                             printf '[dispatcher]   pending -> %s (type=%s, queued=%d)\n' "$_name" "$_step_type" "$((_pend_count + 1))" >&2
+                            # Salience injection: an inbound chat message that
+                            # queues behind a busy agentic run ALSO lands as a
+                            # feedback step in the traj that run is reading, so
+                            # the model can answer mid-run instead of the
+                            # sender waiting out the whole run. Inbound only —
+                            # our own outgoing replies are context, not
+                            # something to answer. feedback matches no
+                            # subscription, so this append never re-dispatches.
+                            if [[ "$_step_type" == "message" ]]; then
+                                _fb_from=$(printf '%s' "$_step_json" | jq -r '.from // empty' 2>/dev/null) || _fb_from=""
+                                _fb_to=$(printf '%s' "$_step_json" | jq -r '.to // empty' 2>/dev/null) || _fb_to=""
+                                _fb_id=$(printf '%s' "$_step_json" | jq -r '.step_id // empty' 2>/dev/null) || _fb_id=""
+                                if [[ -n "$_fb_from" && -n "$_fb_id" && "$_fb_to" == "$IDENTITY_NAME" && "$_fb_from" != "$IDENTITY_NAME" ]]; then
+                                    _fb_snip=$(printf '%s' "$_step_json" | jq -r '(.content // "") | tostring | .[0:300]' 2>/dev/null) || _fb_snip=""
+                                    jq -nc \
+                                        --arg content "A chat message from $_fb_from arrived while you are mid-task (message step $_fb_id): \"$_fb_snip\". You may answer it inline without stopping your work: if a brief accurate answer is possible from what you already know, run \`chat reply --reply-to $_fb_id '$_fb_from' \"<your reply>\"\` now, then continue the task. If a real answer needs the work you are doing, send one short line the same way saying you are on it and will follow up. One reply at most; if a reply from you to this message already appears later in the log, ignore this note. Do not abandon or restart your current task." \
+                                        --arg trigger "$_fb_id" \
+                                        '{type:"feedback", content:$content, source:"dispatcher"}
+                                         + (if $trigger == "" then {} else {trigger_step:$trigger} end)' \
+                                        | traj append --traj_dir "$TRAJ_DIR" "${_straj#"$TRAJ_DIR"/}" >/dev/null 2>&1 || true
+                                fi
+                            fi
                             ;;
                         *)
                             _pend_file="$run_dir/pending/${_name}.${_step_type}.coalesced"
