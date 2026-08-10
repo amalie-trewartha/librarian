@@ -438,10 +438,16 @@ _start_dispatcher() {
         # other types (last-wins). Fixed-width epoch+seq means glob order ==
         # arrival order, and firing a step makes the thinker busy again, so
         # at most one queued step fires per thinker per pass. Thinker names
-        # and step types must not contain dots.
+        # and step types must not contain dots. Message triggers are globbed
+        # first (then action) so a freed slot answers a waiting human before
+        # it services a coalesced self-wake; an unmatched pattern stays
+        # literal and fails the -f guard, and a file revisited by the
+        # catch-all pass is already fired (rm-ed or its thinker busy again).
         _fire_pending() {
             local _pfile _pbase _pname _ptype _pjson _pactive
-            for _pfile in "$run_dir/pending"/*; do
+            for _pfile in "$run_dir/pending"/*.message.* \
+                          "$run_dir/pending"/*.action.* \
+                          "$run_dir/pending"/*; do
                 [[ -f "$_pfile" ]] || continue
                 _pbase=$(basename "$_pfile")
                 _pname="${_pbase%%.*}"
