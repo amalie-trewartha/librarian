@@ -87,6 +87,21 @@ sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$SCRIPT_DIR/shellm-web.service" \
 systemctl daemon-reload
 systemctl enable --now shellm-web
 
+# Per-identity thinker units: the dash starts/stops dispatchers through
+# shellm-thinkers@<identity>.service (via the sudo wrapper) so they get
+# their own cgroup instead of living inside shellm-web's.
+echo "==> Installing per-identity thinkers unit + control wrapper"
+sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$SCRIPT_DIR/shellm-thinkers@.service" \
+    > "/etc/systemd/system/shellm-thinkers@.service"
+install -o root -g root -m 0755 "$SCRIPT_DIR/shellm-thinkersctl" /usr/local/bin/shellm-thinkersctl
+if visudo -cf "$SCRIPT_DIR/sudoers-shellm-thinkers"; then
+    install -o root -g root -m 0440 "$SCRIPT_DIR/sudoers-shellm-thinkers" /etc/sudoers.d/shellm-thinkers
+else
+    echo "ERROR: deploy/sudoers-shellm-thinkers failed the visudo check — not installing" >&2
+    exit 1
+fi
+systemctl daemon-reload
+
 # Optional component: the Slack bridge (persona bootstrap + Socket Mode
 # client). Off by default — core deploys are unaffected unless the flag is
 # set (the terraform-slack stack sets it in user_data).

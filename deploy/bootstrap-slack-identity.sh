@@ -60,8 +60,18 @@ set -o pipefail
 # on 2026-08-04 until manually cycled. Detection is exactly the kind of
 # step that fails silently; don't detect, just stop.
 echo "==> Restarting thinkers with current environment"
-thinkers stop || true
-echo "==> Starting monolith thinker"
-thinkers start monolith
+# Prefer the per-identity systemd unit (own cgroup; see
+# deploy/shellm-thinkers@.service) — its start path also stops any stale
+# dispatcher and re-sources the env. Fall back to the direct start on boxes
+# provisioned before the unit existed.
+if [[ -x /usr/local/bin/shellm-thinkersctl ]] \
+    && sudo -n /usr/local/bin/shellm-thinkersctl restart "$name"; then
+    echo "==> Thinkers running under shellm-thinkers@$name"
+else
+    echo "==> thinkers unit unavailable — starting directly (legacy path)"
+    thinkers stop || true
+    echo "==> Starting monolith thinker"
+    thinkers start monolith
+fi
 
 echo "==> Persona '$name' ready"

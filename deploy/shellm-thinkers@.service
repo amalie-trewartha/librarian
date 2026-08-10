@@ -1,0 +1,43 @@
+# shellm-thinkers@<identity> systemd template unit. Installed by
+# deploy/setup.sh (re-synced by deploy/update.sh), which substitutes
+# @SHELLM_HOME@. One instance per identity: shellm-thinkers@audel, etc.
+#
+# The point of this unit is cgroup isolation: a dispatcher started from the
+# web dash used to live inside shellm-web.service's cgroup, where a web
+# OOM-kill/restart orphaned it (and on 2026-08-10 the orphan was then killed
+# by another agent's process-hygiene sweep). Under its own unit, the whole
+# mind — dispatcher, steps, and anything they spawn — has a cgroup of its
+# own, `systemctl status shellm-thinkers@<identity>` shows exactly what
+# belongs to it, and `systemctl stop` reaps everything by construction.
+#
+# The control plane manages instances through /usr/local/bin/shellm-thinkersctl
+# (sudo, see deploy/sudoers-shellm-thinkers), never systemctl directly.
+
+[Unit]
+Description=shellm thinkers for identity %i
+After=network-online.target shellm-slack-agent.service
+Wants=network-online.target
+
+[Service]
+# thinkers start forks the dispatcher and exits, writing run/dispatcher.pid
+# first — the forking type + PIDFile lets systemd track the dispatcher as
+# the main process.
+Type=forking
+PIDFile=@SHELLM_HOME@/app/.identities/%i/run/dispatcher.pid
+User=shellm
+WorkingDirectory=@SHELLM_HOME@/app
+Environment="PATH=@SHELLM_HOME@/.local/bin:@SHELLM_HOME@/.bun/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/bin/bash @SHELLM_HOME@/app/deploy/thinkers-service.sh @SHELLM_HOME@/app %i start
+ExecStop=/bin/bash @SHELLM_HOME@/app/deploy/thinkers-service.sh @SHELLM_HOME@/app %i stop
+# No Restart=: the CLI stop paths (thinkers stop --force, stopping the last
+# named thinker) kill the dispatcher directly, and an auto-restart would
+# resurrect it against the operator's intent. A dispatcher that dies on its
+# own leaves the unit in a visible failed state instead of silently downing
+# the mind — which is exactly what we could not see on 2026-08-10.
+# The stop script waits out the CLI's drain (default 180s) before systemd's
+# final cgroup sweep, so in-flight steps get their chance to finish.
+TimeoutStartSec=120
+TimeoutStopSec=200
+
+[Install]
+WantedBy=multi-user.target

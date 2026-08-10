@@ -255,6 +255,110 @@ def test_step_trigger_fires(client: TestClient, stub_bin: Path):
     assert "ARGS=step alpha" in _calls(stub_bin)
 
 
+# ---------------------------------------------------------------------------
+# systemd-unit routing (SHELLM_THINKERSCTL set — provisioned-box behavior)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def unit_ctl(tmp_path: Path, monkeypatch):
+    """Fake shellm-thinkersctl: logs calls; is-active mirrors a state file."""
+    from types import SimpleNamespace
+
+    script = tmp_path / "thinkersctl"
+    state = tmp_path / "unit-active"
+    calls = tmp_path / "ctl-calls.txt"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        f'echo "$*" >> {calls}\n'
+        'if [ "$1" = "is-active" ]; then\n'
+        f'  if [ -e {state} ]; then exit 0; else exit 3; fi\n'
+        "fi\n"
+        "exit 0\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("SHELLM_THINKERSCTL", str(script))
+    monkeypatch.setenv("SHELLM_THINKERSCTL_SUDO", "")
+    return SimpleNamespace(state=state, calls=calls)
+
+
+def test_start_routes_to_unit_when_dispatcher_down(
+    client: TestClient, stub_bin: Path, unit_ctl
+):
+    _write_stub(stub_bin, "thinkers")
+    resp = client.post("/api/identities/.identities~ctl/thinkers/start", json={})
+    assert resp.status_code == 200, resp.text
+    assert unit_ctl.calls.read_text().splitlines() == ["is-active ctl", "start ctl"]
+    # The unit's ExecStart kicks every enabled thinker — no CLI pass needed.
+    assert not (stub_bin / "calls.txt").exists()
+
+
+def test_start_kicks_cli_when_unit_running(
+    client: TestClient, stub_bin: Path, unit_ctl
+):
+    _write_stub(stub_bin, "thinkers")
+    unit_ctl.state.touch()
+    resp = client.post(
+        "/api/identities/.identities~ctl/thinkers/start", json={"names": ["alpha"]}
+    )
+    assert resp.status_code == 200, resp.text
+    assert "ARGS=start alpha" in _calls(stub_bin)
+    # Only the liveness probe hit the wrapper; no second unit start.
+    assert unit_ctl.calls.read_text().splitlines() == ["is-active ctl"]
+
+
+def test_start_no_self_trigger_skips_unit(
+    client: TestClient, stub_bin: Path, unit_ctl
+):
+    _write_stub(stub_bin, "thinkers")
+    resp = client.post(
+        "/api/identities/.identities~ctl/thinkers/start",
+        json={"no_self_trigger": True},
+    )
+    assert resp.status_code == 200, resp.text
+    assert "--no-self-trigger" in _calls(stub_bin)
+    assert not unit_ctl.calls.exists()
+
+
+def test_stop_all_routes_to_unit(client: TestClient, stub_bin: Path, unit_ctl):
+    _write_stub(stub_bin, "thinkers")
+    unit_ctl.state.touch()
+    resp = client.post("/api/identities/.identities~ctl/thinkers/stop", json={})
+    assert resp.status_code == 200, resp.text
+    assert unit_ctl.calls.read_text().splitlines() == ["is-active ctl", "stop ctl"]
+    assert not (stub_bin / "calls.txt").exists()
+
+
+def test_stop_all_falls_back_to_cli_when_unit_inactive(
+    client: TestClient, stub_bin: Path, unit_ctl
+):
+    """Transition path: an old-style dispatcher may run outside any unit."""
+    _write_stub(stub_bin, "thinkers")
+    resp = client.post("/api/identities/.identities~ctl/thinkers/stop", json={})
+    assert resp.status_code == 200, resp.text
+    assert "ARGS=stop" in _calls(stub_bin)
+    assert unit_ctl.calls.read_text().splitlines() == ["is-active ctl"]
+
+
+def test_stop_named_and_force_use_cli(
+    client: TestClient, stub_bin: Path, unit_ctl
+):
+    _write_stub(stub_bin, "thinkers")
+    unit_ctl.state.touch()
+    resp = client.post(
+        "/api/identities/.identities~ctl/thinkers/stop", json={"names": ["alpha"]}
+    )
+    assert resp.status_code == 200, resp.text
+    assert "ARGS=stop alpha" in _calls(stub_bin)
+    resp = client.post(
+        "/api/identities/.identities~ctl/thinkers/stop", json={"force": True}
+    )
+    assert resp.status_code == 200, resp.text
+    assert "ARGS=stop --force" in _calls(stub_bin)
+    # Named and force stops never consult the unit.
+    assert not unit_ctl.calls.exists()
+
+
 def test_chat_get(client: TestClient):
     body = client.get("/api/identities/.identities~ctl/chat").json()
     contents = [m["content"] for m in body["messages"]]

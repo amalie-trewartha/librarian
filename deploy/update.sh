@@ -28,6 +28,35 @@ if [[ -f "$UNIT_SRC" ]]; then
     fi
 fi
 
+# Per-identity thinkers: template unit + root wrapper + sudo rule. Synced
+# like the web unit so changes deploy as code. The wrapper and sudo rule
+# are what let the dash (user shellm) start dispatchers in their own
+# cgroup; the sudoers file is only installed if it passes visudo's check,
+# because a malformed sudoers file breaks sudo box-wide.
+unit_src="$APP_DIR/deploy/shellm-thinkers@.service"
+if [[ -f "$unit_src" ]]; then
+    rendered=$(sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$unit_src")
+    if ! printf '%s\n' "$rendered" | cmp -s - "/etc/systemd/system/shellm-thinkers@.service" 2>/dev/null; then
+        echo "==> Unit file changed — re-installing shellm-thinkers@"
+        printf '%s\n' "$rendered" | sudo tee "/etc/systemd/system/shellm-thinkers@.service" >/dev/null
+        sudo systemctl daemon-reload
+    fi
+fi
+if [[ -f "$APP_DIR/deploy/shellm-thinkersctl" ]] \
+    && ! cmp -s "$APP_DIR/deploy/shellm-thinkersctl" /usr/local/bin/shellm-thinkersctl 2>/dev/null; then
+    echo "==> Installing shellm-thinkersctl wrapper"
+    sudo install -o root -g root -m 0755 "$APP_DIR/deploy/shellm-thinkersctl" /usr/local/bin/shellm-thinkersctl
+fi
+if [[ -f "$APP_DIR/deploy/sudoers-shellm-thinkers" ]] \
+    && ! sudo cmp -s "$APP_DIR/deploy/sudoers-shellm-thinkers" /etc/sudoers.d/shellm-thinkers 2>/dev/null; then
+    if sudo visudo -cf "$APP_DIR/deploy/sudoers-shellm-thinkers"; then
+        echo "==> Installing sudoers rule for shellm-thinkersctl"
+        sudo install -o root -g root -m 0440 "$APP_DIR/deploy/sudoers-shellm-thinkers" /etc/sudoers.d/shellm-thinkers
+    else
+        echo "==> ERROR: deploy/sudoers-shellm-thinkers failed the visudo check — skipped" >&2
+    fi
+fi
+
 # Optional component: Slack bridge (installed on boxes provisioned with
 # SHELLM_INSTALL_SLACK_BRIDGE=1). Re-sync its units + deps and restart the
 # bridge; the persona bootstrap (oneshot) is left alone so the running

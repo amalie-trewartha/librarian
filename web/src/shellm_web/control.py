@@ -99,6 +99,48 @@ def _wrap(cli: str, *args: str) -> list[str]:
     return ["bash", "-c", _ENV_WRAPPER, str(BIN_DIR / cli), *args]
 
 
+# --- systemd-managed dispatchers -------------------------------------------
+# On provisioned boxes SHELLM_THINKERSCTL points at a root-owned wrapper
+# (deploy/shellm-thinkersctl, sudo rule in deploy/sudoers-shellm-thinkers)
+# that maps start/stop/restart/is-active onto `systemctl <action>
+# shellm-thinkers@<identity>`. Routing the dispatcher lifecycle through it
+# gives each mind its own cgroup instead of shellm-web's — a dash-started
+# dispatcher used to die orphaned when this service was OOM-killed or
+# restarted (2026-08-10 outage). Unset (dev, tests): the direct CLI paths
+# below behave exactly as before.
+
+
+def _thinkersctl_path() -> str:
+    return os.environ.get("SHELLM_THINKERSCTL", "")
+
+
+def _thinkersctl(
+    action: str, identity_name: str, timeout: int = DEFAULT_TIMEOUT
+) -> subprocess.CompletedProcess:
+    # SHELLM_THINKERSCTL_SUDO exists for tests, which can't sudo; empty
+    # string means "run the wrapper directly".
+    sudo = os.environ.get("SHELLM_THINKERSCTL_SUDO", "sudo -n").split()
+    cmd = [*sudo, _thinkersctl_path(), action, identity_name]
+    try:
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"message": f"shellm-thinkersctl {action} timed out after {timeout}s"},
+        ) from exc
+
+
+def _unit_active(identity_name: str) -> bool:
+    return _thinkersctl("is-active", identity_name).returncode == 0
+
+
 def run_cli(
     cmd: list[str],
     env: dict[str, str],
@@ -165,6 +207,21 @@ def thinkers_start(
         args.append("--no-self-trigger")
     args.extend(names)
     with identity_lock(identity.id):
+        # --no-self-trigger changes how the dispatcher itself is armed,
+        # which the fixed unit definition can't express — that debug path
+        # keeps the direct CLI (and its old cgroup caveat).
+        if _thinkersctl_path() and not no_self_trigger and not _unit_active(identity.path.name):
+            # Fresh start through the unit: its ExecStart arms the
+            # dispatcher in its own cgroup and kicks every enabled thinker
+            # once, so no CLI pass is needed. (A subset request still
+            # brings up all enabled thinkers — acceptable for a mind that
+            # was fully down.)
+            proc = _thinkersctl("start", identity.path.name, timeout=150)
+            _raise_for_failure(proc)
+            return _result("start", names, proc)
+        # Dispatcher already running (or no unit wrapper): the CLI named
+        # start only activates and kicks the requested thinkers — a
+        # short-lived mutation, safe to run from this service's cgroup.
         proc = run_cli(_wrap("thinkers", *args), identity_env(identity, root), root)
     _raise_for_failure(proc)
     return _result("start", names, proc)
@@ -180,6 +237,23 @@ def thinkers_stop(
         args.append("--force")
     args.extend(names)
     with identity_lock(identity.id):
+        if (
+            _thinkersctl_path()
+            and not names
+            and not force
+            and _unit_active(identity.path.name)
+        ):
+            # Whole-identity drain stop of a unit-managed dispatcher:
+            # systemd runs ExecStop (thinkers stop + a wait for draining
+            # steps) and then sweeps the unit's cgroup, so nothing can be
+            # left over. Timeout tracks the unit's TimeoutStopSec=200.
+            proc = _thinkersctl("stop", identity.path.name, timeout=210)
+            _raise_for_failure(proc)
+            return _result("stop", names, proc)
+        # Named stop, --force, or no unit: direct CLI. If this ends up
+        # killing a unit-managed dispatcher (force, or stopping the last
+        # thinker), systemd notices the main PID exit and reaps the unit's
+        # remaining processes itself — unit state converges on its own.
         proc = run_cli(_wrap("thinkers", *args), identity_env(identity, root), root)
     _raise_for_failure(proc)
     return _result("stop", names, proc)

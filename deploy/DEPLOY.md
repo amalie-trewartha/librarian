@@ -114,6 +114,19 @@ sudo -u shellm rm -rf /opt/shellm/app/web/src/shellm_web/static  # forces fronte
 sudo systemctl restart shellm-web
 ```
 
+**Thinker dispatchers run as per-identity systemd units.** When the dash
+(or the Slack bootstrap) starts an identity's thinkers, the dispatcher runs
+under `shellm-thinkers@<identity>.service` in its own cgroup, so web-server
+restarts and OOM kills cannot orphan or kill a mind. The web control plane
+reaches systemd through `/usr/local/bin/shellm-thinkersctl`, a root-owned
+wrapper that validates the action and identity name; the sudo rule in
+`/etc/sudoers.d/shellm-thinkers` permits only that wrapper. All three pieces
+are installed by `setup.sh` and re-synced by `update.sh`. Useful commands:
+`systemctl status shellm-thinkers@audel` (who owns which processes),
+`journalctl -u shellm-thinkers@audel` (start/stop history). A dispatcher
+that dies on its own leaves the unit in a visible `failed` state — the unit
+deliberately does not auto-restart it.
+
 **Kill switches, in escalating order:** Kill All button in the UI →
 `shellm-killall` on the box → `systemctl stop shellm-web` → stop the VM.
 
