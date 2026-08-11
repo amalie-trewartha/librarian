@@ -272,7 +272,42 @@ export interface ResponseEvent {
   ts: string | null;
   from: string;
   outcome: "replied" | "declined";
+  path: "inline" | "fast" | null;
   response_s: number;
+}
+
+export interface PathStats {
+  n: number;
+  median_s: number | null;
+  p90_s: number | null;
+}
+
+export interface InjectionEvent {
+  ts: string | null;
+  from: string;
+  inject_ms: number;
+  wait_s: number | null;
+  model_s: number | null;
+  total_s: number | null;
+  path: "inline" | "fast" | null;
+}
+
+export interface ModelDaily {
+  day: string;
+  calls: number;
+  in_tok: number;
+  out_tok: number;
+  think_tok: number;
+}
+
+export interface ModelStats {
+  calls: number;
+  llm_p50_s: number | null;
+  llm_p90_s: number | null;
+  in_tok: number;
+  out_tok: number;
+  think_tok: number;
+  daily: ModelDaily[];
 }
 
 export interface ResponseStats {
@@ -280,9 +315,13 @@ export interface ResponseStats {
   replied: number;
   declined: number;
   undecided: number;
+  duplicates: number;
   median_s: number | null;
   p90_s: number | null;
   max_s: number | null;
+  paths: { fast: PathStats; inline: PathStats };
+  injections: InjectionEvent[];
+  model: ModelStats;
   recent: ResponseEvent[];
 }
 

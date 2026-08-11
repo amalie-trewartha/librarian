@@ -182,6 +182,15 @@ export default function HealthPage() {
                 <Stat label="declined" value={String(responses.declined)} />
                 <Stat label="undecided" value={String(responses.undecided)} />
                 <Stat
+                  label="duplicates"
+                  value={String(responses.duplicates ?? 0)}
+                  className={
+                    responses.duplicates
+                      ? "text-amber-600 dark:text-amber-400"
+                      : undefined
+                  }
+                />
+                <Stat
                   label="median response"
                   value={fmtDuration(responses.median_s) ?? "—"}
                 />
@@ -190,8 +199,12 @@ export default function HealthPage() {
                   value={fmtDuration(responses.p90_s) ?? "—"}
                 />
                 <Stat
-                  label="slowest"
-                  value={fmtDuration(responses.max_s) ?? "—"}
+                  label={`fast path (${responses.paths?.fast.n ?? 0})`}
+                  value={fmtDuration(responses.paths?.fast.median_s ?? null) ?? "—"}
+                />
+                <Stat
+                  label={`in-run (${responses.paths?.inline.n ?? 0})`}
+                  value={fmtDuration(responses.paths?.inline.median_s ?? null) ?? "—"}
                 />
               </div>
               {responses.recent.length > 0 && (
@@ -221,10 +234,133 @@ export default function HealthPage() {
                           >
                             {event.outcome}
                           </span>
+                          {event.path && (
+                            <span className="ml-1 text-muted-foreground">
+                              · {event.path}
+                            </span>
+                          )}
                         </td>
                         <td className="py-1">
                           {fmtDuration(event.response_s)}
                         </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </>
+          )}
+        </Section>
+
+        <Section
+          title={`Mid-run injections (${responses?.injections?.length ?? 0})`}
+        >
+          {!responses?.injections?.length ? (
+            <div className="text-sm text-muted-foreground">
+              No message has queued behind a busy run in the window.
+            </div>
+          ) : (
+            <>
+              <table className="w-full text-left text-xs">
+                <thead className="text-muted-foreground">
+                  <tr>
+                    <th className="py-1 pr-4 font-normal">when</th>
+                    <th className="py-1 pr-4 font-normal">from</th>
+                    <th className="py-1 pr-4 font-normal">reply via</th>
+                    <th className="py-1 pr-4 font-normal">total</th>
+                    <th className="py-1 pr-4 font-normal">note written</th>
+                    <th className="py-1 pr-4 font-normal">call in flight</th>
+                    <th className="py-1 font-normal">reply call</th>
+                  </tr>
+                </thead>
+                <tbody className="font-mono">
+                  {responses.injections.map((event, idx) => (
+                    <tr key={idx} className="border-t">
+                      <td className="py-1 pr-4">{eventTime(event.ts)}</td>
+                      <td className="max-w-48 truncate py-1 pr-4">
+                        {event.from}
+                      </td>
+                      <td className="py-1 pr-4">
+                        {event.path ?? (
+                          <span className="text-amber-600 dark:text-amber-400">
+                            no reply
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-1 pr-4">
+                        {fmtDuration(event.total_s) ?? "—"}
+                      </td>
+                      <td className="py-1 pr-4">{event.inject_ms}ms</td>
+                      <td className="py-1 pr-4">
+                        {fmtDuration(event.wait_s) ?? "—"}
+                      </td>
+                      <td className="py-1">
+                        {fmtDuration(event.model_s) ?? "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="mt-2 text-xs text-muted-foreground">
+                A message that arrives mid-run gets a dispatcher note in the
+                trajectory; "call in flight" is the wait for the running model
+                call to finish, "reply call" the one that composed the answer.
+                "fast" means the run ended first and the fast path replied.
+              </div>
+            </>
+          )}
+        </Section>
+
+        <Section title="Model calls">
+          {!responses?.model?.calls ? (
+            <div className="text-sm text-muted-foreground">
+              No stamped model calls in the window yet (llm_s lands with the
+              observability deploy).
+            </div>
+          ) : (
+            <>
+              <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
+                <Stat label="calls" value={String(responses.model.calls)} />
+                <Stat
+                  label="median call"
+                  value={fmtDuration(responses.model.llm_p50_s) ?? "—"}
+                />
+                <Stat
+                  label="p90 call"
+                  value={fmtDuration(responses.model.llm_p90_s) ?? "—"}
+                />
+                <Stat
+                  label="input tok"
+                  value={responses.model.in_tok.toLocaleString()}
+                />
+                <Stat
+                  label="output tok"
+                  value={responses.model.out_tok.toLocaleString()}
+                />
+                <Stat
+                  label="thinking tok"
+                  value={responses.model.think_tok.toLocaleString()}
+                />
+              </div>
+              {responses.model.daily.length > 0 && (
+                <table className="mt-3 w-full text-left text-xs">
+                  <thead className="text-muted-foreground">
+                    <tr>
+                      <th className="py-1 pr-4 font-normal">day (utc)</th>
+                      <th className="py-1 pr-4 font-normal">calls</th>
+                      <th className="py-1 pr-4 font-normal">input</th>
+                      <th className="py-1 pr-4 font-normal">output</th>
+                      <th className="py-1 font-normal">thinking</th>
+                    </tr>
+                  </thead>
+                  <tbody className="font-mono">
+                    {responses.model.daily.map((row) => (
+                      <tr key={row.day} className="border-t">
+                        <td className="py-1 pr-4">{row.day}</td>
+                        <td className="py-1 pr-4">{row.calls}</td>
+                        <td className="py-1 pr-4">{row.in_tok.toLocaleString()}</td>
+                        <td className="py-1 pr-4">{row.out_tok.toLocaleString()}</td>
+                        <td className="py-1">{row.think_tok.toLocaleString()}</td>
                       </tr>
                     ))}
                   </tbody>
