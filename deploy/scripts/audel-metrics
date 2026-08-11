@@ -109,7 +109,11 @@ inbound = []            # (step_id, ts, sender)
 outgoing = []           # (ts, to, reply_to, in_run)
 runs = {}               # run_id -> [first_ts, last_ts, final_ts, n_reasoning]
 fb_marked = set()       # inbound step_ids with a dispatcher feedback marker
+fb_events = []          # (trigger_step_id, feedback_ts)
+run_appends = []        # ts of every reasoning/shell-output append (for
+                        # locating the iteration boundary after an injection)
 llm_s, exec_s = [], []
+in_tok, out_tok, think_tok = [], [], []
 skipped = 0
 total = 0
 
@@ -147,10 +151,18 @@ with open(path, encoding="utf-8", errors="replace") as fh:
                 outgoing.append((ts, to, step.get("reply_to") or "", bool(rid)))
         elif t == "feedback" and step.get("source") == "dispatcher" and step.get("trigger_step"):
             fb_marked.add(step["trigger_step"])
-        elif t == "reasoning" and isinstance(step.get("llm_s"), (int, float)):
-            llm_s.append(step["llm_s"])
-        elif t == "shell-output" and isinstance(step.get("exec_s"), (int, float)):
-            exec_s.append(step["exec_s"])
+            fb_events.append((step["trigger_step"], ts))
+        elif t in ("reasoning", "shell-output"):
+            if rid:
+                run_appends.append(ts)
+            if t == "reasoning":
+                if isinstance(step.get("llm_s"), (int, float)):
+                    llm_s.append(step["llm_s"])
+                for key, dest in (("in_tok", in_tok), ("out_tok", out_tok), ("think_tok", think_tok)):
+                    if isinstance(step.get(key), (int, float)):
+                        dest.append(step[key])
+            elif isinstance(step.get("exec_s"), (int, float)):
+                exec_s.append(step["exec_s"])
 
 # Run spans for busy-at-arrival, sorted for bisect. End at the final step
 # when the run has one, else at the last step seen with that run_id.
@@ -188,6 +200,33 @@ out_counts = {
     "other_in_run": sum(1 for o in outgoing if not o[2] and o[3]),
     "other_fast": sum(1 for o in outgoing if not o[2] and not o[3]),
 }
+
+# Injection events: decompose each mid-run reply chain. The boundary is the
+# first run append (reasoning/shell-output) after the feedback — the moment
+# the in-flight model call + command finished and the note became visible.
+run_appends.sort()
+by_id = {i: (t, s) for (i, t, s) in inbound}
+injections = []
+for trig, fb_ts in fb_events:
+    if trig not in by_id:
+        continue
+    msg_ts = by_id[trig][0]
+    reply = next((o for o in outgoing if o[2] == trig), None)
+    j = bisect.bisect_right(run_appends, fb_ts)
+    bnd = run_appends[j] if j < len(run_appends) else None
+    ev = {
+        "when": datetime.fromtimestamp(msg_ts, timezone.utc).strftime("%m-%d %H:%M"),
+        "inject_ms": int(round((fb_ts - msg_ts) * 1000)),
+        "wait_s": None, "model_s": None, "total_s": None, "path": "none",
+    }
+    if reply:
+        r_ts, in_run = reply[0], reply[3]
+        ev["total_s"] = round(r_ts - msg_ts, 1)
+        ev["path"] = "inline" if in_run else "fast"
+        if in_run and bnd is not None and bnd <= r_ts:
+            ev["wait_s"] = round(bnd - fb_ts, 1)
+            ev["model_s"] = round(r_ts - bnd, 1)
+    injections.append(ev)
 real_runs = [r for r in runs.values() if r[3] > 0]
 out = {
     "identity": ident,
@@ -204,6 +243,11 @@ out = {
         "wall_s": pct([(r[2] if r[2] is not None else r[1]) - r[0] for r in real_runs]),
     },
     "durations": {"llm_s": pct(llm_s), "exec_s": pct(exec_s)},
+    "tokens": {
+        "in_tok": pct(in_tok), "out_tok": pct(out_tok), "think_tok": pct(think_tok),
+        "totals": {"in": sum(in_tok), "out": sum(out_tok), "think": sum(think_tok)},
+    },
+    "injections": injections,
 }
 blob = base64.b64encode(gzip.compress(json.dumps(out, separators=(",", ":")).encode())).decode()
 if len(blob) > 23000:
@@ -303,5 +347,34 @@ if du["llm_s"] or du["exec_s"]:
     print(fmt("llm call (llm_s)", du["llm_s"]))
     print(fmt("bash execution (exec_s)", du["exec_s"]))
 else:
-    print("iteration durations: not stamped yet (llm_s/exec_s land with the timeout commit)")
+    print("iteration durations: not stamped yet (llm_s/exec_s not in this log)")
+
+tk = d.get("tokens") or {}
+if tk.get("in_tok") or tk.get("out_tok"):
+    print()
+    print("tokens per model call (stamped by bin/llm)")
+    print("  %-28s %5s  %7s %7s %7s %8s" % ("", "n", "p50", "p90", "p95", "max"))
+    print(fmt("input (in_tok)", tk.get("in_tok")))
+    print(fmt("output (out_tok)", tk.get("out_tok")))
+    print(fmt("thinking (think_tok)", tk.get("think_tok")))
+    tot = tk.get("totals") or {}
+    print("  totals: in %s  out %s  thinking %s"
+          % tuple("{:,}".format(int(tot.get(k, 0))) for k in ("in", "out", "think")))
+
+inj = d.get("injections")
+print()
+print("injection events (message queued behind a busy run)")
+if not inj:
+    print("  none recorded")
+else:
+    print("  %-12s %-7s %8s %10s %8s %8s" % ("when (utc)", "path", "total_s", "inject_ms", "wait_s", "model_s"))
+    for e in inj:
+        print("  %-12s %-7s %8s %10s %8s %8s" % (
+            e["when"], e["path"],
+            e["total_s"] if e["total_s"] is not None else "-",
+            e["inject_ms"],
+            e["wait_s"] if e["wait_s"] is not None else "-",
+            e["model_s"] if e["model_s"] is not None else "-"))
+    print("  (inject = dispatcher wrote the note; wait = in-flight call finishing;")
+    print("   model = the call that composed the reply. fast path = replied after run end)")
 PYEOF
