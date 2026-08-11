@@ -70,6 +70,21 @@ debug() {
     fi
 }
 
+# True if this process runs inside the process tree rooted at the identity's
+# live dispatcher — i.e. we are an in-flight step of the very mind a stop
+# would kill.
+_inside_own_dispatcher() {
+    local run_dir="$1" dpid pid
+    dpid=$(cat "$run_dir/dispatcher.pid" 2>/dev/null) || return 1
+    [[ -n "$dpid" ]] && kill -0 "$dpid" 2>/dev/null || return 1
+    pid=$$
+    while [[ -n "$pid" && "$pid" -gt 1 ]]; do
+        [[ "$pid" -eq "$dpid" ]] && return 0
+        pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]') || return 1
+    done
+    return 1
+}
+
 _require_env() {
     [[ -n "$IDENTITY_DIR" ]] || die "IDENTITY_DIR not set. Run: identity shell <name>"
     [[ -n "$TRAJ_DIR" ]] || die "TRAJ_DIR not set. Run: identity shell <name>"
@@ -887,12 +902,13 @@ cmd_stop() {
     _require_env
 
     local run_dir="$IDENTITY_DIR/run"
-    local force=0 drain_timeout="${THINKERS_DRAIN_TIMEOUT:-180}"
+    local force=0 self_ok=0 drain_timeout="${THINKERS_DRAIN_TIMEOUT:-180}"
     local names=()
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --force) force=1; shift ;;
+            --self) self_ok=1; shift ;;
             --drain-timeout)
                 drain_timeout="${2:?--drain-timeout requires seconds}"; shift 2 ;;
             -*) die "stop: unknown option: $1" ;;
@@ -900,6 +916,16 @@ cmd_stop() {
         esac
     done
     [[ "$drain_timeout" =~ ^[0-9]+$ ]] || die "stop: --drain-timeout must be a number of seconds"
+
+    # Refuse to stop from inside our own dispatcher's process tree: the stop
+    # TERM/KILLs that tree, so the calling step dies mid-command and the mind
+    # goes down with nothing left to notice or restart it. The usual way to
+    # get here is a step that meant to stop a DIFFERENT identity but whose
+    # env switch never took (e.g. `source .../activate | head` sources in a
+    # subshell, leaving the caller's own identity active).
+    if [[ "$self_ok" -ne 1 ]] && _inside_own_dispatcher "$run_dir"; then
+        die "stop: refusing — this shell is an in-flight step of the $(basename "$IDENTITY_DIR") dispatcher it would kill. To stop another identity: bash -c 'source <identities>/<name>/activate && thinkers stop'. To really stop your own mind, pass --self."
+    fi
 
     # Default is a drain stop: deactivate (no new triggers), let in-flight
     # steps finish, escalate to kill only after --drain-timeout. --force
@@ -1327,8 +1353,10 @@ thinkers — Modular reactive thought process manager
 Usage:
   thinkers start [--no-self-trigger] [name ...]
                                Start all thinkers (or specific ones by name)
-  thinkers stop [name ...] [--force] [--drain-timeout N]
+  thinkers stop [name ...] [--force] [--self] [--drain-timeout N]
                                Stop all thinkers (or specific ones by name).
+                               Refuses to run from inside the identity's own
+                               dispatcher tree unless --self is given.
                                Default is a drain stop: no new triggers, but
                                in-flight steps finish (killed only after
                                --drain-timeout, default 180s / $THINKERS_DRAIN_TIMEOUT).
