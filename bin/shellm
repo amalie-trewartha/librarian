@@ -2046,6 +2046,15 @@ run_loop() {
         # Call Claude (capture thinking/reasoning to file)
         local thinking_file="$rundir/.last_thinking"
         : > "$thinking_file"
+        # Observability: time the model call and capture token usage. The
+        # usage file is truncated first so a provider that reports nothing
+        # can't inherit the previous iteration's numbers; llm_s spans the
+        # whole call including empty-response retries (the user-felt time).
+        local usage_file="$rundir/.last_usage"
+        export LLM_USAGE_FILE="$usage_file"
+        : > "$usage_file"
+        local _llm_t0
+        _llm_t0=$(date +%s)
         local response
         response=$(call_llm "$system_prompt" "$messages_json" "$thinking_file")
 
@@ -2098,6 +2107,13 @@ run_loop() {
             die "Empty response from $SHELLM_MODEL after $empty_retries retries"
         fi
 
+        local _llm_s=$(( $(date +%s) - _llm_t0 ))
+        local _usage_extra="{}"
+        if [[ -s "$usage_file" ]]; then
+            _usage_extra=$(jq -c 'select(type == "object")' "$usage_file" 2>/dev/null) || _usage_extra="{}"
+            [[ -z "$_usage_extra" ]] && _usage_extra="{}"
+        fi
+
         local reasoning
         reasoning=$(extract_reasoning "$response")
         # reasoning captured for step record
@@ -2112,7 +2128,9 @@ run_loop() {
             debug "No code extracted, treating full response as final answer"
             progress "No code block found — returning response as answer"
             # Record as a final step with no cmd
-            printf '%s' "$(jq -n --arg t "$reasoning" --arg f "$response" --arg run_id "$_run_step_id" '{type:"final",thought:$t,content:$f,run_id:$run_id}')" \
+            printf '%s' "$(jq -n --arg t "$reasoning" --arg f "$response" --arg run_id "$_run_step_id" \
+                --argjson llm_s "$_llm_s" --argjson usage "$_usage_extra" \
+                '{type:"final",thought:$t,content:$f,run_id:$run_id,llm_s:$llm_s} + $usage')" \
                 | traj append --traj_dir "$_run_traj_dir" "$_run_traj_id" >/dev/null
             echo "$response"
             return 0
@@ -2209,6 +2227,8 @@ exit \$__shellm_rc
         local timed_out=0
 
         # Background: run execute_code, capture PID
+        local _exec_t0
+        _exec_t0=$(date +%s)
         set +eo pipefail
         set +m  # suppress "Terminated" job-control messages
         execute_code "$workdir" "$wrapped_code" "${env_vars[@]}" >> "$output_file" 2>&1 &
@@ -2306,6 +2326,7 @@ exit \$__shellm_rc
         local output
         output=$(cat "$output_file")
         rm -f "$output_file" "$exec_pid_file" "$watchdog_pid_file" "$timeout_marker"
+        local _exec_s=$(( $(date +%s) - _exec_t0 ))
 
         debug "Exit code: $exit_code, timed_out: $timed_out"
 
@@ -2328,7 +2349,9 @@ exit \$__shellm_rc
             --arg thought "$reasoning" \
             --arg cmd "$code" \
             --arg run_id "$_run_step_id" \
-            '{type:"reasoning", thought:$thought, cmd:$cmd, run_id:$run_id}')
+            --argjson llm_s "$_llm_s" \
+            --argjson usage "$_usage_extra" \
+            '{type:"reasoning", thought:$thought, cmd:$cmd, run_id:$run_id, llm_s:$llm_s} + $usage')
         printf '%s' "$reasoning_json" | traj append --traj_dir "$_run_traj_dir" "$_run_traj_id" >/dev/null
 
         # Record shell-output step (user role in multi-turn)
@@ -2346,14 +2369,16 @@ exit \$__shellm_rc
                 --argjson exit "$exit_code" \
                 --arg feedback "$feedback" \
                 --arg run_id "$_run_step_id" \
-                '{type:"shell-output", stdout:$stdout, stderr:$stderr, exit:$exit, timed_out:true, feedback:$feedback, run_id:$run_id}')
+                --argjson exec_s "$_exec_s" \
+                '{type:"shell-output", stdout:$stdout, stderr:$stderr, exit:$exit, timed_out:true, feedback:$feedback, run_id:$run_id, exec_s:$exec_s}')
         else
             output_json=$(jq -n \
                 --arg stdout "$clean_output" \
                 --arg stderr "" \
                 --argjson exit "$exit_code" \
                 --arg run_id "$_run_step_id" \
-                '{type:"shell-output", stdout:$stdout, stderr:$stderr, exit:$exit, run_id:$run_id}')
+                --argjson exec_s "$_exec_s" \
+                '{type:"shell-output", stdout:$stdout, stderr:$stderr, exit:$exit, run_id:$run_id, exec_s:$exec_s}')
         fi
 
         # Also record as feedback step if timed out

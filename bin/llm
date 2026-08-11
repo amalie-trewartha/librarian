@@ -39,6 +39,10 @@ LLM_THINKING_LEVEL=""
 LLM_EFFORT=""
 LLM_RAW=0
 LLM_PROMPT=""
+# When set, a one-line JSON usage record ({in_tok, out_tok, think_tok}) is
+# written to this path after the call. Best-effort: fields the provider
+# doesn't report are omitted, and no failure here can break the call.
+LLM_USAGE_FILE="${LLM_USAGE_FILE:-}"
 # Transient-failure retries (provider errors, 429/5xx, network). Retries
 # only happen when NOTHING has been emitted yet — a retry after partial
 # streamed output would duplicate text. LLM_RETRIES=0 disables.
@@ -323,6 +327,12 @@ build_payload_openai() {
     )
     local jq_filter='{model:$model, messages:., stream:$stream} + {($tokens_field): $max_tokens}'
 
+    # Usage capture on a stream needs the provider to append a final usage
+    # chunk (OpenAI-compatible stream_options; OpenRouter supports it too).
+    if [[ -n "$LLM_USAGE_FILE" && "$LLM_STREAM" -eq 1 ]]; then
+        jq_filter="${jq_filter} + {stream_options: {include_usage: true}}"
+    fi
+
     # Map --thinking LEVEL to OpenAI reasoning.effort (only when an explicit
     # level is given; bare --thinking without a level is ignored for OpenAI
     # since not all models support the reasoning parameter).
@@ -474,12 +484,24 @@ warn_truncated() {
     echo "llm: warning: output truncated at max_tokens=$LLM_MAX_TOKENS (reasoning tokens count against it) — raise with -t" >&2
 }
 
+# Write the LLM_USAGE_FILE record. Args: input tokens, output tokens,
+# reasoning/thinking tokens — non-numeric args are omitted from the record.
+write_usage() {
+    [[ -z "$LLM_USAGE_FILE" ]] && return 0
+    jq -nc --arg i "${1:-}" --arg o "${2:-}" --arg t "${3:-}" '
+        {}
+        + (if ($i | test("^[0-9]+$")) then {in_tok: ($i | tonumber)} else {} end)
+        + (if ($o | test("^[0-9]+$")) then {out_tok: ($o | tonumber)} else {} end)
+        + (if ($t | test("^[0-9]+$")) then {think_tok: ($t | tonumber)} else {} end)' \
+        > "$LLM_USAGE_FILE" 2>/dev/null || true
+}
+
 # ---------------------------------------------------------------------------
 # Streaming handlers
 # ---------------------------------------------------------------------------
 
 stream_anthropic() {
-    local _saw_data=0 _err_buf=""
+    local _saw_data=0 _err_buf="" _u_in="" _u_out=""
     while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
         local line="${raw_line%$'\r'}"
         if [[ "$line" == data:\ * ]]; then
@@ -507,9 +529,19 @@ stream_anthropic() {
                 *'"content_block_stop"'*)
                     _block=""
                     ;;
+                *'"message_start"'*)
+                    # Prompt size arrives up front on the start event.
+                    _u_in=$(printf '%s' "$json" | jq -r '.message.usage.input_tokens // empty' 2>/dev/null) || _u_in=""
+                    ;;
                 *'"message_delta"'*)
                     if [[ "$(printf '%s' "$json" | jq -r '.delta.stop_reason // empty' 2>/dev/null)" == "max_tokens" ]]; then
                         warn_truncated
+                    fi
+                    # Output count grows across deltas; each write overwrites
+                    # the previous, so the last delta wins.
+                    if [[ "$json" == *'"output_tokens"'* ]]; then
+                        _u_out=$(printf '%s' "$json" | jq -r '.usage.output_tokens // empty' 2>/dev/null) || _u_out=""
+                        [[ -n "$_u_out" ]] && write_usage "$_u_in" "$_u_out" ""
                     fi
                     ;;
                 *'"type":"error"'*)
@@ -558,6 +590,20 @@ stream_openai() {
                     warn_truncated
                 fi
             fi
+            # Usage chunk (present when stream_options.include_usage was
+            # requested; usually the last data event). Same glob-guard idea.
+            if [[ -n "$LLM_USAGE_FILE" && "$json" == *'"usage"'* && "$json" != *'"usage":null'* ]]; then
+                local _u=""
+                _u=$(printf '%s' "$json" | jq -r 'select(.usage != null) | [
+                        (.usage.prompt_tokens // ""), (.usage.completion_tokens // ""),
+                        (.usage.completion_tokens_details.reasoning_tokens // "")
+                    ] | @tsv' 2>/dev/null) || _u=""
+                if [[ -n "$_u" ]]; then
+                    local _u_in _u_out _u_think
+                    IFS=$'\t' read -r _u_in _u_out _u_think <<<"$_u"
+                    write_usage "$_u_in" "$_u_out" "$_u_think"
+                fi
+            fi
         elif [[ "$_saw_data" -eq 0 ]]; then
             _err_buf="${_err_buf}${line}
 "
@@ -590,6 +636,20 @@ stream_gemini() {
             if [[ "$json" == *'"finishReason"'* ]]; then
                 if [[ "$(printf '%s' "$json" | jq -r '.candidates[0].finishReason // empty' 2>/dev/null)" == "MAX_TOKENS" ]]; then
                     warn_truncated
+                fi
+            fi
+            # usageMetadata rides the final chunk.
+            if [[ -n "$LLM_USAGE_FILE" && "$json" == *'"usageMetadata"'* ]]; then
+                local _u=""
+                _u=$(printf '%s' "$json" | jq -r '[
+                        (.usageMetadata.promptTokenCount // ""),
+                        (.usageMetadata.candidatesTokenCount // ""),
+                        (.usageMetadata.thoughtsTokenCount // "")
+                    ] | @tsv' 2>/dev/null) || _u=""
+                if [[ -n "$_u" ]]; then
+                    local _u_in _u_out _u_think
+                    IFS=$'\t' read -r _u_in _u_out _u_think <<<"$_u"
+                    write_usage "$_u_in" "$_u_out" "$_u_think"
                 fi
             fi
         elif [[ "$_saw_data" -eq 0 ]]; then
@@ -726,6 +786,18 @@ else
 
     if [[ -n "$("check_truncated_${LLM_PROVIDER}" < "$local_resp")" ]]; then
         warn_truncated
+    fi
+
+    if [[ -n "$LLM_USAGE_FILE" ]]; then
+        case "$LLM_PROVIDER" in
+            anthropic) _u=$(jq -r '[(.usage.input_tokens // ""), (.usage.output_tokens // ""), ""] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
+            gemini)    _u=$(jq -r '[(.usageMetadata.promptTokenCount // ""), (.usageMetadata.candidatesTokenCount // ""), (.usageMetadata.thoughtsTokenCount // "")] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
+            *)         _u=$(jq -r '[(.usage.prompt_tokens // ""), (.usage.completion_tokens // ""), (.usage.completion_tokens_details.reasoning_tokens // "")] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
+        esac
+        if [[ -n "$_u" ]]; then
+            IFS=$'\t' read -r _u_in _u_out _u_think <<<"$_u"
+            write_usage "$_u_in" "$_u_out" "$_u_think"
+        fi
     fi
 
     if [[ "$LLM_RAW" -eq 1 ]]; then
