@@ -130,12 +130,15 @@ gen_step_id() {
     fi
 }
 
-# Generate ISO 8601 timestamp with milliseconds.
+# Generate ISO 8601 timestamp with milliseconds, always UTC. Steps used to
+# be stamped in the writer's local zone, so one trajectory mixed offsets
+# depending on which component appended — every latency query then carried
+# a timezone footgun.
 _iso_ts() {
     perl -MTime::HiRes=gettimeofday -MPOSIX=strftime -e '
         my ($s,$us)=gettimeofday;
-        printf "%s.%03d%s\n", strftime("%Y-%m-%dT%H:%M:%S",localtime($s)), $us/1000, strftime("%z",localtime($s))
-    ' 2>/dev/null || date +%Y-%m-%dT%H:%M:%S%z
+        printf "%s.%03dZ\n", strftime("%Y-%m-%dT%H:%M:%S",gmtime($s)), $us/1000
+    ' 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ
 }
 
 # Determine the next blob_id for a step by counting existing blobs.

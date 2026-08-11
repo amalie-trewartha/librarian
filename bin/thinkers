@@ -424,7 +424,7 @@ _start_dispatcher() {
                 fi
                 if (( SECONDS - _last >= _csecs )); then
                     if [[ "$(_count_active_steps)" -ge "$THINKERS_MAX_CONCURRENT" ]]; then continue; fi
-                    printf '[dispatcher]   watchdog -> %s (quiet %ss)\n' "$_cname" "$((SECONDS - _last))" >&2
+                    printf '%s [dispatcher]   watchdog -> %s (quiet %ss)\n' "$(date -u +%FT%TZ)" "$_cname" "$((SECONDS - _last))" >&2
                     _dispatch_step "$_cname" "$(jq -nc --arg source "$_cname" \
                         '{type:"idle", content:"idle", source:$source, synthetic:"watchdog"}')"
                 fi
@@ -465,7 +465,7 @@ _start_dispatcher() {
                 if [[ "$_pactive" -ge "$THINKERS_MAX_CONCURRENT" ]]; then return 0; fi
                 _pjson=$(cat "$_pfile")
                 rm -f "$_pfile"
-                printf '[dispatcher]   fire pending -> %s (type=%s, active=%s)\n' "$_pname" "$_ptype" "$_pactive" >&2
+                printf '%s [dispatcher]   fire pending -> %s (type=%s, active=%s)\n' "$(date -u +%FT%TZ)" "$_pname" "$_ptype" "$_pactive" >&2
                 _dispatch_step "$_pname" "$_pjson"
             done
         }
@@ -476,7 +476,7 @@ _start_dispatcher() {
             # then fire any pending re-triggers
             if [[ "$_traj_file" == "TICK" ]]; then
                 if [[ "$(cat "$run_dir/dispatcher.token" 2>/dev/null)" != "$dispatcher_token" ]]; then
-                    printf '[dispatcher] ownership lost (newer start or stop) — exiting\n' >&2
+                    printf '%s [dispatcher] ownership lost (newer start or stop) — exiting\n' "$(date -u +%FT%TZ)" >&2
                     # Kill only OUR tails/ticker (whole trees — a bare kill
                     # leaves the tail stage of the pipeline alive); the shared
                     # runtime files (fifo, sub_map, tail_pids, pending) belong
@@ -504,7 +504,7 @@ _start_dispatcher() {
 
             if [[ -z "$_step_type" ]]; then continue; fi
 
-            printf '[dispatcher] step: type=%s source=%s\n' "$_step_type" "$_step_source" >&2
+            printf '%s [dispatcher] step: type=%s source=%s\n' "$(date -u +%FT%TZ)" "$_step_type" "$_step_source" >&2
 
             # Find matching thinkers by scanning sub_map
             while IFS=$'\t' read -r _name _straj _stypes _sself _swd; do
@@ -527,7 +527,7 @@ _start_dispatcher() {
 
                 # Self-trigger check
                 if [[ "$_step_source" == "$_name" && "$_sself" != "true" ]]; then
-                    printf '[dispatcher]   skip %s (self-trigger)\n' "$_name" >&2
+                    printf '%s [dispatcher]   skip %s (self-trigger)\n' "$(date -u +%FT%TZ)" "$_name" >&2
                     continue
                 fi
 
@@ -553,7 +553,7 @@ _start_dispatcher() {
                             done
                             if [[ "$_pend_count" -ge 16 ]]; then
                                 for _pend_file in "$run_dir/pending/${_name}.${_step_type}."*; do
-                                    printf '[dispatcher]   pending %s.%s queue full — dropping oldest\n' "$_name" "$_step_type" >&2
+                                    printf '%s [dispatcher]   pending %s.%s queue full — dropping oldest\n' "$(date -u +%FT%TZ)" "$_name" "$_step_type" >&2
                                     rm -f "$_pend_file"
                                     _pend_count=$((_pend_count - 1))
                                     break
@@ -562,7 +562,7 @@ _start_dispatcher() {
                             _pend_seq=$(( ${_pend_seq:-0} + 1 ))
                             _pend_file="$run_dir/pending/${_name}.${_step_type}.$(date +%s).$(printf '%06d' "$_pend_seq")"
                             printf '%s' "$_step_json" > "$_pend_file"
-                            printf '[dispatcher]   pending -> %s (type=%s, queued=%d)\n' "$_name" "$_step_type" "$((_pend_count + 1))" >&2
+                            printf '%s [dispatcher]   pending -> %s (type=%s, queued=%d)\n' "$(date -u +%FT%TZ)" "$_name" "$_step_type" "$((_pend_count + 1))" >&2
                             # Salience injection: an inbound chat message that
                             # queues behind a busy agentic run ALSO lands as a
                             # feedback step in the traj that run is reading, so
@@ -589,10 +589,10 @@ _start_dispatcher() {
                         *)
                             _pend_file="$run_dir/pending/${_name}.${_step_type}.coalesced"
                             if [[ -f "$_pend_file" ]]; then
-                                printf '[dispatcher]   pending %s.%s superseded (last-wins)\n' "$_name" "$_step_type" >&2
+                                printf '%s [dispatcher]   pending %s.%s superseded (last-wins)\n' "$(date -u +%FT%TZ)" "$_name" "$_step_type" >&2
                             fi
                             printf '%s' "$_step_json" > "$_pend_file"
-                            printf '[dispatcher]   pending -> %s (type=%s, coalesced)\n' "$_name" "$_step_type" >&2
+                            printf '%s [dispatcher]   pending -> %s (type=%s, coalesced)\n' "$(date -u +%FT%TZ)" "$_name" "$_step_type" >&2
                             ;;
                     esac
                     continue
@@ -608,7 +608,7 @@ _start_dispatcher() {
                 done
 
                 # Run thinker step in background
-                printf '[dispatcher]   dispatch -> %s (active=%s)\n' "$_name" "$_active" >&2
+                printf '%s [dispatcher]   dispatch -> %s (active=%s)\n' "$(date -u +%FT%TZ)" "$_name" "$_active" >&2
                 _dispatch_step "$_name" "$_step_json"
             done < "$run_dir/sub_map"
         done < "$fifo"
