@@ -2,7 +2,7 @@
 
 ## Immediate (the loop is telling us what to do)
 
-1. **Work through gen-001's proposal cards.** The two low-risk mechanical ones first: `01-fix-adaptive-thinking-flag` (bin/llm shouldn't send thinking params to models that don't support them) and `02-emit-observation-on-actor-failure` (a failed action must still produce an observation step — the mind must never be blind to its own failures). Apply → review diff → commit → `session.sh --new-gen` and see if the vitals move.
+1. ~~**Work through gen-001's proposal cards.**~~ **DONE (2026-08-06).** Both low-risk mechanical cards are implemented and on main: `01-fix-adaptive-thinking-flag` = commit `cd7693c` (llm: guard thinking params by model capability); `02-emit-observation-on-actor-failure` = commit `3b9ed80` (improve: apply gen-001 cards), confirmed in decisions.md and thinkers/actor/step lines 117-128. Next: run `session.sh --new-gen` to see if vitals move, then proceed to #2.
 2. **Run a cross-session learning pair**: `pipes-note.md`, then `pipes-recall.md` with `--memories` pointing at the first run's memories dir. This exercises sub-goal 3, which gen-001 didn't test.
 3. **Extend the session ladder**: once 1-minute sessions run clean, try `--minutes 5`.
 
