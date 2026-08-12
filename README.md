@@ -564,3 +564,4 @@ CONTEXT_BIN=path/to/context tests/test_context.sh   # test an alternate implemen
 ## Acknowledgements
 
 shellm is a port of [Recursive Language Models (RLM)](https://alexzhang13.github.io/blog/2025/rlm/) by Alex Zhang to bash, for bash.
+
