@@ -35,3 +35,25 @@ step_content="$(printf '%s' "$_step_json" | jq -r '.content // empty')"
 ## Verification after fix
 Run a wakeup with a memory-worthy step and confirm the retrieval thinker
 receives non-empty content and surfaces matching memories.
+
+## Survey: is this bug systemic?
+
+Audited all thinkers/*/step input patterns. _dispatch_step pipes step JSON to
+stdin for every thinker, so the correct input method is reading stdin.
+
+| thinker           | reads stdin | reads env vars |
+|-------------------|-------------|----------------|
+| actor             | yes         | no             |
+| goals_manager     | yes         | no             |
+| inner_monologue   | yes         | no             |
+| learning          | yes         | no             |
+| mind_wanderer     | yes         | no             |
+| monolith          | yes         | no             |
+| proprioception    | yes         | no             |
+| retrieval         | **no**      | **yes (broken)** |
+| values_manager    | yes         | no             |
+
+**Conclusion:** the bug is isolated to retrieval, not systemic. Every other
+thinker correctly reads step JSON from stdin (typically `step_json=$(cat)`
+then parses with jq). retrieval is the outlier — likely written before the
+stdin convention was established, or never tested against a real dispatch.
