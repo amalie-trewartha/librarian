@@ -8,7 +8,7 @@
 
 ## Measurement improvements
 
-- **Fuzzy thought-repetition proxy.** Exact-match dedup scored the g001r1 paraphrase spiral at 0.00. Cheap options: shingle overlap (shared 4-word n-grams between consecutive thoughts), or an embedding-free token-Jaccard threshold. Keep it pure bash/jq if possible.
+- ~~**Fuzzy thought-repetition proxy.**~~ **DONE (2026-08-06, commit 9c0be4f).** Wired iteration_repetition_detector.sh into bin/shellm execute_code() path (across-iteration shingle/token-Jaccard detector, pure bash/jq). Integration test test_wired_rep_detector.sh passes; g001r4 fixture flagged, unique blocks not flagged.
 - **Observation-referencing rate**: fraction of post-observation thoughts that mention content from the observation (crude keyword overlap is fine to start).
 - **Per-scenario vitals matrix** (`improve/metrics.csv` aggregating across generations): the GEPA "training instance" scores. Needed before any automatic acceptance.
 - **Cost/token accounting per session** so generation-over-generation comparisons are budget-aware.
