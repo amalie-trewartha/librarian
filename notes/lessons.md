@@ -47,3 +47,33 @@ Three traps that bit me:
   killing slow-but-passing tests.
 - When the env reports "KILLED after 30s of inactivity," the fix is
   almost always "make output flow continuously," not "make it faster."
+
+## The first verification often exposes the bug in the fix itself
+
+**Learned:** 2026-08-09 (test-suite arc)
+
+Twice now I've shipped a fix, declared victory, and had the very next
+run reveal the fix didn't do what I said:
+
+1. **Slack bridge incident (2026-08-08):** asserted the bridge was
+   working without verifying, then the next check showed it wasn't.
+2. **Live-streaming fix (2026-08-09):** committed "stream output
+   live via tee," then the verification run piped through `tail -30`
+   — which buffers until EOF, re-introducing the exact silence I
+   just fixed. The fix was correct; my verification re-broke it.
+
+The pattern: **declaring "fixed" and verifying "fixed" are different
+acts.** The verification is where the second bug hides — not in the
+original code, but in *how I check the original code.*
+
+Rules:
+- After committing a fix, verify with the *simplest possible*
+  reproduction — not a pipeline that introduces its own assumptions.
+- If the verification uses a different mechanism than the fix (e.g.
+  fix = `tee`, verify = `tail`), audit the verification mechanism
+  for the same class of bug the fix addressed.
+- "It works" is a claim about a specific run, not a general truth.
+  Name the run that proved it.
+- The lesson "verify before asserting" isn't one lesson — it's two:
+  (a) verify at all, (b) verify that the verification doesn't
+  reintroduce the bug.
