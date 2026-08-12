@@ -26,7 +26,7 @@ message replies. Adjust subscriptions so `message` is handled by exactly
 one thinker.
 
 ### Subscription changes
-**Note on retrieval thinker:** `retrieval` also subscribes to `message`, but its use is purely *inward* — it indexes messages into the memory keyword index and never produces an outward reply. Per the design principle (inward overlap is harmless), retrieval's `message` subscription should be **retained**. Only thinkers that produce *outward* replies need disjoint `message` ownership.
+**Note on inward-only thinkers:** `retrieval` and `inner_monologue` also subscribe to `message`, but their use is purely *inward* — retrieval indexes messages into the memory keyword index, and inner_monologue reflects on message content for the stream of consciousness. Neither produces an outward reply (confirmed: inner_monologue/step line 8 explicitly states 'the actor thinker handles the immediate conversational reply'). Per the design principle (inward overlap is harmless), these `message` subscriptions should be **retained**. Only thinkers that produce *outward* replies need disjoint `message` ownership.
 
 
 | Thinker    | Before                          | After                              |
