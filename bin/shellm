@@ -2263,6 +2263,11 @@ exit \$__shellm_rc
                 fi
                 if [[ "$stale_seconds" -ge "$SHELLM_INACTIVITY_TIMEOUT" ]]; then
                     touch "$timeout_marker"
+                    # Name the target: a silent watchdog kill is
+                    # indistinguishable from an external one in a
+                    # post-mortem (2026-08-12 dispatcher death).
+                    printf '%s [shellm-watchdog] inactivity timeout (%ss): killing exec pid %s\n' \
+                        "$(date -u +%FT%TZ)" "$SHELLM_INACTIVITY_TIMEOUT" "$exec_pid" >&2
                     kill "$exec_pid" 2>/dev/null || true
                     # Give it a moment, then force-kill if needed
                     sleep 2
