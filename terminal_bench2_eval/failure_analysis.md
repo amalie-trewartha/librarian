@@ -579,7 +579,7 @@ These tasks completed (agent finished or was evaluated) but the verifier rejecte
 
 **What shelly did:** The agent got stuck in a **context retrieval loop**. On iteration 1, it read the prompt. On iterations 2-3, it ran `traj show` commands to try to re-read the prompt from its own trajectory history. Then on iterations 4-8+, it kept re-printing the task description without ever actually analyzing the G-code file. It never ran commands like `cat /app/text.gcode` or any G-code analysis. Eventually the `traj search` command on iteration 15 was killed by the shellm process.
 
-**Why it failed:** `/app/out.txt` was never created. The verifier expected the file to contain `flag{gc0d3_iz_ch4LLenGiNg}`.
+**Why it failed:** `/app/out.txt` was never created. The verifier expected the file to contain the task's answer flag (value redacted — benchmark answer).
 
 **Root cause:** **Agent got stuck in a meta-loop** trying to understand its own context via `traj show`/`traj search` rather than executing the actual task. This is a shellm agent behavior bug -- the agent should have been reading the G-code file, not its own trajectory.
 
