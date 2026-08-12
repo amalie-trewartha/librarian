@@ -140,7 +140,7 @@ materials() {
 }
 
 printf '▶ Critiquing %s with %s\n' "$LABEL" "$MODEL" >&2
-materials | llm -m "$MODEL" -t 4096 -s "$(cat "$IMPROVE_DIR/prompts/critic.md")" > "$OUT" \
+materials | llm -m "$MODEL" -t "${CRITIC_MAX_TOKENS:-16384}" -s "$(cat "$IMPROVE_DIR/prompts/critic.md")" > "$OUT" \
     || die "llm call failed"
 
 printf '▶ Critique written: %s\n' "$OUT" >&2
