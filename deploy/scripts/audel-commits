@@ -16,7 +16,9 @@
 #              yellow    new self-contained components + tests — Claude reviews
 #              red       edits to shipped code (bin/, web/, slack/src/, core
 #                        thinkers, protected files) — Nick reviews
-#              excluded  identity/memory files — never pulled (auto-recorded)
+#              excluded  private paths: identity/memory files, correspondence
+#                        (drafts/memos/team notes), eval internals — never
+#                        pulled (auto-recorded; this repo is public)
 #            A commit's tier is the worst tier of any file in it.
 # pull       apply one commit's diff to the local working tree UNSTAGED for
 #            review; default is the oldest pending commit. Saves the commit
@@ -42,9 +44,19 @@ BOX_REPO=/opt/shellm/app
 STATE_FILE="$REPO_ROOT/.audel-pulled"
 GIT_DIR="$(git -C "$REPO_ROOT" rev-parse --absolute-git-dir)"
 
-# Identity/memory files never leave the box: stripped from every pull, and a
-# commit containing nothing else is recorded as excluded.
-APPLY_EXCLUDES=(--exclude='identities/*' --exclude='.identities/*')
+# Private paths never leave the box (this repo is PUBLIC): identity/memory
+# files, correspondence (drafts, memos, team notes), and eval internals
+# (benchmark answers/verifier details). Stripped from every pull; a commit
+# containing nothing else is recorded as excluded.
+APPLY_EXCLUDES=(
+    --exclude='identities/*' --exclude='.identities/*'
+    --exclude='chat/drafts/*' --exclude='chat/archive/*'
+    --exclude='notes-for-team.md'
+    --exclude='improve/draft-to-*'
+    --exclude='improve/notes/strategic_*'
+    --exclude='improve/notes/tbench2_*'
+    --exclude='terminal_bench2_eval/*'
+)
 
 usage() { awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "${BASH_SOURCE[0]}"; exit "${1:-0}"; }
 
@@ -91,9 +103,12 @@ classify() {
     awk '
         function ftier(f) {
             if (f ~ /^identities\// || f ~ /^\.identities\//) return "exclude"
+            if (f ~ /^(chat\/drafts|chat\/archive|terminal_bench2_eval)\//) return "exclude"   # correspondence + eval internals: private
+            if (f == "notes-for-team.md") return "exclude"
+            if (f ~ /^improve\/draft-to-/) return "exclude"
+            if (f ~ /^improve\/notes\/(strategic_|tbench2_)/) return "exclude"
             if (f == "improve/vitals.sh") return "red"   # protected: the improve loop measurement stage
-            if (f ~ /^(improve|notes|chat\/drafts|chat\/archive|design|terminal_bench2_eval)\//) return "green"
-            if (f == "notes-for-team.md") return "green"
+            if (f ~ /^(improve|notes|design)\//) return "green"
             if (f ~ /^thinkers\/(chat|retrieval|proprioception)\//) return "yellow"
             if (f ~ /^(lens|skills\/repo-health|skills\/check-trajectory|tests|slack\/tests)\//) return "yellow"
             return "red"   # bin/, web/, slack/src/, thinkers/_lib|monolith|actor/, everything unlisted
@@ -217,7 +232,7 @@ cmd_triage() {
                 disp=applied
             fi
             if [[ "$tier" == exclude && -z "$disp" ]]; then
-                record_state "$sha" excluded "identity files only"
+                record_state "$sha" excluded "private paths only"
                 disp=excluded
             fi
             [[ "$tier" == merge ]] && disp=merge
@@ -246,7 +261,7 @@ cmd_triage() {
             printf '\nGREEN (%d) — docs/notes/improve, batch-pull with: audel-commits pull --tier green:\n%s' "$g_n" "$g_out"
         fi
         if [[ "$x_n" -gt 0 ]]; then
-            printf '\nEXCLUDED (%d) — identity/memory files, never pulled:\n%s' "$x_n" "$x_out"
+            printf '\nEXCLUDED (%d) — private paths (identity, correspondence, eval internals), never pulled:\n%s' "$x_n" "$x_out"
         fi
         if [[ "$m_n" -gt 0 ]]; then
             printf '\nMERGES (%d) — no diff of their own:\n%s' "$m_n" "$m_out"
@@ -298,7 +313,7 @@ pull_one() { # $1 = full sha, $2 = do_commit (0|1)
     done <<<"$PULL_FILES"
     PULL_FILES="${keep%$'\n'}"
     if [[ -z "$PULL_FILES" ]]; then
-        record_state "$sha" excluded "identity/ignored files only"
+        record_state "$sha" excluded "private/ignored paths only"
         PULL_RESULT=excluded
         return 0
     fi
