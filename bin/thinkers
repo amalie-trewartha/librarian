@@ -759,6 +759,34 @@ _stop_dispatcher() {
     rm -rf "$run_dir/pending"
 }
 
+# After starting a fresh dispatcher, tell the mind if it was dead: when the
+# newest trajectory step is older than THINKERS_WAKE_NOTE_MIN_GAP seconds
+# (default 300; 0 disables), append an observation recording the gap. A mind
+# that dies never observes the consequence — the log just stops — so the
+# lesson can only enter its experience at wake-up (2026-08-12: Audel stopped
+# its own dispatcher mid-restart-plan and woke an hour later with no trace
+# of having been down). The note also carries the safe self-restart command,
+# so the teaching lands exactly when it is relevant. Failure-open on
+# purpose: a malformed ts or missing traj must never block the start.
+_append_wake_gap_note() {
+    local min_gap="${THINKERS_WAKE_NOTE_MIN_GAP:-300}"
+    [[ "$min_gap" =~ ^[0-9]+$ && "$min_gap" -gt 0 ]] || return 0
+    local traj_file last_epoch gap
+    traj_file=$(_resolve_traj_file "$TRAJ_DIR" "$TRAJ_ID") || return 0
+    last_epoch=$(tail -n 1 "$traj_file" 2>/dev/null \
+        | jq -r '(.ts // empty) | sub("\\.[0-9]+"; "") | sub("\\+0000$"; "Z") | fromdateiso8601? // empty' 2>/dev/null) || last_epoch=""
+    [[ "$last_epoch" =~ ^[0-9]+$ ]] || return 0
+    gap=$(( $(date +%s) - last_epoch ))
+    [[ "$gap" -ge "$min_gap" ]] || return 0
+    local gap_h=$(( gap / 3600 )) gap_m=$(( (gap % 3600) / 60 ))
+    local gap_str="${gap_m}m"
+    [[ "$gap_h" -gt 0 ]] && gap_str="${gap_h}h ${gap_m}m"
+    jq -nc --arg name "$IDENTITY_NAME" --arg gap "$gap_str" \
+        '{type:"observation", source:"system",
+          content:("Wake-up note: your dispatcher just started, and the previous step in this log is about \($gap) old — your mind was not running in between. If you did not expect this downtime, investigate it (run/logs/dispatcher.log; systemctl status shellm-thinkers@\($name)) before resuming other plans. Reminder: `thinkers stop` from inside your own mind kills you mid-step and nothing restarts you. To restart yourself safely (e.g. to register a new thinker), run: sudo shellm-thinkersctl restart \($name) — systemd completes the restart even though your current step dies with the old dispatcher.")}' \
+        | traj append --traj_dir "$TRAJ_DIR" "${traj_file#"$TRAJ_DIR"/}" >/dev/null 2>&1 || true
+}
+
 # ---------------------------------------------------------------------------
 # Subcommands
 # ---------------------------------------------------------------------------
@@ -827,6 +855,7 @@ cmd_start() {
             local dispatcher_pid
             dispatcher_pid=$(_start_dispatcher)
             printf 'Dispatcher started (PID %s)\n' "$dispatcher_pid" >&2
+            _append_wake_gap_note
         fi
 
         # Kick each thinker once (dispatcher only sees new steps). The kick
@@ -872,6 +901,7 @@ cmd_start() {
         printf 'Starting dispatcher...\n' >&2
         local dispatcher_pid
         dispatcher_pid=$(_start_dispatcher)
+        _append_wake_gap_note
 
         # Show status
         local thinker_count=0
