@@ -49,6 +49,17 @@ LLM_USAGE_FILE="${LLM_USAGE_FILE:-}"
 LLM_RETRIES="${LLM_RETRIES:-2}"
 LLM_RETRY_BACKOFF="${LLM_RETRY_BACKOFF:-1}"   # seconds; grows linearly per attempt
 
+# Network guards: without these a stalled provider stream hangs the caller
+# indefinitely — the retry logic above only fires once curl RETURNS. The
+# speed pair aborts a transfer that stays under LLM_SPEED_LIMIT bytes/s for
+# LLM_SPEED_TIME consecutive seconds: healthy generation streams orders of
+# magnitude faster, while a stream carrying only provider keepalive comments
+# for a whole minute is stuck. Each is 0 to disable.
+LLM_CONNECT_TIMEOUT="${LLM_CONNECT_TIMEOUT:-10}"
+LLM_MAX_TIME="${LLM_MAX_TIME:-600}"
+LLM_SPEED_LIMIT="${LLM_SPEED_LIMIT:-100}"
+LLM_SPEED_TIME="${LLM_SPEED_TIME:-60}"
+
 # ---------------------------------------------------------------------------
 # Utility
 # ---------------------------------------------------------------------------
@@ -134,6 +145,13 @@ Environment:
   LLM_RETRIES              Retries for transient API failures (default: 2;
                            0 disables). Never retries after partial output.
   LLM_RETRY_BACKOFF        Backoff base seconds between retries (default: 1)
+  LLM_CONNECT_TIMEOUT      Seconds to establish the connection (default: 10;
+                           0 disables)
+  LLM_MAX_TIME             Hard ceiling on one HTTP attempt, seconds
+                           (default: 600; 0 disables)
+  LLM_SPEED_LIMIT          Abort a transfer slower than this many bytes/s...
+  LLM_SPEED_TIME           ...for this many consecutive seconds (defaults:
+                           100 bytes/s over 60s; 0 on either disables)
 
 Examples:
   llm -m claude-sonnet-4-5-20250929 "explain quicksort"
@@ -688,6 +706,17 @@ get_url_headers
 [[ "$LLM_RETRIES" =~ ^[0-9]+$ ]] || LLM_RETRIES=0
 _max_attempts=$(( LLM_RETRIES + 1 ))
 
+# Network guard flags for curl (see the LLM_CONNECT_TIMEOUT block above).
+_net_args=()
+[[ "$LLM_CONNECT_TIMEOUT" =~ ^[0-9]+$ && "$LLM_CONNECT_TIMEOUT" -gt 0 ]] \
+    && _net_args+=(--connect-timeout "$LLM_CONNECT_TIMEOUT")
+[[ "$LLM_MAX_TIME" =~ ^[0-9]+$ && "$LLM_MAX_TIME" -gt 0 ]] \
+    && _net_args+=(--max-time "$LLM_MAX_TIME")
+if [[ "$LLM_SPEED_LIMIT" =~ ^[0-9]+$ && "$LLM_SPEED_LIMIT" -gt 0 \
+      && "$LLM_SPEED_TIME" =~ ^[0-9]+$ && "$LLM_SPEED_TIME" -gt 0 ]]; then
+    _net_args+=(--speed-limit "$LLM_SPEED_LIMIT" --speed-time "$LLM_SPEED_TIME")
+fi
+
 if [[ "$LLM_STREAM" -eq 1 ]]; then
     # Streaming path. Each attempt runs the handler in a subshell so a
     # retryable failure (exit 75 from die_retryable — error before any
@@ -702,7 +731,7 @@ if [[ "$LLM_STREAM" -eq 1 ]]; then
         LLM_RETRY_ERR=$(mktemp)
         LLM_DATA_MARKER="${LLM_RETRY_ERR}.emitted"
         _rc=0
-        ( "stream_${LLM_PROVIDER}" < <(curl -sS -N "${headers[@]}" -d @"$payload_file" "$url" 2>"$_curl_err") ) || _rc=$?
+        ( "stream_${LLM_PROVIDER}" < <(curl -sS -N ${_net_args[@]+"${_net_args[@]}"} "${headers[@]}" -d @"$payload_file" "$url" 2>"$_curl_err") ) || _rc=$?
 
         _emitted=0
         [[ -e "$LLM_DATA_MARKER" ]] && _emitted=1
@@ -740,6 +769,7 @@ else
         _attempt=$(( _attempt + 1 ))
         local_resp=$(mktemp)
         http_code=$(curl -sS -o "$local_resp" -w '%{http_code}' \
+            ${_net_args[@]+"${_net_args[@]}"} \
             "${headers[@]}" -d @"$payload_file" "$url" 2>/dev/null) || http_code="000"
 
         # Transient: network failure, timeout, rate limit, server error

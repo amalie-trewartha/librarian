@@ -1265,6 +1265,16 @@ call_llm() {
         [[ -n "$thinking_output_file" ]] && cp "$stderr_file" "$thinking_output_file"
     fi
 
+    # A failed llm call must never yield its partial stream as a response:
+    # a truncated code block that still parses would get executed. Stall
+    # timeouts (bin/llm net guards) land here after llm's own retries.
+    if [[ "$llm_exit" -ne 0 ]]; then
+        local _llm_err=""
+        [[ -s "$stderr_file" ]] && _llm_err=$(tail -c 500 "$stderr_file")
+        rm -f "$text_file" "$stderr_file"
+        die "llm failed (exit $llm_exit): $_llm_err"
+    fi
+
     # If llm produced no output, surface any error from stderr
     if [[ ! -s "$text_file" && -s "$stderr_file" ]]; then
         local _llm_err
