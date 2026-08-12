@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# retrieval-thinker/step — keyword retrieval over memory index
+# Receives step JSON on stdin. Tokenizes content, greps index.tsv,
+# escalates to mem search, emits observation via traj append.
+
+INDEX="${RETRIEVAL_INDEX:-/opt/shellm/app/.identities/audel/mem/index.tsv}"
+MEM=/opt/shellm/app/bin/mem
+TRAJ=/opt/shellm/app/bin/traj
+
+# Read step from stdin
+STEP=$(cat)
+CONTENT=$(printf '%s' "$STEP" | jq -r '.content // empty' 2>/dev/null || true)
+TYPE=$(printf '%s' "$STEP" | jq -r '.type // empty' 2>/dev/null || true)
+STEP_ID=$(printf '%s' "$STEP" | jq -r '.id // empty' 2>/dev/null || true)
+
+# Skip if no content or no index
+[ -z "$CONTENT" ] && exit 0
+[ -f "$INDEX" ] || exit 0
+
+# Stopwords (same set as build-index.sh)
+declare -A STOP
+for w in the a an and or but if then of to in is it this that for with on at by from as be was were are been being have has had do does did i you he she they we us our your my me him her them his hers its their; do STOP[$w]=1; done
+
+# Tokenize content (lowercase, alnum, min 3 chars)
+TOKENS=$(printf '%s' "$CONTENT" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '\n' | grep -E '^[a-z0-9]{3,}$' | sort -u)
+
+# Grep index for each token, collect memory IDs
+declare -A HITS
+for tok in $TOKENS; do
+  [ "${STOP[$tok]:-0}" = "1" ] && continue
+  while IFS=$'\t' read -r kw mid summary; do
+    [ -n "$mid" ] && HITS["$mid"]="$summary"
+  done < <(grep -a -F -w "$tok" "$INDEX" 2>/dev/null || true)
+done
+
+# If no hits, exit quietly
+[ ${#HITS[@]} -eq 0 ] && exit 0
+
+# Pick top hit (first by sorted order for determinism)
+TOP_MID=$(printf '%s\n' "${!HITS[@]}" | sort | head -1)
+TOP_SUMMARY="${HITS[$TOP_MID]}"
+
+# Escalate: run mem search using the content as query, pick top result
+SEARCH_RESULT=""
+if [ -x "$MEM" ]; then
+  SEARCH_RESULT=$(timeout 15 "$MEM" search "$CONTENT" 2>/dev/null | head -5 || true)
+fi
+
+# Emit an observation step surfacing the memory
+OBS="retrieval-thinker surfaced memory $TOP_MID: $TOP_SUMMARY"
+[ -n "$SEARCH_RESULT" ] && OBS="$OBS | semantic: $(printf '%s' "$SEARCH_RESULT" | tr '\n' ' ' | cut -c1-200)"
+
+"$TRAJ" append \
+  --field type=observation \
+  --field content="$OBS" \
+  --field source=retrieval-thinker \
+  --field retrieved_mem="$TOP_MID" 2>/dev/null || true
+
+exit 0
