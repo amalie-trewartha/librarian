@@ -1,10 +1,10 @@
-# Review Request: 44 commits (2026-08-06 → 2026-08-07)
+# Review Request: 46 commits (2026-08-06 → 2026-08-07)
 
 **Status:** Tests green (177 assertions, 0 failures). Merged with origin/main (clean auto-merge). Ready to push.
 
 ## Summary
 
-44 commits, 4015 insertions across 64 files. ~14.5 hours of work.
+46 commits, 4015 insertions across 64 files. ~14.5 hours of work.
 Grouped by theme below — review whichever themes interest you.
 
 ---
@@ -14,11 +14,12 @@ Grouped by theme below — review whichever themes interest you.
 - `7afc7be` **llm: guard thinking params by model capability** — prevents sending thinking tokens to models that don't support them
 - `0dbfbcf` **Fix nested shellm API key + model propagation** — nested shellm calls now inherit API key + model correctly
 
-## 2. Thinkers System (4 commits)
+## 2. Thinkers System (5 commits)
 
 - `1993285` **thinkers: add proprioception thinker** — monitors substrate for errors (dead code, exceptions)
 - `0d24cbd` **thinkers: add post-stop stray tail vitals check** — cleans up orphaned tail processes after stop
 - `4b96412` **fix(thinkers): block self-error feedback loops** — even with trigger_self enabled, thinker won't re-trigger on its own errors
+- `f2e2dda` **test(thinkers): redirect stdin from /dev/null on start/stop_thinkers** — prevents thinkers from hanging on stdin during start/stop
 - `5c2b763` **improve: add retrieval-thinker** — passive memory influence via keyword index (in-progress, not wired)
 
 ## 3. Memory & Retrieval (4 commits)
