@@ -29,4 +29,4 @@
 - `session.sh` doesn't yet implement `--traj ID` registration of live external trajectories (critique.sh accepts any trajectory path, so this is cosmetic).
 - Docker wasn't running during gen-001, so sessions executed on the host. Fine for benign scenarios; start Docker for anything riskier (session cleanup already removes per-run containers).
 - Critic/synthesizer prompts are v0 drafts; they'll need iteration as failure modes shift (that iteration is itself loggable in `log.md`).
-- No guard yet against two concurrent sessions in the same generation colliding on run numbering (last-writer wins on `gen-NNN/identities/gXXXrN`).
+- ~~No guard yet against two concurrent sessions in the same generation colliding on run numbering~~ **FIXED (2026-08-08):** `session.sh` now wraps run_num selection + `identity new` in a `flock`-guarded block on `$GEN_DIR/.session.lock` (commit `7f345be`). Lock held only for slot assignment; sessions still concurrent afterward. TODO: integration test with two simultaneous sessions.
