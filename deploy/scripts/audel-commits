@@ -503,31 +503,63 @@ cmd_reconcile() {
     echo "  '-' = drops, '+' = survives:"
     sed 's/^/  /' <<<"$cherry"
     [[ -n "$status" ]] && { echo "  box tree is dirty — tracked changes will be stashed and re-applied:"; sed 's/^/  /' <<<"$status"; }
-    if grep -q '^+' <<<"$cherry" && [[ -f "$STATE_FILE" ]] && grep -q ' rejected ' "$STATE_FILE"; then
-        echo "  note: rejected commits are among the survivors — the rebase does NOT remove them"
+    # Commits recorded pulled or rejected are removed from the rebase todo:
+    # rejected ones must not survive, and pulled-but-adapted ones (resolved
+    # by hand against newer upstream code) would conflict against their
+    # obsolete box form. Excluded commits are NOT dropped — they stay
+    # box-only by design.
+    local drops="" dsha ddisp _rest
+    if [[ -f "$STATE_FILE" ]]; then
+        while read -r dsha ddisp _rest; do
+            [[ "$ddisp" == pulled || "$ddisp" == rejected ]] || continue
+            grep -q "^+ $dsha" <<<"$cherry" && drops="$drops $dsha"
+        done < "$STATE_FILE"
+    fi
+    if [[ -n "$drops" ]]; then
+        info "these survivors are dispositioned ($(wc -w <<<"$drops" | tr -d ' ')) and will be DROPPED in the rebase:"
+        local d
+        for d in $drops; do
+            printf '  %s  %s\n' "${d:0:7}" "$(grep "^+ $d" <<<"$cherry" | cut -d' ' -f3-)"
+        done
     fi
     if [[ "$yes" -ne 1 ]]; then
         read -r -p "Rebase the box onto origin/main now? [y/N] " ans
         [[ "$ans" == y || "$ans" == Y ]] || { echo "aborted — box unchanged"; return 1; }
     fi
 
-    run_script_on_box '
-        g() { sudo -u shellm git -C /opt/shellm/app "$@"; }
-        stashed=0
-        if [ -n "$(g status --porcelain | grep -v "^??")" ]; then
-            g stash push -m audel-commits-reconcile >/dev/null && stashed=1
-        fi
-        if ! g rebase origin/main; then
-            g rebase --abort || true
-            [ "$stashed" -eq 1 ] && { g stash pop || true; }
-            echo "rebase CONFLICT — aborted, box left as it was" >&2
-            exit 1
-        fi
-        [ "$stashed" -eq 1 ] && { g stash pop || echo "warning: stash pop conflicted — agent WIP left in the stash" >&2; }
-        echo "=== AFTER ==="
-        g log --reverse --oneline origin/main..main
-        g status --short
-    ' || die "reconcile failed — box unchanged"
+    local box_script
+    box_script=$(cat <<EOS
+g() { sudo -u shellm git -C /opt/shellm/app "\$@"; }
+DROPS="$drops"
+cat > /tmp/audel-todo-filter.sh <<'FEOF'
+#!/bin/sh
+# GIT_SEQUENCE_EDITOR: delete pick lines for dispositioned commits
+todo="\$1"
+cp "\$todo" "\$todo.orig"
+awk -v drops="\$DROPS" '
+    BEGIN { n = split(drops, D, " ") }
+    /^pick / { for (i = 1; i <= n; i++) if (index(D[i], \$2) == 1) next }
+    { print }
+' "\$todo.orig" > "\$todo"
+FEOF
+chmod +x /tmp/audel-todo-filter.sh
+stashed=0
+if [ -n "\$(g status --porcelain | grep -v "^??")" ]; then
+    g stash push -m audel-commits-reconcile >/dev/null && stashed=1
+fi
+if ! sudo -u shellm env DROPS="\$DROPS" GIT_SEQUENCE_EDITOR=/tmp/audel-todo-filter.sh GIT_EDITOR=true git -C /opt/shellm/app rebase -i origin/main; then
+    g rebase --abort || true
+    [ "\$stashed" -eq 1 ] && { g stash pop || true; }
+    echo "rebase CONFLICT — aborted, box left as it was" >&2
+    exit 1
+fi
+[ "\$stashed" -eq 1 ] && { g stash pop || echo "warning: stash pop conflicted — agent WIP left in the stash" >&2; }
+echo "=== AFTER ==="
+g log --reverse --oneline origin/main..main
+g status --short
+EOS
+)
+    run_script_on_box "$box_script" || die "reconcile failed — box unchanged"
 
     info "reconciled. If any commit was amended or rejected, the running agent still has the old code baked in:"
     cat <<EOF
