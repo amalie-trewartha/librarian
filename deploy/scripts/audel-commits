@@ -172,7 +172,9 @@ cmd_list() {
             n=$((n + 1))
             pid=$(awk -v s="$sha" '$2==s{print $1}' <<<"$patchids")
             disp=$(state_of "$sha")
-            if [[ -n "$pid" ]] && grep -qx "$pid" <<<"$lpids"; then
+            if [[ -z "$pid" ]]; then
+                disp=merge   # no patch-id = merge (or empty) commit — nothing to pull
+            elif grep -qx "$pid" <<<"$lpids"; then
                 disp=applied
             fi
             : "${disp:=pending}"
@@ -218,6 +220,7 @@ cmd_triage() {
                 record_state "$sha" excluded "identity files only"
                 disp=excluded
             fi
+            [[ "$tier" == merge ]] && disp=merge
             : "${disp:=pending}"
             line=$(printf '  %s  %-8s %s' "${sha:0:7}" "$disp" "$subject")
             case "$tier" in
@@ -330,13 +333,16 @@ cmd_pull() {
     lpids=$(local_patch_ids)
     while read -r cur subject; do
         pid=$(awk -v s="$cur" '$2==s{print $1}' < <(section PATCHIDS "$series"))
+        [[ -n "$pid" ]] || continue   # merge/empty commit — never a pull target
         disp=$(state_of "$cur")
-        [[ -n "$pid" ]] && grep -qx "$pid" <<<"$lpids" && disp=applied
+        grep -qx "$pid" <<<"$lpids" && disp=applied
         [[ -z "$disp" ]] && { default="$cur"; break; }
     done <<<"$log"
 
     if [[ -n "$target" ]]; then
         sha=$(resolve_sha "$target" "$log")
+        pid=$(awk -v s="$sha" '$2==s{print $1}' < <(section PATCHIDS "$series"))
+        [[ -n "$pid" ]] || die "${sha:0:7} is a merge (or empty) commit — nothing to pull; it drops in the reconcile rebase"
         if [[ -n "$default" && "$sha" != "$default" ]]; then
             echo "warning: skipping ahead — oldest pending is ${default:0:7}; this diff may not apply cleanly" >&2
         fi
