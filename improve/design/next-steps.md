@@ -9,7 +9,7 @@
 ## Measurement improvements
 
 - ~~**Fuzzy thought-repetition proxy.**~~ **DONE (2026-08-06, commit 9c0be4f).** Wired iteration_repetition_detector.sh into bin/shellm execute_code() path (across-iteration shingle/token-Jaccard detector, pure bash/jq). Integration test test_wired_rep_detector.sh passes; g001r4 fixture flagged, unique blocks not flagged.
-- **Observation-referencing rate**: fraction of post-observation thoughts that mention content from the observation (crude keyword overlap is fine to start).
+- ~~**Observation-referencing rate.**~~ **DONE (2026-08-08).** Script at improve/metrics/observation_reference_rate.sh. Emits observations=N thoughts_referencing=M rate=0.XX. Gen-001 survey: g001r1=0.50, g001r5=1.00, g001r10=1.00, others N/A (no obs→thought pairs). Crude keyword overlap (lowercase tokens >=4 chars, stopwords removed) per spec. Original:  fraction of post-observation thoughts that mention content from the observation (crude keyword overlap is fine to start).
 - **Per-scenario vitals matrix** (`improve/metrics.csv` aggregating across generations): the GEPA "training instance" scores. Needed before any automatic acceptance.
 - **Cost/token accounting per session** so generation-over-generation comparisons are budget-aware.
 
