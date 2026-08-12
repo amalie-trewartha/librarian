@@ -94,18 +94,27 @@ fi
 GEN_DIR=$(printf '%s/gen-%03d' "$GENERATIONS_DIR" "$GEN_NUM")
 mkdir -p "$GEN_DIR/identities" "$GEN_DIR/critiques"
 
-# --- Create a fresh identity for this run ---------------------------------
-run_num=1
-while [[ -d "$GEN_DIR/identities/$(printf 'g%03dr%d' "$GEN_NUM" "$run_num")" ]]; do
-    run_num=$(( run_num + 1 ))
-done
-RUN_NAME=$(printf 'g%03dr%d' "$GEN_NUM" "$run_num")
-
+# --- Create a fresh identity for this run (atomic against concurrent sessions) ---
+# Guard the check-then-create race: two concurrent sessions in the same
+# generation could both see the same run_num slot as free and collide on
+# `identity new` (which dies if the dir exists, or worse, races on mkdir).
+# flock on a generation-level lock file serializes just the slot assignment
+# + identity creation. The { } block is not a subshell, so vars persist.
+# The lock auto-releases when the block exits, so sessions still run
+# concurrently after their identities are created.
+LOCK_FILE="$GEN_DIR/.session.lock"
+{
+    flock 9
+    run_num=1
+    while [[ -d "$GEN_DIR/identities/$(printf 'g%03dr%d' "$GEN_NUM" "$run_num")" ]]; do
+        run_num=$(( run_num + 1 ))
+    done
+    RUN_NAME=$(printf 'g%03dr%d' "$GEN_NUM" "$run_num")
 printf '▶ Creating identity %s (gen %d, run %d)\n' "$RUN_NAME" "$GEN_NUM" "$run_num" >&2
-id_args=()
-if [[ -n "$MEMORIES_DIR" ]]; then id_args+=(--memories "$MEMORIES_DIR"); fi
-IDENTITY_DIR="$GEN_DIR/identities" identity new "${id_args[@]}" "$RUN_NAME"
-
+    id_args=()
+    if [[ -n "$MEMORIES_DIR" ]]; then id_args+=(--memories "$MEMORIES_DIR"); fi
+    IDENTITY_DIR="$GEN_DIR/identities" identity new "${id_args[@]}" "$RUN_NAME"
+} 9>"$LOCK_FILE"
 IDENTITY_HOME="$GEN_DIR/identities/$RUN_NAME"
 # The activate script is written for interactive shells; relax -eu around it.
 set +eu
