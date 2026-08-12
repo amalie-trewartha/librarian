@@ -70,13 +70,39 @@ debug() {
     fi
 }
 
-# True if this process runs inside the process tree rooted at the identity's
-# live dispatcher — i.e. we are an in-flight step of the very mind a stop
-# would kill.
+# True if this process would die with the identity's live dispatcher —
+# i.e. we are an in-flight step of the very mind a stop would kill.
+# Two signals, either one counts:
+#
+#   1. Same shellm-thinkers@ unit cgroup (Linux). When the dispatcher runs
+#      as that unit's main process, its exit makes systemd sweep the WHOLE
+#      cgroup — including steps that are no longer in the dispatcher's
+#      process tree. The 2026-08-12 self-kill went exactly through that
+#      blind spot: a step kicked by `thinkers start` from inside another
+#      step was orphaned to init when its parent exited, passed the
+#      ancestry walk below, stopped the dispatcher, and was swept mid-plan
+#      before it could run the restart half. Scoped to shellm-thinkers@
+#      cgroups — the only unit whose main process is the dispatcher, so
+#      the only cgroup where a stop triggers the sweep. A dispatcher merely
+#      HOSTED in another unit's cgroup (dash debug start inside
+#      shellm-web, legacy bootstrap inside shellm-slack-agent) is not that
+#      unit's main process: same-cgroup callers there survive the stop,
+#      and refusing them would leave the dash unable to stop its own
+#      debug-path dispatcher.
+#
+#   2. Ppid ancestry walk up to the dispatcher pid — the only signal on
+#      hosts without /proc cgroups (macOS dev), still exact for attached
+#      steps everywhere.
 _inside_own_dispatcher() {
     local run_dir="$1" dpid pid
     dpid=$(cat "$run_dir/dispatcher.pid" 2>/dev/null) || return 1
     [[ -n "$dpid" ]] && kill -0 "$dpid" 2>/dev/null || return 1
+    local my_cg their_cg
+    my_cg=$(cat /proc/self/cgroup 2>/dev/null) || my_cg=""
+    their_cg=$(cat "/proc/$dpid/cgroup" 2>/dev/null) || their_cg=""
+    if [[ -n "$my_cg" && "$my_cg" == "$their_cg" && "$my_cg" == *"/shellm-thinkers@"* ]]; then
+        return 0
+    fi
     pid=$$
     while [[ -n "$pid" && "$pid" -gt 1 ]]; do
         [[ "$pid" -eq "$dpid" ]] && return 0
@@ -930,14 +956,17 @@ cmd_stop() {
     done
     [[ "$drain_timeout" =~ ^[0-9]+$ ]] || die "stop: --drain-timeout must be a number of seconds"
 
-    # Refuse to stop from inside our own dispatcher's process tree: the stop
-    # TERM/KILLs that tree, so the calling step dies mid-command and the mind
-    # goes down with nothing left to notice or restart it. The usual way to
-    # get here is a step that meant to stop a DIFFERENT identity but whose
-    # env switch never took (e.g. `source .../activate | head` sources in a
-    # subshell, leaving the caller's own identity active).
+    # Refuse to stop from inside our own dispatcher's tree or cgroup: the
+    # stop kills the caller mid-command (directly, or via systemd's cgroup
+    # sweep when the unit's main process exits), so the mind goes down with
+    # nothing left to notice or restart it. Two ways to get here: a step
+    # that meant to stop a DIFFERENT identity but whose env switch never
+    # took (e.g. `source .../activate | head` sources in a subshell), and a
+    # step trying to stop-then-restart its own dispatcher — which can never
+    # work from inside, because the stop reaps the process that would run
+    # the start (the 2026-08-12 incident).
     if [[ "$self_ok" -ne 1 ]] && _inside_own_dispatcher "$run_dir"; then
-        die "stop: refusing — this shell is an in-flight step of the $(basename "$IDENTITY_DIR") dispatcher it would kill. To stop another identity: bash -c 'source <identities>/<name>/activate && thinkers stop'. To really stop your own mind, pass --self."
+        die "stop: refusing — this process would die with the $IDENTITY_NAME dispatcher it is asking to stop, leaving the mind down with nothing to restart it. To restart your own mind safely (e.g. to pick up a new thinker): sudo shellm-thinkersctl restart $IDENTITY_NAME — systemd completes the restart even after this step dies with the old dispatcher. To stop another identity: bash -c 'source <identities>/<name>/activate && thinkers stop'. To really stop your own mind, pass --self."
     fi
 
     # Default is a drain stop: deactivate (no new triggers), let in-flight
@@ -1369,7 +1398,10 @@ Usage:
   thinkers stop [name ...] [--force] [--self] [--drain-timeout N]
                                Stop all thinkers (or specific ones by name).
                                Refuses to run from inside the identity's own
-                               dispatcher tree unless --self is given.
+                               dispatcher tree or systemd cgroup unless --self
+                               is given (a stop from there kills the caller
+                               too; use `sudo shellm-thinkersctl restart` to
+                               restart your own mind).
                                Default is a drain stop: no new triggers, but
                                in-flight steps finish (killed only after
                                --drain-timeout, default 180s / $THINKERS_DRAIN_TIMEOUT).

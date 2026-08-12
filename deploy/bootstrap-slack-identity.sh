@@ -69,7 +69,13 @@ if [[ -x /usr/local/bin/shellm-thinkersctl ]] \
     echo "==> Thinkers running under shellm-thinkers@$name"
 else
     echo "==> thinkers unit unavailable — starting directly (legacy path)"
-    thinkers stop || true
+    # --self: this oneshot is an authorized stop path (it restarts the
+    # dispatcher right below), so opt out of the in-flight-step guard in
+    # `thinkers stop` rather than rely on how narrowly it matches. A
+    # dispatcher from an earlier bootstrap run shares this cgroup
+    # (shellm-slack-agent's), but is not that unit's main process, so
+    # stopping it sweeps nothing.
+    thinkers stop --self || true
     echo "==> Starting monolith thinker"
     thinkers start monolith
 fi

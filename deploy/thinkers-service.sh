@@ -59,8 +59,11 @@ case "$ACTION" in
     start)
         # Always stop first so the dispatcher runs with the environment THIS
         # invocation sourced (see bootstrap-slack-identity.sh for the
-        # stale-env incident that made this unconditional).
-        thinkers stop || true
+        # stale-env incident that made this unconditional). --self: service
+        # scripts are authorized stop paths — the guard in `thinkers stop`
+        # exists to block in-flight mind steps, not systemd, and ExecStop
+        # runs inside the unit's own cgroup where the guard would trip.
+        thinkers stop --self || true
 
         names=()
         for tdir in "$ID_DIR/thinkers"/*/; do
@@ -77,7 +80,9 @@ case "$ACTION" in
         exec thinkers start "${names[@]}"
         ;;
     stop)
-        thinkers stop || true
+        # --self: ExecStop runs in the unit's cgroup (same as the
+        # dispatcher), which the guard in `thinkers stop` would refuse.
+        thinkers stop --self || true
 
         # Wait for draining steps (CLI drain default 180s; unit
         # TimeoutStopSec=200 leaves headroom for the final sweep).
