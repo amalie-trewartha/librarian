@@ -104,7 +104,7 @@ RUN_NAME=$(printf 'g%03dr%d' "$GEN_NUM" "$run_num")
 printf '▶ Creating identity %s (gen %d, run %d)\n' "$RUN_NAME" "$GEN_NUM" "$run_num" >&2
 id_args=()
 if [[ -n "$MEMORIES_DIR" ]]; then id_args+=(--memories "$MEMORIES_DIR"); fi
-IDENTITY_DIR="$GEN_DIR/identities" identity new "${id_args[@]+"${id_args[@]}"}" "$RUN_NAME"
+IDENTITY_DIR="$GEN_DIR/identities" identity new "${id_args[@]}" "$RUN_NAME"
 
 IDENTITY_HOME="$GEN_DIR/identities/$RUN_NAME"
 # The activate script is written for interactive shells; relax -eu around it.
