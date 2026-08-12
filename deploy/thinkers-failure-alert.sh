@@ -3,8 +3,10 @@ set -euo pipefail
 
 # deploy/thinkers-failure-alert.sh — OnFailure= hook for
 # shellm-thinkers@<identity>.service (fired via shellm-thinkers-alert@).
-# Gathers how the dispatcher died and posts it to Slack so a dead mind is
-# noticed in minutes instead of when someone pings the persona.
+# With Restart=on-failure on the unit, OnFailure fires only when the start
+# limit is exhausted, so this alert means "died repeatedly, auto-restart
+# gave up, the mind is STAYING DOWN". Per-death and recovery notices are
+# deploy/thinkers-death-alert.sh's job.
 #
 # Usage: thinkers-failure-alert.sh APP_DIR IDENTITY
 #
@@ -34,7 +36,7 @@ info=$(systemctl show "$unit" \
     -p Result,ExecMainStatus,ExecMainExitTimestampMonotonic,ExecMainExitTimestamp 2>/dev/null || true)
 log_tail=$(tail -n 8 "$APP_DIR/.identities/$IDENT/run/logs/dispatcher.log" 2>/dev/null || true)
 
-text=":rotating_light: *${unit} failed* — the ${IDENT} dispatcher died and nothing restarts it automatically (by design).
+text=":rotating_light: *${unit} failed and auto-restart GAVE UP* — the ${IDENT} dispatcher died repeatedly (start limit: 3 unclean deaths in 15 min) and is STAYING DOWN.
 \`\`\`
 ${info}
 --- dispatcher.log tail ---

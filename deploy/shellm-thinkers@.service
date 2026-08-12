@@ -17,12 +17,14 @@
 Description=shellm thinkers for identity %i
 After=network-online.target shellm-slack-agent.service
 Wants=network-online.target
-# No Restart= (see below) means a dispatcher that dies on its own leaves
-# this unit failed — visible, but silent. OnFailure turns that into a
-# Slack alert (see deploy/thinkers-failure-alert.sh) so the operator hears
-# about a dead mind in minutes. Deliberate stops don't fail the unit and
-# don't alert.
+# With Restart=on-failure (below), OnFailure fires only once the start
+# limit is exhausted — it now means "died repeatedly, auto-restart GAVE UP,
+# staying down" (deploy/thinkers-failure-alert.sh). Per-death and
+# back-up-again Slack notices come from ExecStopPost/ExecStartPost
+# (deploy/thinkers-death-alert.sh). Deliberate stops post nothing.
 OnFailure=shellm-thinkers-alert@%i.service
+StartLimitIntervalSec=900
+StartLimitBurst=3
 
 [Service]
 # thinkers start forks the dispatcher and exits, writing run/dispatcher.pid
@@ -35,11 +37,19 @@ WorkingDirectory=@SHELLM_HOME@/app
 Environment="PATH=@SHELLM_HOME@/.local/bin:@SHELLM_HOME@/.bun/bin:/usr/local/bin:/usr/bin:/bin"
 ExecStart=/bin/bash @SHELLM_HOME@/app/deploy/thinkers-service.sh @SHELLM_HOME@/app %i start
 ExecStop=/bin/bash @SHELLM_HOME@/app/deploy/thinkers-service.sh @SHELLM_HOME@/app %i stop
-# No Restart=: the CLI stop paths (thinkers stop --force, stopping the last
-# named thinker) kill the dispatcher directly, and an auto-restart would
-# resurrect it against the operator's intent. A dispatcher that dies on its
-# own leaves the unit in a visible failed state instead of silently downing
-# the mind — which is exactly what we could not see on 2026-08-10.
+# Restart=on-failure cannot resurrect a deliberately stopped mind: every
+# sanctioned stop path goes through _stop_dispatcher, which marks the stop
+# (run/deliberate_stop) so the dispatcher's TERM trap exits 0 — a clean
+# exit systemd leaves alone. Only an UNSANCTIONED death (exit 130: crash,
+# or a stray signal like the unattributed 2026-08-12 16:56Z kill that
+# downed the mind for 3h) triggers the restart. Each such death posts to
+# Slack via ExecStopPost, the recovery via ExecStartPost; after 3 unclean
+# deaths in 15 min systemd gives up and OnFailure posts the staying-down
+# alert.
+Restart=on-failure
+RestartSec=60
+ExecStartPost=/bin/bash @SHELLM_HOME@/app/deploy/thinkers-death-alert.sh @SHELLM_HOME@/app %i started
+ExecStopPost=/bin/bash @SHELLM_HOME@/app/deploy/thinkers-death-alert.sh @SHELLM_HOME@/app %i died
 # The stop script waits out the CLI's drain (default 180s) before systemd's
 # final cgroup sweep, so in-flight steps get their chance to finish.
 TimeoutStartSec=120
