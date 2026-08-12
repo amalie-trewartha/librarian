@@ -5,8 +5,10 @@ set -euo pipefail
 # array with role assignment driven by flags.  The caller passes the output
 # to `llm -M` and provides its own system prompt via `llm -s`.
 #
-# Rendering is a single jq pass over the trajectory (plus one prepass to
-# discover blob refs), so cost stays flat as trajectories grow.
+# Only the head, tail, and pinned lines of the trajectory are read and
+# parsed — selection can never keep anything else — so compute cost stays
+# near-flat as trajectories grow: two streaming passes over raw bytes
+# (wc -l and tail) plus jq over ~head+tail rows.
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -291,26 +293,27 @@ def render_step($limit; $blobs):
     )
   end;
 
-def build_messages($rows; $limit; $blobs; $head; $tail; $pins; $A; $U; $E; $elision):
-  ($rows | length) as $N |
-  reduce range(0; $N) as $i ({msgs: [], el: 0};
-      $rows[$i] as $r |
-      (($r.type // "") | tostring) as $t |
-      role_for($t; $A; $U; $E) as $role |
-      if $role == "exclude" then .
-      elif selected($i; ($r.step_id | tostring); $N; $head; $tail; $pins) then
-          (if .el > 0 and $elision != "none" then
-              {msgs: (.msgs + [{role: "user", content: "[\(.el) steps elided]"}]), el: 0}
-           else . end) as $st |
-          ($r | render_step($limit; $blobs) | rtrim) as $c |
-          if $c == "" then $st
-          else {msgs: ($st.msgs + [{role: $role, content: $c}]), el: 0}
-          end
-      else .el += 1
-      end
+# $kept: [{i, row, role}] sorted by original line index. Gaps between
+# consecutive kept rows render as "[N steps elided]" markers: raw line
+# distance minus fed-but-dropped rows in between ($skip holds the indices of
+# excluded/malformed rows we DID read). Dropped rows in the unread middle
+# can't be subtracted, so middle markers may overcount by a little — the old
+# whole-file pass excluded them exactly, at the price of parsing everything.
+def build_messages($kept; $limit; $blobs; $elision; $total; $skip):
+  def gap_between($a; $b):
+    ($b - $a - 1) - ([$skip[] | select(. > $a and . < $b)] | length);
+  reduce $kept[] as $it ({msgs: [], last: -1};
+      gap_between(.last; $it.i) as $gap |
+      (if $elision != "none" and $gap > 0
+       then .msgs + [{role: "user", content: "[\($gap) steps elided]"}]
+       else .msgs end) as $m |
+      ($it.row | render_step($limit; $blobs) | rtrim) as $c |
+      {msgs: (if $c == "" then $m else $m + [{role: $it.role, content: $c}] end),
+       last: $it.i}
   ) |
-  (if .el > 0 and $elision != "none" then
-      .msgs + [{role: "user", content: "[\(.el) steps elided]"}]
+  (gap_between(.last; $total) as $gap |
+   if $elision != "none" and $gap > 0
+   then .msgs + [{role: "user", content: "[\($gap) steps elided]"}]
    else .msgs end);
 
 # Merge consecutive same-role messages (Anthropic API requires alternation).
@@ -327,31 +330,77 @@ def merge_roles:
 ($ustr | if . == "" then [] else split(",") end) as $U |
 ($estr | if . == "" then [] else split(",") end) as $E |
 ($blobsraw[0] // {}) as $blobs |
+# Input lines are "<original line index>\t<raw JSONL line>" — only the head,
+# tail, and pin-candidate lines of the file (see the loader below). $total
+# carries the file's true line count for selection and elision arithmetic.
 (split("\n")
- | map(fromjson? // null)
- | map(select(. != null))
- | map(select(((.step_id // "") | tostring) != ""))) as $rows |
-($rows | length) as $N |
+ | map(capture("^(?<i>[0-9]+)\t(?<j>.*)$")?)
+ | map({i: (.i | tonumber), row: (.j | fromjson? // null)})
+ | map(if .row != null and ((.row.step_id // "") | tostring) == "" then .row = null else . end)
+ | unique_by(.i)) as $fed |
+([$fed[] | select(.row != null)
+         | . + {role: role_for(((.row.type // "") | tostring); $A; $U; $E)}]) as $items |
+($items | length) as $N |
+([$items[] | select(.role != "exclude")
+           | select(selected(.i; (.row.step_id | tostring); $total; $head; $tail; $pins))]) as $kept |
+([$fed[] | select(.row == null)] + [$items[] | select(.role == "exclude")]
+ | map(.i) | sort) as $skip |
 if $mode == "refs" then
-    [ range(0; $N) as $i |
-      $rows[$i] |
-      select(role_for(((.type // "") | tostring); $A; $U; $E) != "exclude") |
-      select(selected($i; (.step_id | tostring); $N; $head; $tail; $pins)) |
+    [ $kept[].row |
       ((.stdout_ref // empty), (.stderr_ref // empty)) |
       select((type == "string") and . != "")
     ] | unique | .[]
 else
     $N,
-    (build_messages($rows; $limit; $blobs; $head; $tail; $pins; $A; $U; $E; $elision) | merge_roles)
+    (build_messages($kept; $limit; $blobs; $elision; $total; $skip) | merge_roles)
 end
 JQEOF
 )
 
 # ---------------------------------------------------------------------------
-# Load trajectory rows once
+# Load candidate rows: head + pinned + tail lines, tagged "<idx>\t<line>"
+#
+# Selection can only ever keep the first $CTX_HEAD lines, the last $CTX_TAIL
+# lines, and pinned steps, so those are all we read and parse. (The previous
+# implementation slurped the whole file through two jq passes — O(file size)
+# per call, 78s on a 532MB trajectory, 2026-08-12.) Tabs cannot occur inside
+# JSONL lines (JSON escapes control characters), so "<idx>\t<line>" tagging
+# is unambiguous.
 # ---------------------------------------------------------------------------
 
-RAW_ROWS=$(traj cat --raw --traj_dir "$RESOLVED_TRAJ_DIR" "${RESOLVED_TRAJ_FILE#$RESOLVED_TRAJ_DIR/}" 2>/dev/null) || RAW_ROWS=""
+TOTAL_LINES=$(wc -l < "$RESOLVED_TRAJ_FILE" | tr -d '[:space:]')
+# wc -l misses a final unterminated line; count it if present.
+if [[ -s "$RESOLVED_TRAJ_FILE" ]] \
+   && [[ $(tail -c 1 "$RESOLVED_TRAJ_FILE" | wc -l | tr -d '[:space:]') -eq 0 ]]; then
+    TOTAL_LINES=$(( TOTAL_LINES + 1 ))
+fi
+
+if [[ "$TOTAL_LINES" -le $(( CTX_HEAD + CTX_TAIL )) ]]; then
+    RAW_ROWS=$(awk '{printf "%d\t%s\n", NR-1, $0}' "$RESOLVED_TRAJ_FILE")
+else
+    _head_rows=""
+    [[ "$CTX_HEAD" -gt 0 ]] \
+        && _head_rows=$(head -n "$CTX_HEAD" "$RESOLVED_TRAJ_FILE" \
+            | awk '{printf "%d\t%s\n", NR-1, $0}')
+    _tail_rows=""
+    if [[ "$CTX_TAIL" -gt 0 ]]; then
+        _tail_start=$(( TOTAL_LINES - CTX_TAIL ))
+        _tail_rows=$(tail -n "$CTX_TAIL" "$RESOLVED_TRAJ_FILE" \
+            | awk -v s="$_tail_start" '{printf "%d\t%s\n", s+NR-1, $0}')
+    fi
+    _pin_rows=""
+    if [[ ${#CTX_PINS[@]} -gt 0 ]]; then
+        # Cheap byte scan per pin; jq keeps only rows whose step_id actually
+        # matches, so content that merely mentions the ID is harmless.
+        for _pin in "${CTX_PINS[@]}"; do
+            _pin_match=$(grep -nF -- "$_pin" "$RESOLVED_TRAJ_FILE" | head -50) || continue
+            [[ -z "$_pin_match" ]] && continue
+            _pin_rows+=$(printf '%s\n' "$_pin_match" \
+                | awk -F: '{printf "%d\t%s\n", $1-1, substr($0, length($1)+2)}')$'\n'
+        done
+    fi
+    RAW_ROWS=$(printf '%s\n' "$_head_rows" "$_pin_rows" "$_tail_rows")
+fi
 
 # Pins as a JSON array
 PINS_JSON='[]'
@@ -365,6 +414,7 @@ _ctx_jq() {
         --arg mode "$1" \
         --argjson head "$CTX_HEAD" \
         --argjson tail "$CTX_TAIL" \
+        --argjson total "$TOTAL_LINES" \
         --argjson limit "$2" \
         --argjson pins "$PINS_JSON" \
         --arg astr "$CTX_ASSISTANT_TYPES" \

@@ -123,8 +123,12 @@ if [[ "$trigger_type" == "message" ]]; then
     # also counts as the answer — positionally, same definition the router
     # hint uses. The unstamped agentic reply was the reworded double-reply
     # of 2026-08-03.
+    # _root_traj_raw_tail scans a recent window, not the whole log: a
+    # redelivered trigger and any reply to it are hours old at most, far
+    # inside the window; a trigger outside it just means $in comes up null
+    # and only stamped replies in the window can match.
     if [[ -n "$trigger_step_id" ]]; then
-        already=$(traj cat "${ROOT_TRAJ_ID:-$TRAJ_ID}" --raw 2>/dev/null \
+        already=$(_root_traj_raw_tail \
             | jq -Rrn --arg me "$IDENTITY_NAME" --arg them "$msg_from" --arg t "$trigger_step_id" '
                 [inputs | fromjson? // empty] as $steps
                 | ([$steps | to_entries[] | select(.value.step_id == $t)] | last) as $in

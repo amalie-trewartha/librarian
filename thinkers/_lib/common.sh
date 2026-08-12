@@ -139,6 +139,22 @@ load_prompt() {
 # Recent stream context
 # ---------------------------------------------------------------------------
 
+# Stream the raw tail of the root trajectory without reading the whole file.
+# traj cat is O(file size) — a bash read loop over every line — and the root
+# log only grows (78s context builds on a 532MB file, 2026-08-12). The tail
+# window (default 5000 raw lines) always contains the few dozen matching
+# steps callers keep; SHELLM_RAW_TAIL_LINES widens it if that ever changes.
+# Falls back to the full traj cat scan if the path can't be resolved.
+_root_traj_raw_tail() {
+    local _tf
+    _tf=$(traj path "${ROOT_TRAJ_ID:-$TRAJ_ID}" 2>/dev/null) || _tf=""
+    if [[ -n "$_tf" && -f "$_tf" ]]; then
+        tail -n "${SHELLM_RAW_TAIL_LINES:-5000}" -- "$_tf" 2>/dev/null
+    else
+        traj cat "${ROOT_TRAJ_ID:-$TRAJ_ID}" --raw 2>/dev/null
+    fi
+}
+
 # Build a compact recent-stream context for thinker prompts: meaningful step
 # types only, long content truncated. Excluding bulky machinery steps (prompt,
 # shell-output, shellm-run, ...) keeps thinker prompts small AND prevents
@@ -148,7 +164,7 @@ _recent_stream() {
     local n="${1:-${THINK_CONTEXT_TAIL:-20}}"
     # Tolerant parse (fromjson?): skip corrupt lines rather than dying —
     # concurrent appends have historically produced occasional bad lines.
-    traj cat "${ROOT_TRAJ_ID:-$TRAJ_ID}" --raw 2>/dev/null \
+    _root_traj_raw_tail \
         | jq -cR 'fromjson? // empty
             | select(.type == "thought" or .type == "action" or .type == "observation"
                      or .type == "message" or .type == "idle" or .type == "merge"

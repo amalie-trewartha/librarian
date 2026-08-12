@@ -85,6 +85,8 @@ Commands:
 
   exists [ID]               Exit 0 if trajectory exists and has steps.
 
+  path [ID]                 Print the resolved trajectory file path.
+
   list [ID] [--parents N|all] [--children N|all] [--steps] [--json]
                             List parents, self, and children as ASCII tree.
                             --steps expands each trajectory to show its steps.
@@ -1785,6 +1787,47 @@ CATHELP
 
 
 # ---------------------------------------------------------------------------
+# path — Print the resolved trajectory file path
+# ---------------------------------------------------------------------------
+
+cmd_path() {
+    local traj_dir_opt="" traj_id_opt=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --traj_dir)  traj_dir_opt="${2:?--traj_dir requires DIR}"; shift 2 ;;
+            -h|--help)
+                cat <<'PATHHELP'
+traj path — Print the resolved trajectory file path
+
+Usage:
+  traj path [ID]
+
+Options:
+  [ID]               Trajectory ID (positional)
+  --traj_dir DIR     Trajectory directory
+
+Environment:
+  TRAJ_DIR + TRAJ_ID   Default trajectory
+PATHHELP
+                return 0
+                ;;
+            -*)  die "path: unknown option: $1" ;;
+            *)
+                if [[ -z "$traj_id_opt" ]]; then
+                    traj_id_opt="$1"
+                else
+                    die "path: unexpected argument: $1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    require_traj_file "$traj_dir_opt" "$traj_id_opt" "path"
+}
+
+
+# ---------------------------------------------------------------------------
 # exists — Exit 0 if trajectory exists with steps, 1 otherwise
 # ---------------------------------------------------------------------------
 
@@ -2379,6 +2422,7 @@ case "$cmd" in
     cat)      cmd_cat "$@" ;;
     dump)     cmd_cat "$@" ;;  # backwards compat alias
     exists)   cmd_exists "$@" ;;
+    path)     cmd_path "$@" ;;
     list)     cmd_list "$@" ;;
     isroot)   cmd_isroot "$@" ;;
     root)     cmd_root "$@" ;;
