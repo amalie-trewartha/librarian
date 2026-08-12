@@ -284,19 +284,36 @@ pull_one() { # $1 = full sha, $2 = do_commit (0|1)
         printf 'Co-authored-by: %s <%s>\n' "${author:-audel}" "${email:-audel@local}"
     } > "$msg"
 
+    # Strip locally-gitignored paths too (e.g. improve/generations — local run
+    # artifacts; the box's copies must not merge into ours).
+    local f keep="" excl=("${APPLY_EXCLUDES[@]}")
     PULL_FILES=$(git -C "$REPO_ROOT" apply --numstat "${APPLY_EXCLUDES[@]}" "$diff" | cut -f3-)
+    while IFS= read -r f; do
+        [[ -n "$f" ]] || continue
+        if git -C "$REPO_ROOT" check-ignore -q -- "$f" 2>/dev/null; then
+            excl+=(--exclude="$f")
+        else
+            keep+="$f"$'\n'
+        fi
+    done <<<"$PULL_FILES"
+    PULL_FILES="${keep%$'\n'}"
     if [[ -z "$PULL_FILES" ]]; then
-        record_state "$sha" excluded "identity files only"
+        record_state "$sha" excluded "identity/ignored files only"
         PULL_RESULT=excluded
         return 0
     fi
-    git -C "$REPO_ROOT" apply --check "${APPLY_EXCLUDES[@]}" "$diff" || return 1
-    git -C "$REPO_ROOT" apply "${APPLY_EXCLUDES[@]}" "$diff" || return 1
-    record_state "$sha" pulled "$msubject"
     PULL_RESULT=pulled
     if [[ "$do_commit" -eq 1 ]]; then
-        printf '%s\n' "$PULL_FILES" | tr '\n' '\0' | xargs -0 git -C "$REPO_ROOT" add -- || return 1
+        # --index stages adds, deletions, and renames atomically; record only
+        # after the commit actually exists.
+        git -C "$REPO_ROOT" apply --index --check "${excl[@]}" "$diff" || return 1
+        git -C "$REPO_ROOT" apply --index "${excl[@]}" "$diff" || return 1
         git -C "$REPO_ROOT" commit --quiet -F "$msg" || return 1
+        record_state "$sha" pulled "$msubject"
+    else
+        git -C "$REPO_ROOT" apply --check "${excl[@]}" "$diff" || return 1
+        git -C "$REPO_ROOT" apply "${excl[@]}" "$diff" || return 1
+        record_state "$sha" pulled "$msubject"
     fi
     return 0
 }
