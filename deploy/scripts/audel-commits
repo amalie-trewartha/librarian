@@ -294,7 +294,7 @@ pull_one() { # $1 = full sha, $2 = do_commit (0|1)
     email=$(sed -n 's/^Email: //p' <<<"$minfo")
     msubject=$(sed -n 's/^Subject: //p' <<<"$minfo")
     {
-        printf '%s\n\n' "$msubject"
+        printf '[audel] %s\n\n' "$msubject"
         if [[ -s "$body" ]]; then cat "$body"; printf '\n'; fi
         printf 'Co-authored-by: %s <%s>\n' "${author:-audel}" "${email:-audel@local}"
     } > "$msg"
