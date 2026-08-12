@@ -33,15 +33,16 @@ fi
 # are what let the dash (user shellm) start dispatchers in their own
 # cgroup; the sudoers file is only installed if it passes visudo's check,
 # because a malformed sudoers file breaks sudo box-wide.
-unit_src="$APP_DIR/deploy/shellm-thinkers@.service"
-if [[ -f "$unit_src" ]]; then
+for unit_tpl in shellm-thinkers@ shellm-thinkers-alert@; do
+    unit_src="$APP_DIR/deploy/${unit_tpl}.service"
+    [[ -f "$unit_src" ]] || continue
     rendered=$(sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$unit_src")
-    if ! printf '%s\n' "$rendered" | cmp -s - "/etc/systemd/system/shellm-thinkers@.service" 2>/dev/null; then
-        echo "==> Unit file changed — re-installing shellm-thinkers@"
-        printf '%s\n' "$rendered" | sudo tee "/etc/systemd/system/shellm-thinkers@.service" >/dev/null
+    if ! printf '%s\n' "$rendered" | cmp -s - "/etc/systemd/system/${unit_tpl}.service" 2>/dev/null; then
+        echo "==> Unit file changed — re-installing ${unit_tpl}"
+        printf '%s\n' "$rendered" | sudo tee "/etc/systemd/system/${unit_tpl}.service" >/dev/null
         sudo systemctl daemon-reload
     fi
-fi
+done
 if [[ -f "$APP_DIR/deploy/shellm-thinkersctl" ]] \
     && ! cmp -s "$APP_DIR/deploy/shellm-thinkersctl" /usr/local/bin/shellm-thinkersctl 2>/dev/null; then
     echo "==> Installing shellm-thinkersctl wrapper"

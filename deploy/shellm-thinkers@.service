@@ -17,6 +17,12 @@
 Description=shellm thinkers for identity %i
 After=network-online.target shellm-slack-agent.service
 Wants=network-online.target
+# No Restart= (see below) means a dispatcher that dies on its own leaves
+# this unit failed — visible, but silent. OnFailure turns that into a
+# Slack alert (see deploy/thinkers-failure-alert.sh) so the operator hears
+# about a dead mind in minutes. Deliberate stops don't fail the unit and
+# don't alert.
+OnFailure=shellm-thinkers-alert@%i.service
 
 [Service]
 # thinkers start forks the dispatcher and exits, writing run/dispatcher.pid

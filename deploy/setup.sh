@@ -91,8 +91,10 @@ systemctl enable --now shellm-web
 # shellm-thinkers@<identity>.service (via the sudo wrapper) so they get
 # their own cgroup instead of living inside shellm-web's.
 echo "==> Installing per-identity thinkers unit + control wrapper"
-sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$SCRIPT_DIR/shellm-thinkers@.service" \
-    > "/etc/systemd/system/shellm-thinkers@.service"
+for unit_tpl in shellm-thinkers@ shellm-thinkers-alert@; do
+    sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$SCRIPT_DIR/${unit_tpl}.service" \
+        > "/etc/systemd/system/${unit_tpl}.service"
+done
 install -o root -g root -m 0755 "$SCRIPT_DIR/shellm-thinkersctl" /usr/local/bin/shellm-thinkersctl
 if visudo -cf "$SCRIPT_DIR/sudoers-shellm-thinkers"; then
     install -o root -g root -m 0440 "$SCRIPT_DIR/sudoers-shellm-thinkers" /etc/sudoers.d/shellm-thinkers
