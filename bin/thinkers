@@ -829,15 +829,24 @@ cmd_start() {
             printf 'Dispatcher started (PID %s)\n' "$dispatcher_pid" >&2
         fi
 
-        # Kick each thinker once (dispatcher only sees new steps)
+        # Kick each thinker once (dispatcher only sees new steps). The kick
+        # goes through the dispatcher's pending queue — fired on its next
+        # heartbeat tick (~1s) — instead of spawning the step here: a step
+        # spawned by a short-lived CLI call is orphaned outside dispatcher
+        # supervision (untracked by busy/concurrency accounting, invisible
+        # to drain stops, and — when the CLI itself ran inside another
+        # step, as on 2026-08-12 — able to slip past the self-stop guard's
+        # ancestry walk and kill the mind).
+        local kick_seq=0
         local trigger_json
         trigger_json=$(jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S%z)" \
             '{type:"manual-trigger", source:"thinkers-cli", ts:$ts}')
+        mkdir -p "$run_dir/pending"
         for name in "$@"; do
-            local thinker_dir="$THINKERS_DIR/$name"
-            (printf '%s' "$trigger_json" | SHELLM_LAUNCHED_BY="$name" "$thinker_dir/step") \
-                >> "$run_dir/logs/$name.log" 2>&1 &
-            printf 'Started thinker: %s\n' "$name" >&2
+            kick_seq=$((kick_seq + 1))
+            printf '%s' "$trigger_json" \
+                > "$run_dir/pending/${name}.manual-trigger.$(date +%s).$(printf '%06d' "$kick_seq")"
+            printf 'Started thinker: %s (wake queued)\n' "$name" >&2
         done
     else
         # --- Start all thinkers ---
