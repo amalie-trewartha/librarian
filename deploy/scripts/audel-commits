@@ -2,16 +2,31 @@
 # deploy/scripts/audel-commits — review the agent's box commits one at a time.
 #
 # Usage: deploy/scripts/audel-commits list
+#        deploy/scripts/audel-commits triage
 #        deploy/scripts/audel-commits pull [sha]
+#        deploy/scripts/audel-commits pull --tier green [--stop-on-conflict]
 #        deploy/scripts/audel-commits reject <sha> [reason...]
 #        deploy/scripts/audel-commits reconcile [-y]
 #
 # list       show box commits not on origin/main, oldest first, with
-#            dispositions (pending / pulled / applied / rejected)
+#            dispositions (pending / pulled / applied / rejected / excluded)
+# triage     classify unmerged commits by the paths they touch (paths are the
+#            authority — commit messages are never consulted):
+#              green     docs, notes, and improve/ work — safe to batch-pull
+#              yellow    new self-contained components + tests — Claude reviews
+#              red       edits to shipped code (bin/, web/, slack/src/, core
+#                        thinkers, protected files) — Nick reviews
+#              excluded  identity/memory files — never pulled (auto-recorded)
+#            A commit's tier is the worst tier of any file in it.
 # pull       apply one commit's diff to the local working tree UNSTAGED for
 #            review; default is the oldest pending commit. Saves the commit
 #            message (+ Co-authored-by trailer) to .git/AUDEL_MSG and prints
-#            the commands to stage and commit.
+#            the commands to stage and commit. Identity files are always
+#            stripped from the diff.
+#            --tier green: batch mode — pull every pending green commit,
+#            oldest first, committing each with its original message and
+#            co-author trailer. Commits that no longer apply are left pending
+#            and listed at the end (--stop-on-conflict halts at the first).
 # reject     record a commit as rejected without applying it
 # reconcile  after pushing accepted commits: rebase the box onto origin/main
 #            (drops commits whose patch is already upstream, keeps the rest)
@@ -27,7 +42,11 @@ BOX_REPO=/opt/shellm/app
 STATE_FILE="$REPO_ROOT/.audel-pulled"
 GIT_DIR="$(git -C "$REPO_ROOT" rev-parse --absolute-git-dir)"
 
-usage() { sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+# Identity/memory files never leave the box: stripped from every pull, and a
+# commit containing nothing else is recorded as excluded.
+APPLY_EXCLUDES=(--exclude='identities/*' --exclude='.identities/*')
+
+usage() { awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "${BASH_SOURCE[0]}"; exit "${1:-0}"; }
 
 # One round trip: the box's unmerged series (oldest first), the patch-id of
 # each commit, and the working-tree status. Fetches first so origin/main is
@@ -45,7 +64,67 @@ fetch_series() {
     '
 }
 
+# Same round trip plus per-commit file lists. The name-only log for 100+
+# commits would blow the 24KB SSM output cap, so it travels gzip+base64.
+fetch_series_with_files() {
+    run_script_on_box '
+        g() { sudo -u shellm git -C /opt/shellm/app "$@"; }
+        g fetch --quiet origin 2>/dev/null || echo "warning: box git fetch failed — origin/main may be stale" >&2
+        echo "=== PATCHIDS ==="
+        g format-patch --stdout origin/main..main | g patch-id --stable
+        echo "=== STATUS ==="
+        g status --short
+        echo "=== LOGZ ==="
+        g log --reverse --name-only --format="=C= %H %s" origin/main..main | gzip -9 | base64 | tr -d "\n"
+        echo
+    '
+}
+
 section() { awk -v s="=== $1 ===" '$0==s{f=1;next} /^=== /{f=0} f' <<<"$2"; }
+
+decode_logz() { printf '%s' "$1" | base64 -d 2>/dev/null | gunzip 2>/dev/null || true; }
+
+# Classify a `git log --name-only --format="=C= %H %s"` stream into
+# tab-separated "sha<TAB>tier<TAB>subject<TAB>red-paths" lines, one per
+# commit, order preserved. Path rules only — subjects are never consulted.
+classify() {
+    awk '
+        function ftier(f) {
+            if (f ~ /^identities\// || f ~ /^\.identities\//) return "exclude"
+            if (f == "improve/vitals.sh") return "red"   # protected: the improve loop measurement stage
+            if (f ~ /^(improve|notes|chat\/drafts|chat\/archive|design|terminal_bench2_eval)\//) return "green"
+            if (f == "notes-for-team.md") return "green"
+            if (f ~ /^thinkers\/(chat|retrieval|proprioception)\//) return "yellow"
+            if (f ~ /^(lens|skills\/repo-health|skills\/check-trajectory|tests|slack\/tests)\//) return "yellow"
+            return "red"   # bin/, web/, slack/src/, thinkers/_lib|monolith|actor/, everything unlisted
+        }
+        function rank(t) { return t == "green" ? 0 : t == "yellow" ? 1 : 2 }
+        function flush() {
+            if (sha == "") return
+            if (tot == 0)       tier = "merge"
+            else if (kept == 0) tier = "exclude"
+            else                tier = best
+            printf "%s\t%s\t%s\t%s\n", sha, tier, subject, hot
+            sha = ""
+        }
+        /^=C= / {
+            flush()
+            sha = $2
+            subject = $0; sub(/^=C= [0-9a-f]+ /, "", subject)
+            best = "green"; kept = 0; tot = 0; hot = ""
+            next
+        }
+        NF {
+            tot++
+            t = ftier($0)
+            if (t == "exclude") next
+            kept++
+            if (rank(t) > rank(best)) best = t
+            if (t == "red") hot = hot (hot == "" ? "" : ", ") $0
+        }
+        END { flush() }
+    '
+}
 
 # Patch-ids of recent local commits — a box commit whose patch-id appears
 # here has already been applied (possibly re-authored) on this side.
@@ -114,11 +193,130 @@ cmd_list() {
     fi
 }
 
+cmd_triage() {
+    require_tools jq git gzip
+    require_state; require_aws
+    local raw patchids status classified lpids
+    raw=$(fetch_series_with_files)
+    patchids=$(section PATCHIDS "$raw")
+    status=$(section STATUS "$raw")
+    classified=$(decode_logz "$(section LOGZ "$raw")" | classify)
+    if [[ -z "$classified" ]]; then
+        info "box is level with origin/main — nothing to triage"
+    else
+        lpids=$(local_patch_ids)
+        local sha tier subject hot pid disp line
+        local g_out="" y_out="" r_out="" x_out="" m_out=""
+        local g_n=0 y_n=0 r_n=0 x_n=0 m_n=0
+        while IFS=$'\t' read -r sha tier subject hot; do
+            disp=$(state_of "$sha")
+            pid=$(awk -v s="$sha" '$2==s{print $1}' <<<"$patchids")
+            if [[ -n "$pid" ]] && grep -qx "$pid" <<<"$lpids"; then
+                disp=applied
+            fi
+            if [[ "$tier" == exclude && -z "$disp" ]]; then
+                record_state "$sha" excluded "identity files only"
+                disp=excluded
+            fi
+            : "${disp:=pending}"
+            line=$(printf '  %s  %-8s %s' "${sha:0:7}" "$disp" "$subject")
+            case "$tier" in
+                green)   g_out+="$line"$'\n'; g_n=$((g_n + 1)) ;;
+                yellow)  y_out+="$line"$'\n'; y_n=$((y_n + 1)) ;;
+                red)     r_out+="$line"$'\n'
+                         if [[ -n "$hot" ]]; then
+                             r_out+="               -> $hot"$'\n'
+                         fi
+                         r_n=$((r_n + 1)) ;;
+                exclude) x_out+="$line"$'\n'; x_n=$((x_n + 1)) ;;
+                merge)   m_out+="$line"$'\n'; m_n=$((m_n + 1)) ;;
+            esac
+        done <<<"$classified"
+        info "triage of box commits not on origin/main (oldest first; a commit's tier = worst path it touches):"
+        if [[ "$r_n" -gt 0 ]]; then
+            printf '\nRED (%d) — edits to shipped code, Nick reviews (offending paths shown):\n%s' "$r_n" "$r_out"
+        fi
+        if [[ "$y_n" -gt 0 ]]; then
+            printf '\nYELLOW (%d) — new self-contained components/tests, Claude reviews:\n%s' "$y_n" "$y_out"
+        fi
+        if [[ "$g_n" -gt 0 ]]; then
+            printf '\nGREEN (%d) — docs/notes/improve, batch-pull with: audel-commits pull --tier green:\n%s' "$g_n" "$g_out"
+        fi
+        if [[ "$x_n" -gt 0 ]]; then
+            printf '\nEXCLUDED (%d) — identity/memory files, never pulled:\n%s' "$x_n" "$x_out"
+        fi
+        if [[ "$m_n" -gt 0 ]]; then
+            printf '\nMERGES (%d) — no diff of their own:\n%s' "$m_n" "$m_out"
+        fi
+        printf '\n'
+    fi
+    if [[ -n "$status" ]]; then
+        info "box working tree is DIRTY (uncommitted agent work — reconcile stashes tracked changes):"
+        sed 's/^/  /' <<<"$status"
+    else
+        info "box working tree clean"
+    fi
+}
+
+# Fetch one box commit as a patch, strip identity files, and apply it locally.
+# Sets PULL_RESULT (pulled|excluded) and PULL_FILES (kept paths, one per
+# line); with do_commit=1 also stages the kept paths and commits with the
+# prefilled message. Returns 1 if the patch can't be fetched or won't apply.
+pull_one() { # $1 = full sha, $2 = do_commit (0|1)
+    local sha="$1" do_commit="$2"
+    local b64 patch="$GIT_DIR/AUDEL_PATCH"
+    b64=$(run_script_on_box "sudo -u shellm git -C $BOX_REPO format-patch --stdout -1 $sha | gzip -9 | base64 | tr -d '\n'") || return 1
+    printf '%s' "$b64" | base64 -d | gunzip > "$patch" \
+        || { echo "patch retrieval failed (SSM output is capped at 24KB — is this commit huge?)" >&2; return 1; }
+
+    local body="$GIT_DIR/AUDEL_BODY" diff="$GIT_DIR/AUDEL_DIFF" msg="$GIT_DIR/AUDEL_MSG"
+    local minfo author email msubject
+    minfo=$(git mailinfo "$body" "$diff" < "$patch") || return 1
+    author=$(sed -n 's/^Author: //p' <<<"$minfo")
+    email=$(sed -n 's/^Email: //p' <<<"$minfo")
+    msubject=$(sed -n 's/^Subject: //p' <<<"$minfo")
+    {
+        printf '%s\n\n' "$msubject"
+        if [[ -s "$body" ]]; then cat "$body"; printf '\n'; fi
+        printf 'Co-authored-by: %s <%s>\n' "${author:-audel}" "${email:-audel@local}"
+    } > "$msg"
+
+    PULL_FILES=$(git -C "$REPO_ROOT" apply --numstat "${APPLY_EXCLUDES[@]}" "$diff" | cut -f3-)
+    if [[ -z "$PULL_FILES" ]]; then
+        record_state "$sha" excluded "identity files only"
+        PULL_RESULT=excluded
+        return 0
+    fi
+    git -C "$REPO_ROOT" apply --check "${APPLY_EXCLUDES[@]}" "$diff" || return 1
+    git -C "$REPO_ROOT" apply "${APPLY_EXCLUDES[@]}" "$diff" || return 1
+    record_state "$sha" pulled "$msubject"
+    PULL_RESULT=pulled
+    if [[ "$do_commit" -eq 1 ]]; then
+        printf '%s\n' "$PULL_FILES" | tr '\n' '\0' | xargs -0 git -C "$REPO_ROOT" add -- || return 1
+        git -C "$REPO_ROOT" commit --quiet -F "$msg" || return 1
+    fi
+    return 0
+}
+
 cmd_pull() {
     require_tools jq git
     require_state; require_aws
     git -C "$REPO_ROOT" diff --quiet && git -C "$REPO_ROOT" diff --cached --quiet \
         || die "local working tree has uncommitted changes — commit or stash them first (untracked files are fine)"
+
+    local tier="" stop_on_conflict=0 target=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --tier) tier="${2:-}"; [[ -n "$tier" ]] || die "--tier needs green|yellow|red"; shift 2 ;;
+            --stop-on-conflict) stop_on_conflict=1; shift ;;
+            *) target="$1"; shift ;;
+        esac
+    done
+    if [[ -n "$tier" ]]; then
+        [[ -z "$target" ]] || die "pull --tier does not take a sha"
+        cmd_pull_batch "$tier" "$stop_on_conflict"
+        return
+    fi
 
     local series log sha subject default cur
     series=$(fetch_series)
@@ -137,8 +335,8 @@ cmd_pull() {
         [[ -z "$disp" ]] && { default="$cur"; break; }
     done <<<"$log"
 
-    if [[ -n "${1:-}" ]]; then
-        sha=$(resolve_sha "$1" "$log")
+    if [[ -n "$target" ]]; then
+        sha=$(resolve_sha "$target" "$log")
         if [[ -n "$default" && "$sha" != "$default" ]]; then
             echo "warning: skipping ahead — oldest pending is ${default:0:7}; this diff may not apply cleanly" >&2
         fi
@@ -149,33 +347,17 @@ cmd_pull() {
     subject=$(awk -v s="$sha" '$1==s{sub($1 FS, ""); print; exit}' <<<"$log")
 
     info "pulling ${sha:0:7}  $subject"
-    local b64 patch="$GIT_DIR/AUDEL_PATCH"
-    b64=$(run_script_on_box "sudo -u shellm git -C $BOX_REPO format-patch --stdout -1 $sha | gzip -9 | base64 | tr -d '\n'")
-    printf '%s' "$b64" | base64 -d | gunzip > "$patch" \
-        || die "patch retrieval failed (SSM output is capped at 24KB — is this commit huge?)"
-
-    # Split the mbox into message + diff; build the prefilled commit message.
-    local body="$GIT_DIR/AUDEL_BODY" diff="$GIT_DIR/AUDEL_DIFF" msg="$GIT_DIR/AUDEL_MSG"
-    local minfo author email msubject
-    minfo=$(git mailinfo "$body" "$diff" < "$patch")
-    author=$(sed -n 's/^Author: //p' <<<"$minfo")
-    email=$(sed -n 's/^Email: //p' <<<"$minfo")
-    msubject=$(sed -n 's/^Subject: //p' <<<"$minfo")
-    {
-        printf '%s\n\n' "$msubject"
-        if [[ -s "$body" ]]; then cat "$body"; printf '\n'; fi
-        printf 'Co-authored-by: %s <%s>\n' "${author:-audel}" "${email:-audel@local}"
-    } > "$msg"
-
-    git -C "$REPO_ROOT" apply --check "$diff" \
-        || die "patch does not apply — pull earlier pending commits first, or resolve by hand: git apply --3way $diff"
-    git -C "$REPO_ROOT" apply "$diff"
-    record_state "$sha" pulled "$msubject"
+    pull_one "$sha" 0 \
+        || die "patch does not apply — pull earlier pending commits first, or resolve by hand: git apply --3way $GIT_DIR/AUDEL_DIFF"
+    if [[ "$PULL_RESULT" == excluded ]]; then
+        info "commit touches identity files only — recorded excluded, nothing applied"
+        return 0
+    fi
 
     info "applied to working tree (unstaged):"
-    git -C "$REPO_ROOT" apply --stat "$diff" | sed 's/^/  /'
+    sed 's/^/  /' <<<"$PULL_FILES"
     local files
-    files=$(git -C "$REPO_ROOT" apply --numstat "$diff" | cut -f3- | tr '\n' ' ')
+    files=$(tr '\n' ' ' <<<"$PULL_FILES")
     cat <<EOF
 
 Review, then commit (message prefilled with audel as co-author):
@@ -187,6 +369,54 @@ Review, then commit (message prefilled with audel as co-author):
 To back out instead:  git checkout -- $files   (plus rm for new files)
 Then record it:       deploy/scripts/audel-commits reject ${sha:0:7} <reason>
 EOF
+}
+
+cmd_pull_batch() { # $1 = tier, $2 = stop_on_conflict (0|1)
+    local want="$1" stop_on_conflict="$2"
+    local raw patchids classified lpids
+    raw=$(fetch_series_with_files)
+    patchids=$(section PATCHIDS "$raw")
+    classified=$(decode_logz "$(section LOGZ "$raw")" | classify)
+    [[ -n "$classified" ]] || die "box is level with origin/main — nothing to pull"
+    lpids=$(local_patch_ids)
+
+    local sha tier subject hot pid disp
+    local pulled=0 skipped=0 excluded=0 conflicts=""
+    while IFS=$'\t' read -r sha tier subject hot; do
+        [[ "$tier" == "$want" ]] || continue
+        disp=$(state_of "$sha")
+        pid=$(awk -v s="$sha" '$2==s{print $1}' <<<"$patchids")
+        if [[ -n "$pid" ]] && grep -qx "$pid" <<<"$lpids"; then
+            disp=applied
+        fi
+        if [[ -n "$disp" ]]; then
+            skipped=$((skipped + 1))
+            continue
+        fi
+        info "pulling ${sha:0:7}  $subject"
+        # </dev/null: the SSM call inside pull_one must not eat the loop's stdin
+        if pull_one "$sha" 1 </dev/null; then
+            if [[ "$PULL_RESULT" == excluded ]]; then
+                excluded=$((excluded + 1))
+            else
+                pulled=$((pulled + 1))
+            fi
+        else
+            conflicts="$conflicts ${sha:0:7}"
+            if [[ "$stop_on_conflict" -eq 1 ]]; then
+                die "stopped at ${sha:0:7} — pull it individually or resolve by hand, then re-run the batch"
+            fi
+            echo "  does not apply — left pending, continuing" >&2
+        fi
+    done <<<"$classified"
+
+    info "batch done: $pulled committed, $skipped already dispositioned, $excluded excluded"
+    if [[ -n "$conflicts" ]]; then
+        info "left pending (did not apply):$conflicts — pull these individually once their prerequisite commits land"
+    fi
+    if [[ "$pulled" -gt 0 ]]; then
+        echo "review the new commits (git log -$pulled), push, then: deploy/scripts/audel-commits reconcile"
+    fi
 }
 
 cmd_reject() {
@@ -266,6 +496,7 @@ EOF
 
 case "${1:-}" in
     list)       shift; cmd_list "$@" ;;
+    triage)     shift; cmd_triage "$@" ;;
     pull)       shift; cmd_pull "$@" ;;
     reject)     shift; cmd_reject "$@" ;;
     reconcile)  shift; cmd_reconcile "$@" ;;

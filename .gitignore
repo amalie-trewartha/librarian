@@ -28,3 +28,6 @@ web/viewer/.react-router/
 
 # Pulled metrics data + snapshots (deploy/scripts/audel-metrics)
 .metrics/
+
+# Box-commit review log (deploy/scripts/audel-commits)
+.audel-pulled
