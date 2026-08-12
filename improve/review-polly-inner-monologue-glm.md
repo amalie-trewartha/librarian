@@ -33,3 +33,30 @@ cheaper/different model than the current default).
 ## Risk
 - Very low risk. The branch is one commit with a small diff. Even if
   deleted, the work is easily recreated.
+
+## Precise diff analysis (2026-08-06)
+
+Re-examined the one-line change. It does more than swap the default model:
+
+```
+-THINK_MODEL="${THINK_MODEL:-${SHELLM_MODEL:-claude-opus-4-7}}"
++THINK_MODEL="${THINK_MODEL:-glm-5.2}"
+```
+
+Two effects:
+1. Bakes `glm-5.2` as the hardcoded default (replacing `claude-opus-4-7`).
+2. **Removes the `SHELLM_MODEL` fallback entirely.** On main, if someone sets
+   `SHELLM_MODEL` but not `THINK_MODEL`, inner_monologue follows
+   `SHELLM_MODEL`. On Polly's branch, inner_monologue would *ignore*
+   `SHELLM_MODEL` and always use `glm-5.2` unless `THINK_MODEL` is set
+   explicitly.
+
+Per design/model-resolution.md, `SHELLM_MODEL` is the persona-quality knob and
+`THINK_MODEL` is a per-deployment override — the design intends thinkers to
+fall back to `SHELLM_MODEL`, not bypass it. Dropping that fallback is a subtle
+regression in the resolution chain.
+
+If the goal is "use glm-5.2 for inner_monologue in this deployment," the
+design-aligned approach is to set `THINK_MODEL=glm-5.2` in the deployment's
+`.env` (or pass `--model glm-5.2` at the thinker level), not to change the
+code default.
