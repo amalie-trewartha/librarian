@@ -502,7 +502,7 @@ cmd_reconcile() {
     info "box is $total commit(s) ahead of origin/main: $drops drop in the rebase (patch already upstream), $keeps survive"
     echo "  '-' = drops, '+' = survives:"
     sed 's/^/  /' <<<"$cherry"
-    [[ -n "$status" ]] && { echo "  box tree is dirty — tracked changes will be stashed and re-applied:"; sed 's/^/  /' <<<"$status"; }
+    [[ -n "$status" ]] && { echo "  box tree is dirty — tracked and untracked changes will be stashed and re-applied:"; sed 's/^/  /' <<<"$status"; }
     # Commits recorded pulled or rejected are removed from the rebase todo:
     # rejected ones must not survive, and pulled-but-adapted ones (resolved
     # by hand against newer upstream code) would conflict against their
@@ -544,8 +544,8 @@ awk -v drops="\$DROPS" '
 FEOF
 chmod +x /tmp/audel-todo-filter.sh
 stashed=0
-if [ -n "\$(g status --porcelain | grep -v "^??")" ]; then
-    g stash push -m audel-commits-reconcile >/dev/null && stashed=1
+if [ -n "\$(g status --porcelain)" ]; then
+    g stash push -u -m audel-commits-reconcile >/dev/null && stashed=1
 fi
 if ! sudo -u shellm env DROPS="\$DROPS" GIT_SEQUENCE_EDITOR=/tmp/audel-todo-filter.sh GIT_EDITOR=true git -C /opt/shellm/app rebase -i origin/main; then
     g rebase --abort || true
