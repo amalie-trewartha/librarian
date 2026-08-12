@@ -104,6 +104,17 @@ else
 fi
 systemctl daemon-reload
 
+# Signal auditing: kernel-level attribution for process kills (see
+# deploy/audit-shellm-signals.rules — added after the 2026-08-12
+# unattributed dispatcher death). ausearch -k shellm-sig names the sender.
+echo "==> Installing auditd signal rules"
+if ! command -v augenrules >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get install -y auditd >/dev/null
+fi
+install -o root -g root -m 0640 "$SCRIPT_DIR/audit-shellm-signals.rules" \
+    /etc/audit/rules.d/shellm-signals.rules
+augenrules --load || echo "WARN: augenrules --load failed — audit rules apply after next reboot" >&2
+
 # Optional component: the Slack bridge (persona bootstrap + Socket Mode
 # client). Off by default — core deploys are unaffected unless the flag is
 # set (the terraform-slack stack sets it in user_data).

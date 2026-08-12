@@ -58,6 +58,20 @@ if [[ -f "$APP_DIR/deploy/sudoers-shellm-thinkers" ]] \
     fi
 fi
 
+# Signal-audit rules (kernel-level kill attribution, see
+# deploy/audit-shellm-signals.rules). Existing boxes get auditd via this
+# path — setup.sh only runs on fresh provisions.
+if [[ -f "$APP_DIR/deploy/audit-shellm-signals.rules" ]] \
+    && ! sudo cmp -s "$APP_DIR/deploy/audit-shellm-signals.rules" /etc/audit/rules.d/shellm-signals.rules 2>/dev/null; then
+    if ! command -v augenrules >/dev/null 2>&1; then
+        echo "==> Installing auditd"
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y auditd >/dev/null
+    fi
+    echo "==> Audit rules changed — re-installing shellm-signals.rules"
+    sudo install -o root -g root -m 0640 "$APP_DIR/deploy/audit-shellm-signals.rules" /etc/audit/rules.d/shellm-signals.rules
+    sudo augenrules --load || echo "==> WARN: augenrules --load failed — rules apply after next reboot" >&2
+fi
+
 # Optional component: Slack bridge (installed on boxes provisioned with
 # SHELLM_INSTALL_SLACK_BRIDGE=1). Re-sync its units + deps and restart the
 # bridge; the persona bootstrap (oneshot) is left alone so the running
