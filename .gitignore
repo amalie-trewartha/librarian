@@ -31,3 +31,7 @@ web/viewer/.react-router/
 
 # Box-commit review log (deploy/scripts/audel-commits)
 .audel-pulled
+
+# stray backup files
+*.bak
+*.bak.*
