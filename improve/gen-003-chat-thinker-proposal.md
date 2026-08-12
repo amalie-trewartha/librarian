@@ -26,6 +26,8 @@ message replies. Adjust subscriptions so `message` is handled by exactly
 one thinker.
 
 ### Subscription changes
+**Note on retrieval thinker:** `retrieval` also subscribes to `message`, but its use is purely *inward* — it indexes messages into the memory keyword index and never produces an outward reply. Per the design principle (inward overlap is harmless), retrieval's `message` subscription should be **retained**. Only thinkers that produce *outward* replies need disjoint `message` ownership.
+
 
 | Thinker    | Before                          | After                              |
 |------------|---------------------------------|------------------------------------|
