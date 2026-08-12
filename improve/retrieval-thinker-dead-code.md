@@ -57,3 +57,15 @@ stdin for every thinker, so the correct input method is reading stdin.
 thinker correctly reads step JSON from stdin (typically `step_json=$(cat)`
 then parses with jq). retrieval is the outlier — likely written before the
 stdin convention was established, or never tested against a real dispatch.
+
+## Resolution (verified end-to-end)
+
+Fix committed: 9db9f2d (retrieval/step: read triggering step from stdin via jq).
+- retrieval/step now reads step JSON from stdin and extracts .content via jq
+- E2E test: fed a step with real index keywords via stdin → retrieval thinker
+  emitted [retrieval] observations surfacing relevant memories (continuity-
+  novelty tradeoff, retrieval-thinker design, shellm architecture).
+- The dead-code path is now LIVE: retrieval surfaces memories instead of
+  always exiting early at the empty-content guard.
+- Audited all 9 thinkers/*/step: 0 use the dead env-var pattern; all 9 use
+  stdin+jq. retrieval was the only one with the bug.
