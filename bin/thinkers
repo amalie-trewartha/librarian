@@ -541,9 +541,22 @@ _start_dispatcher() {
                 fi
 
                 # Self-trigger check
-                if [[ "$_step_source" == "$_name" && "$_sself" != "true" ]]; then
-                    printf '%s [dispatcher]   skip %s (self-trigger)\n' "$(date -u +%FT%TZ)" "$_name" >&2
-                    continue
+                # Even with trigger_self:true, never re-trigger on own
+                # error/log_error steps — that creates a feedback loop
+                # (thinker errors → error step → re-trigger → errors again
+                # → ...). Own errors are a failure signal to the operator,
+                # not a wake-up signal to the thinker.
+                if [[ "$_step_source" == "$_name" ]]; then
+                    if [[ "$_sself" != "true" ]]; then
+                        printf '%s [dispatcher]   skip %s (self-trigger)\n' "$(date -u +%FT%TZ)" "$_name" >&2
+                        continue
+                    fi
+                    case "$_step_type" in
+                        log_error|error)
+                            printf '%s [dispatcher]   skip %s (self error — would loop)\n' "$(date -u +%FT%TZ)" "$_name" >&2
+                            continue
+                            ;;
+                    esac
                 fi
 
                 # Check if thinker is active
