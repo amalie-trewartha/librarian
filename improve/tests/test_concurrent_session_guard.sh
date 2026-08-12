@@ -58,13 +58,15 @@ main() {
 
     echo
     echo "--- Test 2: WITHOUT flock (negative control) ---"
-    run_test no "$tmp" | sort | uniq -c | sort -rn | head -3 > "$tmp/negative.txt"
-    local dupes
-    dupes=$(awk '$1 > 1' "$tmp/negative.txt" | wc -l)
-    if [[ "$dupes" -gt 0 ]]; then
-        echo "PASS: negative control shows collisions (race exists, test is meaningful)"
+    # Without flock, racers collide on mkdir: the loser crashes (set -e)
+    # and produces no output. Race signature = fewer than N results.
+    run_test no "$tmp" | sort > "$tmp/negative.txt"
+    local neg_count
+    neg_count=$(wc -l < "$tmp/negative.txt")
+    if [[ "$neg_count" -lt "$NUM_RACERS" ]]; then
+        echo "PASS: negative control shows race ($neg_count/$NUM_RACERS racers survived — flock is necessary)"
     else
-        echo "WARN: no collisions in negative control (may need more racers; flock test still valid)"
+        echo "WARN: negative control got all $NUM_RACERS (no race detected; may need more racers — flock test still valid)"
     fi
 
     echo
