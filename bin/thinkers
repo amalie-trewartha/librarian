@@ -312,10 +312,26 @@ _start_dispatcher() {
     export TRAJ_DIR TRAJ_ID THINKERS_DIR SHELLM_HOME THINK_MODEL THINK_CONTEXT_TAIL
     export THINKERS_MAX_CONCURRENT NO_SELF_TRIGGER
 
+    # Fresh slate for the death-attribution markers: a stale deliberate_stop
+    # (stop requested while no dispatcher ran) must not launder the next
+    # unclean death, and last_signal only describes the run ahead.
+    rm -f "$run_dir/deliberate_stop" "$run_dir/last_signal"
+
+    # setsid (util-linux) puts each step in its own session + process group,
+    # so a group-directed signal from inside a step tree (kill 0 and
+    # friends) can never reach the dispatcher — the shared-PGID hazard from
+    # the 2026-08-12 unattributed death. The step stays a direct child
+    # (setsid execs without forking here), so _kill_tree sweeps and step_pids
+    # bookkeeping are unaffected. Absent (macOS dev machines) we degrade to
+    # the old shared-group behavior.
+    local _setsid=""
+    if command -v setsid >/dev/null 2>&1; then _setsid="setsid"; fi
+
     # Start dispatcher in background
     (
         trap '_cleanup_dispatcher' EXIT
-        trap '_cleanup_dispatcher; exit 130' INT TERM
+        trap '_dispatcher_on_signal INT' INT
+        trap '_dispatcher_on_signal TERM' TERM
 
         # Start tail -F for each unique traj file, tagged with traj path.
         # Track our own tail PIDs separately from the shared tail_pids file:
@@ -427,8 +443,10 @@ _start_dispatcher() {
             local _dlog="$run_dir/logs/$_dname.log"
             # SHELLM_LAUNCHED_BY lands as launched_by on any shellm-run the
             # step script starts, so viewers can attribute runs to thinkers.
+            # shellcheck disable=SC2086 — $_setsid is deliberately unquoted:
+            # "setsid" on Linux, empty (and word-split away) elsewhere.
             (
-                printf '%s' "$_djson" | SHELLM_LAUNCHED_BY="$_dname" "$_dscript"
+                printf '%s' "$_djson" | SHELLM_LAUNCHED_BY="$_dname" $_setsid "$_dscript"
             ) >> "$_dlog" 2>&1 &
             _step_entries="${_step_entries}${_step_entries:+ }${_dname}:$!"
             printf '%s %s\n' "$!" "$_dname" >> "$run_dir/step_pids"
@@ -704,6 +722,44 @@ _cleanup_dispatcher() {
     rm -rf "$run_dir/pending"
 }
 
+# Dispatcher INT/TERM handler. Sanctioned stops announce themselves:
+# _stop_dispatcher touches run/deliberate_stop right before its kill -TERM,
+# and finding a fresh marker here means "this stop was requested" — exit 0
+# so systemd sees a clean exit (no Restart=, no alert). Any other INT/TERM
+# is unsanctioned: record WHICH signal hit us to dispatcher.log, journald,
+# and run/last_signal (read by deploy/thinkers-death-alert.sh), then exit
+# 130 so systemd restarts the mind and posts the death alert. Split from a
+# single 'INT TERM' trap after the 2026-08-12 unattributed death, where
+# signal identity was the first forensic question and a shared exit 130
+# couldn't answer it.
+_dispatcher_on_signal() {
+    local sig="$1"
+    local run_dir="$IDENTITY_DIR/run"
+    local marker="$run_dir/deliberate_stop"
+    if [[ -f "$marker" ]]; then
+        local _now _mt
+        _now=$(date +%s)
+        _mt=$(stat -c %Y "$marker" 2>/dev/null || stat -f %m "$marker" 2>/dev/null) || _mt=0
+        rm -f "$marker"
+        if (( _now - _mt < 60 )); then
+            printf '%s [dispatcher] caught SIG%s from a deliberate stop — exiting clean\n' \
+                "$(date -u +%FT%TZ)" "$sig" >&2
+            _cleanup_dispatcher
+            exit 0
+        fi
+        # Stale marker (>60s old): a stop was requested long ago and never
+        # reached us — don't let it launder whatever is signaling us now.
+    fi
+    printf '%s [dispatcher] caught unsanctioned SIG%s (pid %s) — exiting 130\n' \
+        "$(date -u +%FT%TZ)" "$sig" "$$" >&2
+    printf 'SIG%s\n' "$sig" > "$run_dir/last_signal" 2>/dev/null || true
+    logger -t shellm-thinkers \
+        "dispatcher(${IDENTITY_NAME:-unknown}) pid $$ caught unsanctioned SIG${sig}" \
+        2>/dev/null || true
+    _cleanup_dispatcher
+    exit 130
+}
+
 _stop_dispatcher() {
     local run_dir="$IDENTITY_DIR/run"
     local pid_file="$run_dir/dispatcher.pid"
@@ -721,6 +777,11 @@ _stop_dispatcher() {
         pid=$(cat "$pid_file" 2>/dev/null) || true
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
             printf 'Stopping dispatcher (PID %s)...\n' "$pid" >&2
+            # Announce the stop so the dispatcher's TERM trap exits 0
+            # (sanctioned) instead of 130 (unsanctioned — systemd would
+            # restart and alert). The trap removes the marker; a fresh
+            # start clears any stale one.
+            touch "$run_dir/deliberate_stop" 2>/dev/null || true
             kill -TERM "$pid" 2>/dev/null || true
             local i
             for i in 1 2 3 4 5 6 7 8; do
