@@ -37,3 +37,7 @@ allowed_emails = [
 # envrc.example). Setting it here works too (gitignored; state holds it
 # regardless):
 # google_oauth_client_secret = "GOCSPX-..."
+
+# Optional email fallback for the box-down alerts (Slack is the primary
+# path — see alerting.tf). SNS mails a confirmation link on first apply.
+# alert_email = "you@example.com"

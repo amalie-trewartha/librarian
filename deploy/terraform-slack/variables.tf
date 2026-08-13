@@ -106,3 +106,14 @@ variable "env_parameter" {
   type        = string
   default     = "/shellm/env"
 }
+
+variable "alert_email" {
+  description = <<-EOT
+    Optional email fallback for the box-down SNS alerts (alerting.tf) —
+    the primary path is Slack via Lambda. SNS emails a confirmation link
+    on first apply; the subscription is inert until it is clicked. Set to
+    "" to disable.
+  EOT
+  type        = string
+  default     = ""
+}
