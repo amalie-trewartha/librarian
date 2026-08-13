@@ -30,7 +30,7 @@ from statistics import median
 
 from shellm_web.activity import _iso
 from shellm_web.llm_health import _parse_ts
-from shellm_web.trajectory import parse_jsonl
+from shellm_web import trajectory
 
 WINDOW_DAYS = 7
 RECENT_ROWS = 20
@@ -56,7 +56,25 @@ def _path_stats(times: list[float]) -> dict:
 def response_stats(traj_dir: Path, identity_name: str) -> dict:
     now = time.time()
     cutoff = now - WINDOW_DAYS * 86400
-    steps = parse_jsonl(traj_dir / "trajectory.jsonl")
+    # Every aggregate below is windowed to the last WINDOW_DAYS, so only
+    # stream-parse the log from where that window starts (found by walking
+    # the cache's step wrappers back from the tail) — parsing the WHOLE
+    # jsonl here was one of the O(log) request paths behind the 2026-08-13
+    # OOM incident. Downstream ts >= cutoff filters stay authoritative.
+    wrappers = trajectory.CACHE.load(traj_dir)["steps"]
+    start = len(wrappers)
+    for i in range(len(wrappers) - 1, -1, -1):
+        ts = _parse_ts(str(wrappers[i].get("ts") or ""))
+        if ts is not None and ts < cutoff:
+            break
+        start = i
+    if start >= len(wrappers):
+        steps = iter(())  # nothing within the window
+    else:
+        # span-less steps can't happen via the cache; fall back to a full
+        # stream from 0 rather than miss data if they somehow do
+        offset = trajectory.CACHE.offset_of(traj_dir, start) or 0
+        steps = trajectory.iter_jsonl(traj_dir / "trajectory.jsonl", offset)
 
     inbound: dict[str, dict] = {}  # step_id -> {"ts", "from"}
     events: list[dict] = []

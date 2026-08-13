@@ -1,14 +1,18 @@
-"""Chat view over the mind log: filter message steps from trajectory.jsonl."""
+"""Chat view over the mind log: filter message steps from trajectory.jsonl.
 
-from pathlib import Path
+Served from the trajectory cache's compact chat index — chat polls used
+to re-parse the whole jsonl per request, which on audel's 590MB mind log
+meant ~3.5GB of transient dicts per poll and was a main driver of the
+2026-08-13 OOM incident.
+"""
 
-from shellm_web.trajectory import parse_jsonl
+from typing import Any
 
-MESSAGE_TYPES = {"message", "human-msg", "agent-msg"}
+from shellm_web.trajectory import CHAT_MESSAGE_TYPES as MESSAGE_TYPES
 
 
 def chat_view(
-    traj_dir: Path,
+    steps: list[dict[str, Any]],
     identity_name: str,
     tail: int = 200,
     with_name: str | None = None,
@@ -20,8 +24,10 @@ def chat_view(
     decision:"no-reply" observation stamps trigger_step), or "failed" (its
     reply-failed observation). Absent means still undecided — which is what
     a truthful typing indicator needs.
+
+    `steps` is the cache's compact chat index (trajectory.CACHE.chat_steps):
+    message steps plus trigger-stamped observations, small fields only.
     """
-    steps = parse_jsonl(traj_dir / "trajectory.jsonl")
     messages = []
     outcomes: dict[str, str] = {}
     for raw in steps:
@@ -68,9 +74,9 @@ def chat_view(
 
 
 def chat_messages(
-    traj_dir: Path,
+    steps: list[dict[str, Any]],
     identity_name: str,
     tail: int = 200,
     with_name: str | None = None,
 ) -> list[dict]:
-    return chat_view(traj_dir, identity_name, tail, with_name)["messages"]
+    return chat_view(steps, identity_name, tail, with_name)["messages"]

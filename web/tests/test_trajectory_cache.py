@@ -212,3 +212,104 @@ def test_run_command_truncated_and_fetchable(ident_root: Path):
         ).status_code
         == 404
     )
+
+
+# ---------------------------------------------------------------------------
+# Raw eviction: bounded memory, windows rehydrate from disk
+# ---------------------------------------------------------------------------
+
+
+def test_eviction_and_window_rehydration(traj_dir: Path):
+    jsonl = traj_dir / "trajectory.jsonl"
+    _write(jsonl, [_step(i) for i in range(1, 40)], append=True)
+    cache = trajectory.TrajectoryCache(raw_budget=600)  # a few steps' worth
+    body = cache.load(traj_dir)
+    steps = body["steps"]
+    assert body["step_count"] == 40
+    # oldest raws evicted, newest retained; wrappers survive either way
+    assert steps[0]["raw"] is None
+    assert steps[-1]["raw"] is not None
+    assert steps[1]["step_id"] == "s0001"
+    assert steps[1]["preview"]
+    # a window rehydrates exactly what a full reparse sees
+    full = trajectory.load_trajectory(traj_dir)
+    window = cache.window(traj_dir, 1, 5)
+    assert [s["raw"] for s in window["steps"]] == [s["raw"] for s in full["steps"][1:5]]
+    # ...as copies: the cache's own entry stays evicted
+    assert cache.load(traj_dir)["steps"][1]["raw"] is None
+    # tail + since semantics mirror the mindlog endpoint
+    tail = cache.window(traj_dir, tail=3)
+    assert tail["since"] == 37
+    assert [s["step_id"] for s in tail["steps"]] == ["s0037", "s0038", "s0039"]
+    assert all(s["raw"] is not None for s in tail["steps"])
+
+
+def test_search_spans_evicted_history(traj_dir: Path):
+    from shellm_web import search
+
+    jsonl = traj_dir / "trajectory.jsonl"
+    _write(jsonl, [_step(i) for i in range(1, 60)], append=True)
+    cache = trajectory.TrajectoryCache(raw_budget=600)
+    cache.load(traj_dir)
+    assert cache.load(traj_dir)["steps"][3]["raw"] is None  # deep history evicted
+
+    result = search.search_cache(cache, traj_dir, "idea 3", scope="thoughts", limit=5)
+    # matches: idea 3, idea 30..39 = 11 total, newest first, limit honored
+    assert result["total"] == 11
+    assert len(result["hits"]) == 5
+    assert result["hits"][0]["index"] == 39
+    assert result["hits"][0]["step_id"] == "s0039"
+    assert "idea 39" in result["hits"][0]["snippet"]
+
+
+def test_run_command_rehydrates_after_eviction(traj_dir: Path):
+    jsonl = traj_dir / "trajectory.jsonl"
+    big = "PROMPT " * 1000 + "ACTION: dance"
+    _write(jsonl, [{"type": "shellm-run", "step_id": "runbig", "command": big, "ts": "t"}],
+           append=True)
+    _write(jsonl, [_step(i) for i in range(1, 30)], append=True)
+    cache = trajectory.TrajectoryCache(raw_budget=500)
+    body = cache.load(traj_dir)
+    assert body["steps"][1]["raw"] is None  # the run header's raw is gone
+    by_id = {r["run_id"]: r for r in body["runs"]}
+    assert by_id["runbig"]["command_truncated"] is True
+    assert cache.run_command(traj_dir, "runbig") == big
+
+
+def test_chat_index_survives_eviction(traj_dir: Path):
+    from shellm_web import chat
+
+    jsonl = traj_dir / "trajectory.jsonl"
+    _write(jsonl, [
+        {"type": "message", "step_id": "m1", "content": "hello audel",
+         "from": "slack-nick", "to": "audel", "ts": "t1"},
+    ], append=True)
+    _write(jsonl, [_step(i) for i in range(1, 40)], append=True)
+    cache = trajectory.TrajectoryCache(raw_budget=400)
+    assert cache.load(traj_dir)["steps"][1]["raw"] is None  # message raw evicted
+    view = chat.chat_view(cache.chat_steps(traj_dir), "audel")
+    assert view["messages"][0]["content"] == "hello audel"
+    assert view["messages"][0]["from"] == "slack-nick"
+
+
+def test_step_endpoint_hydrates_evicted(ident_root: Path, monkeypatch):
+    monkeypatch.setattr(trajectory, "CACHE", trajectory.TrajectoryCache(raw_budget=300))
+    jsonl = (
+        ident_root / ".identities" / "scaly" / "trajectories"
+        / "fbfbfbfb-root" / "trajectory.jsonl"
+    )
+    _write(jsonl, [_step(i) for i in range(6, 40)], append=True)
+    client = TestClient(create_app(ident_root))
+    url = "/api/identities/.identities~scaly"
+
+    mindlog = client.get(f"{url}/mindlog?tail=3").json()
+    assert all(s["raw"] is not None for s in mindlog["steps"])
+
+    got = client.get(f"{url}/step/s0001").json()
+    assert got["index"] == 1
+    assert got["step"]["raw"]["content"] == "idea 1"
+
+    window = client.get(f"{url}/mindlog?since=1&until=4").json()
+    assert [s["raw"]["content"] for s in window["steps"]] == [
+        "idea 1", "idea 2", "idea 3",
+    ]

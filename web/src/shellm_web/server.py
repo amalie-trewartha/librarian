@@ -337,20 +337,23 @@ def create_app(
         traj_dir = discovery.find_root_traj_dir(identity)
         if traj_dir is None:
             raise HTTPException(status_code=404, detail="No mind log trajectory found")
-        cached = trajectory.CACHE.load(traj_dir)
+        # The client always windows (?tail on load, ?since polls, bounded
+        # backfills), so the hydrate cap never bites in practice — it only
+        # keeps a pathological whole-log fetch from re-materializing GBs.
+        cached = trajectory.CACHE.window(
+            traj_dir, since=since, until=until, tail=tail,
+            max_hydrate=128 * 1024 * 1024,
+        )
         jsonl = traj_dir / "trajectory.jsonl"
         status = liveness.identity_status(identity.path, jsonl)
-        steps = cached["steps"]
         runs = cached["runs"]
-        if since is None and tail is not None:
-            since = max(0, cached["step_count"] - tail)
+        since = cached["since"]
         if since is not None:
             # Only runs touched by a step at/after the window start — the
             # rest are unchanged and heavy (command embeds the whole prompt)
             runs = [run for run in runs if run["last_touch"] >= since]
-            steps = steps[since:until] if until is not None else steps[since:]
         return {
-            "steps": steps,
+            "steps": cached["steps"],
             "runs": runs,
             "traj_id": cached["traj_id"],
             "step_count": cached["step_count"],
@@ -372,9 +375,8 @@ def create_app(
         searches everything. See search.py."""
         identity = _identity_or_404(root, identity_id)
         traj_dir = _root_traj_dir_or_404(identity)
-        cached = trajectory.CACHE.load(traj_dir)
-        result = search.search_steps(cached["steps"], q, scope, limit)
-        result["step_count"] = cached["step_count"]
+        result = search.search_cache(trajectory.CACHE, traj_dir, q, scope, limit)
+        result["step_count"] = trajectory.CACHE.load(traj_dir)["step_count"]
         result["identity"] = {"id": identity.id, "name": identity.name}
         return result
 
@@ -387,8 +389,9 @@ def create_app(
         cached = trajectory.CACHE.load(traj_dir)
         steps = cached["steps"]
         for index in range(len(steps) - 1, -1, -1):
-            step = steps[index]
-            if step.get("step_id") == step_id:
+            if steps[index].get("step_id") == step_id:
+                # hydrate: a hit this old has usually had its raw evicted
+                step = trajectory.CACHE.window(traj_dir, index, index + 1)["steps"][0]
                 run = next(
                     (r for r in cached["runs"] if r["run_id"] == step.get("run_id")),
                     None,
@@ -436,10 +439,14 @@ def create_app(
         traj_dir = tree.find_traj_dir(root_traj_dir, traj_id)
         if traj_dir is None:
             raise HTTPException(status_code=404, detail="Trajectory not found")
-        # dict() copy: the cache owns the steps list; this endpoint adds keys
-        result = dict(trajectory.CACHE.load(traj_dir))
+        # This endpoint ships the trajectory WHOLE (no windowing in the
+        # client yet) — cap rehydration so a huge sub-trajectory serves its
+        # newest ~32MB of raws and previews beyond that, instead of
+        # re-materializing GBs. window() returns a fresh envelope dict.
+        result = trajectory.CACHE.window(traj_dir, max_hydrate=32 * 1024 * 1024)
         result["breadcrumb"] = tree.breadcrumb(root_traj_dir, traj_dir)
-        first = result["steps"][0]["raw"] if result["steps"] else {}
+        first_steps = trajectory.CACHE.window(traj_dir, 0, 1)["steps"]
+        first = (first_steps[0].get("raw") or {}) if first_steps else {}
         parent_traj = first.get("parent_traj")
         result["parent"] = (
             {"traj_id": parent_traj, "step_id": first.get("parent_step")}
@@ -673,7 +680,9 @@ def create_app(
         if with_ is not None and not safety.CHAT_FROM_RE.match(with_):
             raise HTTPException(status_code=422, detail="Invalid conversation name")
         status = liveness.identity_status(identity.path, traj_dir / "trajectory.jsonl")
-        view = chat.chat_view(traj_dir, identity.name, tail, with_)
+        view = chat.chat_view(
+            trajectory.CACHE.chat_steps(traj_dir), identity.name, tail, with_
+        )
         return {
             "identity": {"id": identity.id, "name": identity.name},
             "live": status["live"],

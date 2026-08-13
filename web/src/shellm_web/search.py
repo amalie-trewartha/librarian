@@ -31,6 +31,34 @@ def _snippet(text: str, pos: int, needle_len: int) -> str:
     return f"{prefix}{body}{suffix}"
 
 
+def search_cache(cache, traj_dir, q: str, scope: str = "thoughts", limit: int = 50) -> dict:
+    """Search a cached trajectory, newest first. The hydrated tail is
+    scanned in memory; older (raw-evicted) history streams from disk in
+    bounded chunks via cache.window(), so a search never re-materializes
+    the whole log. `total` still counts every match in the full log."""
+    steps, hydrated_from = cache.hydrated_from(traj_dir)
+    result = search_steps(steps[hydrated_from:], q, scope, limit)
+    hits = result["hits"]
+    total = result["total"]
+    for hit in hits:
+        hit["index"] += hydrated_from
+
+    chunk = 4000
+    hi = hydrated_from
+    while hi > 0:
+        lo = max(0, hi - chunk)
+        window = cache.window(traj_dir, lo, hi)
+        part = search_steps(window["steps"], q, scope, limit)
+        total += part["total"]
+        for hit in part["hits"]:
+            hit["index"] += lo
+        room = limit - len(hits)
+        if room > 0:
+            hits.extend(part["hits"][:room])
+        hi = lo
+    return {"q": q, "scope": scope, "total": total, "hits": hits}
+
+
 def search_steps(
     steps: list[dict[str, Any]],
     q: str,

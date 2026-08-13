@@ -10,11 +10,26 @@ Produces the wire shape the viewer renders:
 """
 
 import json
+import os
 import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+# Cap on the SOURCE bytes of raw step records kept parsed in memory, per
+# cached trajectory (Python dicts run ~6x the jsonl bytes — audel's 590MB
+# mind log parsed whole was ~3.5GB RSS and repeatedly OOMed the box,
+# 2026-08-13). Older steps keep their normalized wrapper (preview,
+# ids, run links) but drop `raw`; any window rehydrates with one
+# contiguous disk read via the recorded byte spans (append-only file, so
+# spans never move).
+_RAW_BUDGET_BYTES = int(os.environ.get("SHELLM_WEB_RAW_CACHE_MB", "48")) * 1024 * 1024
+
+# Cold-parse read size: refresh streams the jsonl in chunks this big,
+# evicting between chunks, so first-load peak memory is O(budget + chunk)
+# — never O(file).
+_REFRESH_CHUNK = 8 * 1024 * 1024
 
 # Step types written by the shellm loop itself (never carry `source`).
 MACHINERY_TYPES = {
@@ -104,16 +119,20 @@ class RunGroup:
     started_ts: str = ""
     ended_ts: str | None = None
     status: str = "running"  # running | done
+    # Stored TRUNCATED (commands embed the whole prompt; thousands of runs
+    # times 100s of KB was a large share of the cache's memory). The full
+    # text is rehydrated from header_span by TrajectoryCache.run_command.
     command: str = ""
+    command_truncated: bool = False
+    header_span: tuple[int, int] | None = None  # shellm-run step's jsonl bytes
     model: str | None = None
     tldr: str | None = None
     # index into steps of the last step that mutated this run — lets the
     # mindlog endpoint ship only changed runs on ?since= deltas (a run's
-    # command embeds the whole prompt, so unchanged runs are dead weight)
+    # command is heavy, so unchanged runs are dead weight)
     last_touch: int = 0
 
     def to_dict(self) -> dict[str, Any]:
-        command, truncated = _truncate_command(self.command)
         return {
             "run_id": self.run_id,
             "trigger_step_id": self.trigger_step_id,
@@ -122,19 +141,22 @@ class RunGroup:
             "started_ts": self.started_ts,
             "ended_ts": self.ended_ts,
             "status": self.status,
-            "command": command,
-            "command_truncated": truncated,
+            "command": self.command,
+            "command_truncated": self.command_truncated,
             "model": self.model,
             "tldr": self.tldr,
             "last_touch": self.last_touch,
         }
 
 
-def parse_jsonl(path: Path) -> list[dict[str, Any]]:
-    """Read a trajectory.jsonl, skipping malformed lines."""
-    steps: list[dict[str, Any]] = []
+def iter_jsonl(path: Path, offset: int = 0):
+    """Stream raw records from a trajectory.jsonl (skipping malformed
+    lines), optionally from a byte offset — O(1) memory, unlike
+    parse_jsonl which materializes the whole log."""
     try:
         with path.open("r", encoding="utf-8", errors="replace") as fh:
+            if offset:
+                fh.seek(offset)
             for line in fh:
                 line = line.strip()
                 if not line:
@@ -144,10 +166,15 @@ def parse_jsonl(path: Path) -> list[dict[str, Any]]:
                 except json.JSONDecodeError:
                     continue
                 if isinstance(record, dict):
-                    steps.append(record)
+                    yield record
     except OSError:
-        return []
-    return steps
+        return
+
+
+def parse_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Read a trajectory.jsonl whole, skipping malformed lines. Only for
+    logs known to be small — big ones want iter_jsonl or the CACHE."""
+    return list(iter_jsonl(path))
 
 
 def _action_suffix(command: str) -> str | None:
@@ -158,6 +185,14 @@ def _action_suffix(command: str) -> str | None:
     return _collapse(command[idx + len("ACTION:") :])
 
 
+# Step types the chat view renders (mirrored by chat.py).
+CHAT_MESSAGE_TYPES = {"message", "human-msg", "agent-msg"}
+
+# Compact chat-index fields copied per message step so the chat endpoints
+# never need the (possibly evicted) raw record, let alone a full reparse.
+_CHAT_FIELDS = ("type", "ts", "step_id", "content", "from", "to", "reply_to", "filename")
+
+
 class _Normalizer:
     """Stateful step normalizer: feed raw steps in order, read results any
     time. The state (open runs, unmatched actions, seen ids) is exactly what
@@ -166,12 +201,17 @@ class _Normalizer:
     def __init__(self, traj_dir: Path) -> None:
         self.traj_dir = traj_dir
         self.steps: list[dict[str, Any]] = []
+        # steps[i]'s byte range in trajectory.jsonl (None when unknown, e.g.
+        # via the span-less normalize() path) — how an evicted raw rehydrates
+        self.spans: list[tuple[int, int] | None] = []
+        # compact copies of chat-relevant steps (messages + reply outcomes)
+        self.chat_index: list[dict[str, Any]] = []
         self.runs: list[RunGroup] = []
         self._runs_by_id: dict[str, RunGroup] = {}
         self._unmatched_actions: list[dict[str, Any]] = []
         self._seen_step_ids: set[str] = set()
 
-    def ingest(self, raw: dict[str, Any]) -> None:
+    def ingest(self, raw: dict[str, Any], span: tuple[int, int] | None = None) -> None:
         step_type = raw.get("type", "")
         source = raw.get("source")
         step_id = raw.get("step_id", "")
@@ -214,10 +254,14 @@ class _Normalizer:
         # Inline-run grouping (machinery steps carry no source)
         if source is None and step_type in MACHINERY_TYPES:
             if step_type == "shellm-run":
+                full_command = raw.get("command", "")
+                command, truncated = _truncate_command(full_command)
                 run = RunGroup(
                     run_id=step_id,
                     started_ts=ts,
-                    command=raw.get("command", ""),
+                    command=command,
+                    command_truncated=truncated,
+                    header_span=span,
                     model=raw.get("model"),
                     launched_by=raw.get("launched_by"),
                 )
@@ -234,7 +278,7 @@ class _Normalizer:
                             a for a in self._unmatched_actions if a["step_id"] != trigger
                         ]
                 else:
-                    suffix = _action_suffix(run.command)
+                    suffix = _action_suffix(full_command)
                     if suffix:
                         for action in reversed(self._unmatched_actions):
                             action_text = _collapse(str(action["raw"].get("content", "")))
@@ -267,9 +311,25 @@ class _Normalizer:
         elif step_type == "action":
             self._unmatched_actions.append(normalized)
 
+        # Chat index: message steps whole (human-scale content), plus the
+        # observation outcomes chat.py folds into typing indicators. Kept
+        # compact so chat polls never touch raw records.
+        if step_type in CHAT_MESSAGE_TYPES and raw.get("content"):
+            self.chat_index.append({k: raw[k] for k in _CHAT_FIELDS if k in raw})
+        elif step_type == "observation" and raw.get("trigger_step"):
+            self.chat_index.append(
+                {
+                    "type": "observation",
+                    "trigger_step": raw.get("trigger_step"),
+                    "decision": raw.get("decision"),
+                    "content": str(raw.get("content") or "")[:100],
+                }
+            )
+
         if step_id:
             self._seen_step_ids.add(step_id)
         self.steps.append(normalized)
+        self.spans.append(span)
 
 
 def normalize(raw_steps: list[dict[str, Any]], traj_dir: Path) -> dict[str, Any]:
@@ -289,6 +349,11 @@ class _CacheEntry:
         self.offset = 0        # bytes consumed, through the last complete line
         self.inode: int | None = None
         self.traj_id = ""
+        # Raw-eviction bookkeeping: steps[:hydrated_from] have raw=None
+        # (rehydratable via spans); hydrated_bytes sums the SOURCE span
+        # lengths of the still-hydrated steps.
+        self.hydrated_from = 0
+        self.hydrated_bytes = 0
 
 
 class TrajectoryCache:
@@ -297,12 +362,18 @@ class TrajectoryCache:
     O(new steps) per poll instead of O(log). A shrunken or replaced file
     (different inode, or size below the consumed offset) resets the entry.
     A trailing partial line (a step mid-append) is left unconsumed and picked
-    up whole on the next refresh."""
+    up whole on the next refresh.
 
-    def __init__(self, max_entries: int = 8) -> None:
+    Memory is bounded: only the newest raw_budget SOURCE bytes of raw
+    records stay parsed per entry (older steps keep their wrapper, drop
+    `raw`); window() rehydrates any evicted range with one contiguous
+    disk read."""
+
+    def __init__(self, max_entries: int = 8, raw_budget: int = _RAW_BUDGET_BYTES) -> None:
         self._entries: dict[Path, _CacheEntry] = {}
         self._lock = threading.Lock()
         self._max_entries = max_entries
+        self._raw_budget = raw_budget
 
     def _fresh_entry(self, traj_dir: Path) -> _CacheEntry:
         """Get-or-create the entry and refresh it. Caller holds the lock."""
@@ -335,12 +406,134 @@ class TrajectoryCache:
             }
 
     def run_command(self, traj_dir: Path, run_id: str) -> str | None:
-        """Full (untruncated) command of one run, for on-demand fetches."""
+        """Full (untruncated) command of one run, for on-demand fetches.
+        The cache stores commands truncated; the full text is re-read from
+        the run's shellm-run line on disk."""
         traj_dir = traj_dir.resolve()
         with self._lock:
             entry = self._fresh_entry(traj_dir)
             run = entry.normalizer._runs_by_id.get(run_id)
-            return run.command if run is not None else None
+            if run is None:
+                return None
+            if not run.command_truncated:
+                return run.command
+            if run.header_span is None:
+                return run.command  # span-less (shouldn't happen via cache)
+            raw = self._read_spans(traj_dir, [run.header_span])[0]
+            if raw is None:
+                return run.command
+            return raw.get("command", run.command)
+
+    def window(
+        self,
+        traj_dir: Path,
+        since: int | None = None,
+        until: int | None = None,
+        tail: int | None = None,
+        max_hydrate: int | None = None,
+    ) -> dict[str, Any]:
+        """Wire dict for a step window [since, until), every step hydrated
+        (evicted raws re-read from disk in one contiguous read; those steps
+        are shallow copies — the cache's own lists stay evicted). ?tail=N
+        maps to the last N steps when since is None. max_hydrate caps the
+        rehydration read in SOURCE bytes, dropping raws oldest-first —
+        for endpoints that ship a whole (possibly huge) trajectory.
+        The response's `since` echoes the effective window start."""
+        traj_dir = traj_dir.resolve()
+        with self._lock:
+            entry = self._fresh_entry(traj_dir)
+            norm = entry.normalizer
+            count = len(norm.steps)
+            if since is None and tail is not None:
+                since = max(0, count - tail)
+            lo = 0 if since is None else max(0, min(since, count))
+            hi = count if until is None else max(lo, min(until, count))
+            steps = norm.steps[lo:hi]
+
+            missing = [
+                i
+                for i in range(lo, hi)
+                if norm.steps[i]["raw"] is None and norm.spans[i] is not None
+            ]
+            if max_hydrate is not None:
+                budget = max_hydrate
+                keep: list[int] = []
+                for i in reversed(missing):  # newest raws win the budget
+                    start, end = norm.spans[i]  # type: ignore[misc]
+                    budget -= end - start
+                    if budget < 0:
+                        break
+                    keep.append(i)
+                missing = list(reversed(keep))
+            if missing:
+                raws = self._read_spans(
+                    traj_dir, [norm.spans[i] for i in missing]  # type: ignore[list-item]
+                )
+                for i, raw in zip(missing, raws):
+                    if raw is not None:
+                        steps[i - lo] = {**norm.steps[i], "raw": raw}
+
+            return {
+                "steps": steps,
+                "runs": [run.to_dict() for run in norm.runs],
+                "traj_id": entry.traj_id,
+                "step_count": count,
+                "since": since,
+            }
+
+    def chat_steps(self, traj_dir: Path) -> list[dict[str, Any]]:
+        """Compact chat-relevant steps (see _Normalizer.chat_index) —
+        read-only, shared with the cache."""
+        traj_dir = traj_dir.resolve()
+        with self._lock:
+            entry = self._fresh_entry(traj_dir)
+            return entry.normalizer.chat_index
+
+    def offset_of(self, traj_dir: Path, index: int) -> int | None:
+        """Byte offset in trajectory.jsonl where step `index` starts —
+        lets callers stream-parse a suffix of the log (see health.py)."""
+        traj_dir = traj_dir.resolve()
+        with self._lock:
+            entry = self._fresh_entry(traj_dir)
+            spans = entry.normalizer.spans
+            if 0 <= index < len(spans) and spans[index] is not None:
+                return spans[index][0]
+            return None
+
+    def hydrated_from(self, traj_dir: Path) -> tuple[list[dict[str, Any]], int]:
+        """(steps, first_hydrated_index) — lets search scan the in-memory
+        tail directly and stream older windows via window()."""
+        traj_dir = traj_dir.resolve()
+        with self._lock:
+            entry = self._fresh_entry(traj_dir)
+            return entry.normalizer.steps, entry.hydrated_from
+
+    @staticmethod
+    def _read_spans(
+        traj_dir: Path, spans: list[tuple[int, int]]
+    ) -> list[dict[str, Any] | None]:
+        """Parse the raw records at the given byte spans. One contiguous
+        read covering min..max — spans come from adjacent steps, so the
+        range is dense; bounded by the caller's window/max_hydrate."""
+        if not spans:
+            return []
+        base = min(start for start, _ in spans)
+        top = max(end for _, end in spans)
+        try:
+            with (traj_dir / "trajectory.jsonl").open("rb") as fh:
+                fh.seek(base)
+                buf = fh.read(top - base)
+        except OSError:
+            return [None] * len(spans)
+        out: list[dict[str, Any] | None] = []
+        for start, end in spans:
+            piece = buf[start - base : end - base]
+            try:
+                record = json.loads(piece.decode("utf-8", errors="replace"))
+            except json.JSONDecodeError:
+                record = None
+            out.append(record if isinstance(record, dict) else None)
+        return out
 
     def _refresh(self, entry: _CacheEntry, traj_dir: Path) -> None:
         jsonl = traj_dir / "trajectory.jsonl"
@@ -351,43 +544,82 @@ class TrajectoryCache:
             entry.offset = 0
             entry.inode = None
             entry.traj_id = ""
+            entry.hydrated_from = 0
+            entry.hydrated_bytes = 0
             return
 
         if entry.inode != stat.st_ino or stat.st_size < entry.offset:
             entry.normalizer = _Normalizer(traj_dir)
             entry.offset = 0
             entry.inode = stat.st_ino
+            entry.hydrated_from = 0
+            entry.hydrated_bytes = 0
 
         if stat.st_size == entry.offset:
             return  # nothing new
 
+        # Stream in bounded chunks, evicting as we go — a cold parse of a
+        # 500MB+ log must never hold the whole file (let alone its dicts)
+        # at once. Only complete lines are consumed; a torn tail (or the
+        # remainder of a line longer than a chunk) waits in `pending` and,
+        # at EOF, for the next poll.
         try:
             with jsonl.open("rb") as fh:
                 fh.seek(entry.offset)
-                chunk = fh.read()
+                pending = b""
+                while True:
+                    chunk = fh.read(_REFRESH_CHUNK)
+                    if not chunk:
+                        break
+                    pending += chunk
+                    last_newline = pending.rfind(b"\n")
+                    if last_newline == -1:
+                        continue
+                    consumed = pending[: last_newline + 1]
+                    pending = pending[last_newline + 1 :]
+
+                    # Split on bytes (not decoded text) so each step's byte
+                    # span in the file is exact — spans are what rehydrate
+                    # evicted raws later.
+                    cursor = entry.offset
+                    for line_bytes in consumed.split(b"\n"):
+                        start = cursor
+                        cursor += len(line_bytes) + 1  # +1: the newline
+                        line = line_bytes.decode("utf-8", errors="replace").strip()
+                        if not line:
+                            continue
+                        try:
+                            record = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(record, dict):
+                            entry.normalizer.ingest(
+                                record, span=(start, start + len(line_bytes))
+                            )
+                            entry.hydrated_bytes += len(line_bytes)
+                    entry.offset += len(consumed)
+                    self._evict_to_budget(entry)
         except OSError:
             return
 
-        # Only consume complete lines; a torn tail waits for the next poll.
-        last_newline = chunk.rfind(b"\n")
-        if last_newline == -1:
-            return
-        consumed = chunk[: last_newline + 1]
-        entry.offset += len(consumed)
-
-        for line in consumed.decode("utf-8", errors="replace").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(record, dict):
-                entry.normalizer.ingest(record)
-
         if not entry.traj_id and entry.normalizer.steps:
-            entry.traj_id = entry.normalizer.steps[0].get("raw", {}).get("step_id", "")
+            # wrapper key, not raw — step 0's raw may already be evicted
+            entry.traj_id = entry.normalizer.steps[0].get("step_id", "")
+
+    def _evict_to_budget(self, entry: _CacheEntry) -> None:
+        """Drop oldest raws down to the budget; wrappers and spans stay, so
+        window() can bring any of them back with one disk read."""
+        norm = entry.normalizer
+        while (
+            entry.hydrated_bytes > self._raw_budget
+            and entry.hydrated_from < len(norm.steps)
+        ):
+            index = entry.hydrated_from
+            span = norm.spans[index]
+            if span is not None and norm.steps[index]["raw"] is not None:
+                norm.steps[index]["raw"] = None
+                entry.hydrated_bytes -= span[1] - span[0]
+            entry.hydrated_from += 1
 
 
 # Process-wide cache used by the API endpoints.

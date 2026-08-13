@@ -35,6 +35,16 @@ Environment="SHELLM_THINKERSCTL=/usr/local/bin/shellm-thinkersctl"
 ExecStart=@SHELLM_HOME@/app/bin/shellm-web @SHELLM_HOME@/app --host 127.0.0.1 --port 8080
 Restart=always
 RestartSec=3
+# Cap the trajectory-cache balloon (2026-08-13: repeated 5-6GB RSS OOM
+# kills, and the final thrash episode took the whole box off the network
+# for 13h). Inside the cap the kernel kills only this cgroup, early, and
+# Restart=always brings the service back — global memory pressure never
+# builds. 5G, not lower: one parse of audel's mind log is ~3.5G today
+# (~6x the on-disk jsonl), so a tighter cap would kill-loop the dash.
+# KillMode=process does not affect this: the kernel's cgroup OOM kill
+# picks the biggest task in the cgroup (the python server), uv exits with
+# it, and systemd restarts. Real fix: bound the cache itself.
+MemoryMax=5G
 # Signal only the main process on stop/restart. Dispatchers now run in
 # their own shellm-thinkers@ units, but short-lived CLI mutations (chat,
 # named thinker kicks) and agent-spawned background jobs can still be in
