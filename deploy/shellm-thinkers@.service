@@ -15,7 +15,13 @@
 
 [Unit]
 Description=shellm thinkers for identity %i
-After=network-online.target shellm-slack-agent.service
+# No After=shellm-slack-agent.service: the bootstrap (a oneshot) starts this
+# unit from inside its own ExecStart, so that ordering edge deadlocked every
+# boot — the queued thinkers job waited on the agent finishing while the
+# agent blocked on the queued job (2026-08-12 and 2026-08-13 incidents).
+# Identity env doesn't need the edge anyway: thinkers-service.sh sources the
+# root .env, identity .env, and activate itself on every start.
+After=network-online.target
 Wants=network-online.target
 # With Restart=on-failure (below), OnFailure fires only once the start
 # limit is exhausted — it now means "died repeatedly, auto-restart GAVE UP,
