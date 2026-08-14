@@ -40,7 +40,10 @@ _resolve_app_dir() {
     fi
     local script_dir
     script_dir="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
-    if [[ -f "$script_dir/../bin/shellm" ]]; then
+    # install.sh must be there too — with the default prefix (~/.local/bin)
+    # a copy-installed script would otherwise mistake ~/.local for the
+    # checkout, since ../bin/shellm matches the installed copies.
+    if [[ -f "$script_dir/../bin/shellm" && -f "$script_dir/../install.sh" ]]; then
         (cd "$script_dir/.." && pwd)
         return 0
     fi
@@ -181,7 +184,9 @@ _first_key_var() {  # first provider var that is set (llm's priority order)
 }
 
 _llm_ok() {
-    llm -t 16 "Reply with the single word: ok" >/dev/null 2>>"$INIT_LOG"
+    # Generous cap: reasoning models spend thinking tokens against -t, and
+    # a too-small budget makes the reply come back empty.
+    llm -t 256 "Reply with the single word: ok" >/dev/null 2>>"$INIT_LOG"
 }
 
 _prompt_key() {
@@ -230,14 +235,26 @@ EOF
         _env_set "$SHELLM_HOME/.env" "SHELLM_MODEL" "$(_default_model_for "$(_first_key_var)")"
     fi
 
+    # A default identity means an earlier init already validated a key.
+    # Unattended re-runs (a restarted container: tty allocated, nobody
+    # attached) must then never die or block on a prompt over what may be
+    # a transient API failure.
+    local revalidating=0
+    [[ -L "$APP_DIR/.identities/default" ]] && revalidating=1
+
     local _
     for _ in 1 2 3; do
         info "Checking the LLM connection (model: ${SHELLM_MODEL})"
         _llm_ok && return 0
         echo "shellm-init: the LLM check failed — the key may be wrong or out of credit (details: $INIT_LOG)" >&2
+        [[ "$revalidating" -eq 1 ]] && continue
         [[ "$HAS_TTY" -eq 1 ]] || die "LLM check failed with the configured key"
         _prompt_key || die "no key entered"
     done
+    if [[ "$revalidating" -eq 1 ]]; then
+        echo "shellm-init: continuing anyway — this key worked before, so the API may just be having a moment" >&2
+        return 0
+    fi
     die "could not validate an API key after 3 attempts"
 }
 
@@ -357,6 +374,13 @@ Weave the answers in naturally so the personality shows in the writing voice its
 }
 
 _create_identity() {
+    # Re-runs adopt the existing identity without re-interviewing — this
+    # also keeps a restarted container (allocated tty, nobody attached)
+    # from blocking on a prompt no one can answer.
+    if [[ -n "$NAME" && -d "$IDENTITY_ROOT/$NAME" ]]; then
+        info "Identity '$NAME' already exists — leaving it as is"
+        return 0
+    fi
     _interview
     NAME="${NAME:-ada}"
     [[ "$NAME" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "invalid identity name: '$NAME'"

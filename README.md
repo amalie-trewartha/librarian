@@ -84,8 +84,36 @@ works. Paste your API key, answer the interview, then open
 http://localhost:8080 on your host
 to watch the mind run. The trailing `bash` keeps the container alive so you
 can explore (`cd ~/.shellm/app && identity shell <name>`); exiting it throws
-the whole world away. To keep the identity across runs, add
-`-v shellm-home:/root`.
+the whole world away (`--rm`).
+
+### Want them to stick around? A long-lived agent in Docker
+
+Same command, minus `--rm`, plus a name and a restart policy:
+
+```bash
+docker run -it --name shellm --restart unless-stopped -p 8080:8080 buildpack-deps:curl \
+  bash -c 'curl -fsSL https://raw.githubusercontent.com/laude-institute/shellm/main/install.sh | bash; exec bash'
+```
+
+You get the same interview and shell, but typing `exit` no longer ends the
+world: Docker restarts the container in the background, the installer
+re-runs (it is idempotent — it keeps your key and identity, pulls the
+latest code, and skips every prompt), and the mind and dash come back up
+on their own. Your agent keeps thinking; the dash stays on
+http://localhost:8080.
+
+Day-to-day:
+
+```bash
+docker exec -it shellm bash -l   # drop back into your agent's world
+docker stop shellm               # pause everything (survives daemon restarts too)
+docker start shellm              # resume
+docker rm -f shellm              # delete the agent and its whole world
+```
+
+Pasting the run command a second time fails with "name shellm already in
+use" — that means your agent already exists, and `docker exec` is how you
+get back to it.
 
 ### Or from a checkout
 
