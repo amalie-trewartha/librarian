@@ -218,7 +218,13 @@ _ensure_path() {
         zsh)  rc="$HOME/.zshrc" ;;
         bash) rc="$HOME/.bashrc" ;;
     esac
-    if [[ -n "$rc" ]] && (: </dev/tty) 2>/dev/null; then
+    # In a container (throwaway env), don't ask — just persist the PATH.
+    local in_container=0
+    [[ -f /.dockerenv || -f /run/.containerenv ]] && in_container=1
+    if [[ -n "$rc" && "$in_container" -eq 1 ]]; then
+        grep -qxF "$path_line" "$rc" 2>/dev/null || printf '\n%s\n' "$path_line" >> "$rc"
+        echo "Added $PREFIX to PATH in $rc (container — no prompt)."
+    elif [[ -n "$rc" ]] && (: </dev/tty) 2>/dev/null; then
         printf 'Add %s to your PATH in %s? [Y/n] ' "$PREFIX" "$rc" >/dev/tty
         IFS= read -r reply </dev/tty || true
         if [[ ! "$reply" =~ ^[Nn] ]]; then
