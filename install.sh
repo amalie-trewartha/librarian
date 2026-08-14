@@ -9,14 +9,14 @@ set -euo pipefail
 #     ./install.sh [options]
 #
 #   One-liner (no checkout needed):
-#     curl -fsSL https://raw.githubusercontent.com/andyk/shellm/main/install.sh | bash
+#     curl -fsSL https://raw.githubusercontent.com/laude-institute/shellm/main/install.sh | bash
 #
 # The one-liner clones the repo to ~/.shellm/app, symlink-installs the tools,
 # then hands off to `shellm-init` to bootstrap a first identity and start the
 # local dash. Pass args through the pipe with `| bash -s -- <args>`.
 #
 # Prefer to read before you run? Same thing, two steps:
-#     curl -fsSLO https://raw.githubusercontent.com/andyk/shellm/main/install.sh
+#     curl -fsSLO https://raw.githubusercontent.com/laude-institute/shellm/main/install.sh
 #     less install.sh && bash install.sh --init
 #
 # Everything side-effectful happens inside main(), invoked on the LAST line of
@@ -24,7 +24,7 @@ set -euo pipefail
 # `curl | bash`) parses but executes nothing. Keep it that way: top level is
 # only defaults, function definitions, and that final call.
 
-SHELLM_REPO="${SHELLM_REPO:-https://github.com/andyk/shellm.git}"
+SHELLM_REPO="${SHELLM_REPO:-https://github.com/laude-institute/shellm.git}"
 SHELLM_BRANCH="${SHELLM_BRANCH:-main}"
 SHELLM_HOME="${SHELLM_HOME:-$HOME/.shellm}"
 
@@ -51,13 +51,27 @@ _pkg_hint() {
 }
 
 _require_deps() {
-    local missing=0 dep
+    local missing=() failed=0 dep
     for dep in "$@"; do
+        command -v "$dep" >/dev/null 2>&1 || missing+=("$dep")
+    done
+    [[ "${#missing[@]}" -eq 0 ]] && return 0
+
+    # Already root with apt available — a fresh container, typically — so
+    # just install them. Still no sudo anywhere: as a normal user we only
+    # print the hints below.
+    if [[ "$(id -u)" -eq 0 ]] && command -v apt-get >/dev/null 2>&1; then
+        echo "==> Installing missing dependencies: ${missing[*]}"
+        apt-get update -qq >/dev/null && \
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ca-certificates "${missing[@]}" >/dev/null || true
+    fi
+
+    for dep in "${missing[@]}"; do
         command -v "$dep" >/dev/null 2>&1 && continue
         printf 'install.sh: missing dependency: %s   (%s)\n' "$dep" "$(_pkg_hint "$dep")" >&2
-        missing=1
+        failed=1
     done
-    [[ "$missing" -eq 0 ]] || exit 1
+    [[ "$failed" -eq 0 ]] || exit 1
 }
 
 # ---------------------------------------------------------------------------

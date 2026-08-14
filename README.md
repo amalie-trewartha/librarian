@@ -36,7 +36,7 @@ One-liner — installs the tools, then walks you through creating your first
 virtual person and opens a local dashboard where you can watch their mind run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/andyk/shellm/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/laude-institute/shellm/main/install.sh | bash
 ```
 
 It clones the repo to `~/.shellm/app`, symlinks the tools into `~/.local/bin`,
@@ -49,7 +49,7 @@ dash opens. Re-running the one-liner updates everything in place.
 Prefer to read before you run? Same thing, two steps:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/andyk/shellm/main/install.sh
+curl -fsSLO https://raw.githubusercontent.com/laude-institute/shellm/main/install.sh
 less install.sh && bash install.sh --init
 ```
 
@@ -58,10 +58,28 @@ The installer never uses sudo — everything lands in `~/.local/bin` and
 installer from the checkout, so what executes is the same code you can read
 here.
 
-Or from a checkout:
+### Prefer a sandbox? Run it in Docker
+
+The same installer works inside a container — nothing touches your machine,
+and the agent's shell commands run in the container too:
 
 ```bash
-git clone https://github.com/andyk/shellm.git
+docker run -it --rm -p 8080:8080 buildpack-deps:curl bash -c \
+  'curl -fsSL https://raw.githubusercontent.com/laude-institute/shellm/main/install.sh | bash; exec bash'
+```
+
+The installer notices it is root in a fresh container and apt-installs its
+own dependencies; the dash binds `0.0.0.0` automatically so the published
+port works. Answer the prompts, then open http://localhost:8080 on your host
+to watch the mind run. The trailing `bash` keeps the container alive so you
+can explore (`cd ~/.shellm/app && identity shell <name>`); exiting it throws
+the whole world away. To keep the identity across runs, add
+`-v shellm-home:/root`.
+
+### Or from a checkout
+
+```bash
+git clone https://github.com/laude-institute/shellm.git
 cd shellm
 ./install.sh            # add --init to also bootstrap an identity + dash
 ```

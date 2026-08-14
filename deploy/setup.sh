@@ -11,14 +11,14 @@ set -euo pipefail
 #   sudo bash deploy/setup.sh
 #
 # Override defaults via env:
-#   SHELLM_REPO=https://github.com/andyk/shellm.git
+#   SHELLM_REPO=https://github.com/laude-institute/shellm.git
 #   SHELLM_BRANCH=main
 #   SHELLM_HOME=/opt/shellm
 #
 # After this script: put your (spend-capped!) API key in
 # /opt/shellm/app/.env and set up the Cloudflare tunnel — see DEPLOY.md.
 
-SHELLM_REPO="${SHELLM_REPO:-https://github.com/andyk/shellm.git}"
+SHELLM_REPO="${SHELLM_REPO:-https://github.com/laude-institute/shellm.git}"
 SHELLM_BRANCH="${SHELLM_BRANCH:-main}"
 SHELLM_HOME="${SHELLM_HOME:-/opt/shellm}"
 SHELLM_USER="shellm"

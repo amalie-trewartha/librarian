@@ -68,6 +68,15 @@ export PATH="$APP_DIR/bin:$PATH"
 HAS_TTY=0
 if (: </dev/tty) 2>/dev/null; then HAS_TTY=1; fi
 
+# In a container, bind the dash on all interfaces so a published port
+# (docker run -p 8080:8080) can reach it — localhost-only is unreachable
+# through a port mapping. Explicit SHELLM_WEB_ARGS still wins.
+IN_CONTAINER=0
+[[ -f /.dockerenv || -f /run/.containerenv ]] && IN_CONTAINER=1
+if [[ "$IN_CONTAINER" -eq 1 && -z "${SHELLM_WEB_ARGS:-}" ]]; then
+    SHELLM_WEB_ARGS="--host 0.0.0.0"
+fi
+
 # ask <prompt> [default] — print the answer; default on no tty / empty reply
 ask() {
     local prompt="$1" def="${2:-}" reply=""
@@ -469,12 +478,19 @@ _start_thinkers
 _start_dash
 _open_dash
 
+# Inside a container the dash binds 0.0.0.0; the address that works is the
+# published port on the host.
+DASH_DISPLAY="$DASH_URL"
+if [[ "$IN_CONTAINER" -eq 1 && -n "$DASH_URL" ]]; then
+    DASH_DISPLAY="${DASH_URL/0.0.0.0/localhost} (in the browser on your host)"
+fi
+
 cat <<EOF
 
 ────────────────────────────────────────────────────────
 $NAME is alive.
 
-  Watch their mind    ${DASH_URL:-run shellm-init again once the dash deps are installed}
+  Watch their mind    ${DASH_DISPLAY:-run shellm-init again once the dash deps are installed}
   Talk to them        from the dash, or:
                         cd $APP_DIR && identity shell $NAME
                         chat send "hello"

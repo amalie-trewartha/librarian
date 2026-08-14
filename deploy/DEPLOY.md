@@ -29,7 +29,7 @@ Cloudflare Access; the app itself stays auth-free.
 ## 1. Provision the app
 
 ```bash
-git clone https://github.com/andyk/shellm.git
+git clone https://github.com/laude-institute/shellm.git
 sudo bash shellm/deploy/setup.sh          # or run from your checkout
 ```
 
