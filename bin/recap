@@ -40,6 +40,13 @@ REDUCE_MODEL="${RECAP_REDUCE_MODEL:-$_DEFAULT_MODEL}"
 # shell-output, prompt echoes of sub-runs...) is noise at recap altitude.
 KEEP_TYPES='["thought","action","observation","message","feedback","final","shellm-run","merge"]'
 
+# --- Tiered rollups / --context (see design/tiered_memory.md) ---
+CONTEXT=0
+FANOUT="${ROLLUP_FANOUT:-10}"          # F: children per tier; tier k covers F^k steps
+CTX_BUDGET="${MONOLITH_CONTEXT_BUDGET:-auto}"   # token budget; auto = fraction of model window
+CTX_RAW_TAIL="${ROLLUP_RAW_TAIL:-auto}"         # R: verbatim recent steps; auto = from budget
+ROLLUP_PROMPT_VERSION=1                 # stamped into sealed blocks for honest determinism
+
 usage() {
     cat <<'EOF'
 recap — Summarize a trajectory into themes + episodes with step references
@@ -52,6 +59,12 @@ Options:
   --window N          Max filtered steps per episode window (default: 100)
   --gap-minutes N     Prefer window cuts at time gaps >= N minutes (default: 30;
                       0 disables gap-aware cutting)
+  --context           Print a budget-bounded "staircase": tiered rollups
+                      (coarse→fine) covering the whole trajectory, then the
+                      recent steps verbatim. Builds/refreshes rollups lazily.
+  --budget N|auto     Token budget for --context (auto = fraction of model window)
+  --raw-tail N        Verbatim recent steps to show under --context (default: auto)
+  --fanout N          F: children per tier for --context rollups (default: 10)
   --cached            Print the existing recap; never call the LLM
   --rebuild           Drop the cache and re-summarize everything
   --json              Emit {"themes":..., "episodes":[...]} JSON
@@ -78,6 +91,10 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --traj_dir) TRAJ_DIR="${2:?--traj_dir requires DIR}"; shift 2 ;;
         --window)   WINDOW="${2:?--window requires N}"; shift 2 ;;
+        --context)  CONTEXT=1; shift ;;
+        --budget)   CTX_BUDGET="${2:?--budget requires N|auto}"; shift 2 ;;
+        --raw-tail) CTX_RAW_TAIL="${2:?--raw-tail requires N}"; shift 2 ;;
+        --fanout)   FANOUT="${2:?--fanout requires N}"; shift 2 ;;
         --gap-minutes) GAP_MINUTES="${2:?--gap-minutes requires N}"; shift 2 ;;
         --cached)   MODE="cached"; shift ;;
         --rebuild)  MODE="rebuild"; shift ;;
@@ -128,6 +145,10 @@ CACHE="$RUN_DIR/recap"
 EPISODES="$CACHE/episodes.jsonl"
 THEMES="$CACHE/themes.json"
 LOCK="$CACHE/.lock"
+ROLLUP_DIR="$RUN_DIR/rollups"
+ROLLUP_LOCK="$ROLLUP_DIR/.lock"
+
+[[ "$FANOUT" =~ ^[0-9]+$ && "$FANOUT" -ge 2 ]] || die "--fanout must be a number >= 2"
 
 # ---------------------------------------------------------------------------
 # Rendering: trajectory lines -> TSV of (raw_line, step_id, ts, text)
@@ -431,8 +452,170 @@ _print_json() {
 }
 
 # ---------------------------------------------------------------------------
+# Tiered rollups + staircase context (--context)
+# ---------------------------------------------------------------------------
+# A logarithmic pyramid of summaries so a single bounded context always spans
+# the whole trajectory. Tier k holds one rollup per F^k steps, rolled up from
+# tier k-1. Blocks are keyed by filtered-step index range, sealed immutable and
+# cached forever; only the frontier (newly-complete blocks) is built each run.
+# See design/tiered_memory.md.
+
+_ROLLUP_SYSTEM='You compress one slice of an AI agent life log into a single rollup. The input is a chronological list of lines: either raw steps "[id] type: content", or child rollup summaries. Reply with ONLY a JSON object, no markdown fences:
+{"summary": "2-3 sentences: what happened in this slice — what the agent did, thought, decided, and how it went",
+ "themes": ["1-4 short kebab-case topics"],
+ "step_ids": ["up to 4 of the most important 8-char step ids that literally appear in the input"]}'
+
+_ctx_pow() { local b=$1 e=$2 r=1 i=0; while [ "$i" -lt "$e" ]; do r=$((r * b)); i=$((i + 1)); done; printf '%s' "$r"; }
+
+_ctx_blockfile() { printf '%s/t%s/%012d-%012d.json' "$ROLLUP_DIR" "$1" "$2" "$3"; }
+
+# Resolve the inference model's context window (tokens).
+_ctx_model_window() {
+    local m="${MODEL_CONTEXT_WINDOW:-auto}"
+    [[ "$m" != "auto" ]] && { printf '%s' "$m"; return; }
+    case "${THINK_MODEL:-${SHELLM_MODEL:-}}" in
+        *claude*|*opus*|*sonnet*|*haiku*) printf '200000' ;;
+        *gpt-4.1*|*o1*|*o3*|*o4*)         printf '1000000' ;;
+        '')                               printf '200000' ;;
+        *)                                printf '128000' ;;
+    esac
+}
+
+# Raw-tail size R from the budget (recency gets ~40% of budget, ~50 tok/step).
+_ctx_resolve_R() {
+    local n=$1
+    if [[ "$CTX_RAW_TAIL" != "auto" ]]; then printf '%s' "$CTX_RAW_TAIL"; return; fi
+    local budget win r
+    if [[ "$CTX_BUDGET" == "auto" ]]; then win=$(_ctx_model_window); budget=$(( win * 6 / 10 )); else budget=$CTX_BUDGET; fi
+    r=$(( (budget * 4 / 10) / 50 ))
+    (( r < 20 )) && r=20
+    (( r > n )) && r=n
+    printf '%s' "$r"
+}
+
+# Write one sealed tier-1 block over filtered-step indices [s,e) (TSV lines s+1..e).
+_ctx_seal_tier1() {
+    local s=$1 e=$2 file rows text ids fid lid body
+    file=$(_ctx_blockfile 1 "$s" "$e"); [[ -f "$file" ]] && return 0
+    rows=$(sed -n "$((s + 1)),${e}p" "$RENDERED_TSV")
+    text=$(cut -f4 <<<"$rows")
+    fid=$(head -1 <<<"$rows" | cut -f2); lid=$(tail -1 <<<"$rows" | cut -f2)
+    note "rollup t1 [$s,$e)"
+    body=$(_llm_json "$MAP_MODEL" "$_ROLLUP_SYSTEM" "$text" 1024) || die "rollup t1 [$s,$e): bad JSON"
+    mkdir -p "$(dirname "$file")"
+    jq -n -c --argjson tier 1 --argjson start "$s" --argjson end "$e" --argjson n "$((e - s))" \
+        --argjson body "$body" --arg fid "$fid" --arg lid "$lid" \
+        --arg model "$MAP_MODEL" --argjson pv "$ROLLUP_PROMPT_VERSION" --arg created "$(date +%Y-%m-%dT%H:%M:%S)" '
+        {tier:$tier, start:$start, end:$end, n:$n,
+         summary:($body.summary // ""), themes:($body.themes // []),
+         step_ids:(($body.step_ids // []) | if length==0 then [$fid,$lid] else . end),
+         model:$model, prompt_version:$pv, created:$created}' > "$file"
+}
+
+# Write one sealed tier-k block (k>1) over indices [s,e), rolled up from tier k-1.
+_ctx_seal_tierk() {
+    local tier=$1 s=$2 e=$3 file childblk c cf lines fallback body
+    file=$(_ctx_blockfile "$tier" "$s" "$e"); [[ -f "$file" ]] && return 0
+    childblk=$(_ctx_pow "$FANOUT" $((tier - 1)))
+    lines=""; fallback=""; c=$s
+    while (( c < e )); do
+        cf=$(_ctx_blockfile $((tier - 1)) "$c" $((c + childblk)))
+        [[ -f "$cf" ]] || die "rollup t$tier [$s,$e): missing child $cf"
+        lines+="$(jq -r '"[" + (.step_ids | join(",")) + "] " + .summary' "$cf")"$'\n'
+        fallback+="$(jq -r '.step_ids[0] // empty' "$cf")"$'\n'
+        c=$((c + childblk))
+    done
+    note "rollup t$tier [$s,$e)"
+    body=$(_llm_json "$MAP_MODEL" "$_ROLLUP_SYSTEM" "$lines" 1024) || die "rollup t$tier [$s,$e): bad JSON"
+    local fb_json
+    fb_json=$(printf '%s' "$fallback" | grep -v '^$' | head -4 | jq -R . | jq -sc .)
+    mkdir -p "$(dirname "$file")"
+    jq -n -c --argjson tier "$tier" --argjson start "$s" --argjson end "$e" --argjson n "$((e - s))" \
+        --argjson body "$body" --argjson fb "$fb_json" \
+        --arg model "$MAP_MODEL" --argjson pv "$ROLLUP_PROMPT_VERSION" --arg created "$(date +%Y-%m-%dT%H:%M:%S)" '
+        {tier:$tier, start:$start, end:$end, n:$n,
+         summary:($body.summary // ""), themes:($body.themes // []),
+         step_ids:(($body.step_ids // []) | if length==0 then $fb else . end),
+         model:$model, prompt_version:$pv, created:$created}' > "$file"
+}
+
+# Lazily seal every complete block, bottom-up. Existing files are skipped, so
+# this is incremental (only the frontier calls the LLM) and idempotent.
+_ctx_build() {
+    local n=$1 tier=1 blk nblocks b s e
+    blk=$FANOUT
+    while (( blk <= n )); do
+        nblocks=$(( n / blk ))
+        for (( b = 0; b < nblocks; b++ )); do
+            s=$(( b * blk )); e=$(( (b + 1) * blk ))
+            if (( tier == 1 )); then _ctx_seal_tier1 "$s" "$e"; else _ctx_seal_tierk "$tier" "$s" "$e"; fi
+        done
+        tier=$(( tier + 1 )); blk=$(( blk * FANOUT ))
+    done
+}
+
+# Assemble and print the staircase: coarse→fine summaries covering [0, cut0),
+# then the raw tail [cut0, N) verbatim. cut0 is snapped to an F boundary and the
+# older region is decomposed positionally (base-F), so coverage is gapless and
+# each tier contributes at most F-1 blocks.
+_ctx_assemble() {
+    local n=$1 r=$2 cut0 remaining tier blk coarser chunk a x
+    cut0=$(( ((n - r) / FANOUT) * FANOUT )); (( cut0 < 0 )) && cut0=0
+    local -a seg_tier=() seg_s=() seg_e=()
+    remaining=$cut0; tier=1
+    while (( remaining > 0 )); do
+        blk=$(_ctx_pow "$FANOUT" "$tier"); coarser=$(( blk * FANOUT ))
+        chunk=$(( remaining - (remaining / coarser) * coarser ))
+        if (( chunk > 0 )); then
+            a=$(( remaining - chunk ))
+            for (( x = a; x < remaining; x += blk )); do
+                seg_tier+=("$tier"); seg_s+=("$x"); seg_e+=("$(( x + blk ))")
+            done
+        fi
+        remaining=$(( remaining - chunk )); tier=$(( tier + 1 ))
+        (( blk > cut0 )) && break
+    done
+
+    if (( ${#seg_tier[@]} > 0 )); then
+        printf '=== YOUR LIFE SO FAR — summarized, oldest first ===\n'
+        local i
+        for (( i = ${#seg_tier[@]} - 1; i >= 0; i-- )); do   # coarse (built last) → fine
+            jq -r '"[t\(.tier) · steps \(.start)–\(.end)] \(.summary)   (\(.step_ids | join(" ")))"' \
+                "$(_ctx_blockfile "${seg_tier[$i]}" "${seg_s[$i]}" "${seg_e[$i]}")"
+        done
+        printf '\n'
+    fi
+    printf '=== RIGHT NOW — the last %s steps, verbatim ===\n' "$(( n - cut0 ))"
+    sed -n "$(( cut0 + 1 )),${n}p" "$RENDERED_TSV" | cut -f4
+}
+
+_ctx_run() {
+    mkdir -p "$ROLLUP_DIR"
+    if [[ -d "$ROLLUP_LOCK" ]]; then
+        [[ -n "$(find "$ROLLUP_LOCK" -maxdepth 0 -mmin +30 2>/dev/null)" ]] && rmdir "$ROLLUP_LOCK" 2>/dev/null || true
+    fi
+    mkdir "$ROLLUP_LOCK" 2>/dev/null || die "another rollup build is in progress (remove $ROLLUP_LOCK if wrong)"
+    RENDERED_TSV=$(mktemp)
+    # shellcheck disable=SC2064
+    trap "rm -f '$RENDERED_TSV'; rmdir '$ROLLUP_LOCK' 2>/dev/null || true" EXIT
+
+    _render_steps 1 > "$RENDERED_TSV"
+    local n r
+    n=$(wc -l < "$RENDERED_TSV" | tr -d ' ')
+    r=$(_ctx_resolve_R "$n")
+    [[ "$MODE" == "rebuild" ]] && rm -rf "$ROLLUP_DIR"/t* 2>/dev/null || true
+    [[ "$MODE" != "cached" ]] && _ctx_build "$n"
+    _ctx_assemble "$n" "$r"
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
+if [[ "$CONTEXT" -eq 1 ]]; then
+    _ctx_run
+    exit 0
+fi
 
 case "$MODE" in
     rebuild)
