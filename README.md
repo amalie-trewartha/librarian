@@ -1,678 +1,121 @@
 ```
-███      █████ ██  ██ █████ ██ ██    ███   ███
-  ███    ██    ██  ██ ██    ██ ██    ██ ███ ██
-    ███  █████ ██▀▀██ ████  ██ ██    ██  █  ██
-  ███       ██ ██  ██ ██    ██ █████ ██     ██    
-███      █████ ██  ██ █████ ████████ 
+███      █████ ██  ██ █████ ██    ██    ██  ██
+  ███    ██    ██  ██ ██    ██    ██    ██  ██
+    ███  █████ ██▀▀██ ████  ██    ██    ▀████▀
+  ███       ██ ██  ██ ██    ██    ██      ██
+███      █████ ██  ██ █████ █████ █████   ██
 ```
 
-A bash-native AI agent that thinks by writing shell commands, running them, and iterating until it has an answer. Composed of dead simple shell tools.
+**Shelly** is an open-source micro-kernel agent framework — a handful of
+small, composable bash tools that add up to
+**persistent agency**: an agent with a continuous, self-guided inner
+monologue. You give them a name and a personality; they keep thinking
+whether or not you're talking to them, decide their own interests and
+priorities, start their own projects, and ping you when they have
+something to say. Every interaction — Slack, Telegram, chat, their own
+idle thoughts — lands in one unified inner experience.
 
-> For the full backstory and design philosophy, see [Philosophy and Introduction to shellm](philosophy.md).
+At the heart of Shelly is **shellm**, a CLI implementation of
+[Recursive Language Models](https://alexzhang13.github.io/blog/2025/rlm/)
+in bash: the agent thinks by writing shell commands, running them, and
+iterating. There is one tool, and it is bash.
 
-## Why the shell?
+## Get started
 
-LLMs are text-in, text-out. The Unix shell is an environment where *everything* is text — stdin, stdout, pipes, files, environment variables. That structural alignment turns out to be deep.
-
-Most agent frameworks give the LLM a curated menu of function calls: `search_web`, `read_file`, `run_sql`. If your menu doesn't include a capability, the model can't do it. The shell inverts this. Instead of enumerating tools, you drop the LLM into a composable environment and let it figure out what to do. `curl` is the HTTP client. `jq` is the JSON processor. `python3 -c` is the escape hatch. No schemas to define, no wrappers to write — the model composes tools the same way a human would, by piping them together.
-
-shellm takes this idea seriously. It's four small, composable tools — all pure bash — that together form a full agent stack. Each one does one thing well. They compose through the filesystem and environment variables, just like Unix intended.
-
-| Tool | What it does |
-|------|-------------|
-| **shellm** | The core loop — sends context to an LLM, executes the bash it writes back, repeats |
-| **llm** | Minimal multi-provider LLM CLI — Anthropic, OpenAI, and Gemini behind one interface |
-| **shellm-explore** | Visualize run trees and generate LLM-powered reports on what a run did and why |
-| **recap** | Summarize a trajectory into themes + episodes with step references (cached, incremental) |
-| **shelly** | Interactive conversational agent with identity, memory, and skills |
-| **mem** | CLI memory store — markdown files with YAML frontmatter, no database |
-| **skills** | Skill manager — install, create, and use SKILL.md-based agent abilities |
-
-`llm` is the foundation — a single command that talks to any supported LLM provider. shellm is the engine that uses it to think and act. shellm-explore gives you visibility into what the engine did. The other three build on shellm to get from a stateless tool to a stateful agent — with memory, learned abilities, and persistent identity across sessions.
-
-## Install
-
-One-liner — installs the tools, then walks you through creating your first
-virtual person and opens a local dashboard where you can watch their mind run:
+One line installs everything, interviews you to bring a shelly agent to life,
+and opens a dashboard where you can watch their mind run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/laude-institute/shellm/main/install.sh | bash
 ```
 
-It clones the repo to `~/.shellm/app`, symlinks the tools into `~/.local/bin`,
-asks for an LLM API key (use a dedicated, spend-capped one — the agent
-executes real shell commands), and runs a short optional interview: a name, a
-few words of personality, what they should think about when idle. The answers
-become their core identity and first memories, then their mind starts and the
-dash opens. Their name also becomes a command:
+You'll need an LLM API key (Anthropic, OpenAI, Gemini, or OpenRouter) —
+use a dedicated, spend-capped one: your agent runs real shell commands
+and thinks around the clock.
+
+Their name becomes a command:
 
 ```bash
-ada                  # chat with them
 ada hello!           # one message, wait for the reply
+ada                  # chat
 ada stop / ada start # pause / resume their mind
 ada dash             # open the dashboard
 ```
 
-Re-running the one-liner updates everything in place.
-
-Prefer to read before you run? Same thing, two steps:
-
-```bash
-curl -fsSLO https://raw.githubusercontent.com/laude-institute/shellm/main/install.sh
-less install.sh && bash install.sh --init
-```
-
-The installer never uses sudo — everything lands in `~/.local/bin` and
-`~/.shellm`, and the piped script only clones the repo and re-runs the
-installer from the checkout, so what executes is the same code you can read
-here.
-
-### Prefer a sandbox? Run it in Docker
-
-The same installer works inside a container — nothing touches your machine,
-and the agent's shell commands run in the container too:
-
-```bash
-docker run -it --rm -p 8080:8080 buildpack-deps:curl bash -c \
-  'curl -fsSL https://raw.githubusercontent.com/laude-institute/shellm/main/install.sh | bash; exec bash'
-```
-
-The installer notices it is root in a fresh container and apt-installs its
-own dependencies (tool installs like uv and bun are automatic there — no
-prompts); the dash binds `0.0.0.0` automatically so the published port
-works. Paste your API key, answer the interview, then open
-http://localhost:8080 on your host
-to watch the mind run. The trailing `bash` keeps the container alive so you
-can explore (`cd ~/.shellm/app && identity shell <name>`); exiting it throws
-the whole world away (`--rm`).
-
-### Want them to stick around? A long-lived agent in Docker
-
-Same command, minus `--rm`, plus a name and a restart policy:
+Prefer a sandbox? The same flow in a long-lived docker container:
 
 ```bash
 docker run -it --name shellm --restart unless-stopped -p 8080:8080 buildpack-deps:curl \
   bash -c 'curl -fsSL https://raw.githubusercontent.com/laude-institute/shellm/main/install.sh | bash; exec bash'
 ```
 
-You get the same interview and shell, but typing `exit` no longer ends the
-world: Docker restarts the container in the background, the installer
-re-runs (it is idempotent — it keeps your key and identity, pulls the
-latest code, and skips every prompt), and the mind and dash come back up
-on their own. Your agent keeps thinking; the dash stays on
-http://localhost:8080.
-
-Day-to-day:
-
-```bash
-docker exec -it shellm bash -l   # drop back into your agent's world
-docker stop shellm               # pause everything (survives daemon restarts too)
-docker start shellm              # resume
-docker rm -f shellm              # delete the agent and its whole world
-```
-
-Pasting the run command a second time fails with "name shellm already in
-use" — that means your agent already exists, and `docker exec` is how you
-get back to it.
-
-### Non-interactive install (CI and coding agents)
-
-Every question the installer asks has an environment variable, and with no
-tty every question falls back to its variable or its default. So a script
-or a coding agent can install with no interaction at all:
-
-```bash
-export OPENROUTER_API_KEY=sk-or-...   # or ANTHROPIC_/OPENAI_/GEMINI_API_KEY
-export SHELLM_IDENTITY_NAME=ada       # optional; the interview's answers
-export SHELLM_IDENTITY_VIBE="curious, warm, and plainspoken"
-export SHELLM_IDENTITY_FOCUS="learning how their own mind works"
-export SHELLM_IDENTITY_USER="I'm Sam, a programmer trying shellm out"
-curl -fsSL https://raw.githubusercontent.com/laude-institute/shellm/main/install.sh | bash
-```
-
-A key must be in the environment (there is no one to type it); everything
-else is optional. `SHELLM_NO_DASH=1` and `SHELLM_NO_THINKERS=1` skip those
-parts. When the installer finishes it writes `~/.shellm/status.json` with
-the outcome, so checking that the install worked is a parse, not a scrape:
-
-```bash
-jq -r '.mind.status, .dash.status, .dash.url' ~/.shellm/status.json
-```
-
-`AGENTS.md` in this repo documents how to operate a running identity —
-paths, logs, health checks, and the sharp edges.
-
-### Or from a checkout
-
-```bash
-git clone https://github.com/laude-institute/shellm.git
-cd shellm
-./install.sh            # add --init to also bootstrap an identity + dash
-```
-
-This copies the tools in `bin/` to `~/.local/bin`. Use `--symlinks` to symlink instead (edits take effect without reinstalling), or `--prefix /usr/local/bin` for a different location.
-
-## Quick start
-
-```bash
-# Set your API key
-export ANTHROPIC_API_KEY="sk-ant-..."
-
-# Run it
-shellm what is the mass of jupiter in kilograms
-
-# Pipe data in
-cat dataset.csv | shellm summarize this data and find outliers
-
-# Pass files
-shellm -f paper.pdf -f notes.txt compare these documents
-
-# Quotes are optional for inline context
-shellm research the latest advances in protein folding and write a summary
-```
-
-## How shellm works
-
-shellm runs a loop:
-
-1. Sends your context to an LLM with a system prompt that says "write bash code"
-2. The LLM responds with a ` ```bash ` code block
-3. shellm executes the code (in Docker if available, locally otherwise)
-4. Output streams back to Claude as the next message
-5. Repeat until the code sets `FINAL="answer"` or hits max iterations
-
-The LLM has full shell access. It can curl APIs, parse data with jq, write Python scripts, call itself recursively, install packages — whatever it takes to solve the task.
-
-### What you see
-
-shellm streams everything live. Commands show in cyan, output in dim:
-
-```
-▶ Iteration 1/25 — calling Claude API...
-▶ Executing bash (12 lines):
-    curl -s "https://api.example.com/data" | jq '.results'
-    ...
-  $ curl -s 'https://api.example.com/data'
-  $ jq '.results'
-  │ {"count": 42, "items": [...]}
-  $ FINAL="Found 42 results"
-  Exit 0
-
-▶ Final answer received
-Found 42 results
-```
-
-If a command hangs (waiting for interactive input), the inactivity watchdog kills it after `SHELLM_INACTIVITY_TIMEOUT` seconds (default 30) and gives the LLM structured feedback on what went wrong.
-
-### Completion signals
-
-The LLM signals it has an answer by setting one of these in its bash code:
-
-```bash
-# Short answer
-FINAL="The answer is 42"
-
-# Long answer from a file
-echo "detailed report..." > report.txt
-FINAL_FILE=report.txt
-```
-
-shellm captures the value and prints it to stdout. Everything else (progress, commands, debug) goes to stderr, so you can pipe the final answer:
-
-```bash
-shellm -f data.csv compute the average > result.txt
-```
-
-### Context
-
-There are three ways to pass context:
-
-**Inline** — everything after the flags is your context (quotes optional):
-
-```bash
-shellm explain why the sky is blue
-shellm "explain why the sky is blue"  # same thing
-```
-
-**Files** — use `-f` one or more times. Contents become `$FILE_CONTEXT1`, `$FILE_CONTEXT2`, etc:
-
-```bash
-shellm -f data.json analyze this
-shellm -f chapter1.txt -f chapter2.txt compare these chapters
-```
-
-**Stdin** — piped data becomes `$CONTEXT`:
-
-```bash
-curl https://example.com | shellm what is this page about
-git diff | shellm review this diff for bugs
-```
-
-These can be combined:
-
-```bash
-cat errors.log | shellm -f config.yaml diagnose why the service is failing
-```
-
-### Nested calls
-
-Code generated by shellm can call shellm itself:
-
-**`shellm "prompt"`** — starts a fresh nested run. The child gets its own conversation history and env. Good for independent subtasks:
-
-```bash
-# Inside generated code
-category=$(shellm "classify this text as positive/negative/neutral: $text")
-```
-
-Sub-runs are tracked as forked branches in the parent's trajectory file.
-
-### Interactive command handling
-
-Generated code runs with stdin connected to `/dev/null`. Interactive prompts (password dialogs, `[y/N]` confirmations, `read` commands) get immediate EOF instead of hanging.
-
-If a process produces no output for `SHELLM_INACTIVITY_TIMEOUT` seconds (default 30), the watchdog kills it and sends the LLM structured feedback:
-
-```
-Execution was KILLED after 30 seconds of inactivity
-(likely waiting for interactive input that will never arrive).
-stdin is connected to /dev/null.
-
-DETECTED: Confirmation prompt. Retry with --yes, -y, --force,
---assume-yes, --non-interactive, or equivalent flag.
-```
-
-The LLM sees this and retries with non-interactive flags. For commands that truly need interaction, the LLM can use tmux to create a PTY session and interact with it step by step.
-
-### Docker sandboxing
-
-If Docker is running, shellm automatically executes code inside a container. This means:
-
-- The LLM can't accidentally modify your host system
-- It can install packages (`apt-get install`) without affecting your machine
-- The container comes with bash, python3, jq, curl, and tmux pre-installed
-- Your workdir is mounted in, so files persist across iterations
-
-```bash
-# Auto-detected (default)
-shellm do something risky
-
-# Force local execution (use the "local" env)
-shellm --env local do something risky
-
-# Use a different base image
-shellm --docker-image python:3.12-slim write a flask app
-
-# Teardown container on exit instead of persisting
-shellm --temp-docker do something risky
-
-# Let generated code run bounded helper containers through a broker
-shellm --docker-access broker run tests in a clean alpine container
-
-# Unsafe escape hatch: expose the host Docker daemon directly
-shellm --docker-access socket inspect docker containers
-
-# Unsafe escape hatch: start an inner Docker daemon
-shellm --docker-access dind build and run a docker image
-```
-
-Docker detection works like this:
-- If Docker daemon is running and env isn't `local` → uses Docker
-- If already inside a Docker container (e.g. CI) → runs locally unless `SHELLM_ALLOW_NESTED_DOCKER=1`
-- If Docker isn't installed → runs locally
-
-Docker access from inside the sandbox is off by default. `--docker-access broker` is the recommended mode when the agent needs helper containers: generated code gets `shellm-docker`, plus a constrained `docker` facade for tools such as Harbor. The facade supports `docker info` and brokered `docker compose build/down/up/exec/cp/stop/config/version`; the broker rejects privileged containers, arbitrary bind mounts, host namespace sharing, device access, and Docker socket mounts. On Linux, the broker uses `socat` for a Unix socket transport when available; otherwise it falls back to a filesystem request/response transport.
-
-`--docker-access socket` mounts `/var/run/docker.sock` into the sandbox. This is convenient, but it is not a strong sandbox because the agent can control the host Docker daemon. `--docker-access dind` starts an inner Docker daemon in a privileged outer container, which is also not a strong sandbox.
-
-### Envs
-
-An **env** is a named execution environment — either a Docker container or "local" (the host machine). Multiple runs can share an env, so installed packages and system modifications persist across conversations.
-
-Each run records its metadata and conversation history in a trajectory file under the trajectories directory (`$TRAJ_DIR`, default `~/.shellm/.trajectories/`). The trajectory is an append-only JSONL file named `YYYY-MM-DD-HH-MM-SS_XXXXXXXX_slug.jsonl` whose first step is a `shellm-run` record capturing the command, workdir, model, and env.
-
-Each run also has a **workdir** — a directory where generated code executes:
-
-- All generated code executes in `$SHELLM_WORKDIR`
-- The default workdir is a fresh per-run directory. Pass `--here` to work
-  on the project in your current directory, or `--workdir DIR` for a
-  specific location.
-- Files created by the agent persist across iterations
-- Sub-runs are tracked as forked branches in the trajectory, not as nested directories
-
-Env metadata is stored in `~/.shellm/envs/<name>/`.
-
-```bash
-# List past runs
-traj list
-
-# Use a custom workdir
-shellm --workdir ./my-run research something complex
-
-# Use a named env (Docker container persists between runs)
-shellm --env my-project do something
-shellm --env my-project do something else  # reuses container
-
-# Run on host (no Docker)
-shellm --env local do something
-
-# Teardown container on exit
-shellm --temp-docker do something risky
-```
-
-With Docker, the workdir is bind-mounted into the container at the same path, so files written inside the container appear on the host and vice versa.
-
-### Run summary
-
-At the start of every run, shellm kicks off a background process that generates a `run-summary` step appended to the trajectory. This calls a fast model (configurable via `SHELLM_SUMMARY_MODEL`, defaults to Haiku) with all the input context — CLI arguments, stdin, and file contents — and produces:
-
-- **tldr** — a one-line summary of the run's context and goal
-- **full_summary** — a multi-paragraph summary (only for large inputs)
-
-This runs asynchronously and doesn't slow down the main loop. The summary is stored as a step in the trajectory and is used by `shellm-explore` to label runs in tree visualizations.
-
-### Exploring runs with shellm-explore
-
-`shellm-explore` visualizes the tree of runs and sub-runs that shellm creates. When shellm delegates subtasks via nested calls, it forks child branches in the trajectory. `shellm-explore` walks the fork/merge references and displays the tree with TLDR summaries from each run's `run-summary` step.
-
-```bash
-# List recent runs
-shellm-explore
-
-# Show the run tree for a given run (by hex ID)
-shellm-explore abc12345
-
-# Generate an LLM-powered report explaining the run tree
-shellm-explore abc12345 --report
-```
-
-Tree output highlights the target run and shows parent/child relationships:
-
-```
-abc12345: Research the AI coding agent market and write a report
-  ├──── def45678: Gather pricing and feature data for top AI coding agents
-  └──── ghi78901: Synthesize findings into a comparative report
-```
-
-With `--report`, it sends the full tree context to an LLM and generates an analysis of what the run tree accomplished, why each sub-run exists, and how they relate to each other.
-
-## The llm tool
-
-`llm` is a standalone multi-provider LLM CLI that shellm and shellm-explore use under the hood. It auto-detects the provider from the model name and handles streaming, thinking, and error reporting.
-
-```bash
-# Simple prompt (provider auto-detected from model name)
-echo "what is 2+2" | llm -m claude-opus-4-7
-
-# Streaming with thinking
-llm --stream --thinking -m claude-opus-4-7 "explain quicksort"
-
-# OpenAI
-llm -m gpt-4o "summarize this" < article.txt
-
-# Gemini
-llm -m gemini-2.5-pro "translate to French: hello world"
-
-# Multi-turn conversation from JSON
-llm -m claude-opus-4-7 -M '[{"role":"user","content":"hi"},{"role":"assistant","content":"hello!"},{"role":"user","content":"what did I just say?"}]'
-```
-
-**Provider auto-detection:**
-
-| Model prefix | Provider |
-|---|---|
-| `claude-*` | Anthropic (`ANTHROPIC_API_KEY`) |
-| `gpt-*`, `o1-*`, `o3-*`, `o4-*` | OpenAI (`OPENAI_API_KEY`) |
-| `gemini-*` | Gemini (`GEMINI_API_KEY`) |
-
-**Output contract:** stdout = text response, stderr = thinking tokens (Anthropic only), exit 0 = success. This makes it composable with pipes and subshells.
-
-## From tool to agent: shelly, mem, and skills
-
-shellm is a powerful primitive, but it's stateless. Each run starts fresh — no memory of what happened last time, no learned abilities, no persistent identity. To get from a tool to an agent, you need memory, skills, and a way to tie them together across conversations.
-
-### mem
-
-A file-based memory store. Each memory is a markdown file with YAML frontmatter (date, type, slug). No database needed.
-
-```bash
-# Add memories with a type
-mem add "the user prefers dark mode"
-mem add --type todo "buy groceries"
-mem add --type value "always be honest"
-mem add --type fact "the project uses React 19"
-
-# Search and browse
-mem list                    # List all (date + slug)
-mem dump                    # Print all summaries
-mem search "user prefs"     # Semantic search (uses shellm)
-
-# Edit and remove
-mem edit <name> "new text"  # Update a memory
-mem forget <name>           # Delete by name or prefix
-```
-
-Types: `memory`, `todo`, `objective`, `value`, `belief`, `fact`, `preference`, `note`
-
-Memories are stored as individual `.md` files in `MEM_DIR` (default: `./.memories/`). Every piece of state is a text file — inspectable, greppable, editable with any editor.
-
-### skills
-
-A manager for SKILL.md-based agent abilities. Skills are directories containing a `SKILL.md` file with YAML frontmatter (name, description) and markdown instructions. They're reusable instruction sets that encode how to do specific things well — no plugin API, no SDK, just text files the LLM reads and follows.
-
-```bash
-# List installed skills
-skills
-
-# Search installed and remote (GitHub) skills
-skills "web research"
-
-# Install from GitHub
-skills --install owner/repo
-
-# Show a skill's full instructions
-skills --show web-research
-
-# Create a new skill
-skills --init my-new-skill
-
-# Remove a skill
-skills --remove old-skill
-```
-
-Skills can declare requirements (env vars, binaries, OS) in their YAML frontmatter under `metadata.shelllm.requires`. By default, `skills list` only shows skills whose requirements are met. Use `skills check <name>` to diagnose a specific skill's requirements.
-
-Skills live in `SKILLS_DIR` (default: `~/.skills/`). shelly also has per-session skills in `.shelly/sessions/<id>/skills/`.
-
-### shelly
-
-shelly ties it all together. It's an interactive conversational agent that wraps shellm, mem, and skills into a stateful chat experience with session management.
-
-```bash
-# Start the REPL
-shelly
-
-# Or send a single message
-shelly send "what's the weather in SF?"
-
-# Send with piped input
-cat report.csv | shelly send "summarize this report"
-```
-
-#### REPL
-
-```
-shelly repl (Ctrl+C to interrupt, Ctrl+D to exit)
-> hello! who are you?
-I'm shelly, an AI with a life context — memories, values, skills...
-> /help
-```
-
-Ctrl+C interrupts a running response and returns to the prompt. Ctrl+D exits.
-
-#### Sessions
-
-shelly keeps conversation history per session:
-
-```bash
-shelly new              # Start a new session
-shelly sessions         # List all sessions
-shelly switch <id>      # Switch to a session (prefix match)
-shelly history          # Show conversation history
-shelly reset            # Clear current session
-shelly compact          # Summarize and compact long history
-```
-
-#### Slash commands (in REPL)
-
-| Command | Description |
-|---------|-------------|
-| `/new` | Start a new session |
-| `/sessions` | List sessions |
-| `/switch <id>` | Switch session |
-| `/history` | Show history |
-| `/reset` | Clear session |
-| `/compact` | Compact history |
-| `/context` | Show assembled system prompt |
-| `/mem ...` | Memory commands (see above) |
-| `/skills ...` | Skills commands (see above) |
-| `/quit` | Exit |
-
-## Options
-
-All configuration is available as both CLI flags and environment variables. Flags take precedence.
-
-| Flag | Env var | Default | Description |
-|------|---------|---------|-------------|
-| `--model` | `SHELLM_MODEL` | `claude-opus-4-7` | LLM model to use |
-| `--max-iterations` | `SHELLM_MAX_ITERATIONS` | unlimited | Max loop iterations before giving up |
-| `--max-tokens` | `SHELLM_MAX_TOKENS` | model's max output cap | Max tokens per API response |
-| `--effort` | `SHELLM_EFFORT` | `high` | Thinking effort: low, medium, high, xhigh, max |
-| — | `SHELLM_INACTIVITY_TIMEOUT` | `30` | Seconds before killing idle execution |
-| `--workdir DIR` | — | fresh per-run dir | Working directory for the run |
-| `--here` | — | off | Shorthand for `--workdir "$PWD"` |
-| `--env NAME` | `SHELLM_ENV` | auto-generated | Named execution environment (Docker container or `local`) |
-| `--temp-docker` | `SHELLM_TEMP_DOCKER=1` | off | Teardown Docker container on exit |
-| `--docker-image` | `SHELLM_DOCKER_IMAGE` | `ubuntu:latest` | Docker image to use |
-| `--docker-access MODE` | `SHELLM_DOCKER_ACCESS` | `none` | Docker access inside the sandbox: `none`, `broker`, `socket`, `dind` |
-| — | `SHELLM_DOCKER_BROKER_TRANSPORT` | `auto` | Broker transport: `auto`, `socket`, `filesystem` |
-| — | `SHELLM_DOCKER_SOCKET` | `/var/run/docker.sock` | Socket mounted for `--docker-access socket` |
-| — | `SHELLM_ALLOW_NESTED_DOCKER` | `0` | Allow shellm running inside Docker to use Docker |
-| `-f FILE` | — | — | Add file context (repeatable) |
-| `-v, --verbose` | — | off | Show debug output |
-| `-q, --quiet` | — | off | Suppress progress output, keep only final answer |
-
-You can also put settings in a `.env` file in the working directory:
-
-```bash
-ANTHROPIC_API_KEY=sk-ant-...
-SHELLM_MODEL=claude-opus-4-7-20250715
-SHELLM_MAX_ITERATIONS=10
-```
-
-## Prerequisites
-
-**Required:**
-- bash (3.2+)
-- jq
-- curl
-
-**Optional:**
-- Docker — for sandboxed execution (auto-detected)
-- socat — optional, used for the fastest `--docker-access broker` transport
-- python3 — for some generated code
-- lynx — for web scraping tasks
-
-## Examples
-
-```bash
-# Weekly research brief
-shellm research the five most important ai launches from the last 7 days and summarize them in a markdown table with sources
-
-# Travel planning from live web data
-shellm find the cheapest 3-night tokyo trips from san francisco in october and show the best date patterns and booking sources
-
-# Vendor landscape research
-shellm compare the top open-source observability stacks for a 20-person saas startup and recommend one
-
-# Competitor mapping
-shellm map the market for ai coding agents including pricing, key features, and the most notable launches this quarter
-
-# Multi-source news synthesis
-shellm reconstruct a timeline of the latest major nvidia announcements from primary sources and reputable coverage
-
-# Delegate subtasks to nested shellm runs
-shellm research the ai coding agent market, split the work into data gathering and synthesis using nested shellm calls, and write the final report to report.md
-```
-
-## Architecture
-
-```
-llm                          Multi-provider LLM CLI
-├── Provider auto-detect     claude-* → Anthropic, gpt-*/o*-* → OpenAI, gemini-* → Gemini
-├── Streaming                SSE parsing with per-provider delta extraction
-├── Thinking                 Anthropic adaptive thinking (stderr), effort control
-└── Output contract          stdout=text, stderr=thinking, exit 0/1
-
-shellm                       The execution engine (uses llm)
-├── run_loop()               Core iteration: call LLM → extract code → execute → repeat
-│   ├── call_llm()           Delegates to llm tool with streaming + thinking capture
-│   ├── extract_code()       Pull first ```bash block from response
-│   ├── execute_code()       Run in Docker or locally (stdin=/dev/null)
-│   ├── watchdog             Background: kill on inactivity timeout
-│   ├── poll_output          Foreground: stream new lines to stderr
-│   ├── generate_run_summary Background: async run-summary step via fast model
-│   └── check final          Done? Return answer. No? Feed output back, loop.
-├── detect_interactive_prompt()  Classify hung output (password, confirm, etc.)
-├── build_inactivity_feedback()  Structured LLM guidance for non-interactive retry
-└── Docker lifecycle         Auto-detect, setup, teardown
-
-shellm-explore               Run tree visualization & analysis
-├── resolve_run_id()         Fuzzy match: hex ID or slug from trajectory filename
-├── print_tree()             Walk fork/merge references, display with TLDR summaries
-├── generate_report()        LLM-powered analysis of run tree structure (uses llm)
-└── get_summary()            Read TLDR from run-summary step (or fallback to prompt)
-
-shelly                       Conversational agent
-├── cmd_repl()               Interactive REPL with Ctrl+C support
-├── cmd_send()               Send message → assemble context → call shellm
-├── assemble_context()       Personality + memories + skills → system prompt
-├── Session management       new, switch, history, reset, compact
-└── Passes MEM_DIR/SKILLS_DIR to shellm environment
-
-mem                          File-based memory store
-├── add / forget / edit      CRUD on markdown files with YAML frontmatter
-├── list / dump              Browse memories
-└── search                   Semantic search via shellm
-
-skills                       Skill manager
-├── list / search            Browse local + GitHub skills
-├── install / remove         Manage installed skills
-├── init                     Scaffold a new skill
-└── show                     Print a skill's SKILL.md
-```
-
-All pure bash. No dependencies beyond bash, jq, and curl. Six tools, each a single file.
-
-## Tests
-
-```bash
-tests/test_context.sh
-```
-
-Golden-output tests for `context`, the tool that renders a trajectory into an
-LLM messages array. Fixture trajectories in `tests/fixtures/` (elision,
-truncation, blob refs, corrupt lines, multibyte content) are rendered with a
-matrix of flags and diffed against checked-in goldens in `tests/golden/`,
-followed by structural invariants: valid JSON with alternating roles, valid
-UTF-8 output, budget enforcement, and a fork-count guard that keeps rendering
-O(1) processes instead of O(trajectory length).
-
-```bash
-tests/test_context.sh --regen          # rebuild goldens after an intended behavior change
-CONTEXT_BIN=path/to/context tests/test_context.sh   # test an alternate implementation
-```
+Details, non-interactive/CI installs, and the from-a-checkout path:
+[docs/install.md](docs/install.md).
+
+## Key ideas
+
+- **Minimal composable tools.** In the spirit of Ken Thompson's Unix
+  philosophy: small CLI executables (`shellm`, `traj`, `llm`, `context`,
+  `mem`, `skills`, ...), each pure bash, each doing one thing well,
+  composing through pipes, files, and environment variables.
+- **All tool calling via bash.** No tool schemas, no function menus. The
+  model writes shell commands; `curl` is the HTTP client, `jq` is the
+  JSON processor, `python3 -c` is the escape hatch.
+- **Docker by default.** Execution auto-sandboxes into a container when
+  Docker is available; container reuse keeps it light. Local mode
+  supported.
+- **Trajectories are a DAG.** A trajectory is an append-only jsonl file
+  with fork and merge, so sub-sub-\*-agents branch off and merge back —
+  and can use the viewer to understand how they fit into the big picture.
+- **Context is a non-destructive function of the trajectory.** Nothing is
+  ever compacted away in place. Exponentially tiered summarization keeps
+  the agent's full life experience in context at gracefully decaying
+  resolution — the further in the past, the more summarized.
+- **The full past stays explorable.** The agent has tooling to dive
+  arbitrarily deep into its own history, down to any single step.
+- **Recursive self-awareness and improvement.** An agent can spin up new
+  agents — clones or clean slates — and merging life experiences is
+  trivial, because they're just trajectories.
+- **python-env-like semantics.** Each identity has an `activate` script;
+  humans and agents co-work in the same familiar paradigm.
+- **Turn-taking or continuous thought.** Works as a classic
+  request/response tool, or as an autoregressive next-thought loop where
+  human messages are simply observations injected into the thought
+  stream.
+
+The full backstory and design philosophy:
+[philosophy.md](philosophy.md).
+
+## The tools
+
+| Tool | What it does |
+|------|-------------|
+| **shellm** | The RLM core — sends context to an LLM, executes the bash it writes back, repeats |
+| **llm** | Multi-provider LLM CLI — Anthropic, OpenAI, Gemini, OpenRouter behind one interface |
+| **traj** | Trajectory operations — append-only jsonl DAGs with fork and merge |
+| **context** | Renders a trajectory into an LLM messages array with tiered compaction |
+| **thinkers** | The mind — reactive thought processes run by a dispatcher |
+| **identity** | Create and manage identities (persona, memories, activate script) |
+| **persona** | Talk to and manage an identity by name, from anywhere |
+| **chat** / **focus** | Messages and goals on an identity's trajectory |
+| **mem** / **skills** | File-based memory store; SKILL.md-based abilities |
+| **recap** | Summarize a trajectory into themes and episodes |
+| **shellm-explore** | Visualize run trees; LLM-powered reports on what happened and why |
+| **shellm-web** | The dashboard — watch a mind think in the browser |
+| **bridges** | Slack and Telegram connectors into the same inner experience |
+
+## Learn more
+
+- [philosophy.md](philosophy.md) — why the shell, and the full design story
+- [docs/shellm.md](docs/shellm.md) — the shellm engine reference: the loop,
+  context passing, Docker sandboxing, envs, the `llm` tool, options
+- [docs/install.md](docs/install.md) — every install variant, including
+  CI/non-interactive and long-lived Docker
+- [AGENTS.md](AGENTS.md) — operating a running identity (for humans and
+  coding agents): paths, logs, health checks, sharp edges
 
 ## Acknowledgements
 
-shellm is a port of [Recursive Language Models (RLM)](https://alexzhang13.github.io/blog/2025/rlm/) by Alex Zhang to bash, for bash.
+shellm is a port of [Recursive Language Models
+(RLM)](https://alexzhang13.github.io/blog/2025/rlm/) by Alex Zhang to
+bash, for bash.
