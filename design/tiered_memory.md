@@ -37,6 +37,15 @@ The shape that gives you "complete coverage in bounded space" is a **logarithmic
 pyramid of summaries** — recent = fine, distant = coarse, total size ∝ log(life
 length).
 
+**Framing: this is a paging problem, not prompt formatting.** The context
+window is fast memory, the trajectory on disk is the backing store, and
+summaries are compressed pages of the past. The load-bearing core is small —
+**recency plus fetch-by-id**: show the recent raw steps, and pull any older span
+back by its step-ids on demand. The tiers are the *optimization* on top of that
+core — they make the far past cheap to keep resident at a glance; they don't
+replace the raw log, and the system must still work (more slowly) if you delete
+every rollup and keep only the log.
+
 ## Core idea: tiered rollups (the memory pyramid)
 
 Summaries at geometrically coarsening granularity. With a **fanout `F`** (default
@@ -63,6 +72,15 @@ re-summarized from raw steps — that's what makes the work exponentially cheap
 (below) — but each entry carries forward a few of its children's notable
 step-ids so concrete anchors survive the climb rather than dissolving into
 summary-of-summary mush.
+
+**The raw log is the source of truth; the tiers are an index, not testimony.**
+A summary of a summary is a rumor — at the coarse tiers you're reading the
+model's paraphrase of its paraphrase, several removes from anything that
+actually happened. So the cited step-ids aren't a nicety, they're the point:
+treat a coarse entry as a *pointer* to where something happened and roughly
+what, distrust its exact wording, and drill to the raw steps whenever a span
+genuinely bears on the current decision (see Drill-down). Recency and drill-down
+carry the fidelity; the tiers only carry the map.
 
 ## Cold start & tier growth (how many tiers, and when)
 
@@ -166,6 +184,15 @@ then **immutable and cached forever** — the past doesn't change, so it's
 summarized exactly once. Only the **frontier** is ever recomputed: the current
 partial tier-0 tail plus the youngest still-growing block at each tier.
 
+Each sealed block records its **provenance** alongside the summary — the
+`model` and `prompt_version` that produced it, its source `step_range`, and a
+`created` timestamp (the same discipline `recap` already keeps per episode):
+
+```json
+{ "step_range": [100, 200], "summary": "…", "themes": […], "step_ids": […],
+  "model": "claude-…", "prompt_version": 3, "created": "…" }
+```
+
 This makes summarization cost back off exponentially, mirroring the memory it
 builds:
 
@@ -183,7 +210,17 @@ It's the simplest thing that works, and because only the frontier is ever
 computed, a warm cache makes assembly cheap; the one cold-cache wakeup that has
 to seal a backlog is acceptable (and bounded — at most one new block per tier).
 A background sealer stays available as a later optimization if that first
-wakeup ever feels slow. Build is **idempotent**: same log ⇒ same pyramid.
+wakeup ever feels slow.
+
+Build is **idempotent only for a fixed summarizer**: same log *and* same
+`(model, prompt_version)` ⇒ the same pyramid. The block *contents* are LLM
+output, so "same log ⇒ same pyramid" would be a lie the moment the model or
+prompt changes — which is exactly why every block is stamped with the summarizer
+that made it. A mismatch is then *detectable* rather than silent: a model/prompt
+change doesn't poison the cache, it just means the affected strata were written
+by an older summarizer, visibly, and can be rebuilt (a targeted `recap
+--rebuild` over those ranges) when you choose. A cache that can't tell you what
+produced it is a guess, not a cache.
 
 ## Build on `recap`, don't reinvent
 
@@ -277,16 +314,25 @@ where `recent_context` is used today; nothing else in the step changes.
 
 ## Config knobs
 
+Every option is a decision you were too unsure to make, pushed onto the user.
+So ship **two**, derive the rest, and add a knob only when something actually
+breaks.
+
+**The two you set:**
+
 | var | default | meaning |
 |-----|---------|---------|
-| `MONOLITH_CONTEXT_BUDGET` | `auto` | token budget the staircase fills; `auto` derives it from the model's window (below), or set a fixed number |
-| `MONOLITH_CONTEXT_FRACTION` | `0.6` | share of the model's context window to fill, leaving headroom for system prompt + tools + output |
-| `MODEL_CONTEXT_WINDOW` | `auto` | the inference model's window in tokens; `auto` resolves it from the model name, override for unknown models |
-| `ROLLUP_FANOUT` | `10` | `F` — steps per tier-1 entry, and children per higher tier (accepts a per-tier list, e.g. `10,10,10`) |
-| `ROLLUP_MAX_TIERS` | `∞` | optional cap on tier count; when hit, the coarsest tier grows past `F` entries instead of spawning a new tier |
-| `ROLLUP_RAW_TAIL` | `auto` (≥20) | `R` — most-recent steps shown verbatim; grows with the budget, floored at 20 |
-| `ROLLUP_PER_TIER` | `auto` (≥F) | `Kₖ` — entries shown per tier in the staircase; grows with the budget |
-| `ROLLUP_MODEL` | `SHELLM_FAST_MODEL` → … | model for rollup summaries (cheap; these are frequent, small calls) |
+| `ROLLUP_FANOUT` | `10` | `F` — the pyramid's shape: steps per tier-1 entry, children per higher tier |
+| `MONOLITH_CONTEXT_BUDGET` | `auto` | how much window to fill; `auto` = a fraction of the inference model's window |
+
+**Everything else is derived, not set.** `R` (raw tail) and `Kₖ` (entries per
+tier) are computed from the budget; the budget in turn comes from
+`MODEL_CONTEXT_WINDOW × 0.6` (both resolved automatically); rollup summaries use
+the fast-model default. These have override hooks
+(`MONOLITH_CONTEXT_FRACTION`, `MODEL_CONTEXT_WINDOW`, `ROLLUP_MODEL`,
+`ROLLUP_MAX_TIERS`) but they're escape hatches for when a default is wrong, not
+part of normal setup — deliberately undocumented in the common path. Tier count
+is uncapped by default (it's logarithmic; it doesn't need a cap).
 
 ## Decided for v1
 
