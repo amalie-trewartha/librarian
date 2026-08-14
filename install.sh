@@ -1,16 +1,93 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# install.sh — install shellm tools onto PATH.
+#
+# Two ways in:
+#
+#   From a checkout:
+#     ./install.sh [options]
+#
+#   One-liner (no checkout needed):
+#     curl -fsSL https://raw.githubusercontent.com/andyk/shellm/main/install.sh | bash
+#
+# The one-liner clones the repo to ~/.shellm/app, symlink-installs the tools,
+# then hands off to `shellm-init` to bootstrap a first identity and start the
+# local dash. Pass args through the pipe with `| bash -s -- <args>`.
+#
+# Prefer to read before you run? Same thing, two steps:
+#     curl -fsSLO https://raw.githubusercontent.com/andyk/shellm/main/install.sh
+#     less install.sh && bash install.sh --init
+#
+# Everything side-effectful happens inside main(), invoked on the LAST line of
+# this file — so a partially downloaded script (a dropped connection mid
+# `curl | bash`) parses but executes nothing. Keep it that way: top level is
+# only defaults, function definitions, and that final call.
+
+SHELLM_REPO="${SHELLM_REPO:-https://github.com/andyk/shellm.git}"
+SHELLM_BRANCH="${SHELLM_BRANCH:-main}"
+SHELLM_HOME="${SHELLM_HOME:-$HOME/.shellm}"
+
 PREFIX="${PREFIX:-$HOME/.local/bin}"
 SYMLINKS="${SYMLINKS:-0}"
-TOOLS=(shellm shellm-docker shellm-docker-broker skills mem llm shellm-explore context traj identity thinkers chat focus recap)
+RUN_INIT=0
+TOOLS=(shellm shellm-docker shellm-docker-broker skills mem llm shellm-explore context traj identity thinkers chat focus recap shellm-init)
 
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --symlinks) SYMLINKS=1; shift ;;
-        --prefix)   PREFIX="${2:?--prefix requires a path}"; shift 2 ;;
-        --help|-h)
-            cat <<'EOF'
+# ---------------------------------------------------------------------------
+# Dependency checks (shared by both modes)
+# ---------------------------------------------------------------------------
+
+_pkg_hint() {
+    local pkg="$1"
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        printf 'brew install %s' "$pkg"
+    elif command -v apt-get >/dev/null 2>&1; then
+        printf 'sudo apt-get install -y %s' "$pkg"
+    elif command -v dnf >/dev/null 2>&1; then
+        printf 'sudo dnf install -y %s' "$pkg"
+    else
+        printf 'install %s with your package manager' "$pkg"
+    fi
+}
+
+_require_deps() {
+    local missing=0 dep
+    for dep in "$@"; do
+        command -v "$dep" >/dev/null 2>&1 && continue
+        printf 'install.sh: missing dependency: %s   (%s)\n' "$dep" "$(_pkg_hint "$dep")" >&2
+        missing=1
+    done
+    [[ "$missing" -eq 0 ]] || exit 1
+}
+
+# ---------------------------------------------------------------------------
+# Bootstrap mode: no checkout next to this script (i.e. `curl ... | bash`).
+# Fetch the repo, then re-exec the checkout's own installer with --init.
+# ---------------------------------------------------------------------------
+
+_bootstrap_and_reexec() {
+    _require_deps git curl jq
+
+    local app_dir="$SHELLM_HOME/app"
+    if [[ -d "$app_dir/.git" ]]; then
+        echo "==> Updating existing checkout at $app_dir"
+        if ! git -C "$app_dir" pull --ff-only origin "$SHELLM_BRANCH"; then
+            echo "install.sh: warning: could not update $app_dir; installing from what's there" >&2
+        fi
+    else
+        echo "==> Cloning $SHELLM_REPO ($SHELLM_BRANCH) to $app_dir"
+        mkdir -p "$SHELLM_HOME"
+        git clone --branch "$SHELLM_BRANCH" "$SHELLM_REPO" "$app_dir"
+    fi
+    exec bash "$app_dir/install.sh" --symlinks --init "$@"
+}
+
+# ---------------------------------------------------------------------------
+# Checkout-mode pieces
+# ---------------------------------------------------------------------------
+
+_usage() {
+    cat <<'EOF'
 Usage: ./install.sh [options]
 
 Installs shellm tools from bin/ to a directory on your PATH.
@@ -18,11 +95,15 @@ Installs shellm tools from bin/ to a directory on your PATH.
 Options:
   --prefix DIR   Install directory (default: ~/.local/bin)
   --symlinks     Create symlinks instead of copies (edits take effect without reinstalling)
+  --init         After installing, run `shellm-init` to bootstrap a first
+                 identity and start the local dash (the curl|bash one-liner
+                 does this by default)
   -h, --help     Show this help
 
 Environment variables:
   PREFIX         Same as --prefix
   SYMLINKS=1     Same as --symlinks
+  SHELLM_HOME    shellm state directory (default: ~/.shellm)
 
 Examples:
   ./install.sh                          # copy to ~/.local/bin
@@ -30,93 +111,156 @@ Examples:
   ./install.sh --prefix /usr/local/bin  # copy to /usr/local/bin (may need sudo)
   PREFIX=~/bin SYMLINKS=1 ./install.sh  # symlink to ~/bin
 EOF
-            exit 0
-            ;;
-        *) echo "Unknown option: $1 (try --help)" >&2; exit 1 ;;
-    esac
-done
+}
 
-mkdir -p "$PREFIX"
+_install_tools() {
+    local tool
+    for tool in "${TOOLS[@]}"; do
+        if [[ "$SYMLINKS" -eq 1 ]]; then
+            ln -sf "$(pwd)/bin/$tool" "$PREFIX/$tool"
+            echo "Linked $tool → $PREFIX/$tool"
+        else
+            cp "bin/$tool" "$PREFIX/$tool"
+            chmod +x "$PREFIX/$tool"
+            echo "Installed $tool → $PREFIX/$tool"
+        fi
+    done
+}
 
-for tool in "${TOOLS[@]}"; do
-    if [[ "$SYMLINKS" -eq 1 ]]; then
-        ln -sf "$(pwd)/bin/$tool" "$PREFIX/$tool"
-        echo "Linked $tool → $PREFIX/$tool"
-    else
-        cp "bin/$tool" "$PREFIX/$tool"
-        chmod +x "$PREFIX/$tool"
-        echo "Installed $tool → $PREFIX/$tool"
-    fi
-done
-
-# Build and install Rust TUI tools
-if [[ -d "tui" ]]; then
-    if command -v cargo &>/dev/null; then
-        for tui_dir in tui/*/; do
-            [[ -f "${tui_dir}Cargo.toml" ]] || continue
-            name=$(basename "$tui_dir")
-            printf 'Building %s...\n' "$name"
-            (cd "$tui_dir" && cargo build --release --quiet) || {
-                printf 'Warning: failed to build %s (skipping)\n' "$name" >&2
-                continue
-            }
-            local_bin="${tui_dir}target/release/$name-tui"
-            [[ -f "$local_bin" ]] || local_bin="${tui_dir}target/release/$name"
-            if [[ -f "$local_bin" ]]; then
-                cp "$local_bin" "$PREFIX/$(basename "$local_bin")"
-                codesign --force --sign - "$PREFIX/$(basename "$local_bin")" 2>/dev/null || true
-                echo "Installed $(basename "$local_bin") → $PREFIX/$(basename "$local_bin")"
-            fi
-        done
-    else
+_install_tui() {
+    [[ -d "tui" ]] || return 0
+    if ! command -v cargo &>/dev/null; then
         echo "Warning: cargo not found, skipping TUI tools" >&2
+        return 0
     fi
-fi
+    local tui_dir name local_bin
+    for tui_dir in tui/*/; do
+        [[ -f "${tui_dir}Cargo.toml" ]] || continue
+        name=$(basename "$tui_dir")
+        printf 'Building %s...\n' "$name"
+        (cd "$tui_dir" && cargo build --release --quiet) || {
+            printf 'Warning: failed to build %s (skipping)\n' "$name" >&2
+            continue
+        }
+        local_bin="${tui_dir}target/release/$name-tui"
+        [[ -f "$local_bin" ]] || local_bin="${tui_dir}target/release/$name"
+        if [[ -f "$local_bin" ]]; then
+            cp "$local_bin" "$PREFIX/$(basename "$local_bin")"
+            codesign --force --sign - "$PREFIX/$(basename "$local_bin")" 2>/dev/null || true
+            echo "Installed $(basename "$local_bin") → $PREFIX/$(basename "$local_bin")"
+        fi
+    done
+}
 
-# Install bundled skills to ~/.skills/core-skills
-SKILLS_PREFIX="${HOME}/.skills/core-skills"
-mkdir -p "$SKILLS_PREFIX"
-for skill_dir in skills/*/; do
-    [[ -f "${skill_dir}SKILL.md" ]] || continue
-    name=$(basename "$skill_dir")
-    if [[ "$SYMLINKS" -eq 1 ]]; then
-        ln -sfn "$(pwd)/$skill_dir" "$SKILLS_PREFIX/$name"
-    else
-        rm -rf "$SKILLS_PREFIX/$name"
-        cp -R "$skill_dir" "$SKILLS_PREFIX/$name"
-    fi
-done
-echo "Installed core skills → $SKILLS_PREFIX"
+_install_skills() {
+    local skills_prefix="${HOME}/.skills/core-skills"
+    mkdir -p "$skills_prefix"
+    local skill_dir name
+    for skill_dir in skills/*/; do
+        [[ -f "${skill_dir}SKILL.md" ]] || continue
+        name=$(basename "$skill_dir")
+        if [[ "$SYMLINKS" -eq 1 ]]; then
+            ln -sfn "$(pwd)/$skill_dir" "$skills_prefix/$name"
+        else
+            rm -rf "${skills_prefix:?}/$name"
+            cp -R "$skill_dir" "$skills_prefix/$name"
+        fi
+    done
+    echo "Installed core skills → $skills_prefix"
+}
 
-
-# Install bundled thinker templates
-THINKERS_PREFIX="${HOME}/.shellm-thinkers"
-if [[ -d "thinkers" ]]; then
-    mkdir -p "$THINKERS_PREFIX"
+_install_thinkers() {
+    [[ -d "thinkers" ]] || return 0
+    local thinkers_prefix="${HOME}/.shellm-thinkers"
+    mkdir -p "$thinkers_prefix"
+    local td name
     if [[ "$SYMLINKS" -eq 1 ]]; then
         for td in thinkers/*/; do
             [[ -d "$td" ]] || continue
-            ln -sfn "$(pwd)/$td" "$THINKERS_PREFIX/$(basename "$td")"
+            ln -sfn "$(pwd)/$td" "$thinkers_prefix/$(basename "$td")"
         done
-        touch "$THINKERS_PREFIX/.use-symlinks"
+        touch "$thinkers_prefix/.use-symlinks"
     else
         for td in thinkers/*/; do
             [[ -d "$td" ]] || continue
             name=$(basename "$td")
-            rm -rf "$THINKERS_PREFIX/$name"
-            cp -R "$td" "$THINKERS_PREFIX/$name"
+            rm -rf "${thinkers_prefix:?}/$name"
+            cp -R "$td" "$thinkers_prefix/$name"
         done
-        rm -f "$THINKERS_PREFIX/.use-symlinks"
+        rm -f "$thinkers_prefix/.use-symlinks"
     fi
-    echo "Installed thinker templates → $THINKERS_PREFIX"
-fi
+    echo "Installed thinker templates → $thinkers_prefix"
+}
 
-case ":$PATH:" in
-    *":$PREFIX:"*) ;;
-    *)
+# PATH: make sure the tools are reachable — for this process (so --init can
+# chain into shellm-init) and, with consent, for future shells.
+_ensure_path() {
+    case ":$PATH:" in
+        *":$PREFIX:"*) return 0 ;;
+    esac
+    export PATH="$PREFIX:$PATH"
+    local path_line="export PATH=\"$PREFIX:\$PATH\"" rc="" reply=""
+    case "$(basename "${SHELL:-}")" in
+        zsh)  rc="$HOME/.zshrc" ;;
+        bash) rc="$HOME/.bashrc" ;;
+    esac
+    if [[ -n "$rc" ]] && (: </dev/tty) 2>/dev/null; then
+        printf 'Add %s to your PATH in %s? [Y/n] ' "$PREFIX" "$rc" >/dev/tty
+        IFS= read -r reply </dev/tty || true
+        if [[ ! "$reply" =~ ^[Nn] ]]; then
+            grep -qxF "$path_line" "$rc" 2>/dev/null || printf '\n%s\n' "$path_line" >> "$rc"
+            echo "Added to $rc (takes effect in new shells)."
+        fi
+    else
         echo
         echo "Warning: $PREFIX is not on your PATH."
         echo "Add this line to your shell rc (~/.zshrc, ~/.bashrc, etc.):"
-        echo "  export PATH=\"$PREFIX:\$PATH\""
-        ;;
-esac
+        echo "  $path_line"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+main() {
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd)"
+    if [[ ! -f "$script_dir/bin/shellm" ]]; then
+        _bootstrap_and_reexec "$@"
+    fi
+    cd "$script_dir"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --symlinks) SYMLINKS=1; shift ;;
+            --prefix)   PREFIX="${2:?--prefix requires a path}"; shift 2 ;;
+            --init)     RUN_INIT=1; shift ;;
+            --no-init)  RUN_INIT=0; shift ;;
+            --help|-h)  _usage; exit 0 ;;
+            *) echo "Unknown option: $1 (try --help)" >&2; exit 1 ;;
+        esac
+    done
+
+    _require_deps jq curl
+
+    mkdir -p "$PREFIX"
+    _install_tools
+
+    # Record where the checkout lives so tools installed as copies (not
+    # symlinks) can still find repo assets (web/, identities/, thinkers/).
+    mkdir -p "$SHELLM_HOME"
+    printf '%s\n' "$(pwd)" > "$SHELLM_HOME/app_dir"
+
+    _install_tui
+    _install_skills
+    _install_thinkers
+    _ensure_path
+
+    if [[ "$RUN_INIT" -eq 1 ]]; then
+        echo
+        exec "$PREFIX/shellm-init"
+    fi
+}
+
+main "$@"

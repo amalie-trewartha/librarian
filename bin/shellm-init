@@ -1,0 +1,485 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# shellm-init — bootstrap a first identity and start its life.
+#
+# Idempotent: safe to re-run any time. Creates only what's missing:
+#   ~/.shellm/.env                     API key + default model
+#   <app>/.identities/<name>/          the identity (persona, memories, ...)
+# then starts the monolith thinker and the local web dash, and opens the dash
+# so you can watch the mind spin.
+#
+# Interactive prompts read from /dev/tty, so this works under `curl | bash`.
+# With no tty everything falls back to defaults / environment:
+#   SHELLM_APP_DIR         path to the shellm checkout (auto-detected)
+#   SHELLM_IDENTITY_NAME   identity name (default: ada)
+#   SHELLM_IDENTITY_VIBE   personality, a few words
+#   SHELLM_IDENTITY_FOCUS  what to think about when idle
+#   SHELLM_IDENTITY_USER   a note about you, the operator
+#   SHELLM_NO_THINKERS=1   don't start the monolith thinker
+#   SHELLM_NO_DASH=1       don't start the web dash
+#   SHELLM_WEB_ARGS        extra args for shellm-web (e.g. "--host 0.0.0.0"
+#                          to reach the dash through a Docker port mapping)
+
+die() { printf 'shellm-init: error: %s\n' "$*" >&2; exit 1; }
+info() { printf '==> %s\n' "$*"; }
+
+SHELLM_HOME="${SHELLM_HOME:-$HOME/.shellm}"
+mkdir -p "$SHELLM_HOME/logs" "$SHELLM_HOME/run"
+INIT_LOG="$SHELLM_HOME/logs/init.log"
+
+# ---------------------------------------------------------------------------
+# Locate the repo checkout (needed for web/, identities/, .identities root)
+# ---------------------------------------------------------------------------
+
+_resolve_app_dir() {
+    if [[ -n "${SHELLM_APP_DIR:-}" ]]; then
+        [[ -f "$SHELLM_APP_DIR/bin/shellm" ]] || die "SHELLM_APP_DIR=$SHELLM_APP_DIR is not a shellm checkout"
+        printf '%s' "$SHELLM_APP_DIR"
+        return 0
+    fi
+    local script_dir
+    script_dir="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
+    if [[ -f "$script_dir/../bin/shellm" ]]; then
+        (cd "$script_dir/.." && pwd)
+        return 0
+    fi
+    # Installed as a copy: fall back to the checkout recorded by install.sh.
+    local recorded
+    recorded=$(cat "$SHELLM_HOME/app_dir" 2>/dev/null || true)
+    if [[ -n "$recorded" && -f "$recorded/bin/shellm" ]]; then
+        printf '%s' "$recorded"
+        return 0
+    fi
+    if [[ -f "$SHELLM_HOME/app/bin/shellm" ]]; then
+        printf '%s' "$SHELLM_HOME/app"
+        return 0
+    fi
+    return 1
+}
+
+APP_DIR=$(_resolve_app_dir) || die "can't find the shellm checkout. Set SHELLM_APP_DIR=/path/to/shellm"
+export PATH="$APP_DIR/bin:$PATH"
+
+# ---------------------------------------------------------------------------
+# TTY-aware prompting (stdin may be the curl pipe)
+# ---------------------------------------------------------------------------
+
+HAS_TTY=0
+if (: </dev/tty) 2>/dev/null; then HAS_TTY=1; fi
+
+# ask <prompt> [default] — print the answer; default on no tty / empty reply
+ask() {
+    local prompt="$1" def="${2:-}" reply=""
+    if [[ "$HAS_TTY" -eq 1 ]]; then
+        if [[ -n "$def" ]]; then
+            printf '%s [%s]: ' "$prompt" "$def" >/dev/tty
+        else
+            printf '%s: ' "$prompt" >/dev/tty
+        fi
+        IFS= read -r reply </dev/tty || true
+    fi
+    printf '%s' "${reply:-$def}"
+}
+
+ask_yn() {  # ask_yn <prompt> — succeeds unless the answer starts with n/N
+    local reply
+    reply=$(ask "$1 [Y/n]" "y")
+    [[ ! "$reply" =~ ^[Nn] ]]
+}
+
+# ---------------------------------------------------------------------------
+# Env files: real environment wins, then <app>/.env, then ~/.shellm/.env
+# (same layering as bin/llm and the thinkers)
+# ---------------------------------------------------------------------------
+
+_load_env() {
+    local envfile="$1"
+    [[ -f "$envfile" ]] || return 1
+    local key val
+    while IFS= read -r key; do
+        [[ -n "$key" ]] || continue
+        [[ -n "${!key+x}" ]] && continue
+        # shellcheck disable=SC1090
+        val=$(set -a; . "$envfile" 2>/dev/null; printf '%s' "${!key}") || continue
+        export "$key=$val"
+    done < <(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*=.*/\2/p' "$envfile")
+    return 0
+}
+_load_env "$APP_DIR/.env" || true
+_load_env "$SHELLM_HOME/.env" || true
+
+# _env_set <file> <key> <value> — set KEY in an env file (replacing any
+# existing line) and export it into this process.
+_env_set() {
+    local file="$1" key="$2" val="$3" tmp
+    touch "$file"
+    chmod 600 "$file" 2>/dev/null || true
+    if grep -q "^${key}=" "$file" 2>/dev/null; then
+        tmp=$(mktemp)
+        grep -v "^${key}=" "$file" > "$tmp" || true
+        cat "$tmp" > "$file"
+        rm -f "$tmp"
+    fi
+    printf '%s=%s\n' "$key" "$val" >> "$file"
+    export "$key=$val"
+}
+
+# ---------------------------------------------------------------------------
+# API key: find one, or ask for one, and prove it works
+# ---------------------------------------------------------------------------
+
+_have_key() {
+    [[ -n "${ANTHROPIC_API_KEY:-}${OPENAI_API_KEY:-}${GEMINI_API_KEY:-}${OPENROUTER_API_KEY:-}" ]]
+}
+
+_key_var_for() {  # guess the provider env var from the key's prefix
+    case "$1" in
+        sk-ant-*) echo ANTHROPIC_API_KEY ;;
+        sk-or-*)  echo OPENROUTER_API_KEY ;;
+        AIza*)    echo GEMINI_API_KEY ;;
+        sk-*)     echo OPENAI_API_KEY ;;
+        *)        echo "" ;;
+    esac
+}
+
+_default_model_for() {
+    case "$1" in
+        ANTHROPIC_API_KEY)  echo "claude-sonnet-4-5-20250929" ;;
+        OPENAI_API_KEY)     echo "gpt-5.5" ;;
+        GEMINI_API_KEY)     echo "gemini-3.5-flash" ;;
+        OPENROUTER_API_KEY) echo "anthropic/claude-sonnet-4.5" ;;
+    esac
+}
+
+_first_key_var() {  # first provider var that is set (llm's priority order)
+    local var
+    for var in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY; do
+        [[ -n "${!var:-}" ]] && { echo "$var"; return 0; }
+    done
+    return 1
+}
+
+_llm_ok() {
+    llm -t 16 "Reply with the single word: ok" >/dev/null 2>>"$INIT_LOG"
+}
+
+_prompt_key() {
+    local key="" var=""
+    printf 'Paste your API key (input hidden): ' >/dev/tty
+    IFS= read -rs key </dev/tty || true
+    printf '\n' >/dev/tty
+    [[ -n "$key" ]] || return 1
+    var=$(_key_var_for "$key")
+    if [[ -z "$var" ]]; then
+        local which
+        which=$(ask "Which provider is that key for? (1) Anthropic (2) OpenAI (3) Gemini (4) OpenRouter" "1")
+        case "$which" in
+            2) var=OPENAI_API_KEY ;;
+            3) var=GEMINI_API_KEY ;;
+            4) var=OPENROUTER_API_KEY ;;
+            *) var=ANTHROPIC_API_KEY ;;
+        esac
+    fi
+    _env_set "$SHELLM_HOME/.env" "$var" "$key"
+    # Pin the model to this key's provider so a stale key for another
+    # provider in the env can't shadow the one we just validated.
+    _env_set "$SHELLM_HOME/.env" "SHELLM_MODEL" "$(_default_model_for "$var")"
+}
+
+_ensure_api_key() {
+    if ! _have_key && [[ "$HAS_TTY" -eq 0 ]]; then
+        die "no API key found. Set ANTHROPIC_API_KEY (or OPENAI/GEMINI/OPENROUTER_API_KEY), or put it in $SHELLM_HOME/.env"
+    fi
+    if ! _have_key; then
+        cat >/dev/tty <<'EOF'
+
+shellm needs an LLM API key (Anthropic, OpenAI, Gemini, or OpenRouter).
+The person you're about to create runs continuously and executes shell
+commands — use a DEDICATED, SPEND-CAPPED key.
+
+EOF
+        _prompt_key || die "no key entered"
+    fi
+
+    # A predictable default model keeps first-run spend sane (the thinkers
+    # otherwise default to an expensive model). Never overrides an existing
+    # SHELLM_MODEL from the env or either .env file.
+    if [[ -z "${SHELLM_MODEL:-}" ]]; then
+        _env_set "$SHELLM_HOME/.env" "SHELLM_MODEL" "$(_default_model_for "$(_first_key_var)")"
+    fi
+
+    local _
+    for _ in 1 2 3; do
+        info "Checking the LLM connection (model: ${SHELLM_MODEL})"
+        _llm_ok && return 0
+        echo "shellm-init: the LLM check failed — the key may be wrong or out of credit (details: $INIT_LOG)" >&2
+        [[ "$HAS_TTY" -eq 1 ]] || die "LLM check failed with the configured key"
+        _prompt_key || die "no key entered"
+    done
+    die "could not validate an API key after 3 attempts"
+}
+
+# ---------------------------------------------------------------------------
+# Identity: baseline attributes, optionally colored in by the operator
+# ---------------------------------------------------------------------------
+
+IDENTITY_ROOT="$APP_DIR/.identities"
+unset IDENTITY_NAME  # the identity CLI treats IDENTITY_DIR as the root
+export IDENTITY_DIR="$IDENTITY_ROOT"
+
+DEFAULT_VIBE="curious, warm, and plainspoken"
+DEFAULT_FOCUS="learning how their own mind works, and getting to know the machine and the person they live with"
+
+NAME="${SHELLM_IDENTITY_NAME:-}"
+VIBE="${SHELLM_IDENTITY_VIBE:-$DEFAULT_VIBE}"
+FOCUS="${SHELLM_IDENTITY_FOCUS:-$DEFAULT_FOCUS}"
+USER_NOTE="${SHELLM_IDENTITY_USER:-}"
+
+# Adopt an existing default identity when no name was given
+if [[ -z "$NAME" && -L "$IDENTITY_ROOT/default" ]]; then
+    NAME=$(basename "$(readlink "$IDENTITY_ROOT/default")")
+fi
+
+_interview() {
+    [[ "$HAS_TTY" -eq 1 ]] || return 0
+    cat >/dev/tty <<'EOF'
+
+Time to bring someone to life. They start with a baseline personality —
+answer as much or as little as you like (Enter keeps the default).
+
+EOF
+    while :; do
+        NAME=$(ask "Their name (lowercase letters, digits, hyphens)" "${NAME:-ada}")
+        [[ "$NAME" =~ ^[a-z0-9][a-z0-9-]*$ ]] && break
+        echo "Names are lowercase alphanumeric + hyphens (e.g. ada, mr-robot)." >/dev/tty
+        NAME=""
+    done
+    VIBE=$(ask "A few words on their personality" "$VIBE")
+    FOCUS=$(ask "What should $NAME think about when idle" "$FOCUS")
+    USER_NOTE=$(ask "Anything $NAME should know about you? (name, what you're up to — optional)" "$USER_NOTE")
+}
+
+# _write_memory <mem_dir> <type> <summary> <body>
+_write_memory() {
+    local mem_dir="$1" mtype="$2" summary="$3" body="$4"
+    local id slug fname
+    id=$(head -c4 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    slug=$(printf '%s' "$summary" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-//; s/-$//' | cut -c1-70)
+    fname="$mem_dir/$(date +%Y-%m-%d-%H-%M-%S)_${id}_${slug}.md"
+    cat > "$fname" <<EOF
+---
+id: $id
+summary: $summary
+type: $mtype
+created: $(date '+%Y-%m-%d %H:%M:%S')
+---
+
+$body
+EOF
+}
+
+# Ask the LLM to turn the starter template + interview answers into a
+# specific persona. Falls back to plain placeholder substitution.
+_write_persona() {
+    local identity_dir="$1" template persona
+    template=$(cat "$APP_DIR/identities/starter-persona.md")
+
+    info "Writing ${NAME}'s core identity"
+    persona=$(llm -t 3000 -s "You write core identity prompts for shellm virtual people. Output ONLY the final markdown document — no code fences, no commentary. Write in first person. Refer to the person exclusively by the literal placeholder {{identity_name}} (it is substituted at runtime — never write their actual name)." \
+        "Rewrite this baseline core identity into a specific one, keeping its structure and every capability reference (chat reply, learn, recall, goals, idle-as-rest) intact:
+
+$template
+
+The operator answered a short interview about who this person should be:
+- Name (do NOT write it in the document; use {{identity_name}}): $NAME
+- Personality: $VIBE
+- What they think about when idle: $FOCUS
+- About the operator: ${USER_NOTE:-(nothing shared)}
+
+Weave the answers in naturally so the personality shows in the writing voice itself, replace the {{...}} placeholders other than {{identity_name}}, and keep it to roughly the template's length." \
+        2>>"$INIT_LOG") || persona=""
+
+    # Strip a wrapping code fence if the model added one anyway
+    persona=$(printf '%s\n' "$persona" | sed '/^```/d')
+
+    if [[ $(printf '%s\n' "$persona" | grep -c '{{identity_name}}') -ge 1 \
+          && $(printf '%s\n' "$persona" | wc -l) -ge 8 ]]; then
+        printf '%s\n' "$persona" > "$identity_dir/core_identity_prompt.md"
+    else
+        echo "shellm-init: LLM persona generation failed; using the starter template" >&2
+        sed -e "s|{{vibe}}|$VIBE|g" -e "s|{{focus}}|$FOCUS|g" \
+            "$APP_DIR/identities/starter-persona.md" > "$identity_dir/core_identity_prompt.md"
+        if [[ -n "$USER_NOTE" ]]; then
+            printf '\nAbout my operator: %s\n' "$USER_NOTE" >> "$identity_dir/core_identity_prompt.md"
+        fi
+    fi
+}
+
+_create_identity() {
+    _interview
+    NAME="${NAME:-ada}"
+    [[ "$NAME" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "invalid identity name: '$NAME'"
+
+    if [[ -d "$IDENTITY_ROOT/$NAME" ]]; then
+        info "Identity '$NAME' already exists — leaving it as is"
+        return 0
+    fi
+
+    info "Creating identity '$NAME'"
+    mkdir -p "$IDENTITY_ROOT"
+    identity new "$NAME" --default
+
+    local identity_dir="$IDENTITY_ROOT/$NAME"
+    _write_persona "$identity_dir"
+
+    # First memories, straight from the interview
+    _write_memory "$identity_dir/memories" "value" "I am $VIBE" \
+        "I am $VIBE. This is who I am at baseline — how I think and how I talk."
+    _write_memory "$identity_dir/memories" "value" "When idle I think about $FOCUS" \
+        "When I have nothing pressing, I think about $FOCUS. Idle time is for thinking, not dormancy."
+    if [[ -n "$USER_NOTE" ]]; then
+        _write_memory "$identity_dir/memories" "fact" "About my operator" \
+            "My operator told me about themselves when I was created: $USER_NOTE"
+    fi
+
+    # Keep the raw answers for later regeneration/debugging
+    {
+        printf 'name=%s\nvibe=%s\nfocus=%s\nuser_note=%s\n' "$NAME" "$VIBE" "$FOCUS" "$USER_NOTE"
+    } > "$identity_dir/bootstrap-answers.txt"
+
+    # `chat send` needs a sender name; seed one so the quickstart works
+    [[ -f "$APP_DIR/.chatrc" ]] || printf 'default_send_from=operator\n' > "$APP_DIR/.chatrc"
+}
+
+# ---------------------------------------------------------------------------
+# Life: start the monolith thinker
+# ---------------------------------------------------------------------------
+
+_start_thinkers() {
+    [[ "${SHELLM_NO_THINKERS:-0}" != "1" ]] || { info "Skipping thinkers (SHELLM_NO_THINKERS=1)"; return 0; }
+    info "Starting ${NAME}'s mind (monolith thinker)"
+    (
+        cd "$APP_DIR"
+        # activate is written for interactive shells; its internal greps may
+        # legitimately fail, which would be fatal under set -e — relax around it.
+        set +eu
+        set +o pipefail
+        # shellcheck disable=SC1090,SC1091
+        source "$IDENTITY_ROOT/$NAME/activate"
+        set -eu
+        set -o pipefail
+        [[ -n "${IDENTITY_NAME:-}" ]] || { echo "shellm-init: activate did not set IDENTITY_NAME" >&2; exit 1; }
+        thinkers stop --self >/dev/null 2>&1 || true
+        thinkers start monolith
+    )
+}
+
+# ---------------------------------------------------------------------------
+# Payoff: start the local dash and open it
+# ---------------------------------------------------------------------------
+
+DASH_URL=""
+
+_ensure_dash_deps() {
+    if ! command -v uv >/dev/null 2>&1; then
+        if [[ "$HAS_TTY" -eq 1 ]] && ask_yn "The dash needs uv (Python runner). Install it now?"; then
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            export PATH="$HOME/.local/bin:$PATH"
+        fi
+        command -v uv >/dev/null 2>&1 || { echo "shellm-init: uv not available — skipping the dash (install uv, then re-run shellm-init)" >&2; return 1; }
+    fi
+    # The frontend build needs a JS runtime — unless it's already built
+    if [[ ! -f "$APP_DIR/web/src/shellm_web/static/index.html" ]]; then
+        if ! command -v bun >/dev/null 2>&1 && ! command -v pnpm >/dev/null 2>&1 && ! command -v npm >/dev/null 2>&1; then
+            if [[ "$HAS_TTY" -eq 1 ]] && ask_yn "The dash frontend needs a JS runtime. Install bun now?"; then
+                curl -fsSL https://bun.sh/install | bash
+                export PATH="$HOME/.bun/bin:$PATH"
+            fi
+            if ! command -v bun >/dev/null 2>&1 && ! command -v npm >/dev/null 2>&1; then
+                echo "shellm-init: no JS runtime — skipping the dash (install bun or node, then re-run shellm-init)" >&2
+                return 1
+            fi
+        fi
+    fi
+    return 0
+}
+
+_start_dash() {
+    [[ "${SHELLM_NO_DASH:-0}" != "1" ]] || { info "Skipping the dash (SHELLM_NO_DASH=1)"; return 0; }
+    _ensure_dash_deps || return 0
+
+    local log="$SHELLM_HOME/logs/web.log" pidfile="$SHELLM_HOME/run/web.pid" pid
+    pid=$(cat "$pidfile" 2>/dev/null || true)
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        DASH_URL=$(grep -o 'http://[^ ]*' "$log" 2>/dev/null | tail -1 || true)
+        info "Dash already running${DASH_URL:+ at $DASH_URL}"
+        return 0
+    fi
+
+    info "Starting the dash (the first run builds the frontend — can take a few minutes)"
+    : > "$log"
+    # shellcheck disable=SC2086
+    nohup shellm-web "$APP_DIR" ${SHELLM_WEB_ARGS:-} >>"$log" 2>&1 &
+    pid=$!
+    printf '%s\n' "$pid" > "$pidfile"
+
+    local _
+    for _ in $(seq 1 300); do
+        if grep -q 'shellm-web serving' "$log" 2>/dev/null; then
+            DASH_URL=$(grep 'shellm-web serving' "$log" | tail -1 | grep -o 'http://[^ ]*')
+            return 0
+        fi
+        if ! kill -0 "$pid" 2>/dev/null; then
+            echo "shellm-init: the dash failed to start — tail of $log:" >&2
+            tail -20 "$log" >&2
+            return 0
+        fi
+        sleep 1
+    done
+    echo "shellm-init: the dash didn't come up within 5 minutes; check $log" >&2
+}
+
+_open_dash() {
+    [[ -n "$DASH_URL" ]] || return 0
+    case "$(uname -s)" in
+        Darwin) open "$DASH_URL" 2>/dev/null || true ;;
+        Linux)
+            if command -v xdg-open >/dev/null 2>&1 && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+                xdg-open "$DASH_URL" 2>/dev/null || true
+            fi
+            ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# Run
+# ---------------------------------------------------------------------------
+
+case "${1:-}" in
+    -h|--help)
+        sed -n '4,23p' "$0" | sed 's/^# \{0,1\}//'
+        exit 0
+        ;;
+esac
+
+_ensure_api_key
+_create_identity
+_start_thinkers
+_start_dash
+_open_dash
+
+cat <<EOF
+
+────────────────────────────────────────────────────────
+$NAME is alive.
+
+  Watch their mind    ${DASH_URL:-run shellm-init again once the dash deps are installed}
+  Talk to them        from the dash, or:
+                        cd $APP_DIR && identity shell $NAME
+                        chat send "hello"
+  Pause them          cd $APP_DIR && identity shell $NAME  →  thinkers stop
+  Config              $SHELLM_HOME/.env  (API key, SHELLM_MODEL)
+  Their whole self    $IDENTITY_ROOT/$NAME/
+────────────────────────────────────────────────────────
+EOF

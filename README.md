@@ -32,13 +32,41 @@ shellm takes this idea seriously. It's four small, composable tools — all pure
 
 ## Install
 
+One-liner — installs the tools, then walks you through creating your first
+virtual person and opens a local dashboard where you can watch their mind run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/andyk/shellm/main/install.sh | bash
+```
+
+It clones the repo to `~/.shellm/app`, symlinks the tools into `~/.local/bin`,
+asks for an LLM API key (use a dedicated, spend-capped one — the agent
+executes real shell commands), and runs a short optional interview: a name, a
+few words of personality, what they should think about when idle. The answers
+become their core identity and first memories, then their mind starts and the
+dash opens. Re-running the one-liner updates everything in place.
+
+Prefer to read before you run? Same thing, two steps:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/andyk/shellm/main/install.sh
+less install.sh && bash install.sh --init
+```
+
+The installer never uses sudo — everything lands in `~/.local/bin` and
+`~/.shellm`, and the piped script only clones the repo and re-runs the
+installer from the checkout, so what executes is the same code you can read
+here.
+
+Or from a checkout:
+
 ```bash
 git clone https://github.com/andyk/shellm.git
 cd shellm
-./install.sh
+./install.sh            # add --init to also bootstrap an identity + dash
 ```
 
-This copies `shellm`, `llm`, `shellm-explore`, `shelly`, `mem`, and `skills` to `/usr/local/bin`. Use `--symlinks` to symlink instead (edits take effect without reinstalling), or `--prefix ~/.local/bin` for a different location.
+This copies the tools in `bin/` to `~/.local/bin`. Use `--symlinks` to symlink instead (edits take effect without reinstalling), or `--prefix /usr/local/bin` for a different location.
 
 ## Quick start
 
