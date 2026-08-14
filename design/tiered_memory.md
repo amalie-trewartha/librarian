@@ -108,6 +108,25 @@ the coarsest tier is allowed to accumulate *more than `F`* entries rather than
 spawning a new tier, so its entry count then grows linearly (`≈ N/F^maxtier`,
 still tiny). Default: uncapped.
 
+### On by default, but built only going forward
+
+Tiered memory is **on by default** for monolith minds (`MONOLITH_TIERED_MEMORY`
+defaults to 1; set 0 to disable). Default-on can't mean an existing long log
+rebuilds hundreds of rollups inside one wakeup, so:
+
+- On first use, a trajectory records a **start marker** (`rollups/meta.json`
+  `start_index` = the filtered-step count at that moment) and the automatic
+  build seals blocks only *at or after* it. So tiered memory works **going
+  forward** from enablement with no synchronous historical build.
+- A **brand-new agent** enables at ~step 0, so "forward from now" is its whole
+  life — a complete pyramid grows for free, ~one cheap call per `F` steps, no
+  backfill ever needed.
+- An **existing agent** gets rollups going forward immediately; its pre-enable
+  history stays uncovered (the staircase simply starts at the marker) until
+  someone runs **`recap --backfill`** once — a one-time, offline command that
+  resets the marker to 0 and summarizes the whole past. That first historical
+  build is the only expensive one, and it's deliberately manual.
+
 ## Assembling one context window: the staircase
 
 A context window is built as a **staircase** from coarse to fine, always
@@ -325,6 +344,9 @@ breaks.
 | `ROLLUP_FANOUT` | `10` | `F` — the pyramid's shape: steps per tier-1 entry, children per higher tier |
 | `MONOLITH_CONTEXT_BUDGET` | `auto` | how much window to fill; `auto` = a fraction of the inference model's window |
 
+On/off is `MONOLITH_TIERED_MEMORY` (default `1`). To cover an existing agent's
+past, run `recap --backfill` once (see "On by default").
+
 **Everything else is derived, not set.** `R` (raw tail) and `Kₖ` (entries per
 tier) are computed from the budget; the budget in turn comes from
 `MODEL_CONTEXT_WINDOW × 0.6` (both resolved automatically); rollup summaries use
@@ -342,6 +364,13 @@ is uncapped by default (it's logarithmic; it doesn't need a cap).
   window). See Build on recap.
 - **Home:** extend `bin/recap` (a `recap --context` mode + internal recursion);
   no new `bin/rollup`. See Build on recap.
+- **Default:** on for monolith minds, but the automatic build is forward-only
+  from a per-trajectory start marker; `recap --backfill` covers pre-enable
+  history on demand. See "On by default, but built only going forward".
+- **Voice:** rollups are written in the **first person** — they're the agent's
+  own memory of its life ("I did X", not "the agent did X"). The prompt version
+  is stamped in each block, so a voice/prompt change is a detectable
+  `--rebuild`, not a silent drift.
 
 ## Open questions
 
