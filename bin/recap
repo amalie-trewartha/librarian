@@ -42,6 +42,7 @@ KEEP_TYPES='["thought","action","observation","message","feedback","final","shel
 
 # --- Tiered rollups / --context (see design/tiered_memory.md) ---
 CONTEXT=0
+BACKFILL=0                             # --backfill: also summarize pre-enable history
 FANOUT="${ROLLUP_FANOUT:-10}"          # F: children per tier; tier k covers F^k steps
 CTX_BUDGET="${MONOLITH_CONTEXT_BUDGET:-auto}"   # token budget; auto = fraction of model window
 CTX_RAW_TAIL="${ROLLUP_RAW_TAIL:-auto}"         # R: verbatim recent steps; auto = from budget
@@ -61,7 +62,11 @@ Options:
                       0 disables gap-aware cutting)
   --context           Print a budget-bounded "staircase": tiered rollups
                       (coarse→fine) covering the whole trajectory, then the
-                      recent steps verbatim. Builds/refreshes rollups lazily.
+                      recent steps verbatim. Builds rollups lazily but only
+                      GOING FORWARD from first use (safe on a long log).
+  --backfill          One-time: also summarize all pre-existing history, so the
+                      staircase covers the whole past. Run manually/offline —
+                      the first build on a long log is the expensive one.
   --budget N|auto     Token budget for --context (auto = fraction of model window)
   --raw-tail N        Verbatim recent steps to show under --context (default: auto)
   --fanout N          F: children per tier for --context rollups (default: 10)
@@ -92,6 +97,7 @@ while [[ $# -gt 0 ]]; do
         --traj_dir) TRAJ_DIR="${2:?--traj_dir requires DIR}"; shift 2 ;;
         --window)   WINDOW="${2:?--window requires N}"; shift 2 ;;
         --context)  CONTEXT=1; shift ;;
+        --backfill) CONTEXT=1; BACKFILL=1; shift ;;
         --budget)   CTX_BUDGET="${2:?--budget requires N|auto}"; shift 2 ;;
         --raw-tail) CTX_RAW_TAIL="${2:?--raw-tail requires N}"; shift 2 ;;
         --fanout)   FANOUT="${2:?--fanout requires N}"; shift 2 ;;
@@ -147,6 +153,7 @@ THEMES="$CACHE/themes.json"
 LOCK="$CACHE/.lock"
 ROLLUP_DIR="$RUN_DIR/rollups"
 ROLLUP_LOCK="$ROLLUP_DIR/.lock"
+ROLLUP_META="$ROLLUP_DIR/meta.json"
 
 [[ "$FANOUT" =~ ^[0-9]+$ && "$FANOUT" -ge 2 ]] || die "--fanout must be a number >= 2"
 
@@ -539,15 +546,33 @@ _ctx_seal_tierk() {
          model:$model, prompt_version:$pv, created:$created}' > "$file"
 }
 
-# Lazily seal every complete block, bottom-up. Existing files are skipped, so
-# this is incremental (only the frontier calls the LLM) and idempotent.
+# The filtered-step index from which blocks are auto-built. First run records
+# "now" so tiered memory works GOING FORWARD without a synchronous build of any
+# pre-existing history; a --backfill run resets it to 0 (summarize everything).
+# A brand-new agent enables at ~step 0, so "forward from now" is its whole life.
+_ctx_start_index() {
+    local n=$1 s
+    if [[ "$BACKFILL" -eq 1 ]]; then printf '0'; return; fi
+    if [[ -f "$ROLLUP_META" ]]; then
+        s=$(jq -r '.start_index // 0' "$ROLLUP_META" 2>/dev/null) || s=0
+        [[ "$s" =~ ^[0-9]+$ ]] || s=0
+        printf '%s' "$s"
+    else
+        printf '%s' "$n"
+    fi
+}
+
+# Lazily seal every complete block at or after `start`, bottom-up. Existing
+# files are skipped, so this is incremental (only the frontier calls the LLM)
+# and idempotent. Blocks older than `start` are left for `recap --backfill`.
 _ctx_build() {
-    local n=$1 tier=1 blk nblocks b s e
+    local n=$1 start=$2 tier=1 blk nblocks b s e
     blk=$FANOUT
     while (( blk <= n )); do
         nblocks=$(( n / blk ))
         for (( b = 0; b < nblocks; b++ )); do
             s=$(( b * blk )); e=$(( (b + 1) * blk ))
+            (( s < start )) && continue
             if (( tier == 1 )); then _ctx_seal_tier1 "$s" "$e"; else _ctx_seal_tierk "$tier" "$s" "$e"; fi
         done
         tier=$(( tier + 1 )); blk=$(( blk * FANOUT ))
@@ -600,11 +625,18 @@ _ctx_run() {
     trap "rm -f '$RENDERED_TSV'; rmdir '$ROLLUP_LOCK' 2>/dev/null || true" EXIT
 
     _render_steps 1 > "$RENDERED_TSV"
-    local n r
+    local n r start
     n=$(wc -l < "$RENDERED_TSV" | tr -d ' ')
     r=$(_ctx_resolve_R "$n")
+    start=$(_ctx_start_index "$n")
+    # Persist the start marker on first enable (records "now") or on backfill
+    # (resets to 0 → history is now in-scope and stays complete going forward).
+    if [[ ! -f "$ROLLUP_META" || "$BACKFILL" -eq 1 ]]; then
+        jq -n --argjson s "$start" --arg u "$(date +%Y-%m-%dT%H:%M:%S)" \
+            '{start_index:$s, updated:$u}' > "$ROLLUP_META"
+    fi
     [[ "$MODE" == "rebuild" ]] && rm -rf "$ROLLUP_DIR"/t* 2>/dev/null || true
-    [[ "$MODE" != "cached" ]] && _ctx_build "$n"
+    [[ "$MODE" != "cached" ]] && _ctx_build "$n" "$start"
     _ctx_assemble "$n" "$r"
 }
 

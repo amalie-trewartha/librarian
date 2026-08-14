@@ -320,11 +320,13 @@ while IFS= read -r _flag; do
     [[ -n "$_flag" ]] && shellm_flags+=("$_flag")
 done < <(_build_shellm_flags "$IDENTITY_DIR" "$run_dir")
 
-# Optional tiered "life so far" memory (opt-in via MONOLITH_TIERED_MEMORY=1).
-# A cold rollup cache builds a backlog on the first wakeup, so it's off by
-# default; _life_context degrades to empty on any error. See tiered_memory.md.
+# Tiered "life so far" memory (on by default; set MONOLITH_TIERED_MEMORY=0 to
+# disable). recap --context builds rollups only GOING FORWARD from first use, so
+# this is safe even on a long pre-existing log — the past stays uncovered until
+# someone runs `recap --backfill` once. _life_context degrades to empty on any
+# error. See design/tiered_memory.md.
 life_section=""
-if [[ "${MONOLITH_TIERED_MEMORY:-0}" == "1" ]]; then
+if [[ "${MONOLITH_TIERED_MEMORY:-1}" == "1" ]]; then
     _lc=$(_life_context) || _lc=""
     [[ -n "$_lc" ]] && life_section="Your life so far (tiered summary, oldest→newest):
 $_lc
