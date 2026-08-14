@@ -78,8 +78,10 @@ docker run -it --rm -p 8080:8080 buildpack-deps:curl bash -c \
 ```
 
 The installer notices it is root in a fresh container and apt-installs its
-own dependencies; the dash binds `0.0.0.0` automatically so the published
-port works. Answer the prompts, then open http://localhost:8080 on your host
+own dependencies (tool installs like uv and bun are automatic there — no
+prompts); the dash binds `0.0.0.0` automatically so the published port
+works. Paste your API key, answer the interview, then open
+http://localhost:8080 on your host
 to watch the mind run. The trailing `bash` keeps the container alive so you
 can explore (`cd ~/.shellm/app && identity shell <name>`); exiting it throws
 the whole world away. To keep the identity across runs, add

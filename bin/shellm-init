@@ -97,6 +97,17 @@ ask_yn() {  # ask_yn <prompt> — succeeds unless the answer starts with n/N
     [[ ! "$reply" =~ ^[Nn] ]]
 }
 
+# confirm_install <prompt> — ask before installing software on someone's
+# machine, but auto-yes in a container (throwaway env, and there may be no
+# tty to ask on).
+confirm_install() {
+    if [[ "$IN_CONTAINER" -eq 1 ]]; then
+        info "$1 Yes (container)."
+        return 0
+    fi
+    [[ "$HAS_TTY" -eq 1 ]] && ask_yn "$1"
+}
+
 # ---------------------------------------------------------------------------
 # Env files: real environment wins, then <app>/.env, then ~/.shellm/.env
 # (same layering as bin/llm and the thinkers)
@@ -204,6 +215,7 @@ _ensure_api_key() {
         cat >/dev/tty <<'EOF'
 
 shellm needs an LLM API key (Anthropic, OpenAI, Gemini, or OpenRouter).
+Paste just the key itself — shellm figures out the provider from it.
 The person you're about to create runs continuously and executes shell
 commands — use a DEDICATED, SPEND-CAPPED key.
 
@@ -439,7 +451,7 @@ DASH_URL=""
 
 _ensure_dash_deps() {
     if ! command -v uv >/dev/null 2>&1; then
-        if [[ "$HAS_TTY" -eq 1 ]] && ask_yn "The dash needs uv (Python runner). Install it now?"; then
+        if confirm_install "The dash needs uv (Python runner). Install it now?"; then
             curl -LsSf https://astral.sh/uv/install.sh | sh
             export PATH="$HOME/.local/bin:$PATH"
         fi
@@ -448,7 +460,13 @@ _ensure_dash_deps() {
     # The frontend build needs a JS runtime — unless it's already built
     if [[ ! -f "$APP_DIR/web/src/shellm_web/static/index.html" ]]; then
         if ! command -v bun >/dev/null 2>&1 && ! command -v pnpm >/dev/null 2>&1 && ! command -v npm >/dev/null 2>&1; then
-            if [[ "$HAS_TTY" -eq 1 ]] && ask_yn "The dash frontend needs a JS runtime. Install bun now?"; then
+            if confirm_install "The dash frontend needs a JS runtime. Install bun now?"; then
+                # bun's installer needs unzip, which slim container images
+                # lack — same root+apt auto-install policy as install.sh.
+                if ! command -v unzip >/dev/null 2>&1 && [[ "$(id -u)" -eq 0 ]] && command -v apt-get >/dev/null 2>&1; then
+                    apt-get update -qq >/dev/null && \
+                        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq unzip >/dev/null || true
+                fi
                 curl -fsSL https://bun.sh/install | bash
                 export PATH="$HOME/.bun/bin:$PATH"
             fi
