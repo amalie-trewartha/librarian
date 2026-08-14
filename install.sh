@@ -208,9 +208,32 @@ _install_thinkers() {
 
 # PATH: make sure the tools are reachable — for this process (so --init can
 # chain into shellm-init) and, with consent, for future shells.
+# A same-named system binary in a dir BEFORE $PREFIX silently shadows the tool
+# we just installed (macOS ships /usr/sbin/chat, /usr/bin/view). Verify each
+# installed tool actually resolves to OUR copy; warn if not. Install still
+# succeeded — PATH order is the user's to fix — so this warns, never fails.
+_warn_shadowed() {
+    local tool resolved shadowed=()
+    for tool in "${TOOLS[@]}"; do
+        [[ -x "$PREFIX/$tool" ]] || continue
+        resolved=$(command -v "$tool" 2>/dev/null) || resolved=""
+        if [[ -n "$resolved" ]] \
+           && [[ "$(realpath "$resolved" 2>/dev/null)" != "$(realpath "$PREFIX/$tool" 2>/dev/null)" ]]; then
+            shadowed+=("$tool → $resolved")
+        fi
+    done
+    [[ "${#shadowed[@]}" -eq 0 ]] && return 0
+    echo
+    echo "Warning: $PREFIX is on your PATH but behind a dir with same-named"
+    echo "binaries, so these tools are shadowed by other programs:"
+    printf '  %s\n' "${shadowed[@]}"
+    echo "Move $PREFIX ahead of the system dirs (e.g. /usr/sbin) in your shell rc:"
+    echo "  export PATH=\"$PREFIX:\$PATH\""
+}
+
 _ensure_path() {
     case ":$PATH:" in
-        *":$PREFIX:"*) return 0 ;;
+        *":$PREFIX:"*) _warn_shadowed; return 0 ;;
     esac
     export PATH="$PREFIX:$PATH"
     local path_line="export PATH=\"$PREFIX:\$PATH\"" rc="" reply=""
