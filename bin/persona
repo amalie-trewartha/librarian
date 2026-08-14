@@ -282,7 +282,9 @@ $CMD — talk to and manage the identity '$NAME'
 
 Usage:
   $CMD                 chat with them
-  $CMD say <message>   send one message and wait briefly for the reply
+  $CMD <message>       send one message and wait briefly for the reply
+  $CMD say <message>   the same, explicitly (for messages starting with a
+                       word like 'stop' or 'status')
   $CMD start           resume their mind
   $CMD stop            pause their mind
   $CMD status          mind + dash status
@@ -300,5 +302,6 @@ case "${1:-}" in
     dash)        cmd_dash ;;
     shell)       cmd_shell ;;
     -h|--help|help) usage ;;
-    *)           die "unknown command: $1 (try: $CMD --help)" ;;
+    -*)          die "unknown option: $1 (try: $CMD --help)" ;;
+    *)           cmd_say "$@" ;;   # `ada hello there` just talks to them
 esac

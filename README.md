@@ -48,7 +48,7 @@ dash opens. Their name also becomes a command:
 
 ```bash
 ada                  # chat with them
-ada say "hello"      # one message, wait for the reply
+ada hello!           # one message, wait for the reply
 ada stop / ada start # pause / resume their mind
 ada dash             # open the dashboard
 ```

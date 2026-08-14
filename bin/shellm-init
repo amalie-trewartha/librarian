@@ -546,7 +546,7 @@ cat <<EOF
 $NAME is alive.
 
   Watch their mind     ${DASH_DISPLAY:-$PERSONA_CMD dash}
-  Chat with them       $PERSONA_CMD          (or: $PERSONA_CMD say "hello")
+  Chat with them       $PERSONA_CMD          (or just: $PERSONA_CMD hello)
   Pause / resume       $PERSONA_CMD stop  /  $PERSONA_CMD start
   Everything else      $PERSONA_CMD --help
 ────────────────────────────────────────────────────────
