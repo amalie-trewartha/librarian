@@ -45,7 +45,7 @@ CONTEXT=0
 FANOUT="${ROLLUP_FANOUT:-10}"          # F: children per tier; tier k covers F^k steps
 CTX_BUDGET="${MONOLITH_CONTEXT_BUDGET:-auto}"   # token budget; auto = fraction of model window
 CTX_RAW_TAIL="${ROLLUP_RAW_TAIL:-auto}"         # R: verbatim recent steps; auto = from budget
-ROLLUP_PROMPT_VERSION=1                 # stamped into sealed blocks for honest determinism
+ROLLUP_PROMPT_VERSION=2                 # stamped into sealed blocks for honest determinism (v2: first-person voice)
 
 usage() {
     cat <<'EOF'
@@ -460,8 +460,8 @@ _print_json() {
 # cached forever; only the frontier (newly-complete blocks) is built each run.
 # See design/tiered_memory.md.
 
-_ROLLUP_SYSTEM='You compress one slice of an AI agent life log into a single rollup. The input is a chronological list of lines: either raw steps "[id] type: content", or child rollup summaries. Reply with ONLY a JSON object, no markdown fences:
-{"summary": "2-3 sentences: what happened in this slice — what the agent did, thought, decided, and how it went",
+_ROLLUP_SYSTEM='You are the AI agent whose life log this is. Summarize this one slice of your own history in the FIRST PERSON — say "I", never "the agent". The input is a chronological list of lines: either raw steps "[id] type: content", or child rollup summaries (already first person). Reply with ONLY a JSON object, no markdown fences:
+{"summary": "2-3 first-person sentences: what I did, thought about, decided, and how it went",
  "themes": ["1-4 short kebab-case topics"],
  "step_ids": ["up to 4 of the most important 8-char step ids that literally appear in the input"]}'
 
