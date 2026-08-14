@@ -115,6 +115,33 @@ Pasting the run command a second time fails with "name shellm already in
 use" — that means your agent already exists, and `docker exec` is how you
 get back to it.
 
+### Non-interactive install (CI and coding agents)
+
+Every question the installer asks has an environment variable, and with no
+tty every question falls back to its variable or its default. So a script
+or a coding agent can install with no interaction at all:
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...   # or ANTHROPIC_/OPENAI_/GEMINI_API_KEY
+export SHELLM_IDENTITY_NAME=ada       # optional; the interview's answers
+export SHELLM_IDENTITY_VIBE="curious, warm, and plainspoken"
+export SHELLM_IDENTITY_FOCUS="learning how their own mind works"
+export SHELLM_IDENTITY_USER="I'm Sam, a programmer trying shellm out"
+curl -fsSL https://raw.githubusercontent.com/laude-institute/shellm/main/install.sh | bash
+```
+
+A key must be in the environment (there is no one to type it); everything
+else is optional. `SHELLM_NO_DASH=1` and `SHELLM_NO_THINKERS=1` skip those
+parts. When the installer finishes it writes `~/.shellm/status.json` with
+the outcome, so checking that the install worked is a parse, not a scrape:
+
+```bash
+jq -r '.mind.status, .dash.status, .dash.url' ~/.shellm/status.json
+```
+
+`AGENTS.md` in this repo documents how to operate a running identity —
+paths, logs, health checks, and the sharp edges.
+
 ### Or from a checkout
 
 ```bash

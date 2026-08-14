@@ -20,6 +20,9 @@ set -euo pipefail
 #   SHELLM_NO_DASH=1       don't start the web dash
 #   SHELLM_WEB_ARGS        extra args for shellm-web (e.g. "--host 0.0.0.0"
 #                          to reach the dash through a Docker port mapping)
+#
+# Writes ~/.shellm/status.json at the end: identity, model, mind/dash
+# status ("ok" | "failed" | "skipped"), dash URL, pid file paths.
 
 die() { printf 'shellm-init: error: %s\n' "$*" >&2; exit 1; }
 info() { printf '==> %s\n' "$*"; }
@@ -472,6 +475,7 @@ _start_thinkers() {
 # ---------------------------------------------------------------------------
 
 DASH_URL=""
+DASH_STATUS="skipped"
 
 _ensure_dash_deps() {
     if ! command -v uv >/dev/null 2>&1; then
@@ -505,15 +509,17 @@ _ensure_dash_deps() {
 
 _start_dash() {
     [[ "${SHELLM_NO_DASH:-0}" != "1" ]] || { info "Skipping the dash (SHELLM_NO_DASH=1)"; return 0; }
-    _ensure_dash_deps || return 0
+    _ensure_dash_deps || { DASH_STATUS="failed"; return 0; }
 
     local log="$SHELLM_HOME/logs/web.log" pidfile="$SHELLM_HOME/run/web.pid" pid
     pid=$(cat "$pidfile" 2>/dev/null || true)
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
         DASH_URL=$(grep -o 'http://[^ ]*' "$log" 2>/dev/null | tail -1 || true)
+        DASH_STATUS="ok"
         info "Dash already running${DASH_URL:+ at $DASH_URL}"
         return 0
     fi
+    DASH_STATUS="failed"
 
     info "Starting the dash (the first run builds the frontend — can take a few minutes)"
     : > "$log"
@@ -526,6 +532,7 @@ _start_dash() {
     for _ in $(seq 1 300); do
         if grep -q 'shellm-web serving' "$log" 2>/dev/null; then
             DASH_URL=$(grep 'shellm-web serving' "$log" | tail -1 | grep -o 'http://[^ ]*')
+            DASH_STATUS="ok"
             return 0
         fi
         if ! kill -0 "$pid" 2>/dev/null; then
@@ -574,6 +581,31 @@ PERSONA_CMD="persona $NAME"
 if [[ "$(readlink "$(command -v "$NAME" 2>/dev/null)" 2>/dev/null)" == *"/persona" ]]; then
     PERSONA_CMD="$NAME"
 fi
+
+# Machine-readable outcome for agents and scripts. Snapshot of this run;
+# the pid files under run/ are the live source of truth.
+DISPATCHER_PIDFILE="$IDENTITY_ROOT/$NAME/run/dispatcher.pid"
+DISPATCHER_PID=$(cat "$DISPATCHER_PIDFILE" 2>/dev/null || true)
+[[ -n "$DISPATCHER_PID" ]] && kill -0 "$DISPATCHER_PID" 2>/dev/null || DISPATCHER_PID=""
+jq -n \
+    --arg identity "$NAME" \
+    --arg cmd "$PERSONA_CMD" \
+    --arg app_dir "$APP_DIR" \
+    --arg model "${SHELLM_MODEL:-}" \
+    --arg mind "$(if [[ "${SHELLM_NO_THINKERS:-0}" == "1" ]]; then echo skipped; elif [[ -n "$DISPATCHER_PID" ]]; then echo ok; else echo failed; fi)" \
+    --arg mind_pidfile "$DISPATCHER_PIDFILE" \
+    --arg dash "$DASH_STATUS" \
+    --arg dash_url "${DASH_URL/0.0.0.0/localhost}" \
+    --argjson container "$([[ "$IN_CONTAINER" -eq 1 ]] && echo true || echo false)" \
+    --arg dash_pidfile "$SHELLM_HOME/run/web.pid" \
+    --arg logs "$SHELLM_HOME/logs" \
+    --arg updated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{identity: $identity, persona_command: $cmd, app_dir: $app_dir,
+      model: $model,
+      mind: {status: $mind, pid_file: $mind_pidfile},
+      dash: {status: $dash, url: (if $dash_url == "" then null else $dash_url end), pid_file: $dash_pidfile},
+      container: $container, logs_dir: $logs, updated: $updated}' \
+    > "$SHELLM_HOME/status.json" || true
 
 # Inside a container the dash binds 0.0.0.0; the address that works is the
 # published port on the host.
