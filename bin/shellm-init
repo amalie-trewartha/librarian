@@ -260,9 +260,28 @@ answer as much or as little as you like (Enter keeps the default).
 EOF
     while :; do
         NAME=$(ask "Their name (lowercase letters, digits, hyphens)" "${NAME:-ada}")
-        [[ "$NAME" =~ ^[a-z0-9][a-z0-9-]*$ ]] && break
-        echo "Names are lowercase alphanumeric + hyphens (e.g. ada, mr-robot)." >/dev/tty
-        NAME=""
+        if [[ ! "$NAME" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+            echo "Names are lowercase alphanumeric + hyphens (e.g. ada, mr-robot)." >/dev/tty
+            NAME=""
+            continue
+        fi
+        if [[ "$NAME" == "persona" || "$NAME" == "default" ]]; then
+            echo "'$NAME' is reserved — pick another name." >/dev/tty
+            NAME=""
+            continue
+        fi
+        # An existing command keeps priority; the identity would only be
+        # reachable as `persona <name>`. Let them decide.
+        if command -v "$NAME" >/dev/null 2>&1 \
+                && [[ "$(readlink "$(command -v "$NAME")" 2>/dev/null)" != *"/persona" ]]; then
+            local _keep
+            _keep=$(ask "'$NAME' is already a command on this system, so you'd chat via 'persona $NAME' instead of just '$NAME'. Keep the name anyway? [y/N]" "n")
+            if [[ ! "$_keep" =~ ^[Yy] ]]; then
+                NAME=""
+                continue
+            fi
+        fi
+        break
     done
     VIBE=$(ask "A few words on their personality" "$VIBE")
     FOCUS=$(ask "What should $NAME think about when idle" "$FOCUS")
@@ -329,6 +348,7 @@ _create_identity() {
     _interview
     NAME="${NAME:-ada}"
     [[ "$NAME" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "invalid identity name: '$NAME'"
+    [[ "$NAME" != "persona" && "$NAME" != "default" ]] || die "'$NAME' is a reserved name"
 
     if [[ -d "$IDENTITY_ROOT/$NAME" ]]; then
         info "Identity '$NAME' already exists — leaving it as is"
@@ -357,8 +377,35 @@ _create_identity() {
         printf 'name=%s\nvibe=%s\nfocus=%s\nuser_note=%s\n' "$NAME" "$VIBE" "$FOCUS" "$USER_NOTE"
     } > "$identity_dir/bootstrap-answers.txt"
 
-    # `chat send` needs a sender name; seed one so the quickstart works
-    [[ -f "$APP_DIR/.chatrc" ]] || printf 'default_send_from=operator\n' > "$APP_DIR/.chatrc"
+    # `chat send` needs a sender name; the identity's activate points CHATRC
+    # at <identity>/chat/.chatrc, so seed it there
+    mkdir -p "$identity_dir/chat"
+    printf 'default_send_from=operator\n' > "$identity_dir/chat/.chatrc"
+}
+
+# Make the identity's name a command (`ada`, `ada stop`, ...) by linking it
+# to the `persona` tool installed next to this script. Never clobbers
+# anything: not an installed tool (chat, mem, ...), not any other command on
+# PATH — those identities are reachable as `persona <name>` instead.
+_link_persona_command() {
+    local bin_dir target link
+    bin_dir=$(cd "$(dirname "$0")" && pwd)
+    target="$bin_dir/persona"
+    [[ -e "$target" ]] || return 0
+    link="$bin_dir/$NAME"
+    if [[ -e "$link" || -L "$link" ]]; then
+        # Fine only if it's already a persona link (idempotent re-run)
+        if [[ -L "$link" && "$(readlink "$link")" == *"/persona" ]]; then
+            return 0
+        fi
+        echo "note: '$NAME' collides with the existing $link — talk to them with 'persona $NAME' instead" >&2
+        return 0
+    fi
+    if command -v "$NAME" >/dev/null 2>&1; then
+        echo "note: '$NAME' is already a command on your system ($(command -v "$NAME")) — talk to them with 'persona $NAME' instead" >&2
+        return 0
+    fi
+    ln -s "$target" "$link"
 }
 
 # ---------------------------------------------------------------------------
@@ -474,9 +521,17 @@ esac
 
 _ensure_api_key
 _create_identity
+_link_persona_command
 _start_thinkers
 _start_dash
 _open_dash
+
+# How to address them in the summary: their own name only if it resolves to
+# a persona link (it may instead be an unrelated command we refused to stomp)
+PERSONA_CMD="persona $NAME"
+if [[ "$(readlink "$(command -v "$NAME" 2>/dev/null)" 2>/dev/null)" == *"/persona" ]]; then
+    PERSONA_CMD="$NAME"
+fi
 
 # Inside a container the dash binds 0.0.0.0; the address that works is the
 # published port on the host.
@@ -490,12 +545,9 @@ cat <<EOF
 ────────────────────────────────────────────────────────
 $NAME is alive.
 
-  Watch their mind    ${DASH_DISPLAY:-run shellm-init again once the dash deps are installed}
-  Talk to them        from the dash, or:
-                        cd $APP_DIR && identity shell $NAME
-                        chat send "hello"
-  Pause them          cd $APP_DIR && identity shell $NAME  →  thinkers stop
-  Config              $SHELLM_HOME/.env  (API key, SHELLM_MODEL)
-  Their whole self    $IDENTITY_ROOT/$NAME/
+  Watch their mind     ${DASH_DISPLAY:-$PERSONA_CMD dash}
+  Chat with them       $PERSONA_CMD          (or: $PERSONA_CMD say "hello")
+  Pause / resume       $PERSONA_CMD stop  /  $PERSONA_CMD start
+  Everything else      $PERSONA_CMD --help
 ────────────────────────────────────────────────────────
 EOF

@@ -1,0 +1,304 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# persona — talk to and manage a shellm identity by name, from anywhere.
+# No cd, no `identity shell` needed.
+#
+# shellm-init links each identity's name to this tool (e.g. `ada`), so the
+# name IS the command:
+#
+#   ada                    chat with them (TUI if built, simple loop otherwise)
+#   ada say <message>      send one message and wait briefly for the reply
+#   ada start / stop       resume / pause their mind (the thinkers)
+#   ada status             mind + dash status
+#   ada dash               start the dashboard if needed and open it
+#   ada shell              subshell with their environment (advanced)
+#
+#   persona <name> ...     the same, for any identity, without the name link
+#   persona ...            ...or the default identity
+
+die() { printf 'persona: error: %s\n' "$*" >&2; exit 1; }
+
+SHELLM_HOME="${SHELLM_HOME:-$HOME/.shellm}"
+
+# ---------------------------------------------------------------------------
+# Locate the checkout and the identity
+# ---------------------------------------------------------------------------
+
+_resolve_app_dir() {
+    if [[ -n "${SHELLM_APP_DIR:-}" ]]; then
+        printf '%s' "$SHELLM_APP_DIR"
+        return 0
+    fi
+    local script_dir
+    script_dir="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
+    if [[ -f "$script_dir/../bin/shellm" ]]; then
+        (cd "$script_dir/.." && pwd)
+        return 0
+    fi
+    local recorded
+    recorded=$(cat "$SHELLM_HOME/app_dir" 2>/dev/null || true)
+    if [[ -n "$recorded" && -f "$recorded/bin/shellm" ]]; then
+        printf '%s' "$recorded"
+        return 0
+    fi
+    if [[ -f "$SHELLM_HOME/app/bin/shellm" ]]; then
+        printf '%s' "$SHELLM_HOME/app"
+        return 0
+    fi
+    return 1
+}
+
+APP_DIR=$(_resolve_app_dir) || die "can't find the shellm checkout. Set SHELLM_APP_DIR=/path/to/shellm"
+export PATH="$APP_DIR/bin:$PATH"
+IDENTITY_ROOT="$APP_DIR/.identities"
+
+# Env files, real environment first (same layering as llm and shellm-init).
+# Without this, activate's THINK_MODEL fallback can't see SHELLM_MODEL and
+# the mind starts on the wrong model.
+_load_env() {
+    local envfile="$1"
+    [[ -f "$envfile" ]] || return 1
+    local key val
+    while IFS= read -r key; do
+        [[ -n "$key" ]] || continue
+        [[ -n "${!key+x}" ]] && continue
+        # shellcheck disable=SC1090
+        val=$(set -a; . "$envfile" 2>/dev/null; printf '%s' "${!key}") || continue
+        export "$key=$val"
+    done < <(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*=.*/\2/p' "$envfile")
+    return 0
+}
+_load_env "$APP_DIR/.env" || true
+_load_env "$SHELLM_HOME/.env" || true
+
+SELF=$(basename "$0")
+NAME=""
+if [[ "$SELF" == "persona" ]]; then
+    # First arg is the identity name if it matches one; otherwise fall through
+    # to the default identity and treat the arg as a subcommand.
+    if [[ -n "${1:-}" && -d "$IDENTITY_ROOT/${1:-}" ]]; then
+        NAME="$1"; shift
+    fi
+else
+    NAME="$SELF"
+fi
+if [[ -z "$NAME" && -L "$IDENTITY_ROOT/default" ]]; then
+    NAME=$(basename "$(readlink "$IDENTITY_ROOT/default")")
+fi
+[[ -n "$NAME" ]] || die "no identity given and no default set. Usage: persona <name> [command]"
+[[ -d "$IDENTITY_ROOT/$NAME" ]] || die "no identity named '$NAME' in $IDENTITY_ROOT"
+
+# The command name to show in messages (`ada stop` vs `persona ada stop`):
+# the bare name only if it actually resolves to a persona link — it may
+# instead be an unrelated command or a shellm tool (e.g. an identity named
+# "chat").
+CMD="persona $NAME"
+if [[ "$(readlink "$(command -v "$NAME" 2>/dev/null)" 2>/dev/null)" == *"/persona" ]]; then
+    CMD="$NAME"
+fi
+
+# ---------------------------------------------------------------------------
+# Identity environment (what `identity shell` would give you, in-process)
+# ---------------------------------------------------------------------------
+
+_activate() {
+    [[ -n "${IDENTITY_NAME:-}" ]] && return 0
+    # activate is written for interactive shells; its internal greps may
+    # legitimately fail, which would be fatal under set -e — relax around it.
+    set +eu
+    set +o pipefail
+    # shellcheck disable=SC1090,SC1091
+    source "$IDENTITY_ROOT/$NAME/activate" >/dev/null 2>&1
+    set -eu
+    set -o pipefail
+    [[ -n "${IDENTITY_NAME:-}" ]] || die "activate did not set IDENTITY_NAME"
+    # `chat send` needs a sender name in the identity's chatrc
+    if [[ -n "${CHATRC:-}" ]] && ! grep -q '^default_send_from=' "$CHATRC" 2>/dev/null; then
+        mkdir -p "$(dirname "$CHATRC")"
+        printf 'default_send_from=operator\n' >> "$CHATRC"
+    fi
+}
+
+_dispatcher_pid() {
+    local pid
+    pid=$(cat "$IDENTITY_ROOT/$NAME/run/dispatcher.pid" 2>/dev/null || true)
+    [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && printf '%s' "$pid" && return 0
+    return 1
+}
+
+# Messages in the root trajectory, one JSON object per line
+_messages() {
+    _activate
+    traj cat "${ROOT_TRAJ_ID:-$TRAJ_ID}" --filter type=message --raw 2>/dev/null \
+        | jq -c '.' 2>/dev/null || true
+}
+
+_print_incoming() {  # stdin: message JSON lines; prints ones from the identity
+    jq -r --arg me "$NAME" 'select(.from == $me) | "\($me)> \(.content)"' 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+cmd_start() {
+    _activate
+    if _dispatcher_pid >/dev/null; then
+        echo "$NAME's mind is already running."
+        return 0
+    fi
+    thinkers start monolith
+    echo "$NAME is thinking again."
+}
+
+cmd_stop() {
+    _activate
+    if ! _dispatcher_pid >/dev/null; then
+        echo "$NAME's mind is already stopped."
+        return 0
+    fi
+    thinkers stop
+    echo "$NAME is paused. Resume with: $CMD start"
+}
+
+cmd_status() {
+    _activate
+    local pid
+    if pid=$(_dispatcher_pid); then
+        echo "mind: running (dispatcher pid $pid)"
+    else
+        echo "mind: stopped   (resume with: $CMD start)"
+    fi
+    local wpid
+    wpid=$(cat "$SHELLM_HOME/run/web.pid" 2>/dev/null || true)
+    if [[ -n "$wpid" ]] && kill -0 "$wpid" 2>/dev/null; then
+        echo "dash: $(grep -o 'http://[^ ]*' "$SHELLM_HOME/logs/web.log" 2>/dev/null | tail -1)"
+    else
+        echo "dash: stopped   (open with: $CMD dash)"
+    fi
+    echo
+    thinkers status 2>/dev/null || true
+}
+
+cmd_shell() {
+    exec env IDENTITY_DIR="$IDENTITY_ROOT" identity shell "$NAME"
+}
+
+cmd_dash() {
+    local log="$SHELLM_HOME/logs/web.log" pidfile="$SHELLM_HOME/run/web.pid" pid url
+    mkdir -p "$SHELLM_HOME/logs" "$SHELLM_HOME/run"
+    pid=$(cat "$pidfile" 2>/dev/null || true)
+    if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+        command -v uv >/dev/null 2>&1 || die "the dash needs uv — run shellm-init to set it up"
+        # In a container, bind on all interfaces so a published port works
+        if [[ -z "${SHELLM_WEB_ARGS:-}" && ( -f /.dockerenv || -f /run/.containerenv ) ]]; then
+            SHELLM_WEB_ARGS="--host 0.0.0.0"
+        fi
+        echo "Starting the dash..."
+        : > "$log"
+        # shellcheck disable=SC2086
+        nohup shellm-web "$APP_DIR" ${SHELLM_WEB_ARGS:-} >>"$log" 2>&1 &
+        printf '%s\n' "$!" > "$pidfile"
+        local _
+        for _ in $(seq 1 300); do
+            grep -q 'shellm-web serving' "$log" 2>/dev/null && break
+            kill -0 "$(cat "$pidfile")" 2>/dev/null || { tail -20 "$log" >&2; die "the dash failed to start (log: $log)"; }
+            sleep 1
+        done
+    fi
+    url=$(grep -o 'http://[^ ]*' "$log" 2>/dev/null | tail -1)
+    [[ -n "$url" ]] || die "dash is running but no URL found in $log"
+    echo "$url"
+    case "$(uname -s)" in
+        Darwin) open "$url" 2>/dev/null || true ;;
+        Linux)
+            if command -v xdg-open >/dev/null 2>&1 && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+                xdg-open "$url" 2>/dev/null || true
+            fi
+            ;;
+    esac
+}
+
+cmd_say() {
+    [[ $# -gt 0 ]] || die "usage: $CMD say <message>"
+    _activate
+    _dispatcher_pid >/dev/null || echo "(note: $NAME's mind is stopped — they won't answer until you run: $CMD start)"
+    local before
+    before=$(_messages | _print_incoming | wc -l | tr -d ' ')
+    chat send "$*" >/dev/null
+    echo "sent. waiting for $NAME (Ctrl-C to stop waiting — replies also appear in the dash)"
+    local _
+    for _ in $(seq 1 60); do
+        sleep 2
+        local now
+        now=$(_messages | _print_incoming | wc -l | tr -d ' ')
+        if [[ "$now" -gt "$before" ]]; then
+            _messages | _print_incoming | tail -n "$((now - before))"
+            return 0
+        fi
+    done
+    echo "no reply yet — it'll show up in '$CMD' chat or the dash."
+}
+
+cmd_chat() {
+    _activate
+    if command -v shellm-tui >/dev/null 2>&1; then
+        exec chat repl
+    fi
+    # Simple fallback loop when the Rust TUI isn't built
+    _dispatcher_pid >/dev/null || echo "(note: $NAME's mind is stopped — they won't answer until you run: $CMD start)"
+    echo "(simple chat — Ctrl-C or Ctrl-D to leave; build the TUI with cargo + install.sh for the full experience)"
+    chat history 10 2>/dev/null || true
+    local seen watcher
+    seen=$(_messages | wc -l | tr -d ' ')
+    (
+        # Watch for new messages from the identity and print them as they land
+        local_seen=$seen
+        while :; do
+            sleep 2
+            total=$(_messages | wc -l | tr -d ' ')
+            if [[ "$total" -gt "$local_seen" ]]; then
+                printf '\n'
+                _messages | tail -n "$((total - local_seen))" | _print_incoming
+                printf 'you> '
+                local_seen=$total
+            fi
+        done
+    ) &
+    watcher=$!
+    trap 'kill "$watcher" 2>/dev/null || true' EXIT
+    local line
+    while IFS= read -r -p "you> " line; do
+        [[ -z "$line" ]] && continue
+        chat send "$line" >/dev/null
+    done
+    echo
+}
+
+usage() {
+    cat <<EOF
+$CMD — talk to and manage the identity '$NAME'
+
+Usage:
+  $CMD                 chat with them
+  $CMD say <message>   send one message and wait briefly for the reply
+  $CMD start           resume their mind
+  $CMD stop            pause their mind
+  $CMD status          mind + dash status
+  $CMD dash            start the dashboard if needed and open it
+  $CMD shell           subshell with their environment (advanced)
+EOF
+}
+
+case "${1:-}" in
+    "")          cmd_chat ;;
+    say)         shift; cmd_say "$@" ;;
+    start)       cmd_start ;;
+    stop)        cmd_stop ;;
+    status)      cmd_status ;;
+    dash)        cmd_dash ;;
+    shell)       cmd_shell ;;
+    -h|--help|help) usage ;;
+    *)           die "unknown command: $1 (try: $CMD --help)" ;;
+esac

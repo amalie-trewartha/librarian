@@ -44,7 +44,16 @@ asks for an LLM API key (use a dedicated, spend-capped one — the agent
 executes real shell commands), and runs a short optional interview: a name, a
 few words of personality, what they should think about when idle. The answers
 become their core identity and first memories, then their mind starts and the
-dash opens. Re-running the one-liner updates everything in place.
+dash opens. Their name also becomes a command:
+
+```bash
+ada                  # chat with them
+ada say "hello"      # one message, wait for the reply
+ada stop / ada start # pause / resume their mind
+ada dash             # open the dashboard
+```
+
+Re-running the one-liner updates everything in place.
 
 Prefer to read before you run? Same thing, two steps:
 
