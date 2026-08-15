@@ -119,3 +119,7 @@ The full backstory and design philosophy:
 shellm is a port of [Recursive Language Models
 (RLM)](https://alexzhang13.github.io/blog/2025/rlm/) by Alex Zhang to
 bash, for bash.
+
+## License
+
+[Apache 2.0](LICENSE)
