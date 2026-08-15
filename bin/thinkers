@@ -848,12 +848,45 @@ _append_wake_gap_note() {
         | traj append --traj_dir "$TRAJ_DIR" "${traj_file#"$TRAJ_DIR"/}" >/dev/null 2>&1 || true
 }
 
+# Guard against shadowed tools. The shellm CLIs live together next to this
+# script, so our own resolved location is the canonical bin dir. Prepend it (so
+# our tools beat same-named system binaries — macOS ships /usr/sbin/chat,
+# /usr/bin/view, ...), then VERIFY each critical tool on PATH actually resolves
+# to OUR copy. Fail loudly rather than silently running the wrong program — the
+# /usr/sbin/chat shadow silently broke every chat reply on 2026-08-14.
+_ensure_shellm_bins() {
+    local self bindir
+    self=$(command -v thinkers 2>/dev/null) || self="$0"
+    bindir=$(cd "$(dirname "$(realpath "$self" 2>/dev/null)")" 2>/dev/null && pwd) || return 0
+
+    # Prepend our dir unless it's already first (a later copy still loses to a
+    # system dir, so presence isn't enough — it must be first).
+    [[ "$PATH" == "$bindir:"* ]] || { PATH="$bindir:$PATH"; export PATH; }
+
+    local tool resolved want bad=()
+    for tool in chat traj llm mem context skills recap focus identity thinkers; do
+        [[ -x "$bindir/$tool" ]] || continue          # only tools we actually ship
+        resolved=$(command -v "$tool" 2>/dev/null) || resolved=""
+        want=$(realpath "$bindir/$tool" 2>/dev/null)
+        if [[ -z "$resolved" || "$(realpath "$resolved" 2>/dev/null)" != "$want" ]]; then
+            bad+=("$tool -> ${resolved:-<not found on PATH>}")
+        fi
+    done
+    if (( ${#bad[@]} )); then
+        printf 'thinkers: error: these tools on PATH are NOT the shellm ones next to this command (%s):\n' "$bindir" >&2
+        printf '  %s\n' "${bad[@]}" >&2
+        printf 'A system binary is shadowing them. Put %s ahead of system dirs (e.g. /usr/sbin) in PATH.\n' "$bindir" >&2
+        exit 1
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # Subcommands
 # ---------------------------------------------------------------------------
 
 cmd_start() {
     _require_env
+    _ensure_shellm_bins
 
     # Parse start-specific flags
     while [[ $# -gt 0 ]]; do

@@ -320,10 +320,24 @@ while IFS= read -r _flag; do
     [[ -n "$_flag" ]] && shellm_flags+=("$_flag")
 done < <(_build_shellm_flags "$IDENTITY_DIR" "$run_dir")
 
+# Tiered "life so far" memory (on by default; set MONOLITH_TIERED_MEMORY=0 to
+# disable). recap --context builds rollups only GOING FORWARD from first use, so
+# this is safe even on a long pre-existing log — the past stays uncovered until
+# someone runs `recap --backfill` once. _life_context degrades to empty on any
+# error. See design/tiered_memory.md.
+life_section=""
+if [[ "${MONOLITH_TIERED_MEMORY:-1}" == "1" ]]; then
+    _lc=$(_life_context) || _lc=""
+    [[ -n "$_lc" ]] && life_section="Your life so far (tiered summary, oldest→newest):
+$_lc
+
+"
+fi
+
 route_prompt="<context>
 $system_prompt
 
-Recent stream (last $THINK_CONTEXT_TAIL steps):
+${life_section}Recent stream (last $THINK_CONTEXT_TAIL steps):
 $recent_context
 
 Routing signals:
