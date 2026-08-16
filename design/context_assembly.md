@@ -1,144 +1,154 @@
-# Context assembly — one owner for a thinker's whole window
+# Context assembly — the microkernel window
 
 Status: draft
-Relates to: [tiered_memory.md](tiered_memory.md) (the rollups this assembles),
-[recap.md](recap.md) (builds them), [monolith_thinker.md](monolith_thinker.md).
+Relates to: [tiered_memory.md](tiered_memory.md) (the rollups this fits),
+[recap.md](recap.md) (builds them, and does the fitting),
+[monolith_thinker.md](monolith_thinker.md), and the skill system.
 
-## Problem
+## The clunk we're removing
 
-The context a thinker sees is assembled in pieces and glued together per-thinker:
+An earlier draft gave `context` a `--identity` mode: one tool that in one mode
+sliced a trajectory into a messages array, and in another assembled the whole
+identity window. Two personalities in one program, chosen by a flag — a smell.
+The fix isn't a better flag. It's to stop overloading one tool: split by
+altitude and compose.
 
-- `bin/context` turns a trajectory into a role-assigned messages array
-  (head / tail / pins) for `llm -M`.
-- `thinkers/_lib/common.sh` builds the rest separately: `_build_system_prompt`
-  (identity + skills), `get_goals`, `_life_context` (→ `recap --context`),
-  `_recent_stream`.
-- each thinker's `step` glues those together — and the monolith and responder
-  glue them *differently*. That divergence is exactly where drift and bugs crept
-  in (the reply-context/double-reply issues).
+## Microkernel / microharness
 
-No single component owns the whole window, so:
+Keep the harness tiny. `context` should depend on the **minimal** set of things
+and know nothing about the rest. That set is exactly three:
 
-- **You can't auto-size memory to the model.** "How much window for rollups =
-  window − everything else" needs one component that assembles *and measures*
-  the rest.
-- **Ordering, token budget, truncation, KV-cache stability** are re-derived
-  ad-hoc in each thinker's bash.
-- **Duplication → drift → bugs.**
+1. **Core identity** — the name and the few things that define who this mind is
+   (`identity prompt`).
+2. **The skill system's prompt** — whatever the installed skills contribute
+   (`skills prompt`).
+3. **Recap** — the tiered memory, which is also the budget-fitter (below).
 
-## Proposal: `context` owns the whole window; split *build* from *assemble*
+In particular, **`context` does not know about `mem`.** `mem` is a skill. Core
+values, current objectives, semantically-relevant memories, the kernel-skill
+markdowns, the one-line index of non-kernel skills — all of that is the *skill
+system's* job, emitted by `skills prompt`. If a mind needs a capability, it's a
+skill, and the skill contributes its slice of the prompt. The harness never
+grows a dependency per capability; it just includes "whatever skills say." That
+is the microkernel move: a small core plus pluggable servers (skills), not a
+kernel that imports every subsystem.
 
-Two different jobs, deliberately kept apart:
+## Plumbing vs porcelain
 
-- **BUILD** (summarize `F` steps → a rollup, seal, cache): stays in `recap`.
-  Expensive, LLM-driven, lazy/incremental, cached immutable on disk. `context`
-  **reads** sealed rollups; it never builds on read (or it inherits the
-  cold-start backlog problem — see tiered_memory.md).
-- **ASSEMBLE** (lay out and budget the whole window for a thinker in an active
-  identity): moves **into `context`**. Cheap, deterministic, per-call.
+The pieces are plumbing that already (mostly) exists as standalone commands:
 
-Concretely: a new mode, `context --identity` (name TBD), assembles the full
-window for the active identity. Plain `context` keeps its current
-trajectory-window behavior for generic `shellm` sub-runs that aren't identity
-thinkers.
+- `identity prompt` — core identity.
+- `skills prompt` — the skill system's contribution (including `mem`).
+- `recap --context` — tiered rollups + raw tail, and the fitter.
 
-## The layout (stable → volatile)
+The composition — the one line that wires them into "the window a thinker sees"
+— is porcelain, and a pipeline is a program. **That program is `context`.**
 
-`context` lays the window out most-stable-first (so the KV-cache prefix stays
-warm) and most-volatile-last (so only the churny tail invalidates):
+And the thing `context` does *today* (trajectory → role-tagged messages array,
+head/tail/pins) is a lower, different job — it belongs to `traj`. Move it to
+`traj messages`. Then:
 
-```
-<core identity: Name>                        # stable — rarely changes
-<context from skills>
-  <kernel skills — full markdown>            # stable
-  <mem>
-    <core values>                            # slow-changing
-    <current objectives>                     # slow-changing
-    <semantically relevant memories>         # query-dependent, small
-  </mem>
-  <non-kernel skills — 1-line index each>    # stable-ish
-</context from skills>
-<tiered memory rollups>                      # grows/decays with life
-  <10× coarsest … 10× finest>
-</tiered memory rollups>
-<recent raw steps — the "now">               # most volatile
-<the thinker's task prompt / function menu>  # supplied by the caller
-```
+- `traj messages` — plumbing: a trajectory → a messages array, for generic
+  `shellm` sub-runs.
+- `context` — porcelain: the assembled identity window, which is just a pipe.
 
-- Identity + kernel skills early → long cache hits across wakeups.
-- Rollups + raw tail last → only that region invalidates as life advances.
-- Centralizing this ordering is itself a reason to move it here: it's a policy
-  you want stated **once**, not re-derived per thinker.
+No modes anywhere. `traj` slices trajectories; `context` means "the context this
+mind sees." The word finally means what it says.
 
-## Budget: fill the window, don't guess
+## The pipe
 
-Because `context` assembles the whole prefix, it can measure it and size the
-memory section to whatever's left:
-
-```
-W             = the inference model's context window (tokens)
-prefix        = identity + skills + mem + task prompt      (measured)
-memory_budget = round(W · FRACTION) − size(prefix)         # FRACTION leaves output headroom
+```sh
+{ identity prompt        # core identity
+  skills prompt          # everything skills contribute — mem, values, objectives,
+                         # semantic memories, kernel markdowns, non-kernel index
+} | recap --context --window "$W"
 ```
 
-Then fill the rollup staircase + raw tail into `memory_budget`: the coarse tiers
-are tiny, so spend the remainder on more tiers shown verbatim and/or a longer
-raw tail. This is tiered_memory's "grow to fill the window," now computed
-**automatically** because one component sees both sides of the subtraction.
+`context` (the porcelain) is essentially those four lines. `recap --context` is
+the **terminal fitter**: it passes the prefix through, measures it, and appends
+the rollup staircase + recent raw tail sized to `W − prefix`. The budget isn't
+computed by a coordinator that owns everything — it falls out of the pipe,
+because the one elastic stage is last and can read everything before it.
 
-Token measurement can be a cheap approximation (~4 chars/token) or a real
-tokenizer call; approximation is fine for sizing headroom.
+## Layout (stable → volatile)
 
-## Interface
+The pipe order keeps the KV-cache prefix warm: stable identity + skills first,
+the growing/decaying memory + raw tail last.
 
-- The thinker calls `context` in identity mode and hands it the one
-  thinker-specific piece — its **task prompt** (the function menu / persona of
-  the moment) — on stdin or via a flag. `context` places that last-before-now
-  and owns *everything else*.
-- `context` returns what the caller feeds to `llm`: the assembled system-prompt
-  text (`-s`) plus the messages array (`-M`), or a single rendered block.
-- Thinkers shrink to **routing + tools**; all "what the model sees" lives in one
-  place.
+```
+<core identity: Name>                         # stable
+<skills prompt>                               # skills own this whole block:
+  <kernel skills — full markdown>             #   stable
+  <mem>  values · objectives · semantic hits  #   slow / query-dependent (a skill!)
+  <non-kernel skills — 1-line index>          #   stable-ish
+<tiered rollups: coarsest … finest>           # grows/decays with life  (recap)
+<recent raw steps — the "now">                # most volatile           (recap)
+```
 
-## Why here (the tradeoff, recapped)
+This matches the hand-drawn layout from our discussion — `mem` was already
+*inside* the skills block. That nesting is the point: `mem` is a skill, so it
+lives in the skill contribution, not as a `context` dependency.
 
-**Pros**
-- Auto-budget to the model window — the whole point; only the layout owner can
-  do it.
-- Single source of truth — kills the per-thinker duplication (and its bug
-  class); every thinker gets identical, correct assembly.
-- KV-cache ordering stated once (stable → volatile).
-- Testable in one place; matches the "context is a paging problem" framing.
+## Budget
 
-**Cons / things to get right**
-- **Scope creep.** `context` grows from a tiny trajectory tool into an
-  identity-aware assembler — it now needs the mem/skills/kernel dirs, a
-  model→window table, and a token estimator.
-- **Cost profile changes.** No longer "two streaming passes": semantic mem
-  search + reading many rollup blocks + skill markdowns. Still bounded, and it's
-  the same work the thinkers do today — just relocated.
-- **Keep build ≠ read.** `recap` builds/seals; `context` only reads. Never
-  summarize on-read.
-- **Two modes.** Generic `shellm` sub-runs must keep the simple trajectory-window
-  behavior; the rich assembly is an explicit identity mode.
+```
+W      = the model's context window (tokens)
+prefix = identity + skills            (measured — whatever arrived on stdin)
+memory = round(W · FRACTION) − size(prefix)
+```
+
+`recap --context` fills `memory` with the staircase + tail (coarse tiers are
+tiny; spend the rest on more tiers verbatim and/or a longer raw tail). Token
+size is a cheap char approximation unless a tokenizer is worth it.
+
+## The maximal-microkernel option: recap as a skill
+
+If we're strict, even `recap` is a capability — so make it a **skill**, installed
+into a mind like any other. Then `context`'s dependency set shrinks to two —
+**identity + skills** — and the pipe is just:
+
+```sh
+identity prompt | skills prompt
+```
+
+…where one installed skill (recap) is the **terminal fitter**: it must be
+ordered last, read the accumulated prefix, and fill `W − prefix`. That's the
+cleanest microkernel — the harness knows only "core identity" and "run the
+skills." The cost: "skills" is no longer a flat bag of independent emitters —
+one of them is privileged (it reads everyone else's output and owns the budget),
+so the skill system needs an ordering/terminal convention.
+
+Decision deferred; both shapes keep `context` free of `mem` and free of any
+per-capability dependency. Start with recap as a tool `context` calls (three
+deps); promote it to a terminal skill (two deps) once the skill system grows a
+terminal convention anyway.
+
+## Interchange format
+
+The stages must pipe cleanly, so pick one stream. Simplest: **plain text** —
+each emitter writes its slice as text, the recent chat tail is rendered as text
+("Andy: … / you: …"), and role-tagging (a messages array) stays the concern of
+whoever needs it (the responder can call `traj messages` for its fast chat
+window). Fewest moving parts. If a thinker genuinely needs roles, the whole
+window becomes a messages stream with the stable sections as one system message
+— uniform, just JSON instead of text.
 
 ## Migration
 
-- Leave `recap --context` building/sealing rollups (already the case).
-- Add `context --identity` that assembles the layout above — moving the
-  `_build_system_prompt` / `get_goals` / `_life_context` / `_recent_stream`
-  logic behind it (or having `context` call those helpers).
-- Repoint the monolith (and responder) to build their prompt via
-  `context --identity` + their task prompt, deleting the per-thinker glue.
-- Retire the divergent per-thinker assembly.
+- Move `context`'s current behavior to `traj messages` (trajectory → messages);
+  repoint `shellm` sub-runs and docs.
+- `context` becomes the porcelain pipe:
+  `{ identity prompt; skills prompt; } | recap --context --window "$W"`.
+- Ensure `skills prompt` emits the `mem` block (values / objectives / semantic)
+  — that's a skill-system concern, not `context`'s.
+- Teach `recap --context` to read a prefix on stdin and fit to `--window`.
+- Repoint thinkers to run `context`; delete the per-thinker
+  `_build_system_prompt` / `_recent_stream` / `_life_context` glue.
 
 ## Open questions
 
-1. Exact interface: a `--identity` flag vs a subcommand; how the task prompt is
-   passed (stdin vs `--task-file`).
-2. Token estimator: chars-approx (cheap) vs a real tokenizer (accurate) — and
-   whether the model→window table lives here or is shared with tiered_memory.
-3. Does the responder want the *full* identity assembly or a lighter,
-   chat-focused window? (latency — replies must stay fast).
-4. Where the persona / `prompt.md` sits: caller-supplied task prompt vs a
-   `context`-owned template.
+1. `recap`: a tool `context` calls, or a terminal skill (maximal microkernel)?
+   Decide when the skill system gets a terminal/ordering convention.
+2. Token estimator: char-approx vs a real tokenizer call.
+3. Does the responder want the full window, or a lighter chat window (latency)?
+4. Interchange: commit to plain text, or messages-array everywhere?
