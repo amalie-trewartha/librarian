@@ -203,6 +203,19 @@ _install_thinkers() {
         done
         rm -f "$thinkers_prefix/.use-symlinks"
     fi
+    # Prune catalog entries for thinkers no longer in the repo, so a thinker
+    # that was deleted from thinkers/ doesn't linger here (as a dangling
+    # symlink or stale copy) and get resurrected into identities on the next
+    # bootstrap. -e || -L catches both live entries and dangling symlinks.
+    local entry
+    for entry in "$thinkers_prefix"/*; do
+        [[ -e "$entry" || -L "$entry" ]] || continue
+        name=$(basename "$entry")
+        if [[ ! -d "thinkers/$name" ]]; then
+            rm -rf "${thinkers_prefix:?}/$name"
+            echo "Pruned stale thinker template → $name"
+        fi
+    done
     echo "Installed thinker templates → $thinkers_prefix"
 }
 

@@ -162,6 +162,13 @@ _ensure_thinkers() {
         name=$(basename "$src_dir")
         local dest="$thinkers_dir/$name"
 
+        # Guard: if a prior (mis)install left `dest` as a directory symlink
+        # pointing back at the source, the file-level symlink pass below would
+        # resolve `$dest/<file>` through it and create self-referential links
+        # *inside the source repo* (ELOOP corruption). A thinker dir must be a
+        # real directory, so drop any symlink here and rebuild it.
+        [[ -L "$dest" ]] && rm -f "$dest"
+
         # Resolve src_dir through symlinks (bundled_dir entries may be symlinks)
         local real_src
         real_src="$(cd "$src_dir" && pwd -P)"
