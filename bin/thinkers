@@ -972,8 +972,15 @@ _append_wake_gap_note() {
 # /usr/sbin/chat shadow silently broke every chat reply on 2026-08-14.
 _ensure_shellm_bins() {
     local self bindir
-    self=$(command -v thinkers 2>/dev/null) || self="$0"
-    bindir=$(cd "$(dirname "$(realpath "$self" 2>/dev/null)")" 2>/dev/null && pwd) || return 0
+    # BASH_SOURCE, not `command -v thinkers`: PATH is the very thing this
+    # guard distrusts, and under absolute-path invocation the PATH lookup can
+    # resolve a different copy than the one executing — the guard would then
+    # prepend and verify the wrong directory.
+    self="${BASH_SOURCE[0]:-$0}"
+    if ! bindir=$(cd "$(dirname "$(realpath "$self" 2>/dev/null)")" 2>/dev/null && pwd); then
+        echo "thinkers: warn: cannot resolve own bin dir from '$self' — PATH-shadow guard skipped" >&2
+        return 0
+    fi
 
     # Prepend our dir unless it's already first (a later copy still loses to a
     # system dir, so presence isn't enough — it must be first).
