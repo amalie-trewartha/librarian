@@ -42,8 +42,12 @@ check "fresh identity has monolith"     test -d "$T/monolith"
 check "fresh identity has responder"    test -d "$T/responder"
 check_not "fresh identity lacks actor"  test -d "$T/actor"
 
-# Simulate a pre-consolidation identity: stale copies of two retired
-# thinkers, one user-authored thinker, one hand-edited bundled prompt.
+check "fresh identity ledger seeded"    grep -qx actor "$T/.retired_done"
+
+# Simulate a pre-consolidation identity: no ledger yet (it did not exist
+# then), stale copies of two retired thinkers, one user-authored thinker,
+# one hand-edited bundled prompt.
+rm -f "$T/.retired_done"
 fake_thinker "$T/actor"
 fake_thinker "$T/mind_wanderer"
 fake_thinker "$T/mycustom"
@@ -77,6 +81,21 @@ check "marker unchanged on rerun" \
 rm "$T/actor/disabled"
 identity sync-thinkers alpha >/dev/null 2>&1
 check_not "operator re-enable sticks"   test -e "$T/actor/disabled"
+
+# On a POST-consolidation identity the seeded ledger means a user-authored
+# thinker that happens to reuse a retired name is never disabled.
+identity new bravo >/dev/null 2>&1
+TB="$WORK/.identities/bravo/thinkers"
+fake_thinker "$TB/learning"
+identity sync-thinkers bravo >/dev/null 2>&1
+check_not "user thinker under retired name survives on fresh identity" \
+    test -e "$TB/learning/disabled"
+
+# sync-thinkers must not require a default identity when given a name:
+# the systemd start path runs it on boxes where no default was ever set.
+rm -f "$WORK/.identities/default"
+identity sync-thinkers alpha >/dev/null 2>&1
+check "works without a default identity" test $? -eq 0
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 exit $((fail > 0))

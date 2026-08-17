@@ -170,7 +170,18 @@ _ensure_thinkers() {
     # the marker an operator deliberately deleted, making the marker's own
     # "delete this file to re-enable" instruction a lie.
     local _retired _rdest _rledger="$thinkers_dir/.retired_done"
-    for _retired in actor goals_manager inner_monologue learning mind_wanderer values_manager; do
+    local -a _retired_names=(actor goals_manager inner_monologue learning mind_wanderer values_manager)
+
+    # A FRESH bootstrap (no thinker dirs yet) seeds the ledger up front:
+    # this identity never had the old roster, so any dir later appearing
+    # under a retired name can only be user-authored — the retire pass must
+    # never touch it. Only a pre-consolidation identity (dirs present, no
+    # ledger) has genuinely stale copies to retire.
+    if [[ ! -f "$_rledger" && -z "$(ls -A "$thinkers_dir" 2>/dev/null)" ]]; then
+        printf '%s\n' "${_retired_names[@]}" > "$_rledger"
+    fi
+
+    for _retired in "${_retired_names[@]}"; do
         _rdest="$thinkers_dir/$_retired"
         [[ -d "$_rdest" && ! -d "$bundled_dir/$_retired" ]] || continue
         [[ -f "$_rdest/step" && -f "$_rdest/subscriptions.jsonl" ]] || continue
@@ -1522,7 +1533,11 @@ main() {
             cmd_sync_kernel "$@"
             ;;
         sync-thinkers)
-            _require_identity
+            # Deliberately NOT _require_identity: that also demands a default
+            # symlink, which a restored/imported box may lack — and this is
+            # what the systemd start path runs, so dying here would leave the
+            # stale roster in place forever with only a journal warning.
+            [[ -d "$IDENTITY_DIR" ]] || die "No identities yet. Create one with: identity new <name>"
             cmd_sync_thinkers "$@"
             ;;
         default)
