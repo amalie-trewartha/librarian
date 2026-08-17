@@ -1775,9 +1775,35 @@ CATHELP
         done <<< "$_all_files" \
             | sort -t$'\t' -k1,1n \
             | cut -f2- \
-            | while IFS= read -r line; do
-                _cat_output "$line"
-            done
+            | if [[ "$format" -eq 1 ]]; then
+                while IFS= read -r line; do
+                    _cat_format_line "$line"
+                done
+              else
+                # Raw mode: lines were already filtered by the per-file jq
+                # above — emit as-is instead of re-filtering per line.
+                cat
+              fi
+    elif [[ "$format" -eq 0 ]]; then
+        # Raw mode: one pass over the whole file. The per-line _cat_output
+        # spawns a jq per step when filters are set, which on a large
+        # trajectory (tens of thousands of steps) turns every filtered
+        # cat into minutes of process spawning.
+        if [[ "$_filter_json" == "[]" ]]; then
+            cat "$traj_file"
+        else
+            jq -Rc --argjson filters "$_filter_json" '
+                fromjson? // empty |
+                def matches_filters($fs):
+                    . as $step |
+                    ($fs | length == 0) or all($fs[];
+                        .key as $k | .vals as $vs |
+                        ($step[$k] // null) as $fv |
+                        ($vs | any(. as $v | $v == ($fv | tostring)))
+                    );
+                select(matches_filters($filters))
+            ' "$traj_file" 2>/dev/null || true
+        fi
     else
         while IFS= read -r line; do
             _cat_output "$line"
