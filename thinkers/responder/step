@@ -3,10 +3,12 @@ set -euo pipefail
 
 # responder/step — Immediate chat reply thinker.
 #
-# Fires on every inbound message. Writes a reply_claim step to the root
-# trajectory FIRST (so the monolith router knows not to double-reply),
-# then composes and sends a reply with a single llm call + `chat reply`.
-# No shellm agentic loop, no tools — lowest possible latency.
+# Fires on every inbound message: composes and sends a reply with a single
+# llm call + `chat reply`. No shellm agentic loop, no tools — lowest
+# possible latency. Idempotency comes from the reply itself (the reply_to
+# stamp in the log, plus chat reply's own answered guard) — deliberately
+# NOT from the reply_claim step below, so a claim whose send then fails
+# never blocks a retry on redelivery.
 
 THINKER_NAME="responder"
 SCRIPT_DIR="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
@@ -58,8 +60,6 @@ if [[ -n "$trigger_step_id" ]]; then
             | ([$steps | to_entries[] | select(.value.step_id == $t)] | last) as $in
             | [$steps[] | select(.type == "message" and .from == $me
                                  and (.reply_to // "") == $t)]
-              + [$steps[] | select(.type == "reply_claim"
-                                   and (.trigger_step // "") == $t)]
               + (if $in == null then []
                  else [$steps[($in.key + 1):][]
                        | select(.type == "message" and .from == $me and .to == $them)]
@@ -68,14 +68,16 @@ if [[ -n "$trigger_step_id" ]]; then
               else (.[0].step_id // "claimed") end' 2>/dev/null \
         | head -n 1) || already=""
     if [[ -n "$already" ]]; then
-        printf '  already replied/claimed step %s — skipping\n' "$trigger_step_id" >&2
+        printf '  already replied to step %s — skipping\n' "$trigger_step_id" >&2
         exit 0
     fi
 fi
 
 # ---------------------------------------------------------------------------
-# Claim: write a reply_claim step IMMEDIATELY so the monolith router knows
-# this message is being handled and does not attempt its own reply.
+# Claim: an audit-trail step recording that this responder began handling
+# the message. NOT consulted for idempotency (see header) — the monolith no
+# longer subscribes to message steps, and a bare claim must never suppress
+# a retry after a failed send.
 # ---------------------------------------------------------------------------
 printf '  claiming reply to %s...\n' "$msg_from" >&2
 jq -nc \
