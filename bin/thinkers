@@ -113,7 +113,13 @@ _inside_own_dispatcher() {
     local my_cg their_cg
     my_cg=$(cat /proc/self/cgroup 2>/dev/null) || my_cg=""
     their_cg=$(cat "/proc/$dpid/cgroup" 2>/dev/null) || their_cg=""
-    if [[ -n "$my_cg" && "$my_cg" == "$their_cg" && "$my_cg" == *"/shellm-thinkers@"* ]]; then
+    # Scope to THIS identity's unit, not just any shellm-thinkers@ unit:
+    # a different identity running inside our cgroup (e.g. tests, or an
+    # aux identity spawned from our step) would otherwise be a false
+    # positive — stop is refused for a dispatcher that is NOT our own,
+    # leaving its pending dir un-cleaned (2026-08-14 test_cleared_on_stop).
+    local unit_pat="shellm-thinkers@$(systemd-escape "$IDENTITY_NAME" 2>/dev/null || printf '%s' "$IDENTITY_NAME").service"
+    if [[ -n "$my_cg" && "$my_cg" == "$their_cg" && "$my_cg" == *"$unit_pat"* ]]; then
         return 0
     fi
     pid=$$
