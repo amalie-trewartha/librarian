@@ -137,6 +137,29 @@ Use the name of the person you mean to reach: chat reply <their-name> <message>"
                 | last // ""' 2>/dev/null) || reply_to=""
     fi
 
+    # Answered guard: if a reply from us stamped to this step is already in
+    # the log, don't send another. Several thinkers subscribe to message
+    # steps, so concurrent wakes for one inbound can each try to answer it
+    # (2026-08-17: one "you there?" got three replies). First send wins;
+    # bounded to the recent log — duplicates happen within seconds.
+    if [[ -n "$reply_to" ]]; then
+        local _guard_tf _dup
+        _guard_tf=$(traj path "${ROOT_TRAJ_ID:-$TRAJ_ID}" 2>/dev/null) || _guard_tf=""
+        if [[ -n "$_guard_tf" && -f "$_guard_tf" ]]; then
+            _dup=$(tail -n 2000 -- "$_guard_tf" 2>/dev/null \
+                | jq -Rr --arg me "$from" --arg rt "$reply_to" \
+                    'fromjson? // empty
+                     | select(.type == "message" and .from == $me
+                              and (.reply_to // "") == $rt)
+                     | .step_id // "answered"' 2>/dev/null | head -1) || _dup=""
+            if [[ -n "$_dup" ]]; then
+                printf 'chat: step %s already has a reply from %s — skipping duplicate send.\n' \
+                    "$reply_to" "$from" >&2
+                return 0
+            fi
+        fi
+    fi
+
     # reply_to stamps which message step this reply answers, making "has this
     # message been answered" a fact in the log rather than an ordering
     # heuristic. Additive — readers that don't know it ignore it.
