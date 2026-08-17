@@ -254,6 +254,14 @@ _build_shellm_flags() {
     printf '%s\n' "--var" "TRAJ_DIR=$abs_traj_dir"
     printf '%s\n' "--var" "TRAJ_ID=$TRAJ_ID"
 
+    # Propagate model + API keys to nested shellm calls. Inside Docker, .env
+    # isn't mounted, so without these the nested call hits the final else in
+    # bin/shellm's model fallback and fails with "ANTHROPIC_API_KEY is not set".
+    [[ -n "${SHELLM_MODEL:-}" ]] && printf '%s\n' "--var" "SHELLM_MODEL=$SHELLM_MODEL"
+    for _ak in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY; do
+        [[ -n "${!_ak:-}" ]] && printf '%s\n' "--var" "$_ak=${!_ak}"
+    done
+
     # Skill-declared vars
     while IFS= read -r vname; do
         [[ -z "$vname" ]] && continue
