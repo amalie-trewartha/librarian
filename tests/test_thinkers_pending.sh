@@ -324,6 +324,50 @@ test_singleton_token() {
 }
 
 # ---------------------------------------------------------------------------
+# Test 8: a killed feeder pipeline is respawned by the housekeeping tick and
+# steps appended after the kill still dispatch (the 2026-08-14 outage class)
+# ---------------------------------------------------------------------------
+test_feeder_respawn() {
+    setup_identity
+    start_thinkers
+
+    local traj="$TMP/id/trajectories/$TRAJ_ID/trajectory.jsonl"
+    if ! pgrep -f "tail -n 0 -F $traj" >/dev/null 2>&1; then
+        bad "feeder respawn: feeder running before kill"
+        stop_thinkers
+        return
+    fi
+
+    # Kill the feeder the way the incident did: TERM the tail directly
+    pkill -f "tail -n 0 -F $traj" 2>/dev/null
+    sleep 3
+
+    if pgrep -f "tail -n 0 -F $traj" >/dev/null 2>&1; then
+        ok "feeder respawned after kill"
+    else
+        bad "feeder respawned after kill" "no tail -F running 3s after kill"
+    fi
+
+    if grep -q 'feeder for .* died — respawning' "$TMP/id/run/logs/dispatcher.log" 2>/dev/null; then
+        ok "feeder respawn logged"
+    else
+        bad "feeder respawn logged"
+    fi
+
+    # The respawned feeder must actually deliver: append a step and expect
+    # a dispatch to the thinker
+    append_step '{"type":"action","content":"AFTER_RESPAWN","source":"test"}'
+    wait_for_record 1 10
+    if grep -q '"AFTER_RESPAWN"' "$TMP/id/record" 2>/dev/null; then
+        ok "step dispatched via respawned feeder"
+    else
+        bad "step dispatched via respawned feeder"
+    fi
+
+    stop_thinkers
+}
+
+# ---------------------------------------------------------------------------
 
 printf 'test_thinkers_pending: using tmp dir %s\n' "$TMP"
 test_pending_replay
@@ -333,6 +377,7 @@ test_selfwake_coalesce
 test_queue_cap
 test_cleared_on_stop
 test_singleton_token
+test_feeder_respawn
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
