@@ -790,7 +790,7 @@ cmd_new() {
         for _mf in "$memories_dir"/*.md; do
             [[ -f "$_mf" ]] || continue
             cp "$_mf" "$identity_dir/memories/"
-            (( _mem_count++ ))
+            (( _mem_count++ )) || true
         done
         printf 'Imported %d memories from %s\n' "$_mem_count" "$memories_dir" >&2
     fi
