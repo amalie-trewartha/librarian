@@ -17,8 +17,14 @@ set -euo pipefail
 #
 # Usage:
 #   tools/pr-committee [PR_NUMBER] [options]
+#   tools/pr-committee --diff RANGE [options]
 #
 # Options:
+#   --diff RANGE     Review a local git commit range (e.g. main..HEAD or
+#                    abc123..def456) instead of a GitHub PR. Everything is
+#                    read from the local repo; gh is not used and --post is
+#                    unavailable. Useful for re-verifying fixes already
+#                    merged, or reviewing before anything is pushed.
 #   --focus TEXT     Steer the review (e.g. "concurrency around the
 #                    dispatcher; ignore style"). Injected into every
 #                    reviewer's brief and prioritized by the chair.
@@ -46,6 +52,7 @@ POST=0
 DRY=0
 OUT=""
 PR=""
+DIFF_RANGE=""
 MAX_FILE_BYTES="${PRC_MAX_FILE_BYTES:-60000}"
 MAX_FILES_BYTES="${PRC_MAX_FILES_BYTES:-250000}"
 
@@ -53,6 +60,7 @@ die() { echo "pr-committee: $*" >&2; exit 1; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --diff)    DIFF_RANGE="${2:?--diff requires a git range}"; shift 2 ;;
         --focus)   FOCUS="${2:?--focus requires a value}"; shift 2 ;;
         --models)  MODELS="${2:?--models requires a value}"; shift 2 ;;
         --chair)   CHAIR="${2:?--chair requires a value}"; shift 2 ;;
@@ -74,71 +82,117 @@ done
 export LLM_SPEED_TIME="${LLM_SPEED_TIME:-0}"
 export LLM_MAX_TIME="${LLM_MAX_TIME:-1800}"
 
-command -v gh  >/dev/null || die "gh CLI is required"
 command -v jq  >/dev/null || die "jq is required"
 command -v llm >/dev/null || die "llm (shellm bin/llm) must be on PATH"
-
-cd "$(git rev-parse --show-toplevel)"
-REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-
-# Default PR: the sole open one, if there is exactly one.
-if [[ -z "$PR" ]]; then
-    mapfile -t open_prs < <(gh pr list --state open --json number -q '.[].number')
-    [[ ${#open_prs[@]} -eq 1 ]] || die "pass a PR number (${#open_prs[@]} open PRs)"
-    PR="${open_prs[0]}"
+[[ -n "$DIFF_RANGE" && -n "$PR" ]] && die "pass either a PR number or --diff RANGE, not both"
+if [[ -z "$DIFF_RANGE" ]]; then
+    command -v gh >/dev/null || die "gh CLI is required (or use --diff RANGE for a local review)"
+elif (( POST )); then
+    die "--post needs a PR target; not available with --diff"
 fi
 
+cd "$(git rev-parse --show-toplevel)"
 STAMP=$(date +%Y%m%d-%H%M%S)
-OUT="${OUT:-$HOME/.shellm/pr-committee/${REPO//\//-}-pr${PR}-${STAMP}}"
-mkdir -p "$OUT"
-
-echo "== PR #$PR on $REPO"
-echo "== run dir: $OUT"
 
 # ---------------------------------------------------------------------------
 # Gather the brief: metadata, full changed files, diff
 # ---------------------------------------------------------------------------
 
-gh pr view "$PR" --json title,body,author,headRefName,headRefOid,files > "$OUT/pr.json"
-gh pr diff "$PR" > "$OUT/diff.patch"
+if [[ -n "$DIFF_RANGE" ]]; then
+    # Local range mode: everything from git, nothing from GitHub.
+    [[ "$DIFF_RANGE" == *..* ]] || die "--diff wants an A..B range (e.g. main..HEAD)"
+    git diff --stat "$DIFF_RANGE" >/dev/null 2>&1 || die "invalid git range: $DIFF_RANGE"
+    HEAD_REF="${DIFF_RANGE##*..}"; HEAD_REF="${HEAD_REF:-HEAD}"
+    REPO=$(basename "$(git rev-parse --show-toplevel)")
+    TARGET="range $DIFF_RANGE"
+    TITLE="$DIFF_RANGE ($(git rev-list --count "$DIFF_RANGE") commits)"
+    OUT="${OUT:-$HOME/.shellm/pr-committee/${REPO}-diff-${DIFF_RANGE//[^A-Za-z0-9._-]/-}-${STAMP}}"
+    mkdir -p "$OUT"
+    echo "== $TARGET in $REPO"
+    echo "== run dir: $OUT"
 
-TITLE=$(jq -r .title "$OUT/pr.json")
-AUTHOR=$(jq -r .author.login "$OUT/pr.json")
-HEAD_SHA=$(jq -r .headRefOid "$OUT/pr.json")
-
-BRIEF="$OUT/brief.md"
-{
-    echo "# Pull request #$PR: $TITLE"
-    echo
-    echo "Repository: $REPO  |  Author: $AUTHOR  |  Head: $(jq -r .headRefName "$OUT/pr.json") @ ${HEAD_SHA:0:9}"
-    echo
-    echo "## PR description"
-    echo
-    jq -r '.body // "(no description)"' "$OUT/pr.json"
-    echo
-    if [[ -n "$FOCUS" ]]; then
-        echo "## PRIORITY FOCUS from the requester"
+    git diff "$DIFF_RANGE" > "$OUT/diff.patch"
+    git diff --name-only "$DIFF_RANGE" > "$OUT/files.txt"
+    BRIEF="$OUT/brief.md"
+    {
+        echo "# Change set under review: $TITLE"
         echo
-        echo "$FOCUS"
+        echo "Repository: $REPO (local)  |  Head: $(git rev-parse --short "$HEAD_REF")"
         echo
+        echo "## Commits in the range (message bodies carry the intent)"
+        echo
+        git log --reverse --format='### %h %s%n%n%b' "$DIFF_RANGE"
+        echo
+        if [[ -n "$FOCUS" ]]; then
+            echo "## PRIORITY FOCUS from the requester"
+            echo
+            echo "$FOCUS"
+            echo
+        fi
+        echo "## Full contents of changed files (post-change, for context)"
+        echo
+    } > "$BRIEF"
+    fetch_file() { git show "$HEAD_REF:$1" 2>/dev/null; }
+else
+    REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+    # Default PR: the sole open one, if there is exactly one.
+    if [[ -z "$PR" ]]; then
+        mapfile -t open_prs < <(gh pr list --state open --json number -q '.[].number')
+        [[ ${#open_prs[@]} -eq 1 ]] || die "pass a PR number (${#open_prs[@]} open PRs)"
+        PR="${open_prs[0]}"
     fi
-    echo "## Full contents of changed files (post-change, for context)"
-    echo
-} > "$BRIEF"
+    TARGET="PR #$PR"
+    OUT="${OUT:-$HOME/.shellm/pr-committee/${REPO//\//-}-pr${PR}-${STAMP}}"
+    mkdir -p "$OUT"
+    echo "== $TARGET on $REPO"
+    echo "== run dir: $OUT"
 
-# Fetch each changed file at the PR head via the contents API — works for
-# fork PRs without touching local git state. Deleted files 404 and are
-# skipped (the diff still shows the deletion). A per-file and a total byte
-# budget keep the brief inside a sane token count.
+    gh pr view "$PR" --json title,body,author,headRefName,headRefOid,files > "$OUT/pr.json"
+    gh pr diff "$PR" > "$OUT/diff.patch"
+    jq -r '.files[].path' "$OUT/pr.json" > "$OUT/files.txt"
+
+    TITLE=$(jq -r .title "$OUT/pr.json")
+    AUTHOR=$(jq -r .author.login "$OUT/pr.json")
+    HEAD_SHA=$(jq -r .headRefOid "$OUT/pr.json")
+
+    BRIEF="$OUT/brief.md"
+    {
+        echo "# Pull request #$PR: $TITLE"
+        echo
+        echo "Repository: $REPO  |  Author: $AUTHOR  |  Head: $(jq -r .headRefName "$OUT/pr.json") @ ${HEAD_SHA:0:9}"
+        echo
+        echo "## PR description"
+        echo
+        jq -r '.body // "(no description)"' "$OUT/pr.json"
+        echo
+        if [[ -n "$FOCUS" ]]; then
+            echo "## PRIORITY FOCUS from the requester"
+            echo
+            echo "$FOCUS"
+            echo
+        fi
+        echo "## Full contents of changed files (post-change, for context)"
+        echo
+    } > "$BRIEF"
+    # Contents come from the API at the PR head — works for fork PRs without
+    # touching local git state. Deleted files 404 and are skipped (the diff
+    # still shows the deletion).
+    fetch_file() {
+        local enc
+        enc=$(jq -rn --arg p "$1" '$p|@uri')
+        gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$REPO/contents/$enc?ref=$HEAD_SHA" 2>/dev/null
+    }
+fi
+
+# A per-file and a total byte budget keep the brief inside a sane token count.
 budget=$MAX_FILES_BYTES
 while IFS= read -r path; do
     if (( budget <= 0 )); then
         echo "(remaining files omitted: full-file budget exhausted; see diff)" >> "$BRIEF"
         break
     fi
-    enc=$(jq -rn --arg p "$path" '$p|@uri')
-    if content=$(gh api -H "Accept: application/vnd.github.raw" \
-                 "repos/$REPO/contents/$enc?ref=$HEAD_SHA" 2>/dev/null); then
+    if content=$(fetch_file "$path") && [[ -n "$content" ]]; then
         content=${content:0:$MAX_FILE_BYTES}
         {
             echo "### $path"
@@ -153,7 +207,7 @@ while IFS= read -r path; do
         echo "### $path — not fetchable at head (likely deleted); see diff" >> "$BRIEF"
         echo >> "$BRIEF"
     fi
-done < <(jq -r '.files[].path' "$OUT/pr.json")
+done < "$OUT/files.txt"
 
 {
     echo "## The diff under review"
@@ -163,7 +217,7 @@ done < <(jq -r '.files[].path' "$OUT/pr.json")
     echo '````'
 } >> "$BRIEF"
 
-echo "== brief: $(wc -c < "$BRIEF") bytes ($(jq -r '.files|length' "$OUT/pr.json") files, $(wc -c < "$OUT/diff.patch") bytes of diff)"
+echo "== brief: $(wc -c < "$BRIEF") bytes ($(wc -l < "$OUT/files.txt" | tr -d ' ') files, $(wc -c < "$OUT/diff.patch") bytes of diff)"
 if (( DRY )); then
     echo "== dry run: no models called. Brief at $BRIEF"
     exit 0
@@ -175,7 +229,7 @@ fi
 
 cat > "$OUT/sys-reviewer.txt" <<EOF
 You are one member of an independent code-review committee examining a
-pull request. Other frontier models are reviewing the same brief in
+proposed change set (a pull request or commit range). Other frontier models are reviewing the same brief in
 parallel; you cannot see their work and must not speculate about it.
 Your value to the committee is an honest, independent, evidence-grounded
 review.
@@ -317,7 +371,7 @@ Then a subsection per finding: evidence, why it matters, suggested fix.
 EOF
 
 {
-    echo "# PR #$PR: $TITLE"
+    echo "# $TARGET: $TITLE"
     echo
     echo "## The diff"
     echo '````diff'
