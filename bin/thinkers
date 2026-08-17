@@ -64,6 +64,19 @@ _kill_traj_tails() {
     done <<< "$list"
 }
 
+
+_warn_stray_tails() {
+    # Vitals check: after stop, warn if any `tail -n 0 -F` feeder
+    # processes survive (indicates a leak in the kill/sweep paths).
+    local stray
+    stray=$(pgrep -f 'tail -n 0 -F' 2>/dev/null) || true
+    if [[ -n "$stray" ]]; then
+        local count
+        count=$(printf '%s\n' "$stray" | grep -c .) || count=0
+        printf '[thinkers] WARNING: %d stray tail feeder process(es) still alive after stop\n' "$count" >&2
+    fi
+}
+
 debug() {
     if [[ "$VERBOSE" -eq 1 ]]; then
         printf '[thinkers debug] %s\n' "$*" >&2
@@ -898,6 +911,9 @@ _stop_dispatcher() {
 
     # Sweep tail feeders that escaped the PID-tree kill (see _kill_traj_tails)
     _kill_traj_tails "$run_dir" "$traj_files_snapshot"
+
+    # Vitals check: warn if any tail feeders survived the kill/sweep
+    _warn_stray_tails
 
     # Clean up FIFO, sub_map, traj_files, pending-trigger flags, and ownership
     # token (removing the token also makes any stray dispatcher instance exit
