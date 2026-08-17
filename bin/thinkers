@@ -977,7 +977,13 @@ _ensure_shellm_bins() {
     # resolve a different copy than the one executing — the guard would then
     # prepend and verify the wrong directory.
     self="${BASH_SOURCE[0]:-$0}"
-    if ! bindir=$(cd "$(dirname "$(realpath "$self" 2>/dev/null)")" 2>/dev/null && pwd); then
+    # realpath's failure must be checked on its own: inlined, a failed
+    # substitution feeds "" to dirname, which yields "." — `cd .` then
+    # succeeds and bindir silently becomes $PWD, prepending and verifying
+    # whatever directory the dispatcher happened to start in.
+    local rp
+    rp=$(realpath "$self" 2>/dev/null) || rp=""
+    if [[ -z "$rp" ]] || ! bindir=$(cd "$(dirname "$rp")" 2>/dev/null && pwd); then
         echo "thinkers: warn: cannot resolve own bin dir from '$self' — PATH-shadow guard skipped" >&2
         return 0
     fi
