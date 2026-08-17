@@ -319,8 +319,8 @@ extract_reasoning() {
         # to the end of a prose sentence (some models, e.g. grok, do the
         # latter). In the appended case, emit the prose that precedes the fence
         # on that line, then stop — so the reasoning shows the words, not code.
-        /^```(bash|sh)?[[:space:]]*$/ { exit }
-        match($0, /```(bash|sh)[[:space:]]*$/) {
+        /^```/ { exit }
+        match($0, /```(bash|shell|sh)[[:space:]]*$/) {
             pre = substr($0, 1, RSTART - 1)
             sub(/[[:space:]]+$/, "", pre)
             if (pre ~ /[^[:space:]]/) print pre
@@ -1360,7 +1360,7 @@ extract_code() {
         # ```bash/```sh fence may be appended to the end of a prose line (see
         # opener note below); a bare ``` only counts at line start.
         first_block_closed && !in_block {
-            if ($0 ~ /```(bash|sh)[[:space:]]*$/ || $0 ~ /^```/) {
+            if ($0 ~ /```(bash|shell|sh)[[:space:]]*$/ || $0 ~ /^```/) {
                 print "TRUNCATED" > "/dev/stderr"
                 exit
             }
@@ -1380,7 +1380,7 @@ extract_code() {
         # is ambiguous with a closing fence). The code always begins on the
         # next line, so discarding the rest of the fence line is correct.
         !in_block {
-            if ($0 ~ /```(bash|sh)[[:space:]]*$/ || $0 ~ /^```/) { in_block = 1 }
+            if ($0 ~ /```(bash|shell|sh)[[:space:]]*$/ || $0 ~ /^```/) { in_block = 1 }
             next
         }
 
