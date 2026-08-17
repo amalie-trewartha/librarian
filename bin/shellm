@@ -1664,7 +1664,11 @@ ${combined}"
 
     # Non-streaming API call to fast model
     local msg_json
-    msg_json=$(jq -n --arg p "$llm_prompt" '[{"role":"user","content":$p}]')
+    local _prompt_tmp
+    _prompt_tmp=$(mktemp)
+    printf '%s' "$llm_prompt" > "$_prompt_tmp"
+    msg_json=$(jq -n --rawfile p "$_prompt_tmp" '[{"role":"user","content":$p}]')
+    rm -f "$_prompt_tmp"
 
     local text
     text=$(llm -m "$summary_model" -t 2048 \
@@ -1978,8 +1982,12 @@ run_loop() {
 
     # Write prompt step
     if [[ -n "$prompt" ]]; then
-        printf '%s' "$(jq -n --arg p "$prompt" --arg run_id "$_run_step_id" '{type:"prompt",content:$p,run_id:$run_id}')" \
+        local _p_tmp
+        _p_tmp=$(mktemp)
+        printf '%s' "$prompt" > "$_p_tmp"
+        printf '%s' "$(jq -n --rawfile p "$_p_tmp" --arg run_id "$_run_step_id" '{type:"prompt",content:$p,run_id:$run_id}')" \
             | traj append --traj_dir "$_run_traj_dir" "$_run_traj_id" >/dev/null
+        rm -f "$_p_tmp"
     fi
 
     # --- Cleanup trap ---
