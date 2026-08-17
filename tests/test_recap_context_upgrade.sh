@@ -159,9 +159,31 @@ check "boundary: chronological order" \
 check "boundary: tail intact"                 grep -q 'topic 215' <<<"$out"
 
 # ---------------------------------------------------------------------------
-# 6. Flag validation: garbage --raw-tail / --budget must die loudly, not
-#    silently evaluate to 0.
+# 6. Multiple segments at the TOP tier: the max_tier scan's final comparison
+#    is false here (three t2 blocks, no coarser tier) — the staircase and
+#    the raw tail must both survive under recap's set -e.
 # ---------------------------------------------------------------------------
+mk_traj face4444-root 305
+mkdir -p "$TRAJ_ROOT/face4444-root/rollups"
+printf '{"start_index":0,"updated":"t"}\n' > "$TRAJ_ROOT/face4444-root/rollups/meta.json"
+for s in 0 100 200; do
+    mk_block face4444-root 2 "$s" $((s+100)) "TOPTIER-$s"
+done
+out=$(recap face4444 --traj_dir "$TRAJ_ROOT" --context --cached --raw-tail 5 2>&1)
+rc=$?
+check "top-tier: exits 0"           test "$rc" -eq 0
+check "top-tier: all three shown"   test "$(grep -c 'TOPTIER-' <<<"$out")" = "3"
+check "top-tier: tail intact"       grep -q 'topic 305' <<<"$out"
+
+# ---------------------------------------------------------------------------
+# 7. Flag validation: garbage --raw-tail / --budget must die loudly on the
+#    modes that read them, and NOT break plain recap (env-seeded values).
+# ---------------------------------------------------------------------------
+# Plain recap with garbage context env must get past validation and fail
+# (if at all) on its own terms — here, the missing episode cache.
+out=$(env MONOLITH_CONTEXT_BUDGET=garbage ROLLUP_RAW_TAIL=nope \
+        recap cafe1111 --traj_dir "$TRAJ_ROOT" --cached 2>&1) || true
+check "bad env budget ignored off --context" grep -q 'no recap yet' <<<"$out"
 check_not "validate: --raw-tail oops rejected" \
     recap cafe1111 --traj_dir "$TRAJ_ROOT" --context --raw-tail oops
 check_not "validate: --budget garbage rejected" \

@@ -319,7 +319,10 @@ extract_reasoning() {
         # to the end of a prose sentence (some models, e.g. grok, do the
         # latter). In the appended case, emit the prose that precedes the fence
         # on that line, then stop — so the reasoning shows the words, not code.
-        /^```/ { exit }
+        # Bare and shell-tagged line-start fences end the reasoning, trailing
+        # text included; a non-shell fence (```json etc.) does NOT — a model
+        # showing a JSON example mid-reasoning keeps its subsequent prose.
+        /^```(bash|shell|sh)?([[:space:]].*)?$/ { exit }
         match($0, /```(bash|shell|sh)[[:space:]]*$/) {
             pre = substr($0, 1, RSTART - 1)
             sub(/[[:space:]]+$/, "", pre)

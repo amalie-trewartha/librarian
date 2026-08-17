@@ -91,6 +91,20 @@ identity sync-thinkers bravo >/dev/null 2>&1
 check_not "user thinker under retired name survives on fresh identity" \
     test -e "$TB/learning/disabled"
 
+# Post-consolidation identity that PREDATES the ledger (monolith/responder
+# present, no .retired_done, none of the six dirs): the first reconcile
+# must close the question for ALL six names — not just ones with dirs — so
+# a thinker the operator authors afterwards under a retired name survives.
+identity new carol >/dev/null 2>&1
+TC="$WORK/.identities/carol/thinkers"
+rm -f "$TC/.retired_done"
+identity sync-thinkers carol >/dev/null 2>&1
+check "first sync ledgers dirless names"  grep -qx learning "$TC/.retired_done"
+fake_thinker "$TC/learning"
+identity sync-thinkers carol >/dev/null 2>&1
+check_not "later user thinker survives on pre-ledger identity" \
+    test -e "$TC/learning/disabled"
+
 # sync-thinkers must not require a default identity when given a name:
 # the systemd start path runs it on boxes where no default was ever set.
 rm -f "$WORK/.identities/default"

@@ -169,24 +169,23 @@ _ensure_thinkers() {
     # runs on every service start, and without the ledger it would re-write
     # the marker an operator deliberately deleted, making the marker's own
     # "delete this file to re-enable" instruction a lie.
+    # EVERY name is recorded on EVERY pass, matching dir or not: the first
+    # reconcile an identity ever sees closes the question for all six names
+    # at once. Recording only matched names left a hole — an identity
+    # created post-consolidation but pre-ledger has no stale dirs and would
+    # get no ledger, so a thinker the operator later authored under a
+    # retired name (their own thinkers/learning) would be disabled on the
+    # next restart. A dir present on that first pass is a stale bundled
+    # copy (the name shipped, the bundle dropped it); a dir appearing on a
+    # later pass is user work the ledger now protects.
     local _retired _rdest _rledger="$thinkers_dir/.retired_done"
     local -a _retired_names=(actor goals_manager inner_monologue learning mind_wanderer values_manager)
-
-    # A FRESH bootstrap (no thinker dirs yet) seeds the ledger up front:
-    # this identity never had the old roster, so any dir later appearing
-    # under a retired name can only be user-authored — the retire pass must
-    # never touch it. Only a pre-consolidation identity (dirs present, no
-    # ledger) has genuinely stale copies to retire.
-    if [[ ! -f "$_rledger" && -z "$(ls -A "$thinkers_dir" 2>/dev/null)" ]]; then
-        printf '%s\n' "${_retired_names[@]}" > "$_rledger"
-    fi
-
     for _retired in "${_retired_names[@]}"; do
-        _rdest="$thinkers_dir/$_retired"
-        [[ -d "$_rdest" && ! -d "$bundled_dir/$_retired" ]] || continue
-        [[ -f "$_rdest/step" && -f "$_rdest/subscriptions.jsonl" ]] || continue
         grep -qxF "$_retired" "$_rledger" 2>/dev/null && continue
-        if [[ ! -e "$_rdest/disabled" ]]; then
+        _rdest="$thinkers_dir/$_retired"
+        if [[ -d "$_rdest" && ! -d "$bundled_dir/$_retired" \
+              && -f "$_rdest/step" && -f "$_rdest/subscriptions.jsonl" \
+              && ! -e "$_rdest/disabled" ]]; then
             printf 'retired by shellm upgrade %s — this thinker was consolidated into monolith/responder; delete this file to re-enable\n' \
                 "$(date +%Y-%m-%d)" > "$_rdest/disabled"
             echo "Retired bundled thinker '$_retired' (disabled marker written; dir kept)" >&2
@@ -1135,11 +1134,14 @@ Usage: identity sync-thinkers [name|--all]
 
 Reconcile an identity's thinkers with the bundled set: bootstrap thinkers
 added upstream, and write a `disabled` marker into bundled thinkers that
-upstream has retired. Existing dirs and their local edits are never
-modified or deleted; user-authored thinkers are never touched. Runs on
-every `thinkers start` via the systemd service wrapper, so an upgraded
-deployment picks up roster changes on restart — this command exists for
-running the same reconcile by hand.
+upstream has retired. User-authored thinkers are never touched. In copy
+mode (the default), existing dirs and their local edits are never
+modified or deleted; in a symlink install (.use-symlinks), bundled CODE
+files (step, *.md) are re-pointed at the bundle, so local edits to those
+belong upstream, not in the identity dir. Runs on every `thinkers start`
+via the systemd service wrapper, so an upgraded deployment picks up
+roster changes on restart — this command exists for running the same
+reconcile by hand.
 EOF
                 return 0
                 ;;

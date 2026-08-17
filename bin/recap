@@ -156,8 +156,13 @@ ROLLUP_LOCK="$ROLLUP_DIR/.lock"
 ROLLUP_META="$ROLLUP_DIR/meta.json"
 
 [[ "$FANOUT" =~ ^[0-9]+$ && "$FANOUT" -ge 2 ]] || die "--fanout must be a number >= 2"
-[[ "$CTX_RAW_TAIL" == "auto" || "$CTX_RAW_TAIL" =~ ^[0-9]+$ ]] || die "--raw-tail must be a number or auto"
-[[ "$CTX_BUDGET" == "auto" || ( "$CTX_BUDGET" =~ ^[0-9]+$ && "$CTX_BUDGET" -gt 0 ) ]] || die "--budget must be a positive number or auto"
+# Validated only when --context/--backfill will actually read them: both are
+# seeded from env (MONOLITH_CONTEXT_BUDGET, ROLLUP_RAW_TAIL), and a malformed
+# identity .env must not break plain `recap`, which never consults them.
+if (( CONTEXT )); then
+    [[ "$CTX_RAW_TAIL" == "auto" || "$CTX_RAW_TAIL" =~ ^[0-9]+$ ]] || die "--raw-tail must be a number or auto"
+    [[ "$CTX_BUDGET" == "auto" || ( "$CTX_BUDGET" =~ ^[0-9]+$ && "$CTX_BUDGET" -gt 0 ) ]] || die "--budget must be a positive number or auto"
+fi
 
 # ---------------------------------------------------------------------------
 # Rendering: trajectory lines -> TSV of (raw_line, step_id, ts, text)
@@ -595,6 +600,7 @@ _ctx_build() {
 # each tier contributes at most F-1 blocks.
 _ctx_assemble() {
     local n=$1 r=$2 cut0 remaining tier blk coarser chunk a x
+    _CTX_START=${3:-0}
     cut0=$(( ((n - r) / FANOUT) * FANOUT )); (( cut0 < 0 )) && cut0=0
     local -a seg_tier=() seg_s=() seg_e=()
     remaining=$cut0; tier=1
@@ -620,7 +626,10 @@ _ctx_assemble() {
     _CTX_EMITTED=0
     local max_tier=0 i
     for (( i = 0; i < ${#seg_tier[@]}; i++ )); do
-        (( seg_tier[i] > max_tier )) && max_tier=${seg_tier[i]}
+        # if-form, not `(( cond )) && assign`: the list form leaves the loop
+        # (and any function it might one day end) with status 1 whenever the
+        # final comparison is false — a latent set -e trap.
+        if (( seg_tier[i] > max_tier )); then max_tier=${seg_tier[i]}; fi
     done
     local t
     for (( t = max_tier; t >= 1; t-- )); do
@@ -647,7 +656,14 @@ _ctx_assemble() {
 # and emit whatever exists; only a tier-1 miss is truly absent history.
 _ctx_emit_seg() {
     local tier=$1 s=$2 e=$3 bf blk c
-    bf=$(_ctx_blockfile "$tier" "$s" "$e")
+    # Prune segments wholly before the enable marker: nothing there is built
+    # at ANY tier until --backfill, and without this cutoff the descent
+    # explores that entire empty tree — one subshell per node, ~cut0/FANOUT
+    # forks on EVERY --context call, growing with the age of the mind. A
+    # straddling segment (s < start < e) still descends: its post-marker
+    # children exist and must print.
+    (( e <= _CTX_START )) && return 0
+    printf -v bf '%s/t%s/%012d-%012d.json' "$ROLLUP_DIR" "$tier" "$s" "$e"
     if [[ -f "$bf" ]]; then
         if (( _CTX_EMITTED == 0 )); then
             printf '=== YOUR LIFE SO FAR — summarized, oldest first ===\n'
@@ -688,7 +704,7 @@ _ctx_run() {
     fi
     [[ "$MODE" == "rebuild" ]] && rm -rf "$ROLLUP_DIR"/t* 2>/dev/null || true
     [[ "$MODE" != "cached" ]] && _ctx_build "$n" "$start"
-    _ctx_assemble "$n" "$r"
+    _ctx_assemble "$n" "$r" "$start"
 }
 
 # ---------------------------------------------------------------------------
