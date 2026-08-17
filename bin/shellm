@@ -306,7 +306,18 @@ _shellm_time() {
 extract_reasoning() {
     local response="$1"
     printf '%s\n' "$response" | awk '
+        # Stop at the opening code fence — everything before it is reasoning.
+        # The fence may be a lone ``` line OR a tagged ```bash/```sh appended
+        # to the end of a prose sentence (some models, e.g. grok, do the
+        # latter). In the appended case, emit the prose that precedes the fence
+        # on that line, then stop — so the reasoning shows the words, not code.
         /^```(bash|sh)?[[:space:]]*$/ { exit }
+        match($0, /```(bash|sh)/) {
+            pre = substr($0, 1, RSTART - 1)
+            sub(/[[:space:]]+$/, "", pre)
+            if (pre ~ /[^[:space:]]/) print pre
+            exit
+        }
         { print }
     '
 }
@@ -1337,18 +1348,29 @@ extract_code() {
 
         BEGIN { in_block = 0; hd_top = 0; first_block_closed = 0 }
 
-        # After first block closed: look for another opening fence
+        # After first block closed: look for another opening fence. A tagged
+        # ```bash/```sh fence may be appended to a prose line (see opener note
+        # below), so match it anywhere; a bare ``` only counts at line start.
         first_block_closed && !in_block {
-            if ($0 ~ /^```/) {
+            if ($0 ~ /```bash/ || $0 ~ /```sh/ || $0 ~ /^```/) {
                 print "TRUNCATED" > "/dev/stderr"
                 exit
             }
             next
         }
 
-        # Before the opening fence — look for ```bash, ```sh, or bare ```
+        # Before the opening fence — look for ```bash, ```sh, or bare ```.
+        # ```bash/```sh may be appended to the END of a prose line: some models
+        # (e.g. grok) write "…do this now.```bash" instead of putting the fence
+        # on its own line. Matching only /^```bash/ misses that, extract_code
+        # returns empty, and the fallback below then runs the WHOLE prose
+        # response as bash ("do: command not found"). So match tagged fences
+        # anywhere on the line; a bare ``` still only opens at line start (a
+        # mid-line bare ``` is ambiguous with a closing fence). The code always
+        # begins on the next line, so discarding the rest of the fence line is
+        # correct.
         !in_block {
-            if ($0 ~ /^```bash/ || $0 ~ /^```sh/ || $0 ~ /^```/) { in_block = 1 }
+            if ($0 ~ /```bash/ || $0 ~ /```sh/ || $0 ~ /^```/) { in_block = 1 }
             next
         }
 
