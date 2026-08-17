@@ -50,12 +50,18 @@ trigger_step_id=$(printf '%s' "$step_json" | jq -r '.step_id // empty' 2>/dev/nu
 # backoff, so a new message or external action wakes us at full speed.
 #
 # The backoff is PRE-EMPTIBLE: we sleep in 1s slices and watch the pending
-# dir for a queued message/action trigger (the dispatcher queues one the
-# moment it arrives while we are busy — and sleeping counts as busy). If one
-# is waiting, this rest wakeup is moot: exit so the dispatcher fires the
-# queued trigger now, instead of the sender waiting out the remaining sleep
-# PLUS a router run. A stale pending file at worst forfeits one idle wakeup;
-# the dispatcher's liveness watchdog is the net.
+# dir for a queued external trigger (the dispatcher queues one the moment it
+# arrives while we are busy — and sleeping counts as busy). If one is waiting,
+# this rest wakeup is moot: exit so the dispatcher fires the queued trigger
+# now, instead of the sender waiting out the remaining sleep PLUS a router run.
+# A stale pending file at worst forfeits one idle wakeup; the dispatcher's
+# liveness watchdog is the net.
+#
+# We watch message/action/observation. Since we no longer subscribe to
+# `message`, an inbound chat reaches us as the responder's *observation*
+# ("Replied to …" / "Chose not to reply …") — that is the signal that wakes
+# us on a chat, so it MUST be in the watch set or the mind sleeps through
+# every conversation until the backoff cap elapses.
 if [[ "$trigger_type" == "idle" ]]; then
     backoff=$(cat "$backoff_file" 2>/dev/null) || backoff="$IDLE_BACKOFF_START"
     [[ "$backoff" =~ ^[0-9]+$ ]] || backoff="$IDLE_BACKOFF_START"
@@ -63,7 +69,7 @@ if [[ "$trigger_type" == "idle" ]]; then
     pending_dir="$IDENTITY_DIR/run/pending"
     slept=0
     while (( slept < backoff )); do
-        for _pend in "$pending_dir/$THINKER_NAME".message.* "$pending_dir/$THINKER_NAME".action.*; do
+        for _pend in "$pending_dir/$THINKER_NAME".message.* "$pending_dir/$THINKER_NAME".action.* "$pending_dir/$THINKER_NAME".observation.*; do
             if [[ -f "$_pend" ]]; then
                 printf '  backoff pre-empted after %ss (queued trigger waiting)\n' "$slept" >&2
                 exit 0
