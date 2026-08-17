@@ -7,7 +7,8 @@ senders is POSTed to the local shellm web API, which appends it to the
 identity's trajectory via `bin/chat`.
 
 The getUpdates offset is persisted after each batch, so delivery is
-at-least-once across restarts; the web API side tolerates the rare replay.
+at-least-once across restarts; the bridge deduplicates by message_id, so
+client retries and replays do not double-post.
 """
 
 from __future__ import annotations
@@ -48,6 +49,11 @@ class Inbound:
         self.allowlist = allowlist
         self.offset = Offset(cfg.state_dir / "update_offset")
         self._chat_url = f"{cfg.web_url}/api/identities/{cfg.identity_api_id}/chat"
+        # Dedup: Telegram delivers at-least-once; a client retry can produce
+        # two updates (different update_ids) for the same message. Drop
+        # duplicates by (user, message_id) — message_id alone is only
+        # unique within one chat, so two users may share the same id.
+        self._seen_msg_ids: dict[tuple[int, int], float] = {}
 
     # -- poll loop -----------------------------------------------------------
 
@@ -93,6 +99,22 @@ class Inbound:
         text = message.get("text") or ""
         if not text:
             return  # text-only pilot: media, stickers, etc. are dropped
+
+        # Dedup: drop if we have already seen this (user, message_id).
+        # Telegram retries can produce two updates with different
+        # update_ids for the same message.
+        now = time.monotonic()
+        msg_id = message.get("message_id")
+        if msg_id is not None:
+            dedup_key = (user_id, msg_id)
+            if dedup_key in self._seen_msg_ids:
+                log.info("dropping duplicate message_id %s from user %s", msg_id, user_id)
+                return
+            self._seen_msg_ids[dedup_key] = now
+            cutoff = now - 300
+            self._seen_msg_ids = {
+                k: v for k, v in self._seen_msg_ids.items() if v > cutoff
+            }
 
         if user_id == self.cfg.admin_id and self._admin_command(text):
             return

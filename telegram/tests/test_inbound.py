@@ -123,3 +123,44 @@ def test_media_and_bots_are_dropped(bridge):
     ib._handle({"message": {"chat": {"id": 7, "type": "private"},
                             "from": {"id": 7, "is_bot": True}, "text": "beep"}})
     assert posts == []
+
+
+def _dm_with_msg_id(user_id, text, msg_id, name="Dana"):
+    """Like dm() but includes a message_id (as Telegram always does)."""
+    return {
+        "message": {
+            "message_id": msg_id,
+            "chat": {"id": user_id, "type": "private"},
+            "from": {"id": user_id, "first_name": name},
+            "text": text,
+        }
+    }
+
+
+def test_duplicate_message_id_is_dropped(bridge):
+    """A client retry that re-delivers the same message_id must not double-post."""
+    ib, bot, posts = bridge
+    ib.allowlist.approve(7)
+    ib._handle(_dm_with_msg_id(7, "hello", msg_id=500))
+    ib._handle(_dm_with_msg_id(7, "hello", msg_id=500))
+    assert len(posts) == 1
+    assert posts[0][1]["content"].endswith("hello")
+
+
+def test_same_msg_id_from_different_users_is_delivered(bridge):
+    """message_id is per-chat; the same id from two users is two messages."""
+    ib, bot, posts = bridge
+    ib.allowlist.approve(7)
+    ib.allowlist.approve(8)
+    ib._handle(_dm_with_msg_id(7, "hi", msg_id=600))
+    ib._handle(_dm_with_msg_id(8, "hey", msg_id=600, name="Eve"))
+    assert len(posts) == 2
+
+
+def test_same_text_new_msg_id_is_delivered(bridge):
+    """The same text sent twice as distinct messages is delivered twice."""
+    ib, bot, posts = bridge
+    ib.allowlist.approve(7)
+    ib._handle(_dm_with_msg_id(7, "ok", msg_id=503))
+    ib._handle(_dm_with_msg_id(7, "ok", msg_id=504))
+    assert len(posts) == 2
