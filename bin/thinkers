@@ -64,6 +64,19 @@ _kill_traj_tails() {
     done <<< "$list"
 }
 
+
+_warn_stray_tails() {
+    # Vitals check: after stop, warn if any `tail -n 0 -F` feeder
+    # processes survive (indicates a leak in the kill/sweep paths).
+    local stray
+    stray=$(pgrep -f 'tail -n 0 -F' 2>/dev/null) || true
+    if [[ -n "$stray" ]]; then
+        local count
+        count=$(printf '%s\n' "$stray" | grep -c .) || count=0
+        printf '[thinkers] WARNING: %d stray tail feeder process(es) still alive after stop\n' "$count" >&2
+    fi
+}
+
 debug() {
     if [[ "$VERBOSE" -eq 1 ]]; then
         printf '[thinkers debug] %s\n' "$*" >&2
@@ -100,7 +113,13 @@ _inside_own_dispatcher() {
     local my_cg their_cg
     my_cg=$(cat /proc/self/cgroup 2>/dev/null) || my_cg=""
     their_cg=$(cat "/proc/$dpid/cgroup" 2>/dev/null) || their_cg=""
-    if [[ -n "$my_cg" && "$my_cg" == "$their_cg" && "$my_cg" == *"/shellm-thinkers@"* ]]; then
+    # Scope to THIS identity's unit, not just any shellm-thinkers@ unit:
+    # a different identity running inside our cgroup (e.g. tests, or an
+    # aux identity spawned from our step) would otherwise be a false
+    # positive — stop is refused for a dispatcher that is NOT our own,
+    # leaving its pending dir un-cleaned (2026-08-14 test_cleared_on_stop).
+    local unit_pat="shellm-thinkers@$(systemd-escape "$IDENTITY_NAME" 2>/dev/null || printf '%s' "$IDENTITY_NAME").service"
+    if [[ -n "$my_cg" && "$my_cg" == "$their_cg" && "$my_cg" == *"$unit_pat"* ]]; then
         return 0
     fi
     pid=$$
@@ -226,6 +245,8 @@ _start_dispatcher() {
     # Fresh pending-trigger flags (steps that arrived while a thinker was busy)
     rm -rf "$run_dir/pending"
     mkdir -p "$run_dir/pending"
+    # Fresh salience-injection dedup log (one feedback nudge per message step)
+    rm -f "$run_dir/fb_injected"
 
     # Ownership token: this instance owns the dispatcher role only while
     # dispatcher.token still holds its token. A newer start overwrites the
@@ -339,30 +360,73 @@ _start_dispatcher() {
         # leave the new owner's runtime files alone.
         printf '' > "$tail_pids_file"
         _my_tail_pids=""
+        # Live feeders as "pid<TAB>traj_file" lines, so the housekeeping
+        # tick can notice a dead one and respawn it for the right file.
+        _feeder_entries=""
+
+        # Spawn the feeder pipeline for one traj file: tail -F tags each
+        # new line with its traj path and writes it to the fifo. Wrapped in
+        # an explicit subshell so $! owns the WHOLE pipeline: tail is then a
+        # child of $! and _kill_tree reaps it. (Killing a bare pipeline's $!
+        # only kills the last stage — the tail survives and leaks.) fd 3 is
+        # the dispatcher's own fifo handle — close it so a feeder never
+        # holds a stray write end.
+        _spawn_feeder() {
+            local _ftraj="$1"
+            (
+                tail -n 0 -F "$_ftraj" 2>/dev/null | while IFS= read -r line; do
+                    printf '%s\t%s\n' "$_ftraj" "$line"
+                done > "$fifo"
+            ) 3<&- &
+            printf '%s\n' "$!" >> "$tail_pids_file"
+            _my_tail_pids="${_my_tail_pids}${_my_tail_pids:+ }$!"
+            _feeder_entries="${_feeder_entries}$!	${_ftraj}
+"
+        }
+
+        # Respawn feeders whose pipeline died. Nothing did this before, so
+        # when the 2026-08-14 stray SIGTERM killed Audel's feeder, the mind
+        # silently fell back to watchdog-only wakeups. Respawning is safe:
+        # tail -n 0 -F starts at the current end of file, so no step is
+        # replayed and every step appended after the respawn is picked up.
+        _respawn_dead_feeders() {
+            local _fpid _ftraj _live="" _dead=""
+            while IFS=$'\t' read -r _fpid _ftraj; do
+                [[ -z "$_fpid" ]] && continue
+                if kill -0 "$_fpid" 2>/dev/null; then
+                    _live="${_live}${_fpid}	${_ftraj}
+"
+                else
+                    _dead="${_dead}${_ftraj}
+"
+                fi
+            done <<< "$_feeder_entries"
+            [[ -z "$_dead" ]] && return 0
+            _feeder_entries="$_live"
+            # A feeder killed mid-write leaves a partial line that can
+            # never complete — drop it rather than glue it onto the next
+            # (unrelated) line. Worst case one step is lost at the moment
+            # of death, exactly what the old no-respawn world lost forever.
+            _read_buf=""
+            while IFS= read -r _ftraj; do
+                [[ -z "$_ftraj" ]] && continue
+                if [[ -f "$_ftraj" ]]; then
+                    printf '%s [dispatcher] feeder for %s died — respawning\n' \
+                        "$(date -u +%FT%TZ)" "$_ftraj" >&2
+                    _spawn_feeder "$_ftraj"
+                else
+                    printf '%s [dispatcher] feeder for %s died and the traj file is gone — not respawning\n' \
+                        "$(date -u +%FT%TZ)" "$_ftraj" >&2
+                fi
+            done <<< "$_dead"
+        }
+
         local _traj_file
         while IFS= read -r _traj_file; do
             [[ -z "$_traj_file" ]] && continue
             [[ -f "$_traj_file" ]] || continue
-
-            # Tag each line with the traj file path. Wrapped in an explicit
-            # subshell so $! owns the WHOLE pipeline: tail is then a child of
-            # $! and _kill_tree reaps it. (Killing a bare pipeline's $! only
-            # kills the last stage — the tail survives and leaks.)
-            (
-                tail -n 0 -F "$_traj_file" 2>/dev/null | while IFS= read -r line; do
-                    printf '%s\t%s\n' "$_traj_file" "$line"
-                done > "$fifo"
-            ) &
-            printf '%s\n' "$!" >> "$tail_pids_file"
-            _my_tail_pids="${_my_tail_pids}${_my_tail_pids:+ }$!"
+            _spawn_feeder "$_traj_file"
         done < "$run_dir/traj_files"
-
-        # Ticker: heartbeat line every second so pending re-triggers fire even
-        # when the trajectory is quiet. Short line => atomic FIFO write, so it
-        # cannot interleave with (much longer) tagged step lines.
-        while :; do printf 'TICK\n'; sleep 1; done > "$fifo" &
-        printf '%s\n' "$!" >> "$tail_pids_file"
-        _my_tail_pids="${_my_tail_pids}${_my_tail_pids:+ }$!"
 
         # Track thinker step PIDs as "name:pid" pairs (space-separated, bash 3.2 compat)
         _step_entries=""
@@ -447,7 +511,7 @@ _start_dispatcher() {
             # "setsid" on Linux, empty (and word-split away) elsewhere.
             (
                 printf '%s' "$_djson" | SHELLM_LAUNCHED_BY="$_dname" $_setsid "$_dscript"
-            ) >> "$_dlog" 2>&1 &
+            ) >> "$_dlog" 2>&1 3<&- &
             _step_entries="${_step_entries}${_step_entries:+ }${_dname}:$!"
             printf '%s %s\n' "$!" "$_dname" >> "$run_dir/step_pids"
             _wd_touch "$_dname"
@@ -529,28 +593,71 @@ _start_dispatcher() {
             done
         }
 
-        # Main dispatch loop: read from FIFO
-        while IFS=$'\t' read -r _traj_file _step_json; do
-            # Ticker heartbeat: verify we still own the dispatcher role,
-            # then fire any pending re-triggers
-            if [[ "$_traj_file" == "TICK" ]]; then
-                if [[ "$(cat "$run_dir/dispatcher.token" 2>/dev/null)" != "$dispatcher_token" ]]; then
-                    printf '%s [dispatcher] ownership lost (newer start or stop) — exiting\n' "$(date -u +%FT%TZ)" >&2
-                    # Kill only OUR tails/ticker (whole trees — a bare kill
-                    # leaves the tail stage of the pipeline alive); the shared
-                    # runtime files (fifo, sub_map, tail_pids, pending) belong
-                    # to the new owner now — leave them untouched.
-                    trap - EXIT INT TERM
-                    local _mtp
-                    for _mtp in $_my_tail_pids; do
-                        _kill_tree "$_mtp" TERM
-                    done
-                    exit 0
-                fi
-                _fire_pending
-                _watchdog_check
-                continue
+        # Housekeeping tick: verify we still own the dispatcher role, fire
+        # pending re-triggers, run the watchdog, and respawn dead feeders.
+        # Called from the main loop at most once per second — on the read
+        # timeout when the trajectory is quiet, between steps when it is
+        # busy. This replaces the old TICK ticker process: the loop now
+        # wakes itself, so liveness no longer depends on a child process
+        # that could die silently.
+        _tick() {
+            if [[ "$(cat "$run_dir/dispatcher.token" 2>/dev/null)" != "$dispatcher_token" ]]; then
+                printf '%s [dispatcher] ownership lost (newer start or stop) — exiting\n' "$(date -u +%FT%TZ)" >&2
+                # Kill only OUR tails (whole trees — a bare kill leaves the
+                # tail stage of the pipeline alive); the shared runtime
+                # files (fifo, sub_map, tail_pids, pending) belong to the
+                # new owner now — leave them untouched.
+                trap - EXIT INT TERM
+                local _mtp
+                for _mtp in $_my_tail_pids; do
+                    _kill_tree "$_mtp" TERM
+                done
+                exit 0
             fi
+            _fire_pending
+            _watchdog_check
+            _respawn_dead_feeders
+        }
+        _last_tick=$SECONDS
+
+        # Main dispatch loop: read tagged step lines from the fifo with a
+        # 1s timeout so the loop keeps ticking while the trajectory is
+        # quiet. The dispatcher holds its own write end open (<>), so the
+        # read can never hit EOF — even with every feeder dead it times
+        # out instead, and the tick brings the feeders back.
+        #
+        # The read goes into ONE variable and splits on tab afterwards: a
+        # timeout regularly catches a writer mid-line (tail -F polls on the
+        # same 1s cadence as the timeout, so arrivals cluster right at the
+        # deadline), and bash then returns the partial input. Splitting in
+        # read itself would tear that partial across two variables; with a
+        # single buffer the partial is kept and the rest of the line is
+        # stitched on when it completes.
+        exec 3<> "$fifo"
+        _read_buf=""
+        _tab=$'\t'
+        while :; do
+            _line="" _read_rc=0
+            IFS= read -r -t 1 -u 3 _line || _read_rc=$?
+            if (( SECONDS - _last_tick >= 1 )); then
+                _last_tick=$SECONDS
+                _tick
+            fi
+            if (( _read_rc > 128 )); then
+                # Timeout — keep any partial line for the next pass
+                _read_buf="${_read_buf}${_line}"
+                continue
+            elif (( _read_rc != 0 )); then
+                # Real read error/EOF — cannot happen while fd 3 holds the
+                # write end; exit like the old EOF path rather than spin.
+                printf '%s [dispatcher] fifo read failed (rc=%s) — exiting\n' "$(date -u +%FT%TZ)" "$_read_rc" >&2
+                break
+            fi
+            _line="${_read_buf}${_line}"
+            _read_buf=""
+            _traj_file="${_line%%"$_tab"*}"
+            _step_json="${_line#*"$_tab"}"
+            [[ "$_step_json" == "$_line" ]] && _step_json=""
             if [[ -z "$_step_json" ]]; then continue; fi
 
             # Fire pending re-triggers first so a step flagged while its
@@ -647,7 +754,13 @@ _start_dispatcher() {
                                 _fb_from=$(printf '%s' "$_step_json" | jq -r '.from // empty' 2>/dev/null) || _fb_from=""
                                 _fb_to=$(printf '%s' "$_step_json" | jq -r '.to // empty' 2>/dev/null) || _fb_to=""
                                 _fb_id=$(printf '%s' "$_step_json" | jq -r '.step_id // empty' 2>/dev/null) || _fb_id=""
-                                if [[ -n "$_fb_from" && -n "$_fb_id" && "$_fb_to" == "$IDENTITY_NAME" && "$_fb_from" != "$IDENTITY_NAME" ]]; then
+                                # Dedup: this block runs once per busy subscribed
+                                # thinker, but one inbound message deserves ONE
+                                # nudge — three subscribers meant three identical
+                                # feedback steps (2026-08-17 triple reply).
+                                if [[ -n "$_fb_from" && -n "$_fb_id" && "$_fb_to" == "$IDENTITY_NAME" && "$_fb_from" != "$IDENTITY_NAME" ]] \
+                                    && ! grep -qxF "$_fb_id" "$run_dir/fb_injected" 2>/dev/null; then
+                                    printf '%s\n' "$_fb_id" >> "$run_dir/fb_injected"
                                     _fb_snip=$(printf '%s' "$_step_json" | jq -r '(.content // "") | tostring | .[0:300]' 2>/dev/null) || _fb_snip=""
                                     jq -nc \
                                         --arg content "A chat message from $_fb_from arrived while you are mid-task (message step $_fb_id): \"$_fb_snip\". You may answer it inline without stopping your work: if a brief accurate answer is possible from what you already know, run \`chat reply --reply-to $_fb_id '$_fb_from' \"<your reply>\"\` now, then continue the task. If a real answer needs the work you are doing, send one short line the same way saying you are on it and will follow up. One reply at most; if a reply from you to this message already appears later in the log, ignore this note. Do not abandon or restart your current task." \
@@ -683,7 +796,7 @@ _start_dispatcher() {
                 printf '%s [dispatcher]   dispatch -> %s (active=%s)\n' "$(date -u +%FT%TZ)" "$_name" "$_active" >&2
                 _dispatch_step "$_name" "$_step_json"
             done < "$run_dir/sub_map"
-        done < "$fifo"
+        done
     ) >> "$run_dir/logs/dispatcher.log" 2>&1 &
 
     local dispatcher_pid=$!
@@ -812,6 +925,9 @@ _stop_dispatcher() {
 
     # Sweep tail feeders that escaped the PID-tree kill (see _kill_traj_tails)
     _kill_traj_tails "$run_dir" "$traj_files_snapshot"
+
+    # Vitals check: warn if any tail feeders survived the kill/sweep
+    _warn_stray_tails
 
     # Clean up FIFO, sub_map, traj_files, pending-trigger flags, and ownership
     # token (removing the token also makes any stray dispatcher instance exit

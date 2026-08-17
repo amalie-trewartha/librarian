@@ -1704,7 +1704,11 @@ ${combined}"
 
     # Non-streaming API call to fast model
     local msg_json
-    msg_json=$(jq -n --arg p "$llm_prompt" '[{"role":"user","content":$p}]')
+    local _prompt_tmp
+    _prompt_tmp=$(mktemp)
+    printf '%s' "$llm_prompt" > "$_prompt_tmp"
+    msg_json=$(jq -n --rawfile p "$_prompt_tmp" '[{"role":"user","content":$p}]')
+    rm -f "$_prompt_tmp"
 
     local text
     text=$(llm -m "$summary_model" -t 2048 \
@@ -2018,8 +2022,12 @@ run_loop() {
 
     # Write prompt step
     if [[ -n "$prompt" ]]; then
-        printf '%s' "$(jq -n --arg p "$prompt" --arg run_id "$_run_step_id" '{type:"prompt",content:$p,run_id:$run_id}')" \
+        local _p_tmp
+        _p_tmp=$(mktemp)
+        printf '%s' "$prompt" > "$_p_tmp"
+        printf '%s' "$(jq -n --rawfile p "$_p_tmp" --arg run_id "$_run_step_id" '{type:"prompt",content:$p,run_id:$run_id}')" \
             | traj append --traj_dir "$_run_traj_dir" "$_run_traj_id" >/dev/null
+        rm -f "$_p_tmp"
     fi
 
     # --- Cleanup trap ---
@@ -2399,6 +2407,10 @@ exit \$__shellm_rc
         # Clean output: strip xtrace lines for storage
         local clean_output
         clean_output=$(printf '%s' "$output" | grep -v '^+\+ ' | grep -v '^+ ' || true)
+        # Write to temp file to avoid ARG_MAX when passing large output to jq
+        local _stdout_tmp
+        _stdout_tmp=$(mktemp)
+        printf '%s' "$clean_output" > "$_stdout_tmp"
 
         # Record reasoning step (assistant role in multi-turn)
         local reasoning_json
@@ -2421,7 +2433,7 @@ exit \$__shellm_rc
             local feedback
             feedback=$(build_inactivity_feedback "$output" "$prompt_type" "$SHELLM_INACTIVITY_TIMEOUT")
             output_json=$(jq -n \
-                --arg stdout "$clean_output" \
+                --rawfile stdout "$_stdout_tmp" \
                 --arg stderr "" \
                 --argjson exit "$exit_code" \
                 --arg feedback "$feedback" \
@@ -2430,7 +2442,7 @@ exit \$__shellm_rc
                 '{type:"shell-output", stdout:$stdout, stderr:$stderr, exit:$exit, timed_out:true, feedback:$feedback, run_id:$run_id, exec_s:$exec_s}')
         else
             output_json=$(jq -n \
-                --arg stdout "$clean_output" \
+                --rawfile stdout "$_stdout_tmp" \
                 --arg stderr "" \
                 --argjson exit "$exit_code" \
                 --arg run_id "$_run_step_id" \
@@ -2447,6 +2459,7 @@ exit \$__shellm_rc
         else
             printf '%s' "$output_json" | traj append --traj_dir "$_run_traj_dir" "$_run_traj_id" >/dev/null
         fi
+        rm -f "$_stdout_tmp" 2>/dev/null || true
 
         # Check for final answer. The terminating block's reasoning and
         # shell-output are recorded above like any other iteration; final

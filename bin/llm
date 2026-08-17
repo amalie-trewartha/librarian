@@ -300,6 +300,46 @@ if [[ -z "$LLM_MESSAGES" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Thinking-capability guards
+# ---------------------------------------------------------------------------
+# Extended thinking / reasoning params are only accepted by certain model
+# families. Sending them to an unsupported model is an API error. These
+# guards return 0 (true) only when the current $LLM_MODEL supports the
+# relevant param, so the payload builders can skip injection cleanly.
+#
+# LLM_ASSUME_THINKING=1 bypasses all three guards: thinking params are sent
+# regardless of the model lists. The escape hatch for a model the lists
+# don't know yet — an unsupported model then fails loudly at the API
+# instead of quietly losing thinking. The "ignored" warnings mention it.
+
+supports_anthropic_thinking() {
+    [[ "${LLM_ASSUME_THINKING:-0}" == 1 ]] && return 0
+    # Family globs, not versioned ones, so new versions keep working.
+    # Pre-4 ids all start "claude-3" and stay outside these patterns.
+    case "$LLM_MODEL" in
+        claude-opus-*|claude-sonnet-*|claude-haiku-*) return 0 ;;
+        claude-fable-*|claude-mythos-*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+supports_openai_reasoning() {
+    [[ "${LLM_ASSUME_THINKING:-0}" == 1 ]] && return 0
+    case "$LLM_MODEL" in
+        gpt-[5-9]*|o[1-9]*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+supports_gemini_thinking() {
+    [[ "${LLM_ASSUME_THINKING:-0}" == 1 ]] && return 0
+    case "$LLM_MODEL" in
+        gemini-2.0*|gemini-2.5*|gemini-[3-9]*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
 # Payload builders (one per provider)
 # ---------------------------------------------------------------------------
 
@@ -317,7 +357,11 @@ build_payload_anthropic() {
     fi
 
     if [[ "$LLM_THINKING" -eq 1 ]]; then
-        jq_filter="${jq_filter%\}} , thinking:{type:\"adaptive\",display:\"summarized\"}}"
+        if supports_anthropic_thinking; then
+            jq_filter="${jq_filter%\}} , thinking:{type:\"adaptive\",display:\"summarized\"}}"
+        else
+            echo "llm: --thinking ignored: $LLM_MODEL not in the known-thinking model list (LLM_ASSUME_THINKING=1 to send anyway)" >&2
+        fi
     fi
 
     if [[ -n "$LLM_EFFORT" ]]; then
@@ -360,8 +404,12 @@ build_payload_openai() {
     # level is given; bare --thinking without a level is ignored for OpenAI
     # since not all models support the reasoning parameter).
     if [[ -n "$LLM_THINKING_LEVEL" ]]; then
-        jq_args+=(--arg effort "$LLM_THINKING_LEVEL")
-        jq_filter="${jq_filter%\}} , reasoning:{effort:\$effort, summary:\"auto\"}}"
+        if supports_openai_reasoning; then
+            jq_args+=(--arg effort "$LLM_THINKING_LEVEL")
+            jq_filter="${jq_filter%\}} , reasoning:{effort:\$effort, summary:\"auto\"}}"
+        else
+            echo "llm: --thinking ignored: $LLM_MODEL not in the known-reasoning model list (LLM_ASSUME_THINKING=1 to send anyway)" >&2
+        fi
     fi
 
     printf '%s' "$msgs" | jq "${jq_args[@]}" "$jq_filter"
@@ -376,8 +424,12 @@ build_payload_gemini() {
     local gen_config='maxOutputTokens:$maxOutputTokens'
 
     if [[ -n "$LLM_THINKING_LEVEL" ]]; then
-        jq_args+=(--arg thinkingLevel "$LLM_THINKING_LEVEL")
-        gen_config="${gen_config}, thinkingConfig:{thinkingLevel:\$thinkingLevel}"
+        if supports_gemini_thinking; then
+            jq_args+=(--arg thinkingLevel "$LLM_THINKING_LEVEL")
+            gen_config="${gen_config}, thinkingConfig:{thinkingLevel:\$thinkingLevel}"
+        else
+            echo "llm: --thinking ignored: $LLM_MODEL not in the known-thinking model list (LLM_ASSUME_THINKING=1 to send anyway)" >&2
+        fi
     fi
 
     local jq_filter="{contents:., generationConfig:{${gen_config}}}"
