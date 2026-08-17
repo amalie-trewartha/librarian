@@ -13,6 +13,7 @@
 # alone. No LLM calls, no docker.
 
 set -uo pipefail
+unset IDENTITY_DIR IDENTITY_NAME IDENTITY_MEM_DIR IDENTITY_SKILLS_DIR IDENTITY_SKILLS_KERNEL_DIR
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(dirname "$HERE")"
