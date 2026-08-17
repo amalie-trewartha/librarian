@@ -125,8 +125,8 @@ Use the name of the person you mean to reach: chat reply <their-name> <message>"
     # sent the reply. A reply that answers nothing (every inbound already
     # answered) stays unstamped.
     if [[ -z "$reply_to" ]]; then
-        reply_to=$(traj cat "${ROOT_TRAJ_ID:-$TRAJ_ID}" --raw 2>/dev/null \
-            | jq -Rrn --arg me "$from" --arg them "$to_name" '
+        reply_to=$(timeout 10 traj cat "${ROOT_TRAJ_ID:-$TRAJ_ID}" --raw 2>/dev/null \
+            | timeout 10 jq -Rrn --arg me "$from" --arg them "$to_name" '
                 [inputs | fromjson? // empty] as $steps
                 | [$steps[] | select(.type == "message" and .from == $me
                                      and (.reply_to // "") != "") | .reply_to] as $answered
