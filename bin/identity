@@ -165,16 +165,22 @@ _ensure_thinkers() {
     # marker, removing the file re-enables, and any local edits survive.
     # Only ever touch this fixed list of names WE shipped and later removed —
     # a user-authored thinker absent from the bundle must not be disabled.
-    local _retired _rdest
+    # Each name is retired ONCE, recorded in .retired_done — the reconcile
+    # runs on every service start, and without the ledger it would re-write
+    # the marker an operator deliberately deleted, making the marker's own
+    # "delete this file to re-enable" instruction a lie.
+    local _retired _rdest _rledger="$thinkers_dir/.retired_done"
     for _retired in actor goals_manager inner_monologue learning mind_wanderer values_manager; do
         _rdest="$thinkers_dir/$_retired"
         [[ -d "$_rdest" && ! -d "$bundled_dir/$_retired" ]] || continue
         [[ -f "$_rdest/step" && -f "$_rdest/subscriptions.jsonl" ]] || continue
+        grep -qxF "$_retired" "$_rledger" 2>/dev/null && continue
         if [[ ! -e "$_rdest/disabled" ]]; then
             printf 'retired by shellm upgrade %s — this thinker was consolidated into monolith/responder; delete this file to re-enable\n' \
                 "$(date +%Y-%m-%d)" > "$_rdest/disabled"
             echo "Retired bundled thinker '$_retired' (disabled marker written; dir kept)" >&2
         fi
+        printf '%s\n' "$_retired" >> "$_rledger"
     done
 
     local src_dir
@@ -1106,6 +1112,61 @@ EOF
     printf 'Synced kernel skills: %s\n' "$identity_name" >&2
 }
 
+cmd_sync_thinkers() {
+    local all=0 target=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --all) all=1; shift ;;
+            -h|--help)
+                cat <<'EOF'
+Usage: identity sync-thinkers [name|--all]
+
+Reconcile an identity's thinkers with the bundled set: bootstrap thinkers
+added upstream, and write a `disabled` marker into bundled thinkers that
+upstream has retired. Existing dirs and their local edits are never
+modified or deleted; user-authored thinkers are never touched. Runs on
+every `thinkers start` via the systemd service wrapper, so an upgraded
+deployment picks up roster changes on restart — this command exists for
+running the same reconcile by hand.
+EOF
+                return 0
+                ;;
+            -*)
+                die "sync-thinkers: unknown option: $1"
+                ;;
+            *)
+                [[ -n "$target" ]] && die "Usage: identity sync-thinkers [name|--all]"
+                target="$1"; shift
+                ;;
+        esac
+    done
+
+    if [[ "$all" -eq 1 ]]; then
+        [[ -n "$target" ]] && die "sync-thinkers: pass either a name or --all, not both"
+        [[ -d "$IDENTITY_DIR" ]] || die "No identities found"
+
+        local d identity_path synced=0
+        for d in "$IDENTITY_DIR"/*; do
+            [[ -d "$d" ]] || continue
+            [[ "$(basename "$d")" == "default" ]] && continue
+            identity_path=$(cd "$d" && pwd)
+            _ensure_thinkers "$identity_path"
+            printf 'Synced thinkers: %s\n' "$(basename "$identity_path")" >&2
+            synced=$((synced + 1))
+        done
+        [[ "$synced" -gt 0 ]] || die "No identities found"
+        return 0
+    fi
+
+    local identity_path identity_name
+    identity_path=$(_resolve_identity_path "$target")
+    identity_name=$(grep '^name=' "$identity_path/info.txt" 2>/dev/null | cut -d= -f2-) || true
+    [[ -z "$identity_name" ]] && identity_name=$(basename "$identity_path")
+    _ensure_thinkers "$identity_path"
+    printf 'Synced thinkers: %s\n' "$identity_name" >&2
+}
+
 cmd_default() {
     local target="${1:-}"
 
@@ -1382,6 +1443,7 @@ Usage:
   identity list [-a]         List all identities (-a: show directories)
   identity info [name] [-n|-p]  Show identity info (default: default; -n: name, -p: dir)
   identity sync-kernel [name|--all]  Symlink bundled kernel skills into identities
+  identity sync-thinkers [name|--all]  Bootstrap new + retire deleted bundled thinkers
   identity default [name]     Show or set the default identity
   identity delete <name>     Delete an identity
   identity export [names...] [--all] [--path DIR] [-o FILE|-] [--soul-only]
@@ -1458,6 +1520,10 @@ main() {
         sync-kernel)
             _require_identity
             cmd_sync_kernel "$@"
+            ;;
+        sync-thinkers)
+            _require_identity
+            cmd_sync_thinkers "$@"
             ;;
         default)
             cmd_default "$@"

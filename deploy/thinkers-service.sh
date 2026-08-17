@@ -65,6 +65,16 @@ case "$ACTION" in
         # runs inside the unit's own cgroup where the guard would trip.
         thinkers stop --self || true
 
+        # Reconcile this identity's thinkers with the bundled set BEFORE
+        # enumerating the roster: bootstraps thinkers added upstream and
+        # writes `disabled` markers into retired ones. Without this, an
+        # existing identity never sees roster changes — nothing else on the
+        # restart path calls the bootstrap (identity new/import/shell do,
+        # none of which a deploy runs). Best-effort: a reconcile failure
+        # must not keep the mind down.
+        identity sync-thinkers "$IDENT" \
+            || echo "warn: identity sync-thinkers failed — starting with the roster as-is" >&2
+
         names=()
         for tdir in "$ID_DIR/thinkers"/*/; do
             [[ -d "$tdir" ]] || continue
