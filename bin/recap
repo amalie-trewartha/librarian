@@ -156,6 +156,8 @@ ROLLUP_LOCK="$ROLLUP_DIR/.lock"
 ROLLUP_META="$ROLLUP_DIR/meta.json"
 
 [[ "$FANOUT" =~ ^[0-9]+$ && "$FANOUT" -ge 2 ]] || die "--fanout must be a number >= 2"
+[[ "$CTX_RAW_TAIL" == "auto" || "$CTX_RAW_TAIL" =~ ^[0-9]+$ ]] || die "--raw-tail must be a number or auto"
+[[ "$CTX_BUDGET" == "auto" || ( "$CTX_BUDGET" =~ ^[0-9]+$ && "$CTX_BUDGET" -gt 0 ) ]] || die "--budget must be a positive number or auto"
 
 # ---------------------------------------------------------------------------
 # Rendering: trajectory lines -> TSV of (raw_line, step_id, ts, text)
@@ -488,13 +490,16 @@ _ctx_model_window() {
     esac
 }
 
-# Raw-tail size R from the budget (recency gets ~40% of budget, ~50 tok/step).
+# Raw-tail size R from the budget (recency gets ~40% of budget). A rendered
+# step is capped at 500 chars (_render_steps), ~4 chars/token, so budget at
+# ~125 tok/step — the worst case, not the mean, because overshooting the
+# window truncates the mind's context while undershooting only shortens it.
 _ctx_resolve_R() {
     local n=$1
     if [[ "$CTX_RAW_TAIL" != "auto" ]]; then printf '%s' "$CTX_RAW_TAIL"; return; fi
     local budget win r
     if [[ "$CTX_BUDGET" == "auto" ]]; then win=$(_ctx_model_window); budget=$(( win * 6 / 10 )); else budget=$CTX_BUDGET; fi
-    r=$(( (budget * 4 / 10) / 50 ))
+    r=$(( (budget * 4 / 10) / 125 ))
     (( r < 20 )) && r=20
     (( r > n )) && r=n
     printf '%s' "$r"
@@ -535,7 +540,9 @@ _ctx_seal_tierk() {
     note "rollup t$tier [$s,$e)"
     body=$(_llm_json "$MAP_MODEL" "$_ROLLUP_SYSTEM" "$lines" 1024) || die "rollup t$tier [$s,$e): bad JSON"
     local fb_json
-    fb_json=$(printf '%s' "$fallback" | grep -v '^$' | head -4 | jq -R . | jq -sc .)
+    # awk, not `grep | head`: head's early exit SIGPIPEs grep under pipefail
+    # once the payload outgrows the pipe buffer (large --fanout).
+    fb_json=$(printf '%s' "$fallback" | awk 'NF && ++c <= 4' | jq -R . | jq -sc .)
     mkdir -p "$(dirname "$file")"
     jq -n -c --argjson tier "$tier" --argjson start "$s" --argjson end "$e" --argjson n "$((e - s))" \
         --argjson body "$body" --argjson fb "$fb_json" \
@@ -556,10 +563,13 @@ _ctx_start_index() {
     if [[ -f "$ROLLUP_META" ]]; then
         s=$(jq -r '.start_index // 0' "$ROLLUP_META" 2>/dev/null) || s=0
         [[ "$s" =~ ^[0-9]+$ ]] || s=0
-        printf '%s' "$s"
     else
-        printf '%s' "$n"
+        s=$n
     fi
+    # Snap DOWN to a FANOUT boundary: an unsnapped marker leaves the block
+    # straddling it unbuildable forever ((( s < start )) skips it at every
+    # tier), a permanent coverage hole right at the enable point.
+    printf '%s' "$(( (s / FANOUT) * FANOUT ))"
 }
 
 # Lazily seal every complete block at or after `start`, bottom-up. Existing
@@ -601,15 +611,38 @@ _ctx_assemble() {
         (( blk > cut0 )) && break
     done
 
-    if (( ${#seg_tier[@]} > 0 )); then
-        printf '=== YOUR LIFE SO FAR — summarized, oldest first ===\n'
-        local i
-        for (( i = ${#seg_tier[@]} - 1; i >= 0; i-- )); do   # coarse (built last) → fine
+    # Print coarse→fine (highest tier first) and, WITHIN a tier, oldest
+    # first. Segments were appended tier-ascending/start-ascending, so a
+    # simple reverse of the flat list flips block order inside each tier —
+    # scrambled chronology under an "oldest first" header. Walk tiers
+    # descending, blocks ascending, instead.
+    #
+    # Blocks older than the enable point were deliberately never built
+    # (_ctx_build skips them until --backfill), so a missing file is
+    # expected on any agent with pre-existing history — skip it, never die:
+    # aborting here costs the mind its whole context (the caller swallows
+    # stderr, and the raw tail below would be lost too).
+    local max_tier=0 i emitted=0
+    for (( i = 0; i < ${#seg_tier[@]}; i++ )); do
+        (( seg_tier[i] > max_tier )) && max_tier=${seg_tier[i]}
+    done
+    local t bf
+    for (( t = max_tier; t >= 1; t-- )); do
+        for (( i = 0; i < ${#seg_tier[@]}; i++ )); do
+            (( seg_tier[i] == t )) || continue
+            bf=$(_ctx_blockfile "$t" "${seg_s[$i]}" "${seg_e[$i]}")
+            [[ -f "$bf" ]] || continue
+            if (( emitted == 0 )); then
+                printf '=== YOUR LIFE SO FAR — summarized, oldest first ===\n'
+            fi
+            emitted=1
             jq -r '"[t\(.tier) · steps \(.start)–\(.end)] \(.summary)   (\(.step_ids | join(" ")))"' \
-                "$(_ctx_blockfile "${seg_tier[$i]}" "${seg_s[$i]}" "${seg_e[$i]}")"
+                "$bf" 2>/dev/null \
+                || printf '[t%s · steps %s–%s] (unreadable rollup block)\n' \
+                       "$t" "${seg_s[$i]}" "${seg_e[$i]}"
         done
-        printf '\n'
-    fi
+    done
+    (( emitted )) && printf '\n'
     printf '=== RIGHT NOW — the last %s steps, verbatim ===\n' "$(( n - cut0 ))"
     sed -n "$(( cut0 + 1 )),${n}p" "$RENDERED_TSV" | cut -f4
 }
