@@ -134,7 +134,32 @@ check "corrupt: good blocks still shown" grep -q 'SUMMARY-BRAVO' <<<"$out"
 check "corrupt: tail intact"             grep -q 'topic 125' <<<"$out"
 
 # ---------------------------------------------------------------------------
-# 5. Flag validation: garbage --raw-tail / --budget must die loudly, not
+# 5. Boundary crossing: when cut0 crosses a FANOUT^k boundary, the coarse
+#    block straddling the enable point (t2[0,100) here, enable at 60) can
+#    never seal — assembly must descend into its EXISTING finer children
+#    (t1[60,70)..[90,100)) instead of silently dropping all of them.
+# ---------------------------------------------------------------------------
+mk_traj feed3333-root 215
+mkdir -p "$TRAJ_ROOT/feed3333-root/rollups"
+printf '{"start_index":60,"updated":"t"}\n' > "$TRAJ_ROOT/feed3333-root/rollups/meta.json"
+for s in 60 70 80 90; do
+    mk_block feed3333-root 1 "$s" $((s+10)) "T1-FROM-$s"
+done
+mk_block feed3333-root 2 100 200 "T2-MIDDLE"
+mk_block feed3333-root 1 200 210 "T1-NEWEST"
+out=$(recap feed3333 --traj_dir "$TRAJ_ROOT" --context --cached --raw-tail 5 2>&1)
+rc=$?
+check "boundary: exits 0"                     test "$rc" -eq 0
+check "boundary: straddled t2 descends to t1" grep -q 'T1-FROM-60' <<<"$out"
+check "boundary: all four children shown" \
+    test "$(grep -c 'T1-FROM-' <<<"$out")" = "4"
+seq_found=$(grep -o 'T[12]-[A-Z0-9-]*' <<<"$out" | tr '\n' ' ')
+check "boundary: chronological order" \
+    test "$seq_found" = "T1-FROM-60 T1-FROM-70 T1-FROM-80 T1-FROM-90 T2-MIDDLE T1-NEWEST "
+check "boundary: tail intact"                 grep -q 'topic 215' <<<"$out"
+
+# ---------------------------------------------------------------------------
+# 6. Flag validation: garbage --raw-tail / --budget must die loudly, not
 #    silently evaluate to 0.
 # ---------------------------------------------------------------------------
 check_not "validate: --raw-tail oops rejected" \

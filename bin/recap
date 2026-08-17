@@ -615,36 +615,54 @@ _ctx_assemble() {
     # first. Segments were appended tier-ascending/start-ascending, so a
     # simple reverse of the flat list flips block order inside each tier —
     # scrambled chronology under an "oldest first" header. Walk tiers
-    # descending, blocks ascending, instead.
-    #
-    # Blocks older than the enable point were deliberately never built
-    # (_ctx_build skips them until --backfill), so a missing file is
-    # expected on any agent with pre-existing history — skip it, never die:
-    # aborting here costs the mind its whole context (the caller swallows
-    # stderr, and the raw tail below would be lost too).
-    local max_tier=0 i emitted=0
+    # descending, blocks ascending, instead — that IS chronological order,
+    # since coarser blocks always cover strictly older regions.
+    _CTX_EMITTED=0
+    local max_tier=0 i
     for (( i = 0; i < ${#seg_tier[@]}; i++ )); do
         (( seg_tier[i] > max_tier )) && max_tier=${seg_tier[i]}
     done
-    local t bf
+    local t
     for (( t = max_tier; t >= 1; t-- )); do
         for (( i = 0; i < ${#seg_tier[@]}; i++ )); do
             (( seg_tier[i] == t )) || continue
-            bf=$(_ctx_blockfile "$t" "${seg_s[$i]}" "${seg_e[$i]}")
-            [[ -f "$bf" ]] || continue
-            if (( emitted == 0 )); then
-                printf '=== YOUR LIFE SO FAR — summarized, oldest first ===\n'
-            fi
-            emitted=1
-            jq -r '"[t\(.tier) · steps \(.start)–\(.end)] \(.summary)   (\(.step_ids | join(" ")))"' \
-                "$bf" 2>/dev/null \
-                || printf '[t%s · steps %s–%s] (unreadable rollup block)\n' \
-                       "$t" "${seg_s[$i]}" "${seg_e[$i]}"
+            _ctx_emit_seg "$t" "${seg_s[$i]}" "${seg_e[$i]}"
         done
     done
-    (( emitted )) && printf '\n'
+    (( _CTX_EMITTED )) && printf '\n'
     printf '=== RIGHT NOW — the last %s steps, verbatim ===\n' "$(( n - cut0 ))"
     sed -n "$(( cut0 + 1 )),${n}p" "$RENDERED_TSV" | cut -f4
+}
+
+# Emit one staircase segment. A missing block file is expected, not an
+# error: blocks older than the enable marker are deliberately never built
+# until --backfill, so dying here would cost the mind its whole context
+# (callers swallow stderr and the raw tail would be lost with it). But a
+# coarse block can ALSO be missing because it merely STRADDLES the marker —
+# its oldest child is pre-enable, so tier k never seals even though the
+# finer blocks from the marker onward all exist. Skipping such a segment
+# outright would silently drop every one of those built summaries the
+# moment cut0 crosses a FANOUT^k boundary (at 10k steps, all summarized
+# life before 10k vanishes). So: descend into the F children one tier down
+# and emit whatever exists; only a tier-1 miss is truly absent history.
+_ctx_emit_seg() {
+    local tier=$1 s=$2 e=$3 bf blk c
+    bf=$(_ctx_blockfile "$tier" "$s" "$e")
+    if [[ -f "$bf" ]]; then
+        if (( _CTX_EMITTED == 0 )); then
+            printf '=== YOUR LIFE SO FAR — summarized, oldest first ===\n'
+        fi
+        _CTX_EMITTED=1
+        jq -r '"[t\(.tier) · steps \(.start)–\(.end)] \(.summary)   (\(.step_ids | join(" ")))"' \
+            "$bf" 2>/dev/null \
+            || printf '[t%s · steps %s–%s] (unreadable rollup block)\n' "$tier" "$s" "$e"
+        return 0
+    fi
+    (( tier <= 1 )) && return 0
+    blk=$(_ctx_pow "$FANOUT" $((tier - 1)))
+    for (( c = s; c < e; c += blk )); do
+        _ctx_emit_seg $((tier - 1)) "$c" $((c + blk))
+    done
 }
 
 _ctx_run() {
