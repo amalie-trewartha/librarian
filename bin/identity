@@ -155,6 +155,28 @@ _ensure_thinkers() {
 
     mkdir -p "$thinkers_dir"
 
+    # Retire pass: thinkers that shipped as bundled but have since been
+    # deleted upstream live on inside existing identities (copy mode never
+    # revisits an existing dir), still subscribed and still running — the
+    # 2026-08 roster consolidation deleted six, and without this an upgraded
+    # identity runs the old mind and the new one side by side, with up to
+    # three thinkers answering each chat message. Disable with a marker,
+    # never delete: `thinkers start` and the service wrapper both honor the
+    # marker, removing the file re-enables, and any local edits survive.
+    # Only ever touch this fixed list of names WE shipped and later removed —
+    # a user-authored thinker absent from the bundle must not be disabled.
+    local _retired _rdest
+    for _retired in actor goals_manager inner_monologue learning mind_wanderer values_manager; do
+        _rdest="$thinkers_dir/$_retired"
+        [[ -d "$_rdest" && ! -d "$bundled_dir/$_retired" ]] || continue
+        [[ -f "$_rdest/step" && -f "$_rdest/subscriptions.jsonl" ]] || continue
+        if [[ ! -e "$_rdest/disabled" ]]; then
+            printf 'retired by shellm upgrade %s — this thinker was consolidated into monolith/responder; delete this file to re-enable\n' \
+                "$(date +%Y-%m-%d)" > "$_rdest/disabled"
+            echo "Retired bundled thinker '$_retired' (disabled marker written; dir kept)" >&2
+        fi
+    done
+
     local src_dir
     for src_dir in "$bundled_dir"/*/; do
         [[ -d "$src_dir" ]] || continue

@@ -67,7 +67,7 @@ members=$(tar -tzf "$TGZ")
 check "archive has manifest.json"      grep -qx 'manifest.json' <<<"$members"
 check "archive has memory"             grep -q 'alpha/memories/2026-01-01-00-00-00_fixture.md' <<<"$members"
 check "archive has trajectory"         grep -q 'alpha/trajectories/.*/trajectory.jsonl' <<<"$members"
-check "archive has thinker step"       grep -q 'alpha/thinkers/inner_monologue/step' <<<"$members"
+check "archive has thinker step"       grep -q 'alpha/thinkers/monolith/step' <<<"$members"
 check_not "archive omits run/"         grep -q 'alpha/run' <<<"$members"
 check_not "archive omits .shellm/"     grep -q 'alpha/.shellm' <<<"$members"
 check_not "archive omits .env"         grep -q 'alpha/.env' <<<"$members"
@@ -81,7 +81,7 @@ check "manifest memories"    test "$(jq -r '.identities[0].memories' <<<"$manife
 check "manifest root traj"   test "$(jq -r '.identities[0].root_trajectory' <<<"$manifest")" = "$ALPHA_RT"
 
 # Thinker step files must be real files (dereferenced), not symlinks
-step_type=$(tar -tvzf "$TGZ" | grep 'alpha/thinkers/inner_monologue/step' | head -1 | cut -c1)
+step_type=$(tar -tvzf "$TGZ" | grep 'alpha/thinkers/monolith/step' | head -1 | cut -c1)
 check "thinker step dereferenced" test "$step_type" = "-"
 
 # ---------------------------------------------------------------------------
