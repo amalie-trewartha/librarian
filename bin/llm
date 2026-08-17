@@ -270,6 +270,11 @@ get_model_max_tokens() {
         # thinking first — the visible text just stops at finish_reason
         # "length", possibly at zero characters.
         anthropic/*) echo 64000 ;;
+        # xAI Grok (via OpenRouter): huge context (grok-4.6 = 500k, 4.3 = 1M,
+        # 4.20 = 2M) and NO separate output cap reported (max_completion_tokens
+        # is null). It's a reasoning model, so the generic 16384 starves its
+        # thinking. Give it the reasoning-model tier like Anthropic above.
+        x-ai/grok-4*|x-ai/grok*) echo 64000 ;;
         */*) echo 16384 ;;
         # Conservative fallback for unknown models
         *) echo 4096 ;;
