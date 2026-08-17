@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# responder/step — Immediate chat reply thinker.
+#
+# Fires on every inbound message. Writes a reply_claim step to the root
+# trajectory FIRST (so the monolith router knows not to double-reply),
+# then composes and sends a reply with a single llm call + `chat reply`.
+# No shellm agentic loop, no tools — lowest possible latency.
+
+THINKER_NAME="responder"
+SCRIPT_DIR="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
+
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/../_lib/common.sh"
+
+_require_env
+
+THINK_MODEL="${THINK_MODEL:-${SHELLM_MODEL:-claude-opus-4-7}}"
+THINK_CONTEXT_TAIL="${THINK_CONTEXT_TAIL:-20}"
+REPLY_MODEL="${MONOLITH_REPLY_MODEL:-$THINK_MODEL}"
+
+# Read the triggering step from stdin.
+step_json=$(cat)
+[[ -z "$step_json" ]] && exit 0
+trigger_type=$(printf '%s' "$step_json" | jq -r '.type // empty' 2>/dev/null) || true
+trigger_content=$(printf '%s' "$step_json" | jq -r '.content // empty' 2>/dev/null) || true
+trigger_step_id=$(printf '%s' "$step_json" | jq -r '.step_id // empty' 2>/dev/null) || true
+
+[[ "$trigger_type" == "message" ]] || exit 0
+
+msg_to=$(printf '%s' "$step_json" | jq -r '.to // empty' 2>/dev/null) || true
+msg_from=$(printf '%s' "$step_json" | jq -r '.from // "human"' 2>/dev/null) || true
+
+# Only reply to messages addressed to this identity.
+[[ "$msg_to" == "$IDENTITY_NAME" ]] || exit 0
+
+# Self-message guard: replying would create a self-chat loop.
+if [[ "$msg_from" == "$IDENTITY_NAME" ]]; then
+    printf '  self-message — dropping with observation\n' >&2
+    jq -nc \
+        --arg content "self-message dropped: you chat-sent a message to yourself and it will not be replied to (replying would loop). To message someone else use: chat reply <their-name> <message>. To keep a note for later, write it as a thought step instead. Your message was: $(printf '%.200s' "$trigger_content")" \
+        --arg source "$THINKER_NAME" \
+        --arg trigger "$trigger_step_id" \
+        '{type:"observation", content:$content, source:$source}
+         + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
+        | traj append >/dev/null || true
+    exit 0
+fi
+
+[[ -z "$trigger_content" ]] && exit 0
+
+# Idempotency: don't reply if we (or anyone) already replied to this message.
+if [[ -n "$trigger_step_id" ]]; then
+    already=$(traj cat "${ROOT_TRAJ_ID:-$TRAJ_ID}" --raw 2>/dev/null \
+        | jq -Rrn --arg me "$IDENTITY_NAME" --arg them "$msg_from" --arg t "$trigger_step_id" '
+            [inputs | fromjson? // empty] as $steps
+            | ([$steps | to_entries[] | select(.value.step_id == $t)] | last) as $in
+            | [$steps[] | select(.type == "message" and .from == $me
+                                 and (.reply_to // "") == $t)]
+              + [$steps[] | select(.type == "reply_claim"
+                                   and (.trigger_step // "") == $t)]
+              + (if $in == null then []
+                 else [$steps[($in.key + 1):][]
+                       | select(.type == "message" and .from == $me and .to == $them)]
+                 end)
+            | if length == 0 then empty
+              else (.[0].step_id // "claimed") end' 2>/dev/null \
+        | head -n 1) || already=""
+    if [[ -n "$already" ]]; then
+        printf '  already replied/claimed step %s — skipping\n' "$trigger_step_id" >&2
+        exit 0
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Claim: write a reply_claim step IMMEDIATELY so the monolith router knows
+# this message is being handled and does not attempt its own reply.
+# ---------------------------------------------------------------------------
+printf '  claiming reply to %s...\n' "$msg_from" >&2
+jq -nc \
+    --arg source "$THINKER_NAME" \
+    --arg trigger "$trigger_step_id" \
+    --arg from "$msg_from" \
+    '{type:"reply_claim", content:("handling reply to " + $from), source:$source}
+     + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
+    | traj append >/dev/null || true
+
+# ---------------------------------------------------------------------------
+# Compose and send the reply
+# ---------------------------------------------------------------------------
+system_prompt=$(_build_system_prompt)
+recent_context=""
+if traj exists 2>/dev/null; then
+    recent_context=$(_recent_stream "$THINK_CONTEXT_TAIL") || recent_context=""
+fi
+
+convo_json=$(printf '%s\n' "$recent_context" | jq -cRn \
+    --arg me "$IDENTITY_NAME" --arg them "$msg_from" '
+    [inputs | fromjson? // empty
+     | select(.type == "message")
+     | if .from == $them and .to == $me then {role:"user", content:(.content|tostring)}
+       elif .from == $me and .to == $them then {role:"assistant", content:(.content|tostring)}
+       else empty end]
+    | .[-12:]' 2>/dev/null) || convo_json="[]"
+convo_json=$(printf '%s' "$convo_json" | jq -c --arg c "$trigger_content" '
+    (if length == 0 or .[-1].role != "user" then . + [{role:"user", content:$c}] else . end)
+    | (if (.[0].role // "user") == "assistant" then .[1:] else . end)')
+
+inner_context=$(printf '%s\n' "$recent_context" | jq -Rr \
+    'fromjson? // empty | select(.type != "message")
+     | "[\(.type)] \(.content|tostring)"' 2>/dev/null | tail -n 8) || inner_context=""
+
+reply_system="$system_prompt
+
+You are in a live chat conversation with $msg_from. The messages are the real
+back-and-forth so far; reply to their newest message — first person, natural,
+conversational, concise. Never repeat or rephrase an earlier reply of yours.
+Answer completely from what you already know; only if it genuinely requires
+running tools or looking something up should you instead briefly say you're on
+it (the work happens separately) — in that case do not guess.
+
+Not every message needs a reply. If their newest message is already answered
+(a reply of yours addressing it is visible above), is a bare acknowledgment
+like \"thanks\" or \"ok\", or anything you could say would only repeat you,
+output exactly NO_REPLY on its own line and nothing else. Staying quiet is
+better than a duplicate or a contentless reply.
+
+Your recent inner life (context only, not part of the conversation):
+$inner_context
+
+Output ONLY the reply message text — no preamble, no quotes, no commands.
+Delivery is automatic: never write 'chat reply' or the recipient's address."
+
+printf '  replying to %s...\n' "$msg_from" >&2
+reply=$(llm -m "$REPLY_MODEL" -M "$convo_json" -s "$reply_system") || true
+
+# Strip a leaked delivery command if a model echoes one.
+reply=$(printf '%s' "$reply" | sed -E '1s/^[[:space:]]*chat reply [A-Za-z0-9._-]+[[:space:]]*//')
+
+# The model may judge that no reply is needed.
+first_line=$(printf '%s' "$reply" | head -n 1 | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')
+if [[ "$first_line" == "NO_REPLY" ]]; then
+    printf '  model declined to reply (NO_REPLY)\n' >&2
+    jq -nc \
+        --arg content "Chose not to reply to $msg_from — their message needed no reply (already answered, or a bare acknowledgment). Their message was: $(printf '%.200s' "$trigger_content")" \
+        --arg source "$THINKER_NAME" \
+        --arg trigger "$trigger_step_id" \
+        '{type:"observation", content:$content, source:$source, decision:"no-reply"}
+         + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
+        | traj append >/dev/null || true
+    exit 0
+fi
+
+reply_args=()
+[[ -n "$trigger_step_id" ]] && reply_args+=(--reply-to "$trigger_step_id")
+if [[ -n "$reply" ]] && printf '%s' "$reply" | chat reply ${reply_args[@]+"${reply_args[@]}"} "$msg_from"; then
+    jq -nc \
+        --arg content "Replied to $msg_from: $(printf '%.200s' "$reply")" \
+        --arg source "$THINKER_NAME" \
+        --arg trigger "$trigger_step_id" \
+        '{type:"observation", content:$content, source:$source, decision:"replied"}
+         + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
+        | traj append >/dev/null || true
+    printf '  [reply -> %s] %s\n' "$msg_from" "$(printf '%s' "$reply" | head -1)"
+    exit 0
+fi
+
+# Reply failed — surface it so the monolith can pick it up.
+printf '  reply failed — appending failure observation\n' >&2
+jq -nc \
+    --arg content "reply failed: could not send a reply to $msg_from (empty model output or chat error — see responder log). Their message was: $(printf '%.200s' "$trigger_content")" \
+    --arg source "$THINKER_NAME" \
+    --arg trigger "$trigger_step_id" \
+    '{type:"observation", content:$content, source:$source, decision:"reply-failed"}
+     + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
+    | traj append >/dev/null || true

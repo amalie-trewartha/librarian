@@ -176,6 +176,24 @@ _recent_stream() {
 }
 
 # ---------------------------------------------------------------------------
+# Tiered "life so far" context
+# ---------------------------------------------------------------------------
+
+# Assemble a budget-bounded staircase of tiered rollups (coarse→fine) spanning
+# the whole root trajectory, via `recap --context`. Gives the mind its entire
+# life at level-of-detail instead of just the last N steps. Falls back to empty
+# (caller keeps _recent_stream) on any error, so the loop never breaks.
+# See design/tiered_memory.md.
+_life_context() {
+    command -v recap >/dev/null 2>&1 || return 0
+    local mm=() m="${ROLLUP_MODEL:-${SHELLM_FAST_MODEL:-}}"
+    [[ -n "$m" ]] && mm=(--map-model "$m")
+    recap "${ROOT_TRAJ_ID:-$TRAJ_ID}" --context \
+        --budget "${MONOLITH_CONTEXT_BUDGET:-auto}" \
+        ${mm[@]+"${mm[@]}"} -q 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
 # Skill variable collection
 # ---------------------------------------------------------------------------
 

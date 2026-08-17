@@ -3,14 +3,14 @@ set -euo pipefail
 
 # monolith/step — The whole mind in one thinker.
 #
-# Runs solo. Every wakeup it either:
-#   (a) FAST-REPLY path — the trigger is a chat message addressed to us, so it
-#       replies IMMEDIATELY with a single llm call + `chat reply`, no thinking
-#       step and no tools/agentic loop. Lowest latency the single process can
-#       give. Follow-up work (if any) happens on a later wakeup via `act`.
-#   (b) ROUTER path — one shellm agentic run whose prompt is a function menu
-#       (think / act / learn / recall / goals / values / idle). The model picks
-#       exactly one function and carries it out in the same run.
+# Runs the router: every wakeup is one shellm agentic run whose prompt is a
+# function menu (think / act / learn / recall / goals / values / idle). The
+# model picks one function and carries it out in the same run.
+#
+# Chat replies are NOT the monolith's job — a dedicated `responder` thinker owns
+# immediate replies (see thinkers/responder/step). The monolith no longer
+# subscribes to `message`; it reasons over the conversation as context and can
+# `act` on any follow-up work a message needs.
 #
 # Because it subscribes with trigger_self, the loop is perpetual: the router
 # path is guaranteed to append at least one step per wakeup (liveness net at
@@ -26,9 +26,6 @@ _require_env
 
 THINK_MODEL="${THINK_MODEL:-${SHELLM_MODEL:-claude-opus-4-7}}"
 THINK_CONTEXT_TAIL="${THINK_CONTEXT_TAIL:-20}"
-# The reply path may use a faster model to shave latency; defaults to the
-# main model so behavior is unsurprising until explicitly tuned.
-REPLY_MODEL="${MONOLITH_REPLY_MODEL:-$THINK_MODEL}"
 
 # Idle backoff bounds (seconds). State persists in run_dir across wakeups.
 IDLE_BACKOFF_START="${MONOLITH_IDLE_BACKOFF:-5}"
@@ -53,12 +50,18 @@ trigger_step_id=$(printf '%s' "$step_json" | jq -r '.step_id // empty' 2>/dev/nu
 # backoff, so a new message or external action wakes us at full speed.
 #
 # The backoff is PRE-EMPTIBLE: we sleep in 1s slices and watch the pending
-# dir for a queued message/action trigger (the dispatcher queues one the
-# moment it arrives while we are busy — and sleeping counts as busy). If one
-# is waiting, this rest wakeup is moot: exit so the dispatcher fires the
-# queued trigger now, instead of the sender waiting out the remaining sleep
-# PLUS a router run. A stale pending file at worst forfeits one idle wakeup;
-# the dispatcher's liveness watchdog is the net.
+# dir for a queued external trigger (the dispatcher queues one the moment it
+# arrives while we are busy — and sleeping counts as busy). If one is waiting,
+# this rest wakeup is moot: exit so the dispatcher fires the queued trigger
+# now, instead of the sender waiting out the remaining sleep PLUS a router run.
+# A stale pending file at worst forfeits one idle wakeup; the dispatcher's
+# liveness watchdog is the net.
+#
+# We watch message/action/observation. Since we no longer subscribe to
+# `message`, an inbound chat reaches us as the responder's *observation*
+# ("Replied to …" / "Chose not to reply …") — that is the signal that wakes
+# us on a chat, so it MUST be in the watch set or the mind sleeps through
+# every conversation until the backoff cap elapses.
 if [[ "$trigger_type" == "idle" ]]; then
     backoff=$(cat "$backoff_file" 2>/dev/null) || backoff="$IDLE_BACKOFF_START"
     [[ "$backoff" =~ ^[0-9]+$ ]] || backoff="$IDLE_BACKOFF_START"
@@ -66,7 +69,7 @@ if [[ "$trigger_type" == "idle" ]]; then
     pending_dir="$IDENTITY_DIR/run/pending"
     slept=0
     while (( slept < backoff )); do
-        for _pend in "$pending_dir/$THINKER_NAME".message.* "$pending_dir/$THINKER_NAME".action.*; do
+        for _pend in "$pending_dir/$THINKER_NAME".message.* "$pending_dir/$THINKER_NAME".action.* "$pending_dir/$THINKER_NAME".observation.*; do
             if [[ -f "$_pend" ]]; then
                 printf '  backoff pre-empted after %ss (queued trigger waiting)\n' "$slept" >&2
                 exit 0
@@ -83,176 +86,15 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# (a) FAST-REPLY path — a chat message addressed to us
+# (a) CHAT is the responder thinker's job — the monolith never replies.
 # ---------------------------------------------------------------------------
-# `chat` stamps source:"chat" on BOTH incoming and outgoing messages, so an
-# outgoing reply is itself a message step that would re-trigger us. Guard on
-# direction: only reply when the message is addressed TO us. Our own outgoing
-# messages (from == us) are context, not a prompt to act on.
+# A dedicated `responder` thinker owns immediate chat replies (see
+# thinkers/responder/step). The monolith must not reply too, or the two race
+# to double-reply. We no longer subscribe to `message`; this guard is just
+# defensive. A genuine inbound message still reaches the mind — the responder's
+# reply/observation re-fires us — and the router can then `act` on any real
+# follow-up work the message needs.
 if [[ "$trigger_type" == "message" ]]; then
-    msg_to=$(printf '%s' "$step_json" | jq -r '.to // empty' 2>/dev/null) || true
-    msg_from=$(printf '%s' "$step_json" | jq -r '.from // "human"' 2>/dev/null) || true
-    if [[ "$msg_to" != "$IDENTITY_NAME" ]]; then
-        exit 0  # our own outgoing message (or not for us) — context only
-    fi
-    # A message FROM us TO us is a self-message (`chat send` with no
-    # recipient targets yourself). Replying would re-trigger this path on
-    # our own reply — the perpetual self-chat loop of 2026-07-28. Never
-    # reply to ourselves. Surface the drop as an observation: it re-fires
-    # the loop (a bare exit would leave no pending trigger — the message
-    # step already satisfied the liveness net) and tells the mind how to
-    # course-correct.
-    if [[ "$msg_from" == "$IDENTITY_NAME" ]]; then
-        printf '  self-message — dropping with observation\n' >&2
-        jq -nc \
-            --arg content "self-message dropped: you chat-sent a message to yourself and it will not be replied to (replying would loop). If you meant to keep a note for later, write it as a thought step instead. Your message was: $(printf '%.200s' "$trigger_content")" \
-            --arg source "$THINKER_NAME" \
-            --arg trigger "$trigger_step_id" \
-            '{type:"observation", content:$content, source:$source}
-             + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
-            | traj append >/dev/null || true
-        exit 0
-    fi
-    [[ -z "$trigger_content" ]] && exit 0
-
-    # Idempotency: a redelivered or late-queued trigger (pending replay,
-    # dispatcher restart, a trigger that waited behind a busy agentic run)
-    # must never produce a second reply. Stamped replies (reply_to) match the
-    # trigger exactly; as a net for replies that somehow missed the stamp,
-    # ANY outgoing message to this sender appended AFTER the trigger step
-    # also counts as the answer — positionally, same definition the router
-    # hint uses. The unstamped agentic reply was the reworded double-reply
-    # of 2026-08-03.
-    # _root_traj_raw_tail scans a recent window, not the whole log: a
-    # redelivered trigger and any reply to it are hours old at most, far
-    # inside the window; a trigger outside it just means $in comes up null
-    # and only stamped replies in the window can match.
-    if [[ -n "$trigger_step_id" ]]; then
-        already=$(_root_traj_raw_tail \
-            | jq -Rrn --arg me "$IDENTITY_NAME" --arg them "$msg_from" --arg t "$trigger_step_id" '
-                [inputs | fromjson? // empty] as $steps
-                | ([$steps | to_entries[] | select(.value.step_id == $t)] | last) as $in
-                | [$steps[] | select(.type == "message" and .from == $me
-                                     and (.reply_to // "") == $t)]
-                  + (if $in == null then []
-                     else [$steps[($in.key + 1):][]
-                           | select(.type == "message" and .from == $me and .to == $them)]
-                     end)
-                | if length == 0 then empty
-                  else (.[0].step_id // "unstamped") end' 2>/dev/null \
-            | head -n 1) || already=""
-        if [[ -n "$already" ]]; then
-            printf '  already replied to step %s — skipping\n' "$trigger_step_id" >&2
-            exit 0
-        fi
-    fi
-
-    # Compose the reply with ONE llm call, no tools, no thinking step — this
-    # is the whole point of the reply route. The conversation with this sender
-    # is presented as an actual message array (their messages = user turns,
-    # our replies = assistant turns) rather than a blob of raw steps: models
-    # continue well-formed transcripts instead of parroting their own earlier
-    # replies out of an undifferentiated stream (the repeat bugs of
-    # 2026-08-03). Everything else from the stream rides along as inner
-    # context in the system prompt.
-    system_prompt=$(_build_system_prompt)
-    recent_context=""
-    if traj exists 2>/dev/null; then
-        recent_context=$(_recent_stream "$THINK_CONTEXT_TAIL") || recent_context=""
-    fi
-
-    convo_json=$(printf '%s\n' "$recent_context" | jq -cRn \
-        --arg me "$IDENTITY_NAME" --arg them "$msg_from" '
-        [inputs | fromjson? // empty
-         | select(.type == "message")
-         | if .from == $them and .to == $me then {role:"user", content:(.content|tostring)}
-           elif .from == $me and .to == $them then {role:"assistant", content:(.content|tostring)}
-           else empty end]
-        | .[-12:]' 2>/dev/null) || convo_json="[]"
-    # The triggering message must be the final user turn (it may be missing
-    # from a short/filtered stream), and some providers reject a leading
-    # assistant turn.
-    convo_json=$(printf '%s' "$convo_json" | jq -c --arg c "$trigger_content" '
-        (if length == 0 or .[-1].role != "user" then . + [{role:"user", content:$c}] else . end)
-        | (if (.[0].role // "user") == "assistant" then .[1:] else . end)')
-
-    inner_context=$(printf '%s\n' "$recent_context" | jq -Rr \
-        'fromjson? // empty | select(.type != "message")
-         | "[\(.type)] \(.content|tostring)"' 2>/dev/null | tail -n 8) || inner_context=""
-
-    reply_system="$system_prompt
-
-You are in a live chat conversation with $msg_from. The messages are the real
-back-and-forth so far; reply to their newest message — first person, natural,
-conversational, concise. Never repeat or rephrase an earlier reply of yours.
-Answer completely from what you already know; only if it genuinely requires
-running tools or looking something up should you instead briefly say you're on
-it (the work happens separately) — in that case do not guess.
-
-Not every message needs a reply. If their newest message is already answered
-(a reply of yours addressing it is visible above), is a bare acknowledgment
-like \"thanks\" or \"ok\", or anything you could say would only repeat you,
-output exactly NO_REPLY on its own line and nothing else. Staying quiet is
-better than a duplicate or a contentless reply.
-
-Your recent inner life (context only, not part of the conversation):
-$inner_context
-
-Output ONLY the reply message text — no preamble, no quotes, no commands.
-Delivery is automatic: never write 'chat reply' or the recipient's address."
-
-    printf '  replying to %s...\n' "$msg_from" >&2
-    reply=$(llm -m "$REPLY_MODEL" -M "$convo_json" -s "$reply_system") || true
-
-    # Defense in depth: strip a leaked delivery command if a model echoes one.
-    reply=$(printf '%s' "$reply" | sed -E '1s/^[[:space:]]*chat reply [A-Za-z0-9._-]+[[:space:]]*//')
-
-    # The model may judge that no reply is needed (already answered, bare
-    # acknowledgment). Honor it: post nothing, but record the decision — the
-    # decision:"no-reply" stamp lets the router hint below distinguish
-    # "declined" from "the fast-reply failed", and the observation re-fires
-    # the loop.
-    first_line=$(printf '%s' "$reply" | head -n 1 | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')
-    if [[ "$first_line" == "NO_REPLY" ]]; then
-        printf '  model declined to reply (NO_REPLY)\n' >&2
-        jq -nc \
-            --arg content "Chose not to reply to $msg_from — their message needed no reply (already answered, or a bare acknowledgment). Their message was: $(printf '%.200s' "$trigger_content")" \
-            --arg source "$THINKER_NAME" \
-            --arg trigger "$trigger_step_id" \
-            '{type:"observation", content:$content, source:$source, decision:"no-reply"}
-             + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
-            | traj append >/dev/null || true
-        exit 0
-    fi
-
-    reply_args=()
-    [[ -n "$trigger_step_id" ]] && reply_args+=(--reply-to "$trigger_step_id")
-    if [[ -n "$reply" ]] && printf '%s' "$reply" | chat reply ${reply_args[@]+"${reply_args[@]}"} "$msg_from"; then
-        # `chat reply` already appended the outgoing message step. Record a
-        # brief observation too: it tells the mind it replied (so it does not
-        # reply again) and re-fires the loop so the router can decide what to
-        # do next. This is bookkeeping, not part of composing the reply.
-        jq -nc \
-            --arg content "Replied to $msg_from: $(printf '%.200s' "$reply")" \
-            --arg source "$THINKER_NAME" \
-            --arg trigger "$trigger_step_id" \
-            '{type:"observation", content:$content, source:$source}
-             + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
-            | traj append >/dev/null || true
-        printf '  [reply -> %s] %s\n' "$msg_from" "$(printf '%s' "$reply" | head -1)"
-        exit 0
-    fi
-
-    # Reply failed (empty model output or chat error). Surface it as an
-    # observation so the mind can decide what to do, and keep the loop alive.
-    printf '  reply failed — appending failure observation\n' >&2
-    jq -nc \
-        --arg content "reply failed: could not send a reply to $msg_from (empty model output or chat error — see monolith log). Their message was: $(printf '%.200s' "$trigger_content")" \
-        --arg source "$THINKER_NAME" \
-        --arg trigger "$trigger_step_id" \
-        '{type:"observation", content:$content, source:$source}
-         + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
-        | traj append >/dev/null || true
     exit 0
 fi
 
@@ -268,36 +110,7 @@ fi
 
 # Cheap deterministic routing hints (nudges, not rules — the model decides).
 hints=""
-# Reply-state of the latest inbound message: the fast-reply path answers
-# messages immediately, and the router re-waking on its bookkeeping tends to
-# reply AGAIN (the double-reply loop of 2026-08-03). Tell it outright.
-# A reply that stamps reply_to is matched exactly against the inbound step
-# id; replies without the stamp (agent-typed) fall back to "any later
-# outgoing message to that sender".
-reply_state=$(printf '%s\n' "$recent_context" | jq -Rn --arg me "$IDENTITY_NAME" '
-    [inputs | fromjson? // empty] as $steps
-    | ([$steps | to_entries[] | select(.value.type == "message" and .value.to == $me)] | last) as $in
-    | if $in == null then "none"
-      elif ([$steps[($in.key + 1):][]
-             | select(.type == "message" and .from == $me
-                      and (if (.reply_to // "") != ""
-                           then .reply_to == ($in.value.step_id // "")
-                           else .to == ($in.value.from // "") end))] | length) > 0
-      then "answered"
-      elif ([$steps[($in.key + 1):][]
-             | select((.decision // "") == "no-reply"
-                      and (.trigger_step // "") == ($in.value.step_id // ""))] | length) > 0
-      then "declined" else "unanswered" end' 2>/dev/null) || reply_state="none"
-if [[ "$reply_state" == "answered" ]]; then
-    hints="${hints}- The latest incoming chat message has ALREADY been replied to. Do NOT send another reply unless you have completed real work since then that produced genuinely new information for that person.
-"
-elif [[ "$reply_state" == "declined" ]]; then
-    hints="${hints}- The latest incoming chat message was seen and deliberately NOT replied to (it needed no reply). Do NOT reply to it now unless something has genuinely changed.
-"
-elif [[ "$reply_state" == "unanswered" ]]; then
-    hints="${hints}- The latest incoming chat message appears to have NO reply yet (the fast-reply may have failed) — consider act: reply to it.
-"
-fi
+# (No reply-state hint: replies are the responder thinker's job, not ours.)
 last_three=$(printf '%s\n' "$recent_context" | tail -n 3)
 if printf '%s' "$recent_context" | tail -n 1 | jq -e 'select(.type == "action")' >/dev/null 2>&1; then
     hints="${hints}- The most recent step is an ACTION that has no observation yet — it may need carrying out (act).
@@ -320,10 +133,24 @@ while IFS= read -r _flag; do
     [[ -n "$_flag" ]] && shellm_flags+=("$_flag")
 done < <(_build_shellm_flags "$IDENTITY_DIR" "$run_dir")
 
+# Tiered "life so far" memory (on by default; set MONOLITH_TIERED_MEMORY=0 to
+# disable). recap --context builds rollups only GOING FORWARD from first use, so
+# this is safe even on a long pre-existing log — the past stays uncovered until
+# someone runs `recap --backfill` once. _life_context degrades to empty on any
+# error. See design/tiered_memory.md.
+life_section=""
+if [[ "${MONOLITH_TIERED_MEMORY:-1}" == "1" ]]; then
+    _lc=$(_life_context) || _lc=""
+    [[ -n "$_lc" ]] && life_section="Your life so far (tiered summary, oldest→newest):
+$_lc
+
+"
+fi
+
 route_prompt="<context>
 $system_prompt
 
-Recent stream (last $THINK_CONTEXT_TAIL steps):
+${life_section}Recent stream (last $THINK_CONTEXT_TAIL steps):
 $recent_context
 
 Routing signals:

@@ -53,6 +53,14 @@ if [[ -z "${SHELLM_MODEL:-}" ]]; then
     fi
 fi
 SHELLM_MAX_ITERATIONS="${SHELLM_MAX_ITERATIONS:-}"
+# Spin/stall guard: abort a run that is failing without making progress instead
+# of looping forever (a malformed model whose output cannot be turned into a
+# working command burns tokens and inflates context until something else kills
+# it). Two triggers, either fires; set to 0 to disable that trigger.
+#   CONSECUTIVE: N non-zero-exit iterations in a row (flailing).
+#   REPEAT:      the exact same command submitted and failed N times (stuck).
+SHELLM_MAX_CONSECUTIVE_FAILURES="${SHELLM_MAX_CONSECUTIVE_FAILURES:-10}"
+SHELLM_MAX_REPEAT_FAILURES="${SHELLM_MAX_REPEAT_FAILURES:-3}"
 SHELLM_TRUNCATE="${SHELLM_TRUNCATE:-2000}"
 SHELLM_API_URL="${SHELLM_API_URL:-}"
 # Clear any inherited LLM_API_URL so llm uses per-provider defaults
@@ -306,7 +314,18 @@ _shellm_time() {
 extract_reasoning() {
     local response="$1"
     printf '%s\n' "$response" | awk '
+        # Stop at the opening code fence — everything before it is reasoning.
+        # The fence may be a lone ``` line OR a tagged ```bash/```sh appended
+        # to the end of a prose sentence (some models, e.g. grok, do the
+        # latter). In the appended case, emit the prose that precedes the fence
+        # on that line, then stop — so the reasoning shows the words, not code.
         /^```(bash|sh)?[[:space:]]*$/ { exit }
+        match($0, /```(bash|sh)/) {
+            pre = substr($0, 1, RSTART - 1)
+            sub(/[[:space:]]+$/, "", pre)
+            if (pre ~ /[^[:space:]]/) print pre
+            exit
+        }
         { print }
     '
 }
@@ -1337,18 +1356,29 @@ extract_code() {
 
         BEGIN { in_block = 0; hd_top = 0; first_block_closed = 0 }
 
-        # After first block closed: look for another opening fence
+        # After first block closed: look for another opening fence. A tagged
+        # ```bash/```sh fence may be appended to a prose line (see opener note
+        # below), so match it anywhere; a bare ``` only counts at line start.
         first_block_closed && !in_block {
-            if ($0 ~ /^```/) {
+            if ($0 ~ /```bash/ || $0 ~ /```sh/ || $0 ~ /^```/) {
                 print "TRUNCATED" > "/dev/stderr"
                 exit
             }
             next
         }
 
-        # Before the opening fence — look for ```bash, ```sh, or bare ```
+        # Before the opening fence — look for ```bash, ```sh, or bare ```.
+        # ```bash/```sh may be appended to the END of a prose line: some models
+        # (e.g. grok) write "…do this now.```bash" instead of putting the fence
+        # on its own line. Matching only /^```bash/ misses that, extract_code
+        # returns empty, and the fallback below then runs the WHOLE prose
+        # response as bash ("do: command not found"). So match tagged fences
+        # anywhere on the line; a bare ``` still only opens at line start (a
+        # mid-line bare ``` is ambiguous with a closing fence). The code always
+        # begins on the next line, so discarding the rest of the fence line is
+        # correct.
         !in_block {
-            if ($0 ~ /^```bash/ || $0 ~ /^```sh/ || $0 ~ /^```/) { in_block = 1 }
+            if ($0 ~ /```bash/ || $0 ~ /```sh/ || $0 ~ /^```/) { in_block = 1 }
             next
         }
 
@@ -1417,9 +1447,19 @@ You are shellm, an AI assistant operating inside a bash shell environment. You s
 
 IMPORTANT: End your response with exactly ONE ```bash code block. Your response is NOT streamed — code blocks are not executed until your entire response is complete. Combine multiple steps into a single script. Only the first code block is executed; all others are silently discarded.
 
+CRITICAL — the opening ```bash fence MUST start on its OWN new line. Put a
+newline after your prose, THEN the fence on a line by itself. Never append the
+fence to the end of a sentence. If you attach the fence to prose, your prose
+can be run as shell commands and fail.
+  RIGHT:                          WRONG:
+    Let me inspect the state.        Let me inspect the state.```bash
+    ```bash                          ls -la
+    ls -la                           ```
+    ```
+
 ## How you work
 - Do any reasoning you want before generating your shell code
-- When you're ready, end your response with a single ```bash fenced code block
+- When you're ready, end your response with a single ```bash fenced code block — the ```bash opening fence on its own new line, never appended to a sentence
 - Your code is executed in a bash subprocess
 - You see the stdout/stderr output from execution
 - You will be called iteratively until you have the answer, then signal completion
@@ -2043,6 +2083,8 @@ run_loop() {
     progress "Starting shellm loop (model: $SHELLM_MODEL, max iterations: ${SHELLM_MAX_ITERATIONS:-unlimited})"
 
     local iteration=0
+    # Spin/stall guard state (see SHELLM_MAX_*_FAILURES).
+    local _consec_fail=0 _repeat_fail=0 _prev_fail_code=""
     while [[ -z "$SHELLM_MAX_ITERATIONS" || "$iteration" -lt "$SHELLM_MAX_ITERATIONS" ]]; do
         iteration=$((iteration + 1))
         local iter_label
@@ -2434,6 +2476,7 @@ exit \$__shellm_rc
                 '{type:"final", content:$content, run_id:$run_id}')" \
                 | traj append --traj_dir "$_run_traj_dir" "$_run_traj_id" >/dev/null
             redact_sensitive "$final_answer"
+            _consec_fail=0; _repeat_fail=0; _prev_fail_code=""
             [[ "$QUIET" -eq 0 ]] && echo >&2
             progress_dim "Trajectory: $_run_traj_id"
             # Write thought step to parent traj referencing this sub-traj
@@ -2452,6 +2495,51 @@ exit \$__shellm_rc
                     | traj append --traj_dir "$_run_traj_dir" "$_SHELLM_PARENT_TRAJ_ID" >/dev/null 2>/dev/null || true
             fi
             return 0
+        fi
+
+        # ── Spin/stall guard ────────────────────────────────────────────────
+        # No final answer this turn. If the executed code keeps failing without
+        # progress, abort loudly rather than spin forever burning tokens and
+        # inflating context (the classic symptom of a model whose output cannot
+        # be turned into a runnable command). A success clears the counters.
+        if [[ "$exit_code" -eq 0 ]]; then
+            _consec_fail=0; _repeat_fail=0; _prev_fail_code=""
+        else
+            _consec_fail=$(( _consec_fail + 1 ))
+            if [[ -n "$code" && "$code" == "$_prev_fail_code" ]]; then
+                _repeat_fail=$(( _repeat_fail + 1 ))
+            else
+                _repeat_fail=1
+            fi
+            _prev_fail_code="$code"
+
+            local _stall=""
+            if [[ "$SHELLM_MAX_REPEAT_FAILURES" -gt 0 && "$_repeat_fail" -ge "$SHELLM_MAX_REPEAT_FAILURES" ]]; then
+                _stall="submitted the same failing command $_repeat_fail times in a row"
+            elif [[ "$SHELLM_MAX_CONSECUTIVE_FAILURES" -gt 0 && "$_consec_fail" -ge "$SHELLM_MAX_CONSECUTIVE_FAILURES" ]]; then
+                _stall="$_consec_fail commands in a row failed with no progress"
+            fi
+
+            if [[ -n "$_stall" ]]; then
+                [[ "$QUIET" -eq 0 ]] && echo >&2
+                progress "\033[1;31mSTALL: agent $_stall (last exit=$exit_code) — aborting run\033[0m"
+                printf '%s [shellm] STALL: agent %s (last exit=%s); aborting run %s to stop a spin.\n' \
+                    "$(date -u +%FT%TZ)" "$_stall" "$exit_code" "$_run_traj_id" >&2
+                jq -nc \
+                    --arg content "shellm killed this run: the agent stalled — $_stall (last exit=$exit_code). Likely the model output could not be turned into a working command (e.g. a malformed code fence). The run was aborted to stop a token-burning spin; investigate the last few reasoning/shell-output steps." \
+                    --arg run_id "$_run_step_id" \
+                    '{type:"error", content:$content, run_id:$run_id, reason:"stall"}' \
+                    | traj append --traj_dir "$_run_traj_dir" "$_run_traj_id" >/dev/null || true
+                # For sub-runs, surface the stall to the parent trajectory too.
+                if [[ -n "${_SHELLM_PARENT_TRAJ_ID:-}" && -z "$_use_traj" ]]; then
+                    jq -nc \
+                        --arg content "(stalled: $_stall)" \
+                        --arg from_traj "$_run_traj_id" \
+                        '{type:"merge", content:$content, from_traj:$from_traj}' \
+                        | traj append --traj_dir "$_run_traj_dir" "$_SHELLM_PARENT_TRAJ_ID" >/dev/null 2>/dev/null || true
+                fi
+                return 1
+            fi
         fi
     done
 
