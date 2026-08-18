@@ -1,9 +1,15 @@
 # Monolith thinker
 
-Status: draft
+Status: implemented (runs solo as the mind), with two revisions since this
+draft: (1) chat moved to a dedicated `responder` thinker — the monolith no
+longer subscribes to `message` or runs the fast-reply path described below; an
+inbound chat reaches it as the responder's observation. (2) Loop pacing is now
+the non-blocking scheduled-wake backoff in monolith_backoff.md
+(`trigger_self:false` + a timer), not the in-loop `trigger_self:true` sleep
+described here.
 Replaces (when enabled): the multi-thinker roster (inner_monologue, actor,
 goals_manager, learning, mind_wanderer, values_manager) with a single thinker,
-`monolith`, that runs solo and handles every function — including chat.
+`monolith`, that runs solo and handles every function.
 
 ## Motivation
 

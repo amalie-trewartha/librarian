@@ -8,13 +8,19 @@ set -euo pipefail
 # model picks one function and carries it out in the same run.
 #
 # Chat replies are NOT the monolith's job — a dedicated `responder` thinker owns
-# immediate replies (see thinkers/responder/step). The monolith no longer
-# subscribes to `message`; it reasons over the conversation as context and can
-# `act` on any follow-up work a message needs.
+# immediate replies (see thinkers/responder/step). The monolith reasons over the
+# conversation as context and can `act` on any follow-up work a message needs.
 #
-# Because it subscribes with trigger_self, the loop is perpetual: the router
-# path is guaranteed to append at least one step per wakeup (liveness net at
-# the end), so the dispatcher always re-fires. See design/monolith_thinker.md.
+# PACING (see design/monolith_backoff.md). The monolith subscribes with
+# trigger_self:FALSE, so its own steps never re-fire it — that removes the
+# uncontrolled self-loop and the old in-step `sleep`. Two things drive it now:
+#   1. Reactivity — an external step (the responder's observation for a chat, or
+#      an external action/merge) fires it immediately; that is engagement.
+#   2. Spontaneity — a `monolith-wake` step posted by a detached timer this step
+#      arms on its way out (arm_wake, via an EXIT trap). The delay backs off
+#      exponentially to a cap while nothing happens, and is 0 (think again at
+#      once) while engaged or producing real work. The timer — NOT an appended
+#      step — is the liveness mechanism, so the trap must always arm.
 
 THINKER_NAME="monolith"
 SCRIPT_DIR="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
@@ -27,79 +33,136 @@ _require_env
 THINK_MODEL="${THINK_MODEL:-${SHELLM_MODEL:-claude-opus-4-7}}"
 THINK_CONTEXT_TAIL="${THINK_CONTEXT_TAIL:-20}"
 
-# Idle backoff bounds (seconds). State persists in run_dir across wakeups.
-IDLE_BACKOFF_START="${MONOLITH_IDLE_BACKOFF:-5}"
-IDLE_BACKOFF_MAX="${MONOLITH_IDLE_BACKOFF_MAX:-60}"
-
 run_dir="$IDENTITY_DIR/workdir"
 mkdir -p "$run_dir"
-backoff_file="$run_dir/monolith_idle_backoff"
 
-# Read the triggering step from stdin (context still comes from the traj).
+# ---------------------------------------------------------------------------
+# Backoff config + state (level-based; see design/monolith_backoff.md)
+# ---------------------------------------------------------------------------
+# delay(0)      = 0                              # engaged / working: no pause
+# delay(n >= 1) = min(BASE * FACTOR^(n-1), CAP)  # 5, 10, 20, … up to CAP
+# HOLD: stay at each level for HOLD empty wakes before stepping to the next.
+BACKOFF_BASE="${MONOLITH_BACKOFF_BASE:-5}"
+BACKOFF_FACTOR="${MONOLITH_BACKOFF_FACTOR:-2}"
+BACKOFF_CAP="${MONOLITH_BACKOFF_CAP:-300}"
+BACKOFF_HOLD="${MONOLITH_BACKOFF_HOLD:-3}"
+
+state_dir="$IDENTITY_DIR/run"
+mkdir -p "$state_dir"
+state_file="$state_dir/monolith_backoff_state.json"
+timer_pid_file="$state_dir/monolith_timer.pid"
+root_traj="${ROOT_TRAJ_ID:-$TRAJ_ID}"
+
+# delay in seconds for a backoff level.
+_delay_for_level() {
+    local lvl="$1" d="$BACKOFF_BASE" i=1
+    (( lvl <= 0 )) && { printf '0'; return; }
+    while (( i < lvl )); do
+        d=$(( d * BACKOFF_FACTOR ))
+        (( d >= BACKOFF_CAP )) && { d="$BACKOFF_CAP"; break; }
+        i=$(( i + 1 ))
+    done
+    (( d > BACKOFF_CAP )) && d="$BACKOFF_CAP"
+    printf '%s' "$d"
+}
+
+# Load persisted backoff state (level + dwell counter).
+level=0
+ticks_at_level=0
+if [[ -f "$state_file" ]]; then
+    level=$(jq -r '.level // 0' "$state_file" 2>/dev/null) || level=0
+    ticks_at_level=$(jq -r '.ticks_at_level // 0' "$state_file" 2>/dev/null) || ticks_at_level=0
+    [[ "$level" =~ ^[0-9]+$ ]] || level=0
+    [[ "$ticks_at_level" =~ ^[0-9]+$ ]] || ticks_at_level=0
+fi
+
+_save_state() {
+    local tmp
+    tmp=$(mktemp) || return 0
+    if jq -nc --argjson l "$level" --argjson t "$ticks_at_level" \
+        '{level:$l, ticks_at_level:$t}' > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$state_file"
+    else
+        rm -f "$tmp"
+    fi
+}
+
+# arm_wake DELAY — singleton timer. Kills any prior timer, then detaches a
+# process that sleeps DELAY and appends ONE monolith-wake step — but only if the
+# dispatcher that armed it still owns the runtime (token guard closes the
+# stop/start race). No dispatcher token → don't arm.
+arm_wake() {
+    local delay="$1"
+    [[ -f "$state_dir/dispatcher.token" ]] || return 0
+    local token
+    token=$(cat "$state_dir/dispatcher.token" 2>/dev/null) || return 0
+    [[ -n "$token" ]] || return 0
+    if [[ -f "$timer_pid_file" ]]; then
+        local _old
+        _old=$(cat "$timer_pid_file" 2>/dev/null) || _old=""
+        # Kill the whole timer group (setsid → pgid == pid) so no stale sleeper
+        # survives to post a spurious wake.
+        [[ -n "$_old" ]] && { kill -TERM -"$_old" 2>/dev/null || kill -TERM "$_old" 2>/dev/null || true; }
+    fi
+    setsid bash -c '
+        sleep "$1" || exit 0
+        [[ "$(cat "$2/dispatcher.token" 2>/dev/null)" == "$3" ]] || exit 0
+        traj append "$4" --field type=monolith-wake --field source=monolith-timer --field content=wake >/dev/null 2>&1
+    ' _ "$delay" "$state_dir" "$token" "$root_traj" &
+    echo $! > "$timer_pid_file"
+}
+
+# ---------------------------------------------------------------------------
+# Parse the triggering step
+# ---------------------------------------------------------------------------
 step_json=$(cat)
 [[ -z "$step_json" ]] && exit 0
 trigger_type=$(printf '%s' "$step_json" | jq -r '.type // empty' 2>/dev/null) || true
-trigger_content=$(printf '%s' "$step_json" | jq -r '.content // empty' 2>/dev/null) || true
+trigger_source=$(printf '%s' "$step_json" | jq -r '.source // empty' 2>/dev/null) || true
 trigger_step_id=$(printf '%s' "$step_json" | jq -r '.step_id // empty' 2>/dev/null) || true
 
 # ---------------------------------------------------------------------------
-# Idle backoff pacing
+# EXIT-trap liveness: arm the next timer on the way out. next_delay stays ""
+# for no-op wakes (leave the running timer untouched); it is set to 0 (arm an
+# immediate wake — keep thinking) or delay(level) (rest) by the handlers below.
+# The trap fires on EVERY exit, including crash/refusal paths, so the loop
+# cannot die by "appending nothing" the way trigger_self used to guard against.
 # ---------------------------------------------------------------------------
-# When we are re-fired by our OWN idle step, back off (doubling, capped) so the
-# solo loop does not burn tokens at rest. Any non-idle trigger resets the
-# backoff, so a new message or external action wakes us at full speed.
-#
-# The backoff is PRE-EMPTIBLE: we sleep in 1s slices and watch the pending
-# dir for a queued external trigger (the dispatcher queues one the moment it
-# arrives while we are busy — and sleeping counts as busy). If one is waiting,
-# this rest wakeup is moot: exit so the dispatcher fires the queued trigger
-# now, instead of the sender waiting out the remaining sleep PLUS a router run.
-# A stale pending file at worst forfeits one idle wakeup; the dispatcher's
-# liveness watchdog is the net.
-#
-# We watch message/action/observation. Since we no longer subscribe to
-# `message`, an inbound chat reaches us as the responder's *observation*
-# ("Replied to …" / "Chose not to reply …") — that is the signal that wakes
-# us on a chat, so it MUST be in the watch set or the mind sleeps through
-# every conversation until the backoff cap elapses.
-if [[ "$trigger_type" == "idle" ]]; then
-    backoff=$(cat "$backoff_file" 2>/dev/null) || backoff="$IDLE_BACKOFF_START"
-    [[ "$backoff" =~ ^[0-9]+$ ]] || backoff="$IDLE_BACKOFF_START"
-    printf '  idle — backing off %ss\n' "$backoff" >&2
-    pending_dir="$IDENTITY_DIR/run/pending"
-    slept=0
-    while (( slept < backoff )); do
-        for _pend in "$pending_dir/$THINKER_NAME".message.* "$pending_dir/$THINKER_NAME".action.* "$pending_dir/$THINKER_NAME".observation.*; do
-            if [[ -f "$_pend" ]]; then
-                printf '  backoff pre-empted after %ss (queued trigger waiting)\n' "$slept" >&2
-                exit 0
-            fi
-        done
-        sleep 1
-        slept=$(( slept + 1 ))
-    done
-    next=$(( backoff * 2 ))
-    (( next > IDLE_BACKOFF_MAX )) && next="$IDLE_BACKOFF_MAX"
-    printf '%s' "$next" > "$backoff_file"
-else
-    printf '%s' "$IDLE_BACKOFF_START" > "$backoff_file"
-fi
+next_delay=""
+trap '[[ -n "$next_delay" ]] && arm_wake "$next_delay"' EXIT
+
+# Classify the wake. With trigger_self:false the dispatcher already filters our
+# own steps, so these are all external — but stay defensive.
+case "$trigger_type" in
+    message)
+        # We do not subscribe to message (responder owns chat). Defensive no-op;
+        # leave the running timer alone.
+        exit 0
+        ;;
+    observation|action|merge)
+        if [[ "$trigger_source" == "$THINKER_NAME" ]]; then
+            exit 0   # our own step — should not arrive; no-op, leave timer
+        fi
+        wake_mode="reactive"     # an external event — engage
+        ;;
+    monolith-wake)
+        wake_mode="spontaneous"  # scheduled self-check — classify by work done
+        ;;
+    *)
+        # idle / manual-trigger / initial start wake / watchdog / unknown: treat
+        # as a spontaneity/bootstrap wake so the timer loop (re)starts from here.
+        wake_mode="spontaneous"
+        ;;
+esac
+
+# Liveness fallback: from here on we WILL run, so guarantee the trap arms a
+# timer even if this run dies early under `set -e` (arming the timer, not an
+# appended step, is what keeps the trigger_self:false loop alive). The proper
+# decision at the end overrides next_delay before a clean exit.
+next_delay=$(_delay_for_level "$level")
 
 # ---------------------------------------------------------------------------
-# (a) CHAT is the responder thinker's job — the monolith never replies.
-# ---------------------------------------------------------------------------
-# A dedicated `responder` thinker owns immediate chat replies (see
-# thinkers/responder/step). The monolith must not reply too, or the two race
-# to double-reply. We no longer subscribe to `message`; this guard is just
-# defensive. A genuine inbound message still reaches the mind — the responder's
-# reply/observation re-fires us — and the router can then `act` on any real
-# follow-up work the message needs.
-if [[ "$trigger_type" == "message" ]]; then
-    exit 0
-fi
-
-# ---------------------------------------------------------------------------
-# (b) ROUTER path — one agentic run over the function menu
+# ROUTER path — one agentic run over the function menu
 # ---------------------------------------------------------------------------
 system_prompt=$(_build_system_prompt)
 
@@ -161,38 +224,32 @@ $think_prompt
 
 Choose ONE function for this wakeup and carry it out now."
 
-# Liveness accounting. We must know whether the run appended a step that will
-# RE-TRIGGER us — i.e. one of our subscribed types. shellm always appends its
-# own machinery steps (prompt, shellm-run, ...) even when the model produces
-# nothing useful, and those are NOT subscribed, so a naive "did the last
-# step_id change?" check is fooled by them and the self-trigger loop dies
-# silently. Track the last SUBSCRIBED-type step id instead.
-# -R reads each line as a raw STRING so fromjson can parse it and corrupt
-# lines are skipped (matches _recent_stream). Without -R, jq parses the line
-# as JSON itself and fromjson then fails on every object, silently yielding
-# empty — which would make the net fire on every wakeup.
-_last_live_id() {
-    traj cat "${ROOT_TRAJ_ID:-$TRAJ_ID}" --raw 2>/dev/null \
+# Work probe: compare the last REAL-WORK step id before/after the run. Real work
+# is thought/action/observation/merge/message (NOT idle — a fallback idle is not
+# progress). Drives the backoff classification below.
+# -R reads each line as a raw STRING so fromjson can parse it and corrupt lines
+# are skipped (matches _recent_stream). Without -R, jq parses the line as JSON
+# itself and fromjson then fails on every object, silently yielding empty.
+_last_work_id() {
+    traj cat "$root_traj" --raw 2>/dev/null \
         | jq -Rr 'fromjson? // empty
             | select(.type == "thought" or .type == "action" or .type == "observation"
-                     or .type == "merge" or .type == "message" or .type == "idle")
+                     or .type == "merge" or .type == "message")
             | .step_id // empty' 2>/dev/null \
         | tail -n 1
 }
-before_last=""
+before_work=""
 if traj exists 2>/dev/null; then
-    before_last=$(_last_live_id) || before_last=""
+    before_work=$(_last_work_id) || before_work=""
 fi
 
-# shellm writes its run header's step_id here, so the fallback idle can carry
-# run_id and the timeline can pair it with the run that went quiet. Exact even
-# when concurrent runs interleave in the root trajectory; empty file means the
-# run died before appending its header.
+# shellm writes its run header's step_id here, so a fallback idle can carry
+# run_id and the timeline can pair it with the run that went quiet.
 run_id_file=$(mktemp)
 
 # One shellm agentic run (writes to the root trajectory). Model via --model so
 # it cannot be shadowed by env/.env layers (see design/model-resolution.md).
-printf '  routing (%s)...\n' "${trigger_type:-none}" >&2
+printf '  routing (%s / %s)...\n' "${trigger_type:-none}" "$wake_mode" >&2
 run_rc=0
 run_response=$(SHELLM_NO_BANNER=1 \
     SHELLM_TRIGGER_STEP_ID="$trigger_step_id" \
@@ -201,20 +258,18 @@ run_response=$(SHELLM_NO_BANNER=1 \
     "${shellm_flags[@]}" \
     "$route_prompt") || run_rc=$?
 
-# Liveness net: the loop is perpetual only if every wakeup appends a step of a
-# subscribed type (one that re-fires us). If the agentic run produced only
-# machinery steps or nothing (crash, refusal, empty run), emit a fallback idle
-# step so trigger_self re-fires and the mind does not go dark.
-after_last=""
+after_work=""
 if traj exists 2>/dev/null; then
-    after_last=$(_last_live_id) || after_last=""
+    after_work=$(_last_work_id) || after_work=""
 fi
+did_work=0
+[[ "$after_work" != "$before_work" ]] && did_work=1
 
-if [[ "$after_last" == "$before_last" ]]; then
-    printf '  run appended nothing (rc=%s) — emitting fallback idle to keep the loop alive\n' "$run_rc" >&2
-    [[ "$run_rc" -ne 0 ]] && sleep 1   # brief backoff so a failing run does not tight-loop
-    # Stamp the idle with the run that produced nothing (empty when the run
-    # died before appending its header — then the idle stays unpinned).
+# For observability, still append a fallback idle when a run produced no work
+# (crash/refusal/empty). Under trigger_self:false this idle does NOT drive the
+# loop — the EXIT trap's arm_wake does — it just marks the quiet wake.
+if [[ "$did_work" -eq 0 ]]; then
+    printf '  run produced no work (rc=%s) — marking idle; timer keeps the loop alive\n' "$run_rc" >&2
     idle_run_id=$(cat "$run_id_file" 2>/dev/null) || idle_run_id=""
     jq -nc \
         --arg source "$THINKER_NAME" \
@@ -226,6 +281,28 @@ if [[ "$after_last" == "$before_last" ]]; then
         | traj append >/dev/null || true
 fi
 rm -f "$run_id_file"
+
+# ---------------------------------------------------------------------------
+# Backoff decision — sets next_delay for the EXIT trap.
+# ---------------------------------------------------------------------------
+if [[ "$wake_mode" == "reactive" || "$did_work" -eq 1 ]]; then
+    # Engaged, or the run did real work → reset to no pause; think again at once.
+    level=0
+    ticks_at_level=0
+    next_delay=0
+else
+    # Empty spontaneous wake → dwell at this rate, then descend one level.
+    ticks_at_level=$(( ticks_at_level + 1 ))
+    if (( ticks_at_level >= BACKOFF_HOLD )); then
+        # Step to the next (slower) level unless already resting at the cap.
+        if (( $(_delay_for_level "$level") < BACKOFF_CAP )); then
+            level=$(( level + 1 ))
+        fi
+        ticks_at_level=0
+    fi
+    next_delay=$(_delay_for_level "$level")
+fi
+_save_state
 
 if [[ -n "$run_response" ]]; then
     printf '  [monolith] %s\n' "$(printf '%s' "$run_response" | head -1)"

@@ -619,6 +619,8 @@ _start_dispatcher() {
             _respawn_dead_feeders
         }
         _last_tick=$SECONDS
+        _spin_mark=$SECONDS
+        _spin_count=0
 
         # Main dispatch loop: read tagged step lines from the fifo with a
         # 1s timeout so the loop keeps ticking while the trajectory is
@@ -643,15 +645,30 @@ _start_dispatcher() {
                 _last_tick=$SECONDS
                 _tick
             fi
-            if (( _read_rc > 128 )); then
-                # Timeout — keep any partial line for the next pass
+            if (( _read_rc != 0 )); then
+                # `read -t` timeout return code is bash-version-specific: bash
+                # >=4 returns >128, but macOS's /bin/bash 3.2 returns 1. fd 3
+                # holds the fifo's OWN write end (exec 3<> above), so a genuine
+                # EOF is impossible — every non-zero read is a timeout. (The old
+                # `>128`-only check misread bash 3.2's rc=1 timeout as a fatal
+                # "fifo read failed" and the dispatcher died on its first idle
+                # second on macOS.) Keep any partial line and loop.
+                #
+                # Spin guard: a real -t 1 timeout takes ~1s, so at most a few
+                # per second. If non-zero reads pile up WITHIN one second the fd
+                # is actually broken (returning instantly, not timing out) —
+                # exit rather than hot-loop.
+                if (( SECONDS == _spin_mark )); then
+                    if (( ++_spin_count > 50 )); then
+                        printf '%s [dispatcher] fifo read failing fast (rc=%s) — exiting\n' "$(date -u +%FT%TZ)" "$_read_rc" >&2
+                        break
+                    fi
+                else
+                    _spin_mark=$SECONDS
+                    _spin_count=0
+                fi
                 _read_buf="${_read_buf}${_line}"
                 continue
-            elif (( _read_rc != 0 )); then
-                # Real read error/EOF — cannot happen while fd 3 holds the
-                # write end; exit like the old EOF path rather than spin.
-                printf '%s [dispatcher] fifo read failed (rc=%s) — exiting\n' "$(date -u +%FT%TZ)" "$_read_rc" >&2
-                break
             fi
             _line="${_read_buf}${_line}"
             _read_buf=""
@@ -1229,6 +1246,19 @@ cmd_stop() {
     # the start (the 2026-08-12 incident).
     if [[ "$self_ok" -ne 1 ]] && _inside_own_dispatcher "$run_dir"; then
         die "stop: refusing — this process would die with the $IDENTITY_NAME dispatcher it is asking to stop, leaving the mind down with nothing to restart it. To restart your own mind safely (e.g. to pick up a new thinker): sudo shellm-thinkersctl restart $IDENTITY_NAME — systemd completes the restart even after this step dies with the old dispatcher. To stop another identity: bash -c 'source <identities>/<name>/activate && thinkers stop'. To really stop your own mind, pass --self."
+    fi
+
+    # Kill the monolith spontaneity timer (design/monolith_backoff.md) when
+    # stopping the monolith or all thinkers — otherwise a detached sleeper
+    # survives and posts a stale monolith-wake into whatever runs next. The
+    # timer's dispatcher-token guard makes a leaked one harmless, but reap it.
+    if [[ ${#names[@]} -eq 0 ]] || printf '%s\n' "${names[@]}" | grep -qx monolith; then
+        if [[ -f "$run_dir/monolith_timer.pid" ]]; then
+            local _mtimer
+            _mtimer=$(cat "$run_dir/monolith_timer.pid" 2>/dev/null) || _mtimer=""
+            [[ -n "$_mtimer" ]] && { kill -TERM -"$_mtimer" 2>/dev/null || _kill_tree "$_mtimer" TERM || true; }
+            rm -f "$run_dir/monolith_timer.pid"
+        fi
     fi
 
     # Default is a drain stop: deactivate (no new triggers), let in-flight
