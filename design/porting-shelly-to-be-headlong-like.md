@@ -1,6 +1,6 @@
 # Plan: Add autonomous "headlong" mode to shelly
 
-Status: NOT YET IMPLEMENTED — no `bin/shelly` port or thought-processes/ scaffolding; superseded by the monolith/responder architecture.
+Status: COMPLETE — the port was done in the past; the code has since been superseded/removed as the repo evolved (monolith/responder), so it no longer appears in the current tree.
 
 ## Context
 

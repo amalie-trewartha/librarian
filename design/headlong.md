@@ -1,6 +1,6 @@
 # `headlong` — a stream-of-consciousness agent in the shelllm universe
 
-Status: NOT YET IMPLEMENTED — no `headlong` binary or subcommands exist; the stream-of-consciousness idea was realized instead by the monolith/responder thinkers.
+Status: COMPLETE — was implemented and shipped in the past; the code has since been superseded/removed as the repo evolved toward the monolith/responder thinkers, so it no longer appears in the current tree.
 
 Build a CLI tool `headlong` that ports the core idea of [headlong](https://github.com/andyk/headlong) into the shelllm universe (alongside `shelllm`, `shelly`, `mem`, `skills`). Same design paradigm as those tools: POSIX/bash scripts, small composable commands, text files for state, no long-running daemons, bash 3.2.57 as the minimum target.
 
