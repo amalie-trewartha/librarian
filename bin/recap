@@ -525,6 +525,11 @@ _ctx_resolve_R() {
 _ctx_seal_tier1() {
     local s=$1 e=$2 file rows text ids fid lid body
     file=$(_ctx_blockfile 1 "$s" "$e"); [[ -f "$file" ]] && return 0
+    # Keepalive: _ctx_run breaks locks idle >30min as stale, but a --backfill
+    # legitimately seals for hours. Refresh the lock before each seal so a
+    # LIVE builder never looks stale — a second concurrent builder would
+    # corrupt the shared rendered.tsv.
+    touch "$ROLLUP_LOCK" 2>/dev/null || true
     rows=$(sed -n "$((s + 1)),${e}p" "$RENDERED_TSV")
     text=$(cut -f4 <<<"$rows")
     fid=$(head -1 <<<"$rows" | cut -f2); lid=$(tail -1 <<<"$rows" | cut -f2)
@@ -544,6 +549,7 @@ _ctx_seal_tier1() {
 _ctx_seal_tierk() {
     local tier=$1 s=$2 e=$3 file childblk c cf lines fallback body
     file=$(_ctx_blockfile "$tier" "$s" "$e"); [[ -f "$file" ]] && return 0
+    touch "$ROLLUP_LOCK" 2>/dev/null || true   # keepalive, see _ctx_seal_tier1
     childblk=$(_ctx_pow "$FANOUT" $((tier - 1)))
     lines=""; fallback=""; c=$s
     while (( c < e )); do

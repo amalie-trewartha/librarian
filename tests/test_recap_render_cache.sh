@@ -140,7 +140,24 @@ check_not "shrink: cache rebuilt"   grep -q 'CACHE-SENTINEL' "$TSV"
 check "shrink: 40 signal rows"      test "$(wc -l < "$TSV" | tr -d ' ')" = "40"
 
 # ---------------------------------------------------------------------------
-# 6. Equivalence: the staircase a warm cache produces is byte-identical to a
+# 6. Lock discipline: a fresh lock (live builder) blocks a second run; a
+#    stale one (>30min, dead builder) is broken and the run proceeds. A live
+#    --backfill stays fresh via the per-seal keepalive touch, so only a
+#    genuinely dead builder ever looks stale.
+# ---------------------------------------------------------------------------
+mkdir -p "$ROLLUPS/.lock"
+out6=$(recap feed1111 --traj_dir "$TRAJ_ROOT" --context --raw-tail 5 2>&1)
+rc=$?
+check "lock: fresh lock blocks"     test "$rc" -ne 0
+check "lock: says in progress"      grep -q 'in progress' <<<"$out6"
+touch -t 202601010000 "$ROLLUPS/.lock"
+out7=$(recap feed1111 --traj_dir "$TRAJ_ROOT" --context --raw-tail 5 2>&1)
+rc=$?
+check "lock: stale lock broken"     test "$rc" -eq 0
+check_not "lock: released after"    test -d "$ROLLUPS/.lock"
+
+# ---------------------------------------------------------------------------
+# 7. Equivalence: the staircase a warm cache produces is byte-identical to a
 #    cold full render of the same trajectory.
 # ---------------------------------------------------------------------------
 warm=$(recap feed1111 --traj_dir "$TRAJ_ROOT" --context --raw-tail 5 2>&1)
