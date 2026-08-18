@@ -40,6 +40,11 @@ REDUCE_MODEL="${RECAP_REDUCE_MODEL:-$_DEFAULT_MODEL}"
 # shell-output, prompt echoes of sub-runs...) is noise at recap altitude.
 KEEP_TYPES='["thought","action","observation","message","feedback","final","shellm-run","merge"]'
 
+# Cached-render format version: bump when the TSV row format changes, so a
+# stale rendered.tsv is rebuilt instead of mixing formats. (A KEEP_TYPES
+# change is detected independently — the keep set is stored in the meta.)
+RENDER_VERSION=1
+
 # --- Tiered rollups / --context (see design/tiered_memory.md) ---
 CONTEXT=0
 BACKFILL=0                             # --backfill: also summarize pre-enable history
@@ -175,8 +180,14 @@ fi
 # done by hand because mind logs mix timezones (+0800 thinkers, +0000
 # actor) and naive comparison would see 8-hour phantom gaps.
 _render_steps() {
-    local from_line="${1:-1}"
-    tail -n "+$from_line" "$JSONL" | jq -r --argjson keep "$KEEP_TYPES" --argjson off "$((from_line - 1))" '
+    local from_line="${1:-1}" limit="${2:-}"
+    # Optional line bound: the render cache snapshots the raw line count
+    # BEFORE rendering, then renders exactly that many lines — steps appended
+    # mid-render would otherwise land in the TSV above the recorded
+    # high-water mark and duplicate on the next incremental pass.
+    tail -n "+$from_line" "$JSONL" \
+        | { if [[ -n "$limit" ]]; then head -n "$limit"; else cat; fi; } \
+        | jq -r --argjson keep "$KEEP_TYPES" --argjson off "$((from_line - 1))" '
         def epoch_min:
           (tostring
            | capture("^(?<y>[0-9]{4})-(?<mo>[0-9]{2})-(?<d>[0-9]{2})T(?<h>[0-9]{2}):(?<mi>[0-9]{2})(:[0-9]{2})?([.][0-9]+)?(?<tz>Z|[+-][0-9]{4})?")
@@ -681,17 +692,53 @@ _ctx_emit_seg() {
     done
 }
 
+# Render the trajectory into $RENDERED_TSV via a persistent cache. Parsing
+# every raw line to keep the ~8 signal types is the dominant --context cost
+# on a long life (minutes of jq at 100% CPU on a multi-hundred-MB log), and
+# the log is append-only — so the TSV is kept next to the blocks and only
+# raw lines past the recorded high-water mark are rendered on later calls.
+# Any mismatch (row-format version, keep set, or a log that SHRANK, which
+# append-only says cannot happen) rebuilds from scratch. Runs under
+# $ROLLUP_LOCK, so no concurrent writers.
+_render_cached() {
+    local raw_lines done_lines="" meta_ver="" meta_keep="" last_row
+    raw_lines=$(wc -l < "$JSONL" | tr -d ' ')
+    if [[ -f "$RENDER_META" && -f "$RENDERED_TSV" ]]; then
+        meta_ver=$(jq -r '.version // empty' "$RENDER_META" 2>/dev/null) || meta_ver=""
+        meta_keep=$(jq -r '.keep // empty' "$RENDER_META" 2>/dev/null) || meta_keep=""
+        done_lines=$(jq -r '.raw_lines // empty' "$RENDER_META" 2>/dev/null) || done_lines=""
+    fi
+    if [[ "$meta_ver" != "$RENDER_VERSION" || "$meta_keep" != "$KEEP_TYPES" \
+          || ! "$done_lines" =~ ^[0-9]+$ || "$done_lines" -gt "$raw_lines" ]]; then
+        _render_steps 1 "$raw_lines" > "$RENDERED_TSV.tmp"
+        mv "$RENDERED_TSV.tmp" "$RENDERED_TSV"
+    elif (( done_lines < raw_lines )); then
+        # A crash between a previous append and its meta write leaves rows
+        # above the recorded mark; drop them first or they would duplicate.
+        last_row=$(tail -n 1 "$RENDERED_TSV" | cut -f1)
+        if [[ "$last_row" =~ ^[0-9]+$ ]] && (( last_row > done_lines )); then
+            awk -F'\t' -v max="$done_lines" '$1 + 0 <= max' "$RENDERED_TSV" > "$RENDERED_TSV.tmp"
+            mv "$RENDERED_TSV.tmp" "$RENDERED_TSV"
+        fi
+        _render_steps "$((done_lines + 1))" "$((raw_lines - done_lines))" >> "$RENDERED_TSV"
+    fi
+    jq -n --argjson v "$RENDER_VERSION" --arg keep "$KEEP_TYPES" \
+        --argjson lines "$raw_lines" --arg u "$(date +%Y-%m-%dT%H:%M:%S)" \
+        '{version:$v, keep:$keep, raw_lines:$lines, updated:$u}' > "$RENDER_META"
+}
+
 _ctx_run() {
     mkdir -p "$ROLLUP_DIR"
     if [[ -d "$ROLLUP_LOCK" ]]; then
         [[ -n "$(find "$ROLLUP_LOCK" -maxdepth 0 -mmin +30 2>/dev/null)" ]] && rmdir "$ROLLUP_LOCK" 2>/dev/null || true
     fi
     mkdir "$ROLLUP_LOCK" 2>/dev/null || die "another rollup build is in progress (remove $ROLLUP_LOCK if wrong)"
-    RENDERED_TSV=$(mktemp)
+    RENDERED_TSV="$ROLLUP_DIR/rendered.tsv"
+    RENDER_META="$ROLLUP_DIR/rendered.meta.json"
     # shellcheck disable=SC2064
-    trap "rm -f '$RENDERED_TSV'; rmdir '$ROLLUP_LOCK' 2>/dev/null || true" EXIT
+    trap "rm -f '$RENDERED_TSV.tmp'; rmdir '$ROLLUP_LOCK' 2>/dev/null || true" EXIT
 
-    _render_steps 1 > "$RENDERED_TSV"
+    _render_cached
     local n r start
     n=$(wc -l < "$RENDERED_TSV" | tr -d ' ')
     r=$(_ctx_resolve_R "$n")
