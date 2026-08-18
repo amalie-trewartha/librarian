@@ -1,6 +1,7 @@
 # Shellm.app — minimal native macOS chat client
 
-Status: NOT YET IMPLEMENTED — no macos/ Swift client exists in the repo.
+**Status: implemented** — `macos/Shellm/` (main.swift, Info.plist, Makefile).
+`make app` builds a working `.app` bundle with `swiftc`, no Xcode needed.
 
 A menu-bar chat client for talking to a shellm agent, whether the identity
 runs locally or on a remote box (e.g. the EC2 instance behind
@@ -43,15 +44,17 @@ Cloudflare **service token**:
    `CF-Access-Client-Id` and `CF-Access-Client-Secret`.
 
 That's two optional text fields in the app's settings, left empty when
-pointing at localhost. No OAuth flows. The secret should live in Keychain
-rather than UserDefaults (~10 extra lines).
+pointing at localhost. No OAuth flows. The secret is stored in
+`~/.config/shellm/cf-secret` (mode 0600) — Keychain's
+`SecItemCopyMatching` crashes on unsigned app bundles built with `swiftc`.
 
 ## App shape
 
-**SwiftUI `MenuBarExtra`** (macOS 13+), window style — a chat panel that
-drops down from the menu bar. Minimal form factor for "talk to my agent":
-always reachable, no dock presence, no window management, and only ~4
-lines more than a plain window. Zero third-party dependencies.
+**`NSStatusBar` + `NSPopover`** — a chat panel that drops down from the
+menu bar. `MenuBarExtra` was tried first but doesn't render reliably when
+built outside Xcode; the classic `NSStatusItem`/`NSPopover` pair works
+everywhere. Minimal form factor for "talk to my agent": always reachable,
+no dock presence, no window management. Zero third-party dependencies.
 
 One Swift file, ~350 lines, five pieces:
 
@@ -89,9 +92,29 @@ macos/Shellm/
   Makefile        # `make app` → Shellm.app
 ```
 
-ATS note: `https://chat.shellm.net` and `http://localhost` both pass App
-Transport Security defaults; only a non-localhost plain-http server would
-need an `Info.plist` exception, so none is included.
+ATS note: `NSAllowsArbitraryLoads` is enabled in Info.plist because
+Tailscale IPs (100.x.x.x) are not considered "local networking" by
+Apple's `NSAllowsLocalNetworking`, and shellm commonly runs on LAN/VPN
+hosts over plain HTTP.
+
+## Global keyboard shortcut
+
+A system-wide hotkey (e.g. `⌥Space` or user-configurable) toggles the
+chat panel open/closed — the primary way to summon the agent. This is
+the menu-bar form factor's killer feature: the agent is always one
+keystroke away regardless of which app has focus.
+
+Implementation: `CGEvent.tapCreate` at the session level — this
+intercepts keystrokes before any app (including terminals) sees them,
+unlike `NSEvent.addGlobalMonitorForEvents` which is observe-only and
+unreliable. Requires Accessibility permission (the app prompts on first
+launch via `AXIsProcessTrustedWithOptions`). Store the binding in
+`@AppStorage` with a settings UI to remap it (a simple "press keys"
+recorder via `NSEvent.keyCode` + modifier flags).
+
+The shortcut should also focus the text input field so the user can
+immediately start typing — open panel and begin chatting in a single
+keystroke.
 
 ## Deliberately left out
 
