@@ -54,6 +54,18 @@ def run(cfg: Config, bot: Bot, allowlist: Allowlist, stop_event: threading.Event
     for step in mindlog.follow(traj, cursor, should_stop=stop_event.is_set):
         if step.get("type") != "message" or step.get("from") != cfg.identity:
             continue
+        if step.get("source") != "chat":
+            # Only bin/chat speaks for the identity — it stamps source:"chat"
+            # on every outgoing message. Thinkers sometimes append raw message
+            # steps directly to the trajectory (thinking out loud, not a
+            # reply); delivering those gives the user a second, unstamped
+            # voice. Bridges are the mouth; the trajectory is the mind.
+            log.warning(
+                "dropping non-chat message step %s (source=%r)",
+                step.get("step_id"),
+                step.get("source"),
+            )
+            continue
         to = step.get("to")
         if not naming.is_telegram_name(to):
             continue
