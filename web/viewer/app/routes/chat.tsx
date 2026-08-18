@@ -36,6 +36,13 @@ function storedName(): string {
   return window.localStorage.getItem(MY_NAME_KEY) || "";
 }
 
+// Whether the user has ever touched the name field. A cleared field stores ""
+// — still "touched", so the chatrc default must not refill it on remount.
+function hasStoredName(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(MY_NAME_KEY) !== null;
+}
+
 function messageTime(ts: string | null): string {
   if (!ts) return "";
   const date = new Date(ts);
@@ -85,24 +92,16 @@ export default function ChatPage() {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   // Seed the from-field default from the CLI (chatrc default_send_from) unless
-  // the user has already picked a name. Runs once, so clearing the field later
-  // to retype doesn't get auto-refilled out from under them.
+  // the user has ever touched the name field (tracked in localStorage, so the
+  // guard survives remounts — a deliberately cleared field stays cleared).
   const { data: config } = useQuery({
     queryKey: ["config"],
     queryFn: fetchConfig,
     staleTime: Infinity,
   });
-  const seededDefault = useRef(false);
   useEffect(() => {
-    if (seededDefault.current) return;
-    if (storedName()) {
-      seededDefault.current = true;
-      return;
-    }
-    if (config) {
-      setMyName(config.default_send_from || "you");
-      seededDefault.current = true;
-    }
+    if (hasStoredName()) return;
+    if (config) setMyName(config.default_send_from || "you");
   }, [config]);
 
   const { data: status } = useQuery({
@@ -169,10 +168,12 @@ export default function ChatPage() {
           </div>
         ) : (
           messages.map((message, idx) => (
+            // "you" was the hardcoded sender before default_send_from existed,
+            // so that history is always ours regardless of the current name.
             <Bubble
               key={message.step_id ?? idx}
               message={message}
-              mine={message.from === myName}
+              mine={message.from === myName || message.from === "you"}
             />
           ))
         )}
