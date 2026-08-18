@@ -1,7 +1,7 @@
 [
   {
     "role": "user",
-    "content": "You are a test agent. Solve the task.\n---\n[34 steps elided]"
+    "content": "You are a test agent. Solve the task.\n---\n[39 steps elided]"
   },
   {
     "role": "assistant",
