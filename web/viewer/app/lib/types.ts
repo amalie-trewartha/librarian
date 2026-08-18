@@ -5,6 +5,7 @@ export interface Config {
   version: string;
   controls_enabled: boolean;
   self_update_enabled: boolean;
+  default_send_from: string | null;
   git_commit: string | null;
   git_branch: string | null;
 }
