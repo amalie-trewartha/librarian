@@ -1,5 +1,7 @@
 # Proposal: Agent-Native Documentation Conventions for ShellLM
 
+Status: PARTIAL — conventions adopted (AGENTS.md, `skills show`, per-tool SKILL.md); housekeeping skill, docs/human↔docs/agent split, and full SKILL.md coverage not done.
+
 **Status:** Draft
 **Author:** Andy and Claude
 **Date:** 2026-05-01

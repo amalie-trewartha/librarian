@@ -1,5 +1,7 @@
 # Plan: Add autonomous "headlong" mode to shelly
 
+Status: COMPLETE — the port was done in the past; the code has since been superseded/removed as the repo evolved (monolith/responder), so it no longer appears in the current tree.
+
 ## Context
 
 Headlong is an autonomous agent that generates a stream of consciousness — thoughts, actions, and observations — without waiting for human input. The original headlong (github.com/andyk/headlong, running at ~/Development/headlong_gandolf_overmind) is a three-process Python system with Supabase, a React webapp, and persistent daemons. Its core innovation is the **4-phase RLM thought generation lifecycle**: gather context → generate candidate thoughts → judge → finalize.

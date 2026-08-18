@@ -1,5 +1,7 @@
 # `recap` — trajectory summarization with step references
 
+Status: COMPLETE — bin/recap plus the web Recap tab/API (server.py, recap.tsx) implement the full design.
+
 **Status:** Implemented
 **Date:** 2026-07-17
 

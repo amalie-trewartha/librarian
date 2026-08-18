@@ -1,4 +1,4 @@
-Status: draft, as of 2026-08-17.
+Status: NOT YET IMPLEMENTED — design only; no mem children/parent/level fields, no rollup↔mem bridge, no drill-down skill, mem search still O(n).
 
 Related notes:
 

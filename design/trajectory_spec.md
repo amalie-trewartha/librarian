@@ -1,5 +1,7 @@
 # Trajectory Spec
 
+Status: COMPLETE — bin/traj and bin/chat implement the documented format and subcommands.
+
 A **trajectory** is an append-only log of steps stored as a JSONL file named `trajectory.jsonl` inside a directory. Each line is a JSON object representing one step. Trajectories record what an agent did, thought, observed, and produced during a run.
 
 ## Core concepts

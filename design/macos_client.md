@@ -1,5 +1,7 @@
 # Shellm.app — minimal native macOS chat client
 
+Status: NOT YET IMPLEMENTED — no macos/ Swift client exists in the repo.
+
 A menu-bar chat client for talking to a shellm agent, whether the identity
 runs locally or on a remote box (e.g. the EC2 instance behind
 chat.shellm.net). Design goal: the most minimal possible native client —

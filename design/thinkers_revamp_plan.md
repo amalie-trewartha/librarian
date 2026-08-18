@@ -1,5 +1,7 @@
 # Rename Thought Processes to Thinkers, refactor `think` into `thinkers`
 
+Status: PARTIAL — the dispatcher/_lib/install infrastructure landed, but the planned main+actor+7-thinker roster was built and then consolidated into monolith+responder (superseded).
+
 ## Context
 
 The current `bin/think` command is monolithic: a single `think step` call takes 4+ minutes because it serially runs a 5-stage thought generator, then the actor (if action), then dispatches all 7 thought processes one by one. This makes the agent too unresponsive for interactive chat.

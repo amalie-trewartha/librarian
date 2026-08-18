@@ -1,6 +1,6 @@
 # Responder thinker (reverse-engineered)
 
-Status: First draft implemented, not merged
+Status: COMPLETE — thinkers/responder/{step,subscriptions.jsonl} implement it; merged via PR #31.
 
 Related: [monolith_thinker.md](monolith_thinker.md) — its "History" section
 predicted exactly this ("a dedicated low-latency `responder` for chat") as the

@@ -1,6 +1,6 @@
 # Tiered memory rollups — the whole life in every context window
 
-Status: draft
+Status: COMPLETE — bin/recap --context (rollups, staircase, --backfill, --fanout, forward-only meta.json) + thinkers/_lib/common.sh _life_context implement it; only two deliberately-optional escape-hatch knobs are unexposed.
 Relates to: [monolith_thinker.md](monolith_thinker.md),
 [recap.md](recap.md) (this generalizes recap from one tier to many).
 
