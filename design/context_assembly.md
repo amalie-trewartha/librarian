@@ -1,4 +1,4 @@
-# Context assembly — the microkernel window
+# Context assembly — the microharness window
 
 Status: draft
 Relates to: [tiered_memory.md](tiered_memory.md) (the rollups this fits),
@@ -13,7 +13,7 @@ identity window. Two personalities in one program, chosen by a flag — a smell.
 The fix isn't a better flag. It's to stop overloading one tool: split by
 altitude and compose.
 
-## Microkernel / microharness
+## Microharness
 
 Keep the harness tiny. `context` should depend on the **minimal** set of things
 and know nothing about the rest. That set is exactly three:
@@ -30,7 +30,7 @@ markdowns, the one-line index of non-kernel skills — all of that is the *skill
 system's* job, emitted by `skills prompt`. If a mind needs a capability, it's a
 skill, and the skill contributes its slice of the prompt. The harness never
 grows a dependency per capability; it just includes "whatever skills say." That
-is the microkernel move: a small core plus pluggable servers (skills), not a
+is the microharness move: a small core plus pluggable servers (skills), not a
 kernel that imports every subsystem.
 
 ## Plumbing vs porcelain
@@ -101,7 +101,7 @@ memory = round(W · FRACTION) − size(prefix)
 tiny; spend the rest on more tiers verbatim and/or a longer raw tail). Token
 size is a cheap char approximation unless a tokenizer is worth it.
 
-## The maximal-microkernel option: recap as a skill
+## The maximal-microharness option: recap as a skill
 
 If we're strict, even `recap` is a capability — so make it a **skill**, installed
 into a mind like any other. Then `context`'s dependency set shrinks to two —
@@ -113,7 +113,7 @@ identity prompt | skills prompt
 
 …where one installed skill (recap) is the **terminal fitter**: it must be
 ordered last, read the accumulated prefix, and fill `W − prefix`. That's the
-cleanest microkernel — the harness knows only "core identity" and "run the
+cleanest microharness — the harness knows only "core identity" and "run the
 skills." The cost: "skills" is no longer a flat bag of independent emitters —
 one of them is privileged (it reads everyone else's output and owns the budget),
 so the skill system needs an ordering/terminal convention.
@@ -147,7 +147,7 @@ window becomes a messages stream with the stable sections as one system message
 
 ## Open questions
 
-1. `recap`: a tool `context` calls, or a terminal skill (maximal microkernel)?
+1. `recap`: a tool `context` calls, or a terminal skill (maximal microharness)?
    Decide when the skill system gets a terminal/ordering convention.
 2. Token estimator: char-approx vs a real tokenizer call.
 3. Does the responder want the full window, or a lighter chat window (latency)?

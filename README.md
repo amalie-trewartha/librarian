@@ -6,7 +6,7 @@
 ███      █████ ██  ██ █████ █████ █████   ██
 ```
 
-**Shelly** is an open-source micro-kernel agent framework — a handful of
+**Shelly** is an open-source microharness agent framework — a handful of
 small, composable bash tools that add up to
 **persistent agency**: an agent with a continuous, self-guided inner
 monologue. You give them a name and a personality; they keep thinking
