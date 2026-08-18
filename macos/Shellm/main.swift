@@ -9,14 +9,18 @@ let delegate = AppDelegate()
 app.delegate = delegate
 app.run()
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     var statusItem: NSStatusItem!
     var popover: NSPopover!
     let model = ChatModel()
     var settingsWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        let nc = UNUserNotificationCenter.current()
+        nc.delegate = self
+        nc.requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+            if !granted { NSLog("Shellm: notification permission denied") }
+        }
         promptAccessibilityIfNeeded()
 
         // Enable Edit menu (paste/copy/cut/select-all) in popover
@@ -89,6 +93,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow = window
+    }
+
+    // Show notifications even when app is in foreground
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification,
+                                withCompletionHandler handler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        handler([.banner, .sound])
     }
 
     func promptAccessibilityIfNeeded() {
@@ -292,9 +303,13 @@ class ChatModel: ObservableObject {
             live = resp.live
             self.error = nil
 
-            if messages.count > oldCount, let last = messages.last,
-               last.from == identityName, !(popover?.isShown ?? false) {
-                notifyNewMessage(last)
+            // Notify on all new agent messages
+            if messages.count > oldCount {
+                for msg in messages.suffix(messages.count - oldCount) {
+                    if msg.from == identityName {
+                        notifyNewMessage(msg)
+                    }
+                }
             }
         } catch {
             self.error = error.localizedDescription
@@ -348,10 +363,21 @@ class ChatModel: ObservableObject {
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
             options: .defaultTap,
-            eventsOfInterest: CGEventMask(1 << CGEventType.keyDown.rawValue),
+            eventsOfInterest: CGEventMask(1 << CGEventType.keyDown.rawValue)
+                | CGEventMask(1 << CGEventType.tapDisabledByTimeout.rawValue)
+                | CGEventMask(1 << CGEventType.tapDisabledByUserInput.rawValue),
             callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
                 guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
                 let model = Unmanaged<ChatModel>.fromOpaque(refcon).takeUnretainedValue()
+
+                // macOS disables taps that take too long — re-enable
+                if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                    if let tap = model.eventTap {
+                        CGEvent.tapEnable(tap: tap, enable: true)
+                    }
+                    return Unmanaged.passUnretained(event)
+                }
+
                 let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
                 let flags = event.flags.intersection([.maskAlternate, .maskCommand, .maskShift, .maskControl])
                 let wantedFlags = CGEventFlags(rawValue: UInt64(model.hotkeyMods))
@@ -363,7 +389,10 @@ class ChatModel: ObservableObject {
                 return Unmanaged.passUnretained(event)
             },
             userInfo: selfPtr
-        ) else { return }
+        ) else {
+            NSLog("Shellm: CGEvent tap failed — Accessibility permission not granted")
+            return
+        }
 
         eventTap = tap
         runLoopSource = CFMachPortCreateRunLoopSource(nil, tap, 0)
