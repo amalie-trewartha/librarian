@@ -1,5 +1,7 @@
 # Thinkers — Modular Reactive Thought Processes
 
+Status: PARTIAL — the dispatcher mechanism, subscription format, pending/watchdog system, and CLI conform; the "Core Thinkers" roster section (inner_monologue/actor/learning/…) is stale, consolidated into monolith+responder.
+
 ## Overview
 
 Thinkers replace the monolithic `think` command with independent, modular units that subscribe to trajectories and react to new steps. The identity's root trajectory becomes a shared bus: thinkers write to it, which broadcasts to all other subscribed thinkers. This enables concurrency (thinkers run in parallel) and composability (add/remove thinkers independently).

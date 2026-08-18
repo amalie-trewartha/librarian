@@ -1,6 +1,6 @@
 # Context assembly — the microharness window
 
-Status: draft
+Status: PARTIAL — the identity+skills+`recap --context` plumbing exists and is composed in the thinker glue, but the core `bin/context` porcelain-pipe refactor and `traj messages` are NOT done (bin/context is still the old messages-array policy layer).
 Relates to: [tiered_memory.md](tiered_memory.md) (the rollups this fits),
 [recap.md](recap.md) (builds them, and does the fitting),
 [monolith_thinker.md](monolith_thinker.md), and the skill system.

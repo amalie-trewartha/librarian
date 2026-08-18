@@ -1,5 +1,7 @@
 # Model resolution
 
+Status: COMPLETE — documents shipped behavior; the resolution chains match bin/llm, bin/shellm, bin/mem, and thinkers/_lib/common.sh.
+
 **Status:** Current behavior (documented 2026-07-15)
 
 How every LLM call in shellm decides which model to use, and where the
