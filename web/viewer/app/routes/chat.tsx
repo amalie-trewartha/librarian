@@ -14,6 +14,7 @@ import { Input } from "~/components/ui/input";
 import { LoadingDots } from "~/components/ui/loading-dots";
 import {
   fetchChat,
+  fetchConfig,
   fetchIdentityStatus,
   fetchThinkers,
   sendChat,
@@ -27,9 +28,12 @@ export function meta() {
 
 const MY_NAME_KEY = "shellm-chat-from";
 
-function myNameDefault(): string {
-  if (typeof window === "undefined") return "you";
-  return window.localStorage.getItem(MY_NAME_KEY) || "you";
+// A name the user explicitly chose here (persisted), or "" if they never have.
+// When empty, we fall back to the server's CLI default (chatrc
+// default_send_from) once config loads — matching what `chat send` would use.
+function storedName(): string {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(MY_NAME_KEY) || "";
 }
 
 function messageTime(ts: string | null): string {
@@ -77,8 +81,29 @@ export default function ChatPage() {
   const controlsEnabled = useControlsEnabled();
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState("");
-  const [myName, setMyName] = useState(myNameDefault);
+  const [myName, setMyName] = useState(storedName);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Seed the from-field default from the CLI (chatrc default_send_from) unless
+  // the user has already picked a name. Runs once, so clearing the field later
+  // to retype doesn't get auto-refilled out from under them.
+  const { data: config } = useQuery({
+    queryKey: ["config"],
+    queryFn: fetchConfig,
+    staleTime: Infinity,
+  });
+  const seededDefault = useRef(false);
+  useEffect(() => {
+    if (seededDefault.current) return;
+    if (storedName()) {
+      seededDefault.current = true;
+      return;
+    }
+    if (config) {
+      setMyName(config.default_send_from || "you");
+      seededDefault.current = true;
+    }
+  }, [config]);
 
   const { data: status } = useQuery({
     queryKey: ["status", identityId],

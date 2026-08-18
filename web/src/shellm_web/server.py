@@ -95,6 +95,21 @@ def _count_steps(jsonl: Path) -> int:
         return 0
 
 
+def _chatrc_default_from(root: Path) -> str | None:
+    """The CLI's `default_send_from`, so the web UI can share its default
+    sender. Mirrors bin/chat: `$CHATRC` (default `./.chatrc`) relative to the
+    directory CLI calls run in, which is the serve root."""
+    chatrc = Path(os.environ["CHATRC"]) if os.environ.get("CHATRC") else root / ".chatrc"
+    try:
+        for line in chatrc.read_text().splitlines():
+            if line.startswith("default_send_from="):
+                value = line.split("=", 1)[1].strip()
+                return value or None
+    except OSError:
+        pass
+    return None
+
+
 def _iso(ts: float | None) -> str | None:
     if ts is None:
         return None
@@ -205,6 +220,7 @@ def create_app(
             "version": VERSION,
             "controls_enabled": not read_only,
             "self_update_enabled": self_update_enabled,
+            "default_send_from": _chatrc_default_from(root),
             **git_info,
         }
 
