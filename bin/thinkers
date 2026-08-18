@@ -1248,6 +1248,19 @@ cmd_stop() {
         die "stop: refusing — this process would die with the $IDENTITY_NAME dispatcher it is asking to stop, leaving the mind down with nothing to restart it. To restart your own mind safely (e.g. to pick up a new thinker): sudo shellm-thinkersctl restart $IDENTITY_NAME — systemd completes the restart even after this step dies with the old dispatcher. To stop another identity: bash -c 'source <identities>/<name>/activate && thinkers stop'. To really stop your own mind, pass --self."
     fi
 
+    # Kill the monolith spontaneity timer (design/monolith_backoff.md) when
+    # stopping the monolith or all thinkers — otherwise a detached sleeper
+    # survives and posts a stale monolith-wake into whatever runs next. The
+    # timer's dispatcher-token guard makes a leaked one harmless, but reap it.
+    if [[ ${#names[@]} -eq 0 ]] || printf '%s\n' "${names[@]}" | grep -qx monolith; then
+        if [[ -f "$run_dir/monolith_timer.pid" ]]; then
+            local _mtimer
+            _mtimer=$(cat "$run_dir/monolith_timer.pid" 2>/dev/null) || _mtimer=""
+            [[ -n "$_mtimer" ]] && { kill -TERM -"$_mtimer" 2>/dev/null || _kill_tree "$_mtimer" TERM || true; }
+            rm -f "$run_dir/monolith_timer.pid"
+        fi
+    fi
+
     # Default is a drain stop: deactivate (no new triggers), let in-flight
     # steps finish, escalate to kill only after --drain-timeout. --force
     # kills in-flight steps immediately (the old behavior).

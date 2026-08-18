@@ -1,6 +1,7 @@
 # Monolith idle backoff — spend nothing while nobody's talking
 
-Status: draft (merged)
+Status: implemented (thinkers/monolith/step + subscriptions.jsonl; shipped
+default cap is 300s / 5 min, overridable per-identity via MONOLITH_BACKOFF_CAP)
 Authors: merged from two independent drafts (Claude's and Codex's). Where they
 differed, the choice and its rationale are noted inline.
 Extends: [monolith_thinker.md](monolith_thinker.md) (revises its "Loop liveness
@@ -128,7 +129,7 @@ Configuration:
 |---------|---------|---------|
 | `MONOLITH_BACKOFF_BASE` | `5` | the first *non-zero* delay, seconds (level 1) |
 | `MONOLITH_BACKOFF_FACTOR` | `2` | multiplier applied when stepping to the next level |
-| `MONOLITH_BACKOFF_CAP` | `600` | the slowest steady rate — max delay between spontaneous wakes; adjust freely (e.g. `1800` for 30 min, `3600` for an hour) |
+| `MONOLITH_BACKOFF_CAP` | `300` | the slowest steady rate — max delay between spontaneous wakes; adjust freely (e.g. `600` for 10 min, `1800` for 30 min, `3600` for an hour) |
 | `MONOLITH_BACKOFF_HOLD` | `3` | how many empty wakes to **stay at each rate** before stepping to the next, slower one |
 
 Two properties the schedule must have (this section's requirements):
