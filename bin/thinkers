@@ -87,18 +87,18 @@ debug() {
 # i.e. we are an in-flight step of the very mind a stop would kill.
 # Two signals, either one counts:
 #
-#   1. Same shellm-thinkers@ unit cgroup (Linux). When the dispatcher runs
+#   1. Same shelly-thinkers@ unit cgroup (Linux). When the dispatcher runs
 #      as that unit's main process, its exit makes systemd sweep the WHOLE
 #      cgroup — including steps that are no longer in the dispatcher's
 #      process tree. The 2026-08-12 self-kill went exactly through that
 #      blind spot: a step kicked by `thinkers start` from inside another
 #      step was orphaned to init when its parent exited, passed the
 #      ancestry walk below, stopped the dispatcher, and was swept mid-plan
-#      before it could run the restart half. Scoped to shellm-thinkers@
+#      before it could run the restart half. Scoped to shelly-thinkers@
 #      cgroups — the only unit whose main process is the dispatcher, so
 #      the only cgroup where a stop triggers the sweep. A dispatcher merely
 #      HOSTED in another unit's cgroup (dash debug start inside
-#      shellm-web, legacy bootstrap inside shellm-slack-agent) is not that
+#      shelly-web, legacy bootstrap inside shelly-slack-agent) is not that
 #      unit's main process: same-cgroup callers there survive the stop,
 #      and refusing them would leave the dash unable to stop its own
 #      debug-path dispatcher.
@@ -113,13 +113,20 @@ _inside_own_dispatcher() {
     local my_cg their_cg
     my_cg=$(cat /proc/self/cgroup 2>/dev/null) || my_cg=""
     their_cg=$(cat "/proc/$dpid/cgroup" 2>/dev/null) || their_cg=""
-    # Scope to THIS identity's unit, not just any shellm-thinkers@ unit:
+    # Scope to THIS identity's unit, not just any shelly-thinkers@ unit:
     # a different identity running inside our cgroup (e.g. tests, or an
     # aux identity spawned from our step) would otherwise be a false
     # positive — stop is refused for a dispatcher that is NOT our own,
     # leaving its pending dir un-cleaned (2026-08-14 test_cleared_on_stop).
-    local unit_pat="shellm-thinkers@$(systemd-escape "$IDENTITY_NAME" 2>/dev/null || printf '%s' "$IDENTITY_NAME").service"
-    if [[ -n "$my_cg" && "$my_cg" == "$their_cg" && "$my_cg" == *"$unit_pat"* ]]; then
+    local esc
+    esc=$(systemd-escape "$IDENTITY_NAME" 2>/dev/null || printf '%s' "$IDENTITY_NAME")
+    # Both spellings: the unit is shelly-thinkers@ after the rename migration
+    # and shellm-thinkers@ before it. A step running across the cutover must
+    # still recognize its own cgroup, so match either — a guard that silently
+    # stops matching is exactly the 2026-08-12 failure mode.
+    if [[ -n "$my_cg" && "$my_cg" == "$their_cg" ]] \
+        && { [[ "$my_cg" == *"shelly-thinkers@${esc}.service"* ]] \
+            || [[ "$my_cg" == *"shellm-thinkers@${esc}.service"* ]]; }; then
         return 0
     fi
     pid=$$
@@ -883,7 +890,7 @@ _dispatcher_on_signal() {
     printf '%s [dispatcher] caught unsanctioned SIG%s (pid %s) — exiting 130\n' \
         "$(date -u +%FT%TZ)" "$sig" "$$" >&2
     printf 'SIG%s\n' "$sig" > "$run_dir/last_signal" 2>/dev/null || true
-    logger -t shellm-thinkers \
+    logger -t shelly-thinkers \
         "dispatcher(${IDENTITY_NAME:-unknown}) pid $$ caught unsanctioned SIG${sig}" \
         2>/dev/null || true
     _cleanup_dispatcher
@@ -977,7 +984,7 @@ _append_wake_gap_note() {
     [[ "$gap_h" -gt 0 ]] && gap_str="${gap_h}h ${gap_m}m"
     jq -nc --arg name "$IDENTITY_NAME" --arg gap "$gap_str" \
         '{type:"observation", source:"system",
-          content:("Wake-up note: your dispatcher just started, and the previous step in this log is about \($gap) old — your mind was not running in between. If you did not expect this downtime, investigate it (run/logs/dispatcher.log; systemctl status shellm-thinkers@\($name)) before resuming other plans. Reminder: `thinkers stop` from inside your own mind kills you mid-step and nothing restarts you. To restart yourself safely (e.g. to register a new thinker), run: sudo shellm-thinkersctl restart \($name) — systemd completes the restart even though your current step dies with the old dispatcher.")}' \
+          content:("Wake-up note: your dispatcher just started, and the previous step in this log is about \($gap) old — your mind was not running in between. If you did not expect this downtime, investigate it (run/logs/dispatcher.log; systemctl status shelly-thinkers@\($name)) before resuming other plans. Reminder: `thinkers stop` from inside your own mind kills you mid-step and nothing restarts you. To restart yourself safely (e.g. to register a new thinker), run: sudo shelly-thinkersctl restart \($name) — systemd completes the restart even though your current step dies with the old dispatcher.")}' \
         | traj append --traj_dir "$TRAJ_DIR" "${traj_file#"$TRAJ_DIR"/}" >/dev/null 2>&1 || true
 }
 
@@ -1245,7 +1252,7 @@ cmd_stop() {
     # work from inside, because the stop reaps the process that would run
     # the start (the 2026-08-12 incident).
     if [[ "$self_ok" -ne 1 ]] && _inside_own_dispatcher "$run_dir"; then
-        die "stop: refusing — this process would die with the $IDENTITY_NAME dispatcher it is asking to stop, leaving the mind down with nothing to restart it. To restart your own mind safely (e.g. to pick up a new thinker): sudo shellm-thinkersctl restart $IDENTITY_NAME — systemd completes the restart even after this step dies with the old dispatcher. To stop another identity: bash -c 'source <identities>/<name>/activate && thinkers stop'. To really stop your own mind, pass --self."
+        die "stop: refusing — this process would die with the $IDENTITY_NAME dispatcher it is asking to stop, leaving the mind down with nothing to restart it. To restart your own mind safely (e.g. to pick up a new thinker): sudo shelly-thinkersctl restart $IDENTITY_NAME — systemd completes the restart even after this step dies with the old dispatcher. To stop another identity: bash -c 'source <identities>/<name>/activate && thinkers stop'. To really stop your own mind, pass --self."
     fi
 
     # Kill the monolith spontaneity timer (design/monolith_backoff.md) when
@@ -1696,7 +1703,7 @@ Usage:
                                Refuses to run from inside the identity's own
                                dispatcher tree or systemd cgroup unless --self
                                is given (a stop from there kills the caller
-                               too; use `sudo shellm-thinkersctl restart` to
+                               too; use `sudo shelly-thinkersctl restart` to
                                restart your own mind).
                                Default is a drain stop: no new triggers, but
                                in-flight steps finish (killed only after

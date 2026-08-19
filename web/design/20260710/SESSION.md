@@ -45,7 +45,7 @@ swimlane view of mind-log interactions + three more writer stamps:
   the `shellm-run` step_id from `traj append` (was discarded to /dev/null)
   and stamps `run_id` on prompt/reasoning/shell-output(×2 variants)/
   feedback/final(×2 sites)/run-summary; `generate_run_summary` gained the
-  run step_id as arg 3. Viewer (`web/src/shellm_web/trajectory.py`) groups
+  run step_id as arg 3. Viewer (`web/src/shelly_web/trajectory.py`) groups
   by explicit run_id (dict lookup); deleted the open-run stack, the
   "most recently closed" summary attribution, and `confidence`
   (backend + `types.ts` + warning icon in `run-group.tsx`).

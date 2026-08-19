@@ -100,7 +100,7 @@ variable "env_parameter" {
       terraform apply -replace=aws_instance.shellm
     or update the running box in place over SSM:
       aws ssm start-session --target <instance-id> --region <region>
-      # then on the box: re-run the fetch and restart shellm-web
+      # then on the box: re-run the fetch and restart shelly-web
     Set to "" to disable.
   EOT
   type        = string

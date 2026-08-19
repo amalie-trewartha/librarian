@@ -21,27 +21,38 @@ if [[ "$state" == "running" ]]; then
     # Telegram is enabled post-hoc via /etc/shellm/telegram.env, which does
     # NOT survive a rebuild — on the slack stack a missing env is worth a
     # loud reminder, on other stacks telegram only shows when installed.
+    # Units are shelly-* after the rename migration and shellm-* before it;
+    # a box can be on either side, and this is the first command the
+    # incident runbook reaches for, so resolve the live name rather than
+    # reporting a healthy service as missing.
+    unit_resolver='
+        u() {
+            if [ -f "/etc/systemd/system/shelly-$1.service" ]; then echo "shelly-$1"
+            else echo "shellm-$1"; fi
+        }
+        has() { [ -f "/etc/systemd/system/shelly-$1.service" ] || [ -f "/etc/systemd/system/shellm-$1.service" ]; }
+    '
     telegram_check='
-        if [ -f /etc/systemd/system/shellm-telegram-bridge.service ]; then
-            echo "telegram: $(systemctl is-active shellm-telegram-bridge)"
+        if has telegram-bridge; then
+            echo "telegram: $(systemctl is-active "$(u telegram-bridge)")"
         fi'
     if [[ "${SHELLM_TF_STACK:-}" == "terraform-slack" ]]; then
         telegram_check='
-        if [ -f /etc/systemd/system/shellm-telegram-bridge.service ]; then
-            echo "telegram: $(systemctl is-active shellm-telegram-bridge)"
+        if has telegram-bridge; then
+            echo "telegram: $(systemctl is-active "$(u telegram-bridge)")"
         elif [ -f /etc/shellm/telegram.env ]; then
             echo "telegram: env present but unit missing — run deploy/scripts/update"
         else
             echo "telegram: NOT SET UP (env file is lost on rebuild) — run deploy/scripts/telegram-env, then deploy/scripts/update"
         fi'
     fi
-    run_script_on_box '
+    run_script_on_box "$unit_resolver"'
         echo "health:   $(curl -fsS localhost:8080/api/health 2>/dev/null || echo DOWN)"
-        echo "service:  $(systemctl is-active shellm-web)"
+        echo "service:  $(systemctl is-active "$(u web)")"
         echo "deployed: $(sudo -u shellm git -C /opt/shellm/app log -1 --oneline)"
-        if [ -f /etc/systemd/system/shellm-slack-bridge.service ]; then
-            echo "bridge:   $(systemctl is-active shellm-slack-bridge)"
-            echo "persona:  $(systemctl is-active shellm-slack-agent)"
+        if has slack-bridge; then
+            echo "bridge:   $(systemctl is-active "$(u slack-bridge)")"
+            echo "persona:  $(systemctl is-active "$(u slack-agent)")"
         fi'"$telegram_check"
     echo  # box output arrives without a trailing newline (--output text strips it)
 else

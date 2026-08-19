@@ -28,9 +28,9 @@ its own namespace, so the channels cannot leak into each other's
 transport, though the shared mind means content can still cross.
 
 Each bridge has a kill switch that mutes the channel without touching
-the agent. For Slack it is `systemctl stop shellm-slack-bridge`, for the
+the agent. For Slack it is `systemctl stop shelly-slack-bridge`, for the
 phone chat it is disabling the Cloudflare Access app, and for Telegram
-it is `systemctl stop shellm-telegram-bridge`.
+it is `systemctl stop shelly-telegram-bridge`.
 
 ## Slack
 

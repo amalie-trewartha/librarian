@@ -1,10 +1,10 @@
-# shellm-telegram-bridge systemd unit. Installed by deploy/update.sh when
+# shelly-telegram-bridge systemd unit. Installed by deploy/update.sh when
 # /etc/shellm/telegram.env exists (telegram is enabled post-hoc on a live
 # box — user_data must never change, so there is no bootstrap flag).
 # @SHELLM_HOME@ is substituted at install time.
 #
 # deploy/update.sh re-syncs this file on every deploy — put box-local
-# changes in a drop-in (shellm-telegram-bridge.service.d/override.conf).
+# changes in a drop-in (shelly-telegram-bridge.service.d/override.conf).
 #
 # Privilege separation, deliberate and load-bearing:
 #  - User=shellm-telegram (NOT shellm): the agent runs as shellm and can
@@ -17,12 +17,12 @@
 #  - SupplementaryGroups=shellm grants read access to the identity's
 #    trajectory under /opt/shellm (group r-x on the home dir).
 #
-# ExecStart uses the project venv directly (not bin/shellm-telegram-bridge):
+# ExecStart uses the project venv directly (not bin/shelly-telegram-bridge):
 # uv would try to write the shellm-owned venv, which this user cannot.
 
 [Unit]
-Description=shellm Telegram bridge
-After=network-online.target shellm-web.service
+Description=shelly Telegram bridge
+After=network-online.target shelly-web.service
 Wants=network-online.target
 
 [Service]
@@ -34,12 +34,12 @@ EnvironmentFile=/etc/shellm/telegram.env
 StateDirectory=shellm-telegram
 Environment="HOME=/var/lib/shellm-telegram"
 Environment="SHELLM_TELEGRAM_STATE_DIR=/var/lib/shellm-telegram"
-ExecStart=@SHELLM_HOME@/app/telegram/.venv/bin/shellm-telegram-bridge @SHELLM_HOME@/app
+ExecStart=@SHELLM_HOME@/app/telegram/.venv/bin/shelly-telegram-bridge @SHELLM_HOME@/app
 Restart=always
 RestartSec=5
 
-# Kill switch: `systemctl stop shellm-telegram-bridge` mutes Telegram
-# without touching the agent (bin/shellm-killall stops the agent itself).
+# Kill switch: `systemctl stop shelly-telegram-bridge` mutes Telegram
+# without touching the agent (bin/shelly-killall stops the agent itself).
 
 [Install]
 WantedBy=multi-user.target

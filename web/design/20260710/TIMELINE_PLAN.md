@@ -252,7 +252,7 @@ correlation, any mobile-specific layout.
   (`.identities/timeline-demo/`, gitignored, kept as a demo: launched_by
   lanes for actor+learning, exact trigger/dispatch/assoc edges, nested
   in-run steps, 4m gap divider, light+dark, modals, hover). 13 pytest,
-  typecheck clean, no console errors. NOTE: restart `shellm-web` after
+  typecheck clean, no console errors. NOTE: restart `shelly-web` after
   pulling backend changes — uvicorn (non-dev) serves stale code.
 - **Round 2 (Nick's feedback)**: collapsible lanes (click a lane header to
   shrink it to a 40px square-strip; URL-persisted via `?collapsed=`; lane

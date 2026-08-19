@@ -134,9 +134,9 @@ def _run_production(root: Path, host: str, port: int, rebuild: bool, read_only: 
         from shelly_web.push import PushWatcher
 
         PushWatcher(root).start()
-    # NOTE: bin/shelly-init greps the log for the literal "shellm-web serving"
+    # NOTE: bin/shelly-init greps the log for "shell(m|y)-web serving"
     # to detect a healthy dash — keep this string until that grep migrates.
-    print(f"shellm-web serving {root} at http://{host}:{port}", file=sys.stderr)
+    print(f"shelly-web serving {root} at http://{host}:{port}", file=sys.stderr)
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 

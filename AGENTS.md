@@ -14,8 +14,12 @@ remain as symlinks) and framework env vars are `SHELLY_*` (legacy
 `SHELLM_*` spellings still honored). The state home defaults to
 `~/.shelly`, falling back to `~/.shellm` when only that exists (so
 pre-rename installs keep their state); explicit `SHELLY_HOME` or
-`SHELLM_HOME` overrides both. The deployed systemd units are still
-`shellm-*` — those migrate in a later phase.
+`SHELLM_HOME` overrides both. Systemd units are `shelly-*`; a box provisioned before
+the rename is migrated once with `deploy/migrate-units.sh` (see
+deploy/DEPLOY.md). What deliberately keeps the `shellm` name: the
+`/opt/shellm` deploy path, the `shellm` and `shellm-telegram` UNIX users,
+`~shellm/.shellm`, the per-identity `.shellm/` subdirectory, and the
+`*.shellm.net` domains.
 
 Shelly creates a persistent identity whose mind is a loop of LLM calls
 run by a dispatcher. The identity has a name (default `ada`), and that

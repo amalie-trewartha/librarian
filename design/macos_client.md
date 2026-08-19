@@ -10,7 +10,7 @@ one Swift file, zero dependencies, no new server work.
 
 ## What it talks to
 
-The existing `shellm-web` HTTP API (`web/src/shellm_web/server.py`) — the
+The existing `shelly-web` HTTP API (`web/src/shelly_web/server.py`) — the
 same API the phone PWA uses. It is identical for local
 (`http://localhost:8080`) and remote (`https://chat.shellm.net`):
 

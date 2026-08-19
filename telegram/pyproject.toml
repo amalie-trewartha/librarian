@@ -9,7 +9,9 @@ dependencies = [
 
 [project.scripts]
 shelly-telegram-bridge = "shelly_telegram.cli:main"
-# Back-compat alias for the deployed systemd unit; remove after the box migration.
+# Back-compat alias for the pre-rename systemd units. Keep until the box
+# migration is verified stable: deploy/migrate-units.sh --rollback
+# reinstalls units whose ExecStart calls this name.
 shellm-telegram-bridge = "shelly_telegram.cli:main"
 
 [dependency-groups]

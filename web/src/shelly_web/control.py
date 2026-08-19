@@ -1,5 +1,5 @@
 """Mutations: shell out to the repo's bash CLIs (thinkers, chat, identity,
-shellm-killall) with the same environment `identity shell` would set.
+shelly-killall) with the same environment `identity shell` would set.
 
 Process management stays in bash — this module only builds env, serializes
 concurrent mutations per identity, and maps CLI failures to HTTP errors.
@@ -103,10 +103,10 @@ def _wrap(cli: str, *args: str) -> list[str]:
 # --- systemd-managed dispatchers -------------------------------------------
 # On provisioned boxes SHELLY_THINKERSCTL (legacy SHELLM_THINKERSCTL) points
 # at a root-owned wrapper
-# (deploy/shellm-thinkersctl, sudo rule in deploy/sudoers-shellm-thinkers)
+# (deploy/shelly-thinkersctl, sudo rule in deploy/sudoers-shelly-thinkers)
 # that maps start/stop/restart/is-active onto `systemctl <action>
-# shellm-thinkers@<identity>`. Routing the dispatcher lifecycle through it
-# gives each mind its own cgroup instead of shellm-web's — a dash-started
+# shelly-thinkers@<identity>`. Routing the dispatcher lifecycle through it
+# gives each mind its own cgroup instead of shelly-web's — a dash-started
 # dispatcher used to die orphaned when this service was OOM-killed or
 # restarted (2026-08-10 outage). Unset (dev, tests): the direct CLI paths
 # below behave exactly as before.
@@ -135,7 +135,7 @@ def _thinkersctl(
     except subprocess.TimeoutExpired as exc:
         raise HTTPException(
             status_code=500,
-            detail={"message": f"shellm-thinkersctl {action} timed out after {timeout}s"},
+            detail={"message": f"shelly-thinkersctl {action} timed out after {timeout}s"},
         ) from exc
 
 
@@ -430,7 +430,7 @@ def identity_import(root: Path, archive: Path, name: str | None = None) -> dict:
 def killall(dry_run: bool = False) -> dict:
     env = os.environ.copy()
     env["PATH"] = f"{BIN_DIR}:{env.get('PATH', '')}"
-    args = [str(BIN_DIR / "shellm-killall")] + (["--dry-run"] if dry_run else [])
+    args = [str(BIN_DIR / "shelly-killall")] + (["--dry-run"] if dry_run else [])
     proc = run_cli(args, env, BIN_DIR.parent)
     _raise_for_failure(proc)
     return {"ok": True, "dry_run": dry_run, "stdout": proc.stdout, "stderr": proc.stderr}

@@ -17,7 +17,7 @@ is a trajectory; most trajectories aren't mind logs.
 **Machinery steps.** The shellm loop writes seven step types, and they never
 carry a `source` field: `shellm-run`, `prompt`, `reasoning`, `shell-output`,
 `feedback`, `final`, `run-summary` (the set is `MACHINERY_TYPES` in
-`web/src/shellm_web/trajectory.py`). Thinker steps (`thought`, `action`,
+`web/src/shelly_web/trajectory.py`). Thinker steps (`thought`, `action`,
 `observation`, `idle`, …) always carry `source` (thinker name). The web
 viewer attributes steps by this absence/presence.
 
@@ -38,7 +38,7 @@ in both eras; forking is current mechanism, not legacy.
 
 **The cost of flat writes.** Nothing ties an inline machinery step to the
 run it belongs to, so the viewer reconstructs structure heuristically
-(`web/src/shellm_web/trajectory.py`):
+(`web/src/shelly_web/trajectory.py`):
 
 1. Source-less machinery steps attach to a *stack* of open `shellm-run`s
    (`final` pops); a run opening while another is open is flagged
@@ -195,7 +195,7 @@ step_ids — a different program), SSE tailing, stream virtualization,
 3. **Fix the monologue JSON-wrapped `content` bug at its source**
    (see D3; root-cause fix in the inner_monologue thinker).
 
-4. **Viewer simplification** (`web/src/shellm_web/trajectory.py`,
+4. **Viewer simplification** (`web/src/shelly_web/trajectory.py`,
    `web/viewer/app/lib/types.ts`, run-group UI): group by `run_id`, join
    actions by `trigger_step`, delete the stack / summary-attachment rule /
    prefix match / `confidence` plumbing and its warning icon.

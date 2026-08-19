@@ -11,7 +11,9 @@ dependencies = [
 
 [project.scripts]
 shelly-web = "shelly_web.cli:main"
-# Back-compat alias for the deployed systemd unit; remove after the box migration.
+# Back-compat alias for the pre-rename systemd units. Keep until the box
+# migration is verified stable: deploy/migrate-units.sh --rollback
+# reinstalls units whose ExecStart calls this name.
 shellm-web = "shelly_web.cli:main"
 
 [dependency-groups]

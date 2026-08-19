@@ -3,7 +3,7 @@
 The backend reads shellm's on-disk formats directly; this file records the
 ground truths it relies on. The authoritative specs are
 `design/trajectory_spec.md` and `design/THINKERS_spec.md` at the repo root —
-if those change, `web/src/shellm_web/trajectory.py` and `tree.py` are the
+if those change, `web/src/shelly_web/trajectory.py` and `tree.py` are the
 code to revisit.
 
 ## Trajectory files

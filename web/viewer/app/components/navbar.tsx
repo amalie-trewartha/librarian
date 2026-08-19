@@ -44,7 +44,7 @@ function pollForNewBuild(oldCommit: string, timeoutMs = 5 * 60 * 1000) {
   const started = Date.now();
   const tick = async () => {
     if (Date.now() - started > timeoutMs) {
-      toast.error("Update timed out — check `journalctl -u shellm-web` on the box");
+      toast.error("Update timed out — check `journalctl -u shelly-web` on the box");
       return;
     }
     try {

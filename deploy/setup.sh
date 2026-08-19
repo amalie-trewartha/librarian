@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# deploy/setup.sh — provision a fresh Ubuntu VM to run shellm-web.
+# deploy/setup.sh — provision a fresh Ubuntu VM to run shelly-web.
 #
 # Creates a dedicated `shellm` user, clones the repo to /opt/shellm/app,
 # installs uv + bun for that user, prebuilds the viewer frontend, and
@@ -82,37 +82,41 @@ ENV
 fi
 
 echo "==> Installing systemd service"
-sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$SCRIPT_DIR/shellm-web.service" \
-    > /etc/systemd/system/shellm-web.service
+sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$SCRIPT_DIR/shelly-web.service" \
+    > /etc/systemd/system/shelly-web.service
 systemctl daemon-reload
-systemctl enable --now shellm-web
+systemctl enable --now shelly-web
 
 # Per-identity thinker units: the dash starts/stops dispatchers through
-# shellm-thinkers@<identity>.service (via the sudo wrapper) so they get
-# their own cgroup instead of living inside shellm-web's.
+# shelly-thinkers@<identity>.service (via the sudo wrapper) so they get
+# their own cgroup instead of living inside shelly-web's.
 echo "==> Installing per-identity thinkers unit + control wrapper"
-for unit_tpl in shellm-thinkers@ shellm-thinkers-alert@; do
+for unit_tpl in shelly-thinkers@ shelly-thinkers-alert@; do
     sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$SCRIPT_DIR/${unit_tpl}.service" \
         > "/etc/systemd/system/${unit_tpl}.service"
 done
-install -o root -g root -m 0755 "$SCRIPT_DIR/shellm-thinkersctl" /usr/local/bin/shellm-thinkersctl
-if visudo -cf "$SCRIPT_DIR/sudoers-shellm-thinkers"; then
-    install -o root -g root -m 0440 "$SCRIPT_DIR/sudoers-shellm-thinkers" /etc/sudoers.d/shellm-thinkers
+# Both names: see the note in deploy/update.sh. The wrapper targets
+# whichever unit template is installed.
+for ctl in shelly-thinkersctl shellm-thinkersctl; do
+    install -o root -g root -m 0755 "$SCRIPT_DIR/shelly-thinkersctl" "/usr/local/bin/$ctl"
+done
+if visudo -cf "$SCRIPT_DIR/sudoers-shelly-thinkers"; then
+    install -o root -g root -m 0440 "$SCRIPT_DIR/sudoers-shelly-thinkers" /etc/sudoers.d/shelly-thinkers
 else
-    echo "ERROR: deploy/sudoers-shellm-thinkers failed the visudo check — not installing" >&2
+    echo "ERROR: deploy/sudoers-shelly-thinkers failed the visudo check — not installing" >&2
     exit 1
 fi
 systemctl daemon-reload
 
 # Signal auditing: kernel-level attribution for process kills (see
-# deploy/audit-shellm-signals.rules — added after the 2026-08-12
-# unattributed dispatcher death). ausearch -k shellm-sig names the sender.
+# deploy/audit-shelly-signals.rules — added after the 2026-08-12
+# unattributed dispatcher death). ausearch -k shelly-sig names the sender.
 echo "==> Installing auditd signal rules"
 if ! command -v augenrules >/dev/null 2>&1; then
     DEBIAN_FRONTEND=noninteractive apt-get install -y auditd >/dev/null
 fi
-install -o root -g root -m 0640 "$SCRIPT_DIR/audit-shellm-signals.rules" \
-    /etc/audit/rules.d/shellm-signals.rules
+install -o root -g root -m 0640 "$SCRIPT_DIR/audit-shelly-signals.rules" \
+    /etc/audit/rules.d/shelly-signals.rules
 augenrules --load || echo "WARN: augenrules --load failed — audit rules apply after next reboot" >&2
 
 # Optional component: the Slack bridge (persona bootstrap + Socket Mode
@@ -124,18 +128,18 @@ if [[ "${SHELLM_INSTALL_SLACK_BRIDGE:-0}" == "1" ]]; then
         export PATH=\"\$HOME/.local/bin:\$PATH\"
         cd '$APP_DIR/slack' && uv sync
     "
-    for unit in shellm-slack-agent shellm-slack-bridge; do
+    for unit in shelly-slack-agent shelly-slack-bridge; do
         sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$SCRIPT_DIR/$unit.service" \
             > "/etc/systemd/system/$unit.service"
     done
     systemctl daemon-reload
-    systemctl enable --now shellm-slack-agent shellm-slack-bridge
+    systemctl enable --now shelly-slack-agent shelly-slack-bridge
 fi
 
 echo
-echo "Done. shellm-web is running on 127.0.0.1:8080 (not publicly reachable)."
+echo "Done. shelly-web is running on 127.0.0.1:8080 (not publicly reachable)."
 echo
 echo "Next steps:"
 echo "  1. Add your spend-capped API key to $APP_DIR/.env"
-echo "     then: systemctl restart shellm-web"
+echo "     then: systemctl restart shelly-web"
 echo "  2. Set up the Cloudflare tunnel + Access policy — see deploy/DEPLOY.md"

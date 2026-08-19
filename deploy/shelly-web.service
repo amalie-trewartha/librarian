@@ -1,18 +1,18 @@
-# shellm-web systemd unit. Installed by deploy/setup.sh, which substitutes
+# shelly-web systemd unit. Installed by deploy/setup.sh, which substitutes
 # @SHELLM_HOME@ (default /opt/shellm; the repo lives at @SHELLM_HOME@/app).
 #
 # deploy/update.sh re-syncs this file on every deploy — do NOT hand-edit the
 # installed copy; put box-local changes in a drop-in that survives deploys:
-#   /etc/systemd/system/shellm-web.service.d/override.conf
+#   /etc/systemd/system/shelly-web.service.d/override.conf
 #   ([Service] + Environment=... lines; then daemon-reload + restart)
 #
 # The web server binds 127.0.0.1 only — expose it exclusively through the
 # Cloudflare tunnel (see deploy/DEPLOY.md). Dispatchers started from the UI
-# run as shellm-thinkers@<identity> units (via SHELLM_THINKERSCTL below), so
+# run as shelly-thinkers@<identity> units (via SHELLY_THINKERSCTL below), so
 # they live in their own cgroup and survive restarts of this service.
 
 [Unit]
-Description=shellm web viewer + control plane
+Description=shelly web viewer + control plane
 After=network-online.target
 Wants=network-online.target
 
@@ -22,17 +22,17 @@ User=shellm
 WorkingDirectory=@SHELLM_HOME@/app
 Environment="PATH=@SHELLM_HOME@/.local/bin:@SHELLM_HOME@/.bun/bin:/usr/local/bin:/usr/bin:/bin"
 # Lock CORS to your public hostname once the tunnel is up:
-#Environment="SHELLM_WEB_ALLOWED_ORIGINS=https://agents.example.com"
+#Environment="SHELLY_WEB_ALLOWED_ORIGINS=https://agents.example.com"
 # For a view-only deployment (no start/stop/chat/config mutations):
-#Environment="SHELLM_WEB_READONLY=1"
+#Environment="SHELLY_WEB_READONLY=1"
 # The dash's build-stamp menu can pull the repo and restart the service
 # (safe here because Restart=always brings it back). Remove to disable.
-Environment="SHELLM_WEB_SELF_UPDATE=1"
+Environment="SHELLY_WEB_SELF_UPDATE=1"
 # Dispatcher lifecycle goes through per-identity systemd units via this
-# root-owned wrapper (sudo rule: /etc/sudoers.d/shellm-thinkers). Unset it
+# root-owned wrapper (sudo rule: /etc/sudoers.d/shelly-thinkers). Unset it
 # to fall back to spawning dispatchers directly (dev behavior).
-Environment="SHELLM_THINKERSCTL=/usr/local/bin/shellm-thinkersctl"
-ExecStart=@SHELLM_HOME@/app/bin/shellm-web @SHELLM_HOME@/app --host 127.0.0.1 --port 8080
+Environment="SHELLY_THINKERSCTL=/usr/local/bin/shelly-thinkersctl"
+ExecStart=@SHELLM_HOME@/app/bin/shelly-web @SHELLM_HOME@/app --host 127.0.0.1 --port 8080
 Restart=always
 RestartSec=3
 # Cap the trajectory-cache balloon (2026-08-13: repeated 5-6GB RSS OOM
@@ -46,16 +46,16 @@ RestartSec=3
 # it, and systemd restarts. Real fix: bound the cache itself.
 MemoryMax=5G
 # Signal only the main process on stop/restart. Dispatchers now run in
-# their own shellm-thinkers@ units, but short-lived CLI mutations (chat,
+# their own shelly-thinkers@ units, but short-lived CLI mutations (chat,
 # named thinker kicks) and agent-spawned background jobs can still be in
 # this cgroup, and the default KillMode=control-group would kill them on
 # any restart (including the dash's self-update). Agents have their own
-# kill switches: the UI's Kill All button and bin/shellm-killall.
+# kill switches: the UI's Kill All button and bin/shelly-killall.
 KillMode=process
 
 # The agent needs broad shell access by design — do NOT run anything else on
-# this machine. Kill switches: `systemctl stop shellm-web` stops the control
-# plane; `@SHELLM_HOME@/app/bin/shellm-killall` stops all agent processes.
+# this machine. Kill switches: `systemctl stop shelly-web` stops the control
+# plane; `@SHELLM_HOME@/app/bin/shelly-killall` stops all agent processes.
 
 [Install]
 WantedBy=multi-user.target

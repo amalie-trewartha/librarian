@@ -101,7 +101,7 @@ The env file does not survive an instance rebuild. After a rebuild,
 repeat step 3 and 4. `deploy/scripts/status` (which `rebuild` runs at
 the end) prints a loud `telegram: NOT SET UP` reminder on the slack
 stack whenever the env file is missing. To turn the bridge off, `sudo systemctl stop
-shellm-telegram-bridge` mutes it without touching the agent, and
+shelly-telegram-bridge` mutes it without touching the agent, and
 removing `/etc/shellm/telegram.env` keeps it from coming back on the
 next deploy.
 

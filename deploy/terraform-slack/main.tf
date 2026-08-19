@@ -6,7 +6,7 @@
 # (user_data_replace_on_change). If you fix something here, fix it there too.
 #
 # Slack-specific deltas: subdomain/env_parameter values in terraform.tfvars,
-# and user_data.sh.tpl installs + restarts the shellm-slack-* units.
+# and user_data.sh.tpl installs + restarts the shelly-slack-* units.
 
 terraform {
   required_version = ">= 1.5"

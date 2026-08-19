@@ -5,7 +5,7 @@ set -euo pipefail
 # persona: create the identity if missing, install its persona prompt, and
 # make sure the monolith thinker dispatcher is running.
 #
-# Runs as the shellm user via shellm-slack-agent.service (oneshot); safe to
+# Runs as the shellm user via shelly-slack-agent.service (oneshot); safe to
 # re-run any time. Usage: bootstrap-slack-identity.sh [APP_DIR]
 
 APP_DIR="${1:-/opt/shellm/app}"
@@ -61,19 +61,19 @@ set -o pipefail
 # step that fails silently; don't detect, just stop.
 echo "==> Restarting thinkers with current environment"
 # Prefer the per-identity systemd unit (own cgroup; see
-# deploy/shellm-thinkers@.service) — its start path also stops any stale
+# deploy/shelly-thinkers@.service) — its start path also stops any stale
 # dispatcher and re-sources the env. Fall back to the direct start on boxes
 # provisioned before the unit existed.
-if [[ -x /usr/local/bin/shellm-thinkersctl ]] \
-    && sudo -n /usr/local/bin/shellm-thinkersctl restart "$name"; then
-    echo "==> Thinkers running under shellm-thinkers@$name"
+if [[ -x /usr/local/bin/shelly-thinkersctl ]] \
+    && sudo -n /usr/local/bin/shelly-thinkersctl restart "$name"; then
+    echo "==> Thinkers running under shelly-thinkers@$name"
 else
     echo "==> thinkers unit unavailable — starting directly (legacy path)"
     # --self: this oneshot is an authorized stop path (it restarts the
     # dispatcher right below), so opt out of the in-flight-step guard in
     # `thinkers stop` rather than rely on how narrowly it matches. A
     # dispatcher from an earlier bootstrap run shares this cgroup
-    # (shellm-slack-agent's), but is not that unit's main process, so
+    # (shelly-slack-agent's), but is not that unit's main process, so
     # stopping it sweeps nothing.
     thinkers stop --self || true
     echo "==> Starting monolith thinker"

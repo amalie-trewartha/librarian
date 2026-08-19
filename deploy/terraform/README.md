@@ -194,17 +194,17 @@ creds + this directory's terraform state, but not the Cloudflare token):
 
 There's also an in-dash path: click the **build stamp** in the navbar →
 "Pull latest & restart" (the server pulls its repo and restarts itself via
-systemd; enabled by `SHELLM_WEB_SELF_UPDATE=1` in the unit).
+systemd; enabled by `SHELLY_WEB_SELF_UPDATE=1` in the unit).
 
 | Task | How |
 |---|---|
 | Shell on the box | `deploy/scripts/shell` (or `$(terraform output -raw ssm_session_command)`) |
 | Watch first-boot progress | in a session: `tail -f /var/log/shellm-bootstrap.log` |
-| App logs | `journalctl -u shellm-web -f` |
+| App logs | `journalctl -u shelly-web -f` |
 | Update the app (after pushing!) | `deploy/scripts/update` (or `eval "$(terraform output -raw update_command)"`) |
 | Add/remove viewers | edit `allowed_emails`, `terraform apply` |
 | Rotate keys / change model | `aws ssm put-parameter ... --overwrite`, then rebuild or re-fetch in place — see "The .env" above |
-| Panic | Kill All in the UI → `shellm-killall` on the box → stop the instance |
+| Panic | Kill All in the UI → `shelly-killall` on the box → stop the instance |
 | Rebuild from scratch | `terraform destroy && terraform apply` — `.env` self-heals from the SSM parameter (identities/trajectories are lost — copy them off first if they matter) |
 | Pause billing | stop the instance in the console (~$3/mo for the disk); the tunnel reconnects on start |
 
@@ -274,7 +274,7 @@ terraform apply -replace=aws_instance.shellm
 aws ec2 stop-instances --region <your-region> \
     --instance-ids "$(terraform output -raw instance_id)"
 
-# start it back up (tunnel + shellm-web come back via systemd)
+# start it back up (tunnel + shelly-web come back via systemd)
 aws ec2 start-instances --region <your-region> \
     --instance-ids "$(terraform output -raw instance_id)"
 

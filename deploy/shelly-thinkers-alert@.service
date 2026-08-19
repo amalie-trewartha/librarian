@@ -1,8 +1,8 @@
-# shellm-thinkers-alert@<identity> systemd template unit. Installed by
+# shelly-thinkers-alert@<identity> systemd template unit. Installed by
 # deploy/setup.sh (re-synced by deploy/update.sh), which substitutes
 # @SHELLM_HOME@.
 #
-# Fired by shellm-thinkers@<identity>.service's OnFailure= when the
+# Fired by shelly-thinkers@<identity>.service's OnFailure= when the
 # dispatcher unit lands in a failed state — a dispatcher that died on its
 # own, not a deliberate stop (clean stops don't fail the unit). The
 # thinkers unit intentionally has no Restart=, so a failed unit is a mind
@@ -12,14 +12,14 @@
 # down for an hour before a human noticed).
 
 [Unit]
-Description=shellm thinkers failure alert for identity %i
+Description=shelly thinkers failure alert for identity %i
 
 [Service]
 Type=oneshot
 User=shellm
 WorkingDirectory=@SHELLM_HOME@/app
 # systemd reads the env file as root (the shellm user may not be able to);
-# same pattern as shellm-slack-bridge.service. The script also tolerates a
+# same pattern as shelly-slack-bridge.service. The script also tolerates a
 # missing/unreadable file and falls back to sourcing it itself.
 EnvironmentFile=-@SHELLM_HOME@/app/.env
 ExecStart=/bin/bash @SHELLM_HOME@/app/deploy/thinkers-failure-alert.sh @SHELLM_HOME@/app %i

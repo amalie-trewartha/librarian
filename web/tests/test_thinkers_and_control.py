@@ -262,7 +262,7 @@ def test_step_trigger_fires(client: TestClient, stub_bin: Path):
 
 @pytest.fixture
 def unit_ctl(tmp_path: Path, monkeypatch):
-    """Fake shellm-thinkersctl: logs calls; is-active mirrors a state file."""
+    """Fake shelly-thinkersctl: logs calls; is-active mirrors a state file."""
     from types import SimpleNamespace
 
     script = tmp_path / "thinkersctl"
@@ -407,7 +407,7 @@ def test_create_identity(client: TestClient, stub_bin: Path, control_identity: P
 
 
 def test_killall(client: TestClient, stub_bin: Path):
-    _write_stub(stub_bin, "shellm-killall")
+    _write_stub(stub_bin, "shelly-killall")
     resp = client.post("/api/killall", json={"dry_run": True})
     assert resp.status_code == 200
     assert "ARGS=--dry-run" in _calls(stub_bin)

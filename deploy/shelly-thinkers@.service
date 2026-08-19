@@ -1,21 +1,21 @@
-# shellm-thinkers@<identity> systemd template unit. Installed by
+# shelly-thinkers@<identity> systemd template unit. Installed by
 # deploy/setup.sh (re-synced by deploy/update.sh), which substitutes
-# @SHELLM_HOME@. One instance per identity: shellm-thinkers@audel, etc.
+# @SHELLM_HOME@. One instance per identity: shelly-thinkers@audel, etc.
 #
 # The point of this unit is cgroup isolation: a dispatcher started from the
-# web dash used to live inside shellm-web.service's cgroup, where a web
+# web dash used to live inside shelly-web.service's cgroup, where a web
 # OOM-kill/restart orphaned it (and on 2026-08-10 the orphan was then killed
 # by another agent's process-hygiene sweep). Under its own unit, the whole
 # mind — dispatcher, steps, and anything they spawn — has a cgroup of its
-# own, `systemctl status shellm-thinkers@<identity>` shows exactly what
+# own, `systemctl status shelly-thinkers@<identity>` shows exactly what
 # belongs to it, and `systemctl stop` reaps everything by construction.
 #
-# The control plane manages instances through /usr/local/bin/shellm-thinkersctl
-# (sudo, see deploy/sudoers-shellm-thinkers), never systemctl directly.
+# The control plane manages instances through /usr/local/bin/shelly-thinkersctl
+# (sudo, see deploy/sudoers-shelly-thinkers), never systemctl directly.
 
 [Unit]
-Description=shellm thinkers for identity %i
-# No After=shellm-slack-agent.service: the bootstrap (a oneshot) starts this
+Description=shelly thinkers for identity %i
+# No After=shelly-slack-agent.service: the bootstrap (a oneshot) starts this
 # unit from inside its own ExecStart, so that ordering edge deadlocked every
 # boot — the queued thinkers job waited on the agent finishing while the
 # agent blocked on the queued job (2026-08-12 and 2026-08-13 incidents).
@@ -28,7 +28,7 @@ Wants=network-online.target
 # staying down" (deploy/thinkers-failure-alert.sh). Per-death and
 # back-up-again Slack notices come from ExecStopPost/ExecStartPost
 # (deploy/thinkers-death-alert.sh). Deliberate stops post nothing.
-OnFailure=shellm-thinkers-alert@%i.service
+OnFailure=shelly-thinkers-alert@%i.service
 StartLimitIntervalSec=900
 StartLimitBurst=3
 
