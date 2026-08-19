@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# deploy/scripts/audel-rlm — how often Audel actually uses the RLM machinery.
+#
+# Usage: deploy/scripts/audel-rlm [--cached] [--json] [--local PATH]
+#
+# Counts, from the box's mind log, the recursive-language-model moves: llm /
+# shellm invoked from inside the mind's own bash, programmatic traj and mem
+# reads, recap runs — versus plain flat inference. Aggregates on the box
+# (SSM output is capped at 24KB), caches the data in .metrics/, keeps a
+# dated JSON snapshot next to the cache, and prints a plain-text report.
+#
+# --cached      re-render from the last pull, no AWS calls
+# --json        print the raw JSON instead of the report
+# --local PATH  run the extractor on a local identity dir or trajectory.jsonl
+#               instead of the box (no AWS calls; still caches + renders)
+#
+# Identity defaults to audel; override with SHELLM_METRICS_IDENTITY.
+
+export SHELLM_TF_STACK="${SHELLM_TF_STACK:-terraform-slack}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+IDENT="${SHELLM_METRICS_IDENTITY:-audel}"
+OUT_DIR="$REPO_ROOT/.metrics"
+DATA="$OUT_DIR/$IDENT-rlm.json"
+EXTRACT="$SCRIPTS_DIR/audel-rlm-extract.py"
+
+cached=0 raw_json=0 local_path=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --cached)  cached=1; shift ;;
+        --json)    raw_json=1; shift ;;
+        --local)   local_path="${2:?--local requires a path}"; shift 2 ;;
+        -h|--help) sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) die "unknown flag: $1 (see --help)" ;;
+    esac
+done
+
+require_tools python3
+mkdir -p "$OUT_DIR"
+
+if [[ -n "$local_path" ]]; then
+    DATA="$OUT_DIR/local-rlm.json"
+    python3 "$EXTRACT" "$local_path" > "$DATA" || die "extractor failed on $local_path"
+elif [[ "$cached" -eq 0 ]]; then
+    require_tools terraform aws jq
+    require_state
+    require_aws
+
+    # Ship the extractor inside the script; it aggregates on the box so the
+    # payload fits the 24KB SSM cap. PYEOF must not appear in the extractor.
+    onbox_script="set -euo pipefail
+IDENT_DIR=/opt/shellm/app/.identities/$IDENT
+[ -d \"\$IDENT_DIR\" ] || { echo \"no identity dir on box: \$IDENT_DIR\" >&2; exit 1; }
+python3 - \"\$IDENT_DIR\" <<'PYEOF' | gzip | base64 | sed -e '1i AUDEL_RLM_BEGIN' -e '\$a AUDEL_RLM_END'
+$(cat "$EXTRACT")
+PYEOF"
+
+    info "pulling $IDENT rlm stats from the box ($SHELLM_TF_STACK)..."
+    payload=$(run_script_on_box "$onbox_script")
+    b64=$(awk '/^AUDEL_RLM_BEGIN$/{f=1;next} /^AUDEL_RLM_END$/{f=0} f' <<<"$payload")
+    [[ -n "$b64" ]] || die "no data in box output:
+$payload"
+    printf '%s' "$b64" | base64 -d | gunzip > "$DATA" || die "payload decode failed"
+    snapshot="$OUT_DIR/$IDENT-rlm-$(date -u +%Y%m%d).json"
+    cp "$DATA" "$snapshot"
+    info "cached $(wc -c < "$DATA" | tr -d ' ') bytes -> $DATA (snapshot: $snapshot)"
+else
+    [[ -f "$DATA" ]] || die "no cached data at $DATA — run once without --cached"
+fi
+
+if [[ "$raw_json" -eq 1 ]]; then
+    python3 -m json.tool "$DATA"
+    exit 0
+fi
+
+python3 - "$DATA" <<'PYEOF'
+import json, sys
+
+d = json.load(open(sys.argv[1]))
+
+def mb(n):
+    return "%.1fMB" % (n / 1e6) if n >= 1e5 else "%dKB" % (n / 1e3)
+
+def fmt_bytes(stats):
+    if not stats:
+        return "%9s %9s %9s" % ("-", "-", "-")
+    return "%9s %9s %9s" % (mb(stats["p50"]), mb(stats["p90"]), mb(stats["max"]))
+
+LABELS = {
+    "llm": "llm (one-shot sub-call)",
+    "shellm": "shellm (nested run)",
+    "traj_read": "traj read (log as data)",
+    "mem_read": "mem read",
+    "mem_write": "mem write",
+    "recap": "recap (self-summary)",
+    "context": "context (ctx builder)",
+    "traj_write": "traj append (mechanics)",
+}
+RLM = ("llm", "shellm", "traj_read", "mem_read", "mem_write", "recap", "context")
+
+r = d["runs"]
+span = "%s .. %s" % ((d.get("first_ts") or "?")[:16], (d.get("last_ts") or "?")[:16])
+print("audel rlm report — recursive/programmatic moves in the mind log")
+print("log: %s" % d["log"])
+print("     %d lines (%d parsed), %s, span %s" % (d["log_lines"], d["parsed"], mb(d["log_bytes"]), span))
+print()
+pct_rlm = 100.0 * r["rlm_runs"] / r["distinct_run_ids"] if r["distinct_run_ids"] else 0.0
+print("runs (agentic wakeups)")
+print("  distinct run_ids: %d   shellm-run steps: %d" % (r["distinct_run_ids"], r["shellm_run_steps"]))
+print("  runs using RLM machinery: %d (%.0f%%)" % (r["rlm_runs"], pct_rlm))
+print("  sub-trajectory merges: %d steps from %d distinct sub-trajs"
+      % (d["merges"]["steps"], d["merges"]["distinct_sub_trajs"]))
+print()
+n_reason = d["type_counts"].get("reasoning", 0)
+print("bash classification (%d reasoning steps total)" % n_reason)
+print("  %-26s %6s %6s %5s %5s  %9s %9s %9s  %9s" %
+      ("class", "steps", "runs", "days", "fail", "out_p50", "out_p90", "out_max", "out_total"))
+for c in list(RLM) + ["traj_write"]:
+    s = d["classes"].get(c)
+    if not s or (s["steps"] == 0 and c != "traj_write"):
+        continue
+    print("  %-26s %6d %6d %5d %5d  %s  %9s" %
+          (LABELS.get(c, c), s["steps"], s["runs"], s["days"], s["failed"],
+           fmt_bytes(s["out_bytes"]), mb(s["out_bytes_total"])))
+print()
+lat = d.get("log_bytes_at_traj_read")
+if lat:
+    print("log size when traj reads happened (the corpus those reads ranged over)")
+    print("  n=%d   p50 %s   p90 %s   max %s" % (lat["n"], mb(lat["p50"]), mb(lat["p90"]), mb(lat["max"])))
+    print()
+mt = d.get("monolith_types") or {}
+if mt:
+    mix = "  ".join("%s %d" % (k, v) for k, v in sorted(mt.items(), key=lambda kv: -kv[1]))
+    print("monolith step mix: %s" % mix)
+    print()
+daily = d.get("daily") or {}
+if daily:
+    days = sorted(daily)[-14:]
+    print("daily (last %d days): reasoning / llm / shellm / traj_read / mem" % len(days))
+    for day in days:
+        v = daily[day]
+        memn = v.get("mem_read", 0) + v.get("mem_write", 0)
+        print("  %s  %5d %5d %5d %5d %5d" %
+              (day, v.get("reasoning", 0), v.get("llm", 0), v.get("shellm", 0),
+               v.get("traj_read", 0), memn))
+PYEOF
