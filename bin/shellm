@@ -2067,9 +2067,11 @@ run_loop() {
         --argjson resumed "$(if [[ -n "$_use_traj" ]]; then echo true; else echo false; fi)" \
         --arg trigger "${SHELLM_TRIGGER_STEP_ID:-}" \
         --arg launched_by "${SHELLM_LAUNCHED_BY:-}" \
+        --arg wake "${SHELLM_WAKE:-}" \
         '{type:"shellm-run", command:$cmd, workdir:$wd, model:$model, effort:$effort, max_iterations:$max_iter, max_tokens:$max_tok, inactivity_timeout:$inactivity_timeout, context_files:$ctx, env:$env, resumed:$resumed}
          + (if $trigger == "" then {} else {trigger_step: $trigger} end)
-         + (if $launched_by == "" then {} else {launched_by: $launched_by} end)')
+         + (if $launched_by == "" then {} else {launched_by: $launched_by} end)
+         + (if $wake == "" then {} else {wake: $wake} end)')
     # traj append prints the assigned step_id; keep it so every machinery step
     # this run writes can carry run_id (crucial with --traj, where many runs
     # interleave in one shared trajectory)

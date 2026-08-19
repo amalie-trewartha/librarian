@@ -165,5 +165,36 @@ rm -f "$TSV" "$RMETA"
 cold=$(recap feed1111 --traj_dir "$TRAJ_ROOT" --context --raw-tail 5 2>&1)
 check "equiv: warm == cold output"  test "$warm" = "$cold"
 
+# ---------------------------------------------------------------------------
+# 8. shellm-run rows render as wakeup markers, not launcher argv. The argv is
+#    ~500 identical chars per wakeup (40% of the raw tail on a live mind); the
+#    meaning is in launched_by/wake. A run the mind started itself has no
+#    launched_by, and there the command IS the payload, so its tail is kept.
+#    Row COUNT must not change: rollup blocks index rows positionally, so
+#    dropping a row type would silently misalign every sealed block.
+# ---------------------------------------------------------------------------
+RUN2="cafe2222-root"
+mkdir -p "$TRAJ_ROOT/$RUN2"
+J2="$TRAJ_ROOT/$RUN2/trajectory.jsonl"
+ARGV='shellm --model m/1 --traj cafe2222 --env id --workdir /w --var A=1 --var B=2 --var OPENROUTER_API_KEY=sk-secret'
+{
+  printf '{"type":"trajectory","step_id":"cafe2222-0000-4000-8000-000000000000","ts":"t0"}\n'
+  printf '{"type":"thought","step_id":"st000001","ts":"2026-08-19T07:00:01","source":"monolith","content":"unchanged row"}\n'
+  printf '{"type":"shellm-run","step_id":"st000002","ts":"2026-08-19T07:00:02","model":"m/1","launched_by":"monolith","wake":"spontaneous/timer","command":"%s"}\n' "$ARGV"
+  printf '{"type":"shellm-run","step_id":"st000003","ts":"2026-08-19T07:00:03","model":"m/1","launched_by":"mind_wanderer","command":"%s"}\n' "$ARGV"
+  jq -nc --arg c 'shellm --model m/1 --workdir /w "summarize the THREE study"' \
+     '{type:"shellm-run",step_id:"st000004",ts:"2026-08-19T07:00:04",model:"m/1",command:$c}'
+} > "$J2"
+out8=$(recap cafe2222 --traj_dir "$TRAJ_ROOT" --context --raw-tail 50 2>&1)
+TSV2="$TRAJ_ROOT/$RUN2/rollups/rendered.tsv"
+
+check "run row: names the thinker"   grep -q 'shellm-run(monolith): wake spontaneous/timer, model m/1' <<<"$out8"
+check "run row: wake omitted if absent" grep -q 'shellm-run(mind_wanderer): model m/1' <<<"$out8"
+check_not "run row: no launcher flags" grep -q -- '--var' <<<"$out8"
+check_not "run row: no key in prompt"  grep -q 'sk-secret' <<<"$out8"
+check "run row: self-launched keeps cmd" grep -q 'summarize the THREE study' <<<"$out8"
+check "run row: row count unchanged"   test "$(wc -l < "$TSV2" | tr -d ' ')" = "4"
+check "run row: compact (<160 chars)"  test "$(awk -F"\t" '$2=="st000002"{print length($4)}' "$TSV2")" -lt 160
+
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 exit $(( fail > 0 ))

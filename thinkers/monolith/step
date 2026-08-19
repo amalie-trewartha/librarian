@@ -250,9 +250,19 @@ run_id_file=$(mktemp)
 # One shellm agentic run (writes to the root trajectory). Model via --model so
 # it cannot be shadowed by env/.env layers (see design/model-resolution.md).
 printf '  routing (%s / %s)...\n' "${trigger_type:-none}" "$wake_mode" >&2
+
+# Why this wakeup happened, stamped onto the shellm-run step so the mind can
+# read it back later. Without it the rendered run row is 500 chars of launcher
+# argv; with it the row says which thinker woke and what woke it.
+case "$trigger_type" in
+    monolith-wake) wake_reason="$wake_mode/timer" ;;
+    "")            wake_reason="$wake_mode/start" ;;
+    *)             wake_reason="$wake_mode/$trigger_type${trigger_source:+:$trigger_source}" ;;
+esac
 run_rc=0
 run_response=$(SHELLM_NO_BANNER=1 \
     SHELLM_TRIGGER_STEP_ID="$trigger_step_id" \
+    SHELLM_WAKE="$wake_reason" \
     SHELLM_RUN_ID_OUT="$run_id_file" \
     shellm --model "$THINK_MODEL" --traj "$TRAJ_ID" \
     "${shellm_flags[@]}" \

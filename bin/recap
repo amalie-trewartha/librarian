@@ -215,11 +215,28 @@ _render_steps() {
             (
                 "[" + ((.step_id // "?") | tostring | .[0:8]) + "] "
                 + .type
-                + (if .source then "(" + .source + ")" else "" end)
+                + (if .source then "(" + .source + ")"
+                   elif .launched_by then "(" + (.launched_by|tostring) + ")"
+                   else "" end)
                 + (if .from then " " + (.from|tostring) + "→" + ((.to // "?")|tostring) else "" end)
                 + ": "
-                + ((.content // .command // .tldr // "") | tostring
-                   | gsub("[\\t\\n\\r]+"; " ") | .[0:500])
+                + (if .type == "shellm-run" then
+                       # The launcher argv is ~500 chars of identical flags on
+                       # every wakeup (40% of the raw tail on a live mind) and
+                       # says nothing the model can act on. The meaning lives in
+                       # the fields beside it: which thinker woke, and why. A
+                       # run with no launched_by is one the mind started itself,
+                       # where the command IS the payload — keep its tail.
+                       (if .wake then "wake " + (.wake|tostring) + ", " else "" end)
+                       + "model " + ((.model // "?") | tostring)
+                       + (if (.launched_by // "") == "" and (.command // "") != ""
+                          then ", cmd " + ((.command | tostring
+                                            | gsub("[\\t\\n\\r]+"; " "))[-200:])
+                          else "" end)
+                   else
+                       ((.content // .command // .tldr // "") | tostring
+                        | gsub("[\\t\\n\\r]+"; " ") | .[0:500])
+                   end)
             ),
             ((.ts // "") | epoch_min)
         ] | @tsv
