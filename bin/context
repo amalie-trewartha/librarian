@@ -105,7 +105,6 @@ done
 
 # Priority: --traj_dir + positional ID > $TRAJ_DIR + $TRAJ_ID env vars
 RESOLVED_TRAJ_FILE=""
-RESOLVED_TRAJ_DIR=""
 
 # Resolve traj_id within traj_dir (inline version matching traj's _resolve_traj_id)
 _ctx_resolve_traj_id() {
@@ -121,38 +120,26 @@ _ctx_resolve_traj_id() {
         printf '%s\n' "$traj_dir/$traj_id/trajectory.jsonl"; return
     fi
 
-    # 3. Legacy .jsonl suffix
-    if [[ "$traj_id" != *.jsonl && -f "$traj_dir/${traj_id}.jsonl" ]]; then
-        printf '%s\n' "$traj_dir/${traj_id}.jsonl"; return
-    fi
-
-    # 4. UUID handling: extract hex prefix
+    # 3. UUID handling: extract hex prefix
     local hex_prefix="$traj_id"
     if [[ "$traj_id" == *-*-*-*-* ]]; then
         hex_prefix="${traj_id%%-*}"
     fi
 
-    # 5. Directory glob: find directories named <hex_prefix>-*
+    # 4. Directory glob: find directories named <hex_prefix>-*
     local match
     match=$(find "$traj_dir" -type d -name "${hex_prefix}-*" 2>/dev/null | head -1)
     if [[ -n "$match" && -f "$match/trajectory.jsonl" ]]; then
         printf '%s\n' "$match/trajectory.jsonl"; return
     fi
 
-    # 6. Legacy flat file glob: *_<hex_prefix>_*.jsonl
-    match=$(find "$traj_dir" -name "*_${hex_prefix}_*.jsonl" -not -path '*/blobs/*' 2>/dev/null | head -1)
-    if [[ -n "$match" ]]; then
-        printf '%s\n' "$match"; return
-    fi
     return 1
 }
 
 if [[ -n "$CTX_TRAJ_DIR_OPT" && -n "$CTX_TRAJ_ID_OPT" ]]; then
-    RESOLVED_TRAJ_DIR="$CTX_TRAJ_DIR_OPT"
     RESOLVED_TRAJ_FILE=$(_ctx_resolve_traj_id "$CTX_TRAJ_DIR_OPT" "$CTX_TRAJ_ID_OPT") \
         || die "cannot resolve traj ID '$CTX_TRAJ_ID_OPT' in '$CTX_TRAJ_DIR_OPT'"
 elif [[ -n "${TRAJ_DIR:-}" && -n "${TRAJ_ID:-}" ]]; then
-    RESOLVED_TRAJ_DIR="$TRAJ_DIR"
     RESOLVED_TRAJ_FILE=$(_ctx_resolve_traj_id "$TRAJ_DIR" "$TRAJ_ID") \
         || die "cannot resolve TRAJ_ID '$TRAJ_ID' in TRAJ_DIR '$TRAJ_DIR'"
 else

@@ -223,14 +223,13 @@ cmd_move() {
     [[ "$n" =~ ^[0-9]+$ && "$n" -gt 0 ]] || die "N must be a positive integer"
 
     # Collect sorted active goals into arrays (skip completed)
-    local -a files=() pris=()
+    local -a files=()
     while IFS=$'\t' read -r pri f; do
         [[ -z "$f" ]] && continue
         local fstatus
         fstatus=$(_fm_field "$f" "status")
         [[ "$fstatus" == "done" ]] && continue
         files+=("$f")
-        pris+=("$pri")
     done < <(_sorted_goals "$MEM_DIR")
 
     [[ ${#files[@]} -eq 0 ]] && die "No goals to move"
@@ -308,22 +307,6 @@ cmd_done() {
     printf 'Goal completed: %s\n' "$name" >&2
 }
 
-cmd_undo() {
-    local query="$*"
-    [[ -z "$query" ]] && die "Usage: focus undo <goal id>"
-    local file
-    file=$(_find_goal "$query")
-    local fstatus
-    fstatus=$(_fm_field "$file" "status")
-    [[ "$fstatus" != "done" ]] && die "Goal is not completed"
-    _rm_fm_field "$file" "status"
-    _rm_fm_field "$file" "completed"
-    local name
-    name=$(_fm_field "$file" "summary")
-    [[ -z "$name" ]] && name="$query"
-    printf 'Goal reactivated: %s\n' "$name" >&2
-}
-
 usage() {
     cat <<'EOF'
 focus — Goal management
@@ -334,7 +317,6 @@ Usage:
   focus show                            Show current goals (plain text)
   focus move <id> <up|down> [N]         Reorder a goal (default N=1)
   focus done <id>                       Mark a goal as completed
-  focus undo <id>                       Reactivate a completed goal
 
 Environment:
   MEM_DIR   Memories directory (set by `identity shell`)
@@ -349,7 +331,6 @@ case "${1:-}" in
     show)   cmd_show ;;
     move)   shift; cmd_move "$@" ;;
     done)   shift; cmd_done "$@" ;;
-    undo)   shift; cmd_undo "$@" ;;
     -h|--help|help) usage ;;
     "")     cmd_list ;;
     *)      die "Unknown command: $1 (try focus --help)" ;;

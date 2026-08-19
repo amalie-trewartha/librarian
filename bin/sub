@@ -70,8 +70,6 @@ fi
 
 # ── Count occurrences (literal, not regex) ───────────────────────────────
 
-content="$(cat "$file")"
-
 # Use awk to count non-overlapping occurrences of a literal string.
 # We pass old_str via environment to avoid awk argument escaping issues.
 count=$(SUB_OLD="$old_str" awk 'BEGIN {

@@ -92,7 +92,6 @@ Commands:
                             --steps expands each trajectory to show its steps.
                             Use --json for machine-readable output.
 
-  isroot [ID]               Exit 0 if trajectory is a root (no parent).
 
   root [ID]                 Walk up parent links to find root. Print filename.
 
@@ -100,7 +99,6 @@ Commands:
                             -r checks sub-trajectories too.
                             --fix removes bad lines in place.
 
-  repl                      Interactive trajectory TUI
 
 EOF
     if [[ -n "${TRAJ_DIR:-}" ]]; then
@@ -182,24 +180,10 @@ _resolve_traj_id() {
     fi
 
     # 4. Directory glob: find directories named <hex_prefix>-*
-    #    (directory-based takes priority over legacy flat files)
     local match
     match=$(find "$traj_dir" -type d -name "${hex_prefix}-*" 2>/dev/null | head -1)
     if [[ -n "$match" && -f "$match/trajectory.jsonl" ]]; then
         printf '%s\n' "$match/trajectory.jsonl"
-        return
-    fi
-
-    # 5. Legacy .jsonl suffix
-    if [[ "$traj_id" != *.jsonl && -f "$traj_dir/${traj_id}.jsonl" ]]; then
-        printf '%s\n' "$traj_dir/${traj_id}.jsonl"
-        return
-    fi
-
-    # 6. Legacy flat file glob: *_<hex_prefix>_*.jsonl
-    match=$(find "$traj_dir" -maxdepth 1 -name "*_${hex_prefix}_*.jsonl" -not -path '*/blobs/*' 2>/dev/null | head -1)
-    if [[ -n "$match" ]]; then
-        printf '%s\n' "$match"
         return
     fi
 
@@ -240,9 +224,6 @@ _parse_hex_id() {
 
     # New format: <hex8>-<slug>
     if [[ "$bn" =~ ^([0-9a-f]{8})- ]]; then
-        printf '%s' "${BASH_REMATCH[1]}"
-    # Legacy format: YYYY-MM-DD-HH-MM-SS_<hex8>_<slug>
-    elif [[ "$bn" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{2}_([0-9a-f]{8})_ ]]; then
         printf '%s' "${BASH_REMATCH[1]}"
     else
         printf '%s' "$bn"
@@ -769,6 +750,272 @@ _collect_recursive_files() {
     done <<< "$fork_lines"
 }
 
+# Emit every step from the caller's $_all_files, one "epoch<TAB>json" line
+# per step tagged with its file's _traj_hex, filtered by the caller's
+# $_filter_json and sorted by timestamp. Shared by cmd_tail and cmd_cat.
+_sorted_tree_steps() {
+    local f hex
+    while IFS= read -r f; do
+        [[ -f "$f" ]] || continue
+        hex=$(_parse_hex_id "$f")
+        jq -R -r --arg h "$hex" --argjson filters "$_filter_json" '
+            fromjson? // empty |
+            def matches_filters($fs):
+                . as $step |
+                ($fs | length == 0) or all($fs[];
+                    .key as $k | .vals as $vs |
+                    ($step[$k] // null) as $fv |
+                    ($vs | any(. as $v | $v == ($fv | tostring)))
+                );
+            def to_epoch:
+                tostring |
+                sub("\\.[0-9]+"; "") |
+                (capture("^(?<dt>\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2})(?<sign>[+-])(?<oh>\\d{2}):?(?<om>\\d{2})$") //
+                 {dt: ., sign: "+", oh: "00", om: "00"}) |
+                ((.oh | tonumber) * 3600 + (.om | tonumber) * 60) as $off |
+                ((.dt + "Z") | fromdateiso8601) as $local_epoch |
+                (if .sign == "-" then ($local_epoch + $off) else ($local_epoch - $off) end) |
+                tostring;
+            . + {_traj_hex: $h} | select(matches_filters($filters))
+            | ((.ts // .timestamp // "0") | to_epoch) + "\t" + tojson
+        ' "$f" 2>/dev/null || true
+    done <<< "$_all_files" \
+        | sort -t$'\t' -k1,1n
+}
+
+# Shared by cmd_tail and cmd_cat: build the jq filter array from the
+# caller's filters[], auto-detect format/color, and set the color palette.
+# Assigns the caller's pre-declared locals (_filter_json, format, use_color,
+# c_*) via bash dynamic scoping.
+_setup_stream_format() {
+    _filter_json='[]'
+    local _f
+    for _f in "${filters[@]+"${filters[@]}"}"; do
+        local _fk="${_f%%=*}" _fv="${_f#*=}"
+        _filter_json=$(printf '%s' "$_filter_json" | jq -c --arg k "$_fk" --arg v "$_fv" \
+            '. + [{key: $k, vals: ($v | split(","))}]')
+    done
+
+    # Auto-detect formatting: format on TTY, raw when piped
+    format=1
+    if [[ "$raw" -eq 1 ]]; then
+        format=0
+    elif [[ "$force_format" -eq 1 ]]; then
+        format=1
+    elif [[ ! -t 1 && "${CLICOLOR_FORCE:-0}" == "0" ]]; then
+        format=0
+    fi
+
+    # Auto-detect color
+    if [[ "$use_color" -eq -1 ]]; then
+        if [[ "$format" -eq 1 && ( -t 1 || "${CLICOLOR_FORCE:-0}" != "0" ) ]]; then
+            use_color=1
+        else
+            use_color=0
+        fi
+    fi
+
+    # Color palette
+    c_reset="" c_dim=""
+    c_thought="" c_action="" c_observation="" c_human="" c_agent="" c_tp="" c_shell="" c_meta=""
+    if [[ "$use_color" -eq 1 ]]; then
+        c_reset=$'\033[0m'
+        c_dim=$'\033[2m'
+        c_thought=$'\033[36m'     # cyan
+        c_action=$'\033[33m'      # yellow
+        c_observation=$'\033[32m' # green
+        c_human=$'\033[1;37m'     # bold white
+        c_agent=$'\033[35m'       # magenta
+        c_tp=$'\033[34m'          # blue
+        c_shell=$'\033[2m'        # dim
+        c_meta=$'\033[2m'         # dim
+    fi
+}
+
+# Emit a single JSON line: formatted, or raw with jq-side filtering. Shared
+# by cmd_tail and cmd_cat; reads the caller's locals (format, _filter_json)
+# via dynamic scoping.
+_process_line() {
+    local line="$1"
+    if [[ "$format" -eq 1 ]]; then
+        _format_line "$line"
+    else
+        # Raw mode: apply filters via jq if set
+        if [[ "$_filter_json" != "[]" ]]; then
+            printf '%s' "$line" | jq -c --argjson filters "$_filter_json" '
+                def matches_filters($fs):
+                    . as $step |
+                    ($fs | length == 0) or all($fs[];
+                        .key as $k | .vals as $vs |
+                        ($step[$k] // null) as $fv |
+                        ($vs | any(. as $v | $v == ($fv | tostring)))
+                    );
+                select(matches_filters($filters))
+            ' 2>/dev/null || true
+        else
+            printf '%s\n' "$line"
+        fi
+    fi
+}
+
+# Format a single JSON line. Shared by cmd_tail and cmd_cat; reads the
+# caller's locals (color palette, all_fields, _filter_json) via bash
+# dynamic scoping.
+_format_line() {
+    local line="$1"
+    [[ -z "$line" ]] && return 0
+
+    if [[ "$all_fields" -eq 1 ]]; then
+        # -a mode: show timestamp step_id colored [field=val ...] <content>
+        local _all_out
+        _all_out=$(printf '%s' "$line" | jq -r --argjson filters "$_filter_json" '
+            def matches_filters($fs):
+                . as $step |
+                ($fs | length == 0) or all($fs[];
+                    .key as $k | .vals as $vs |
+                    ($step[$k] // null) as $fv |
+                    ($vs | any(. as $v | $v == ($fv | tostring)))
+                );
+            select(matches_filters($filters)) |
+            ((.ts // .timestamp // "0") | tostring) + "\t" +
+            (.step_id // "") + "\t" +
+            (.type // "") + "\t" +
+            ((.content // "") | tostring | gsub("\n"; "\\n") | gsub("\t"; "\\t")) + "\t" +
+            ([to_entries[] | select(.key != "ts" and .key != "timestamp" and .key != "_traj_hex" and .key != "content" and .key != "step_id") |
+                .key + "=" + (.value | tostring | gsub("\n"; "\\n") | gsub("\t"; "\\t"))] | join(" "))
+        ' 2>/dev/null) || return 0
+        [[ -z "$_all_out" ]] && return 0
+
+        local _ts _step_id _type _content _meta
+        _ts=$(printf '%s' "$_all_out" | cut -f1)
+        _step_id=$(printf '%s' "$_all_out" | cut -f2)
+        _type=$(printf '%s' "$_all_out" | cut -f3)
+        _content=$(printf '%s' "$_all_out" | cut -f4)
+        _meta=$(printf '%s' "$_all_out" | cut -f5-)
+
+        # Extract date + time from timestamp
+        local time_display="----/--/-- --:--:--"
+        if [[ "$_ts" =~ ^[0-9]{9,10}$ ]]; then
+            time_display=$(date -r "$_ts" +"%Y/%m/%d %H:%M:%S" 2>/dev/null) || time_display="----/--/-- --:--:--"
+        elif [[ "$_ts" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}:[0-9]{2}:[0-9]{2}) ]]; then
+            time_display="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/${BASH_REMATCH[3]} ${BASH_REMATCH[4]}"
+        elif [[ "$_ts" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2}) ]]; then
+            time_display="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/${BASH_REMATCH[3]} --:--:--"
+        fi
+
+        # Color by type (same scheme as non -a)
+        local color=""
+        case "$_type" in
+            thought|reasoning)  color="$c_thought" ;;
+            action)             color="$c_action" ;;
+            observation)        color="$c_observation" ;;
+            human-msg|message|feedback) color="$c_human" ;;
+            agent-run|agent-msg|final) color="$c_agent" ;;
+            fork|merge|trajectory) color="$c_agent" ;;
+            tp:*|tp-thought)    color="$c_tp" ;;
+            shell-output)       color="$c_shell" ;;
+            shellm-run|run-summary|prompt) color="$c_meta" ;;
+        esac
+
+        # Print: dim(timestamp step_id) color([meta]) content
+        if [[ -n "$_meta" ]]; then
+            printf '%s%s %s%s %s[%s]%s %s\n' \
+                "$c_dim" "$time_display" "$_step_id" "$c_reset" \
+                "$color" "$_meta" "$c_reset" \
+                "$_content"
+        else
+            printf '%s%s %s%s %s\n' \
+                "$c_dim" "$time_display" "$_step_id" "$c_reset" \
+                "$_content"
+        fi
+        return 0
+    fi
+
+    local entry_type content source ts step_id traj_hex
+    { read -r entry_type
+      IFS= read -r content
+      read -r source
+      read -r ts
+      read -r step_id
+      read -r traj_hex
+    } < <(
+        printf '%s' "$line" | jq -r --argjson filters "$_filter_json" '
+            def matches_filters($fs):
+                . as $step |
+                ($fs | length == 0) or all($fs[];
+                    .key as $k | .vals as $vs |
+                    ($step[$k] // null) as $fv |
+                    ($vs | any(. as $v | $v == ($fv | tostring)))
+                );
+            def preview:
+                if   .type == "reasoning"    then
+                    ((.content // .thought // "")[0:100]) +
+                    (if .cmd then " | " + (.cmd | gsub("\n"; " ") | gsub("\\s+"; " "))[0:120] else "" end)
+                elif .type == "shell-output"  then (.stdout // "")
+                elif .type == "shellm-run"    then (.command // "")
+                elif .type == "run-summary"   then (.tldr // "")
+                elif .type == "final"         then ((.content // .thought) // "")
+                elif .type == "fork"          then ("-> " + (.child // ""))
+                elif .type == "trajectory"    then (if (.parent_traj // .parent) then ("<- parent: " + (.parent_traj // .parent)) else ("root" + (if .identity_dir then " (" + .identity_dir + ")" else "" end)) end)
+                elif .type == "merge"         then ("<- " + (.content // .from_traj // ""))
+                else (.content // "")
+                end;
+            select(matches_filters($filters)) |
+            (.type // "unknown"),
+            (preview | if . == "" then "-" else (split("\n") | if length > 1 then .[0] + "..." else .[0] end) end | gsub("\t"; " ")),
+            (.source // "-"),
+            ((.ts // .timestamp // "0") | tostring),
+            (.step_id // "-"),
+            (._traj_hex // "-")
+        ' 2>/dev/null
+    )
+    [[ -n "$entry_type" ]] || return 0
+
+    # Normalize placeholders back to empty
+    [[ "$content" == "-" ]] && content=""
+    [[ "$source" == "-" ]] && source=""
+    [[ "$step_id" == "-" ]] && step_id=""
+    [[ "$traj_hex" == "-" ]] && traj_hex=""
+
+    # Extract date + time from timestamp
+    local time_display="----/--/-- --:--:--"
+    if [[ "$ts" =~ ^[0-9]{9,10}$ ]]; then
+        time_display=$(date -r "$ts" +"%Y/%m/%d %H:%M:%S" 2>/dev/null) || time_display="----/--/-- --:--:--"
+    elif [[ "$ts" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}:[0-9]{2}:[0-9]{2}) ]]; then
+        time_display="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/${BASH_REMATCH[3]} ${BASH_REMATCH[4]}"
+    elif [[ "$ts" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2}) ]]; then
+        time_display="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/${BASH_REMATCH[3]} --:--:--"
+    fi
+
+    # Color by type
+    local color=""
+    case "$entry_type" in
+        thought|reasoning)  color="$c_thought" ;;
+        action)             color="$c_action" ;;
+        observation)        color="$c_observation" ;;
+        human-msg|message|feedback) color="$c_human" ;;
+        agent-run|agent-msg|final) color="$c_agent" ;;
+        fork|merge|trajectory) color="$c_agent" ;;
+        tp:*|tp-thought)    color="$c_tp" ;;
+        shell-output)       color="$c_shell" ;;
+        shellm-run|run-summary|prompt) color="$c_meta" ;;
+    esac
+
+    local type_tag="$entry_type"
+    [[ -n "$source" ]] && type_tag="$entry_type, $source"
+
+    local short_id="${step_id:0:8}"
+    local traj_tag=""
+    [[ -n "$traj_hex" ]] && traj_tag="${c_dim}${traj_hex}/${c_reset}"
+
+    printf '%s%s%s %s%s%s%s %s[%s]%s %s\n' \
+        "$c_dim" "$time_display" "$c_reset" \
+        "$traj_tag" \
+        "$c_dim" "$short_id" "$c_reset" \
+        "$color" "$type_tag" "$c_reset" \
+        "$content"
+}
+
 cmd_tail() {
     local n=10 follow=0 raw=0 force_format=0 use_color=-1 traj_dir_opt="" traj_id_opt="" recursive=0 all_fields=0
     local -a filters=()
@@ -831,229 +1078,10 @@ TAILHELP
 
     # recursive + follow is handled below
 
-    # Build filter JSON array: [{key:"field", vals:["v1","v2"]}, ...]
-    local _filter_json='[]'
-    local _f
-    for _f in "${filters[@]+"${filters[@]}"}"; do
-        local _fk="${_f%%=*}" _fv="${_f#*=}"
-        _filter_json=$(printf '%s' "$_filter_json" | jq -c --arg k "$_fk" --arg v "$_fv" \
-            '. + [{key: $k, vals: ($v | split(","))}]')
-    done
-
-    # Auto-detect formatting: format on TTY, raw when piped
-    local format=1
-    if [[ "$raw" -eq 1 ]]; then
-        format=0
-    elif [[ "$force_format" -eq 1 ]]; then
-        format=1
-    elif [[ ! -t 1 && "${CLICOLOR_FORCE:-0}" == "0" ]]; then
-        format=0
-    fi
-
-    # Auto-detect color
-    if [[ "$use_color" -eq -1 ]]; then
-        if [[ "$format" -eq 1 && ( -t 1 || "${CLICOLOR_FORCE:-0}" != "0" ) ]]; then
-            use_color=1
-        else
-            use_color=0
-        fi
-    fi
-
-    # Color palette
-    local c_reset="" c_dim=""
-    local c_thought="" c_action="" c_observation="" c_human="" c_agent="" c_tp="" c_shell="" c_meta=""
-    if [[ "$use_color" -eq 1 ]]; then
-        c_reset=$'\033[0m'
-        c_dim=$'\033[2m'
-        c_thought=$'\033[36m'     # cyan
-        c_action=$'\033[33m'      # yellow
-        c_observation=$'\033[32m' # green
-        c_human=$'\033[1;37m'     # bold white
-        c_agent=$'\033[35m'       # magenta
-        c_tp=$'\033[34m'          # blue
-        c_shell=$'\033[2m'        # dim
-        c_meta=$'\033[2m'         # dim
-    fi
-
-    # Format a single JSON line
-    _format_line() {
-        local line="$1"
-        [[ -z "$line" ]] && return 0
-
-        if [[ "$all_fields" -eq 1 ]]; then
-            # -a mode: show timestamp step_id colored [field=val ...] <content>
-            local _all_out
-            _all_out=$(printf '%s' "$line" | jq -r --argjson filters "$_filter_json" '
-                def matches_filters($fs):
-                    . as $step |
-                    ($fs | length == 0) or all($fs[];
-                        .key as $k | .vals as $vs |
-                        ($step[$k] // null) as $fv |
-                        ($vs | any(. as $v | $v == ($fv | tostring)))
-                    );
-                select(matches_filters($filters)) |
-                ((.ts // .timestamp // "0") | tostring) + "\t" +
-                (.step_id // "") + "\t" +
-                (.type // "") + "\t" +
-                ((.content // "") | tostring | gsub("\n"; "\\n") | gsub("\t"; "\\t")) + "\t" +
-                ([to_entries[] | select(.key != "ts" and .key != "timestamp" and .key != "_traj_hex" and .key != "content" and .key != "step_id") |
-                    .key + "=" + (.value | tostring | gsub("\n"; "\\n") | gsub("\t"; "\\t"))] | join(" "))
-            ' 2>/dev/null) || return 0
-            [[ -z "$_all_out" ]] && return 0
-
-            local _ts _step_id _type _content _meta
-            _ts=$(printf '%s' "$_all_out" | cut -f1)
-            _step_id=$(printf '%s' "$_all_out" | cut -f2)
-            _type=$(printf '%s' "$_all_out" | cut -f3)
-            _content=$(printf '%s' "$_all_out" | cut -f4)
-            _meta=$(printf '%s' "$_all_out" | cut -f5-)
-
-            # Extract date + time from timestamp
-            local time_display="----/--/-- --:--:--"
-            if [[ "$_ts" =~ ^[0-9]{9,10}$ ]]; then
-                time_display=$(date -r "$_ts" +"%Y/%m/%d %H:%M:%S" 2>/dev/null) || time_display="----/--/-- --:--:--"
-            elif [[ "$_ts" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}:[0-9]{2}:[0-9]{2}) ]]; then
-                time_display="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/${BASH_REMATCH[3]} ${BASH_REMATCH[4]}"
-            elif [[ "$_ts" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2}) ]]; then
-                time_display="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/${BASH_REMATCH[3]} --:--:--"
-            fi
-
-            # Color by type (same scheme as non -a)
-            local color=""
-            case "$_type" in
-                thought|reasoning)  color="$c_thought" ;;
-                action)             color="$c_action" ;;
-                observation)        color="$c_observation" ;;
-                human-msg|message|feedback) color="$c_human" ;;
-                agent-run|agent-msg|final) color="$c_agent" ;;
-                fork|merge|trajectory) color="$c_agent" ;;
-                tp:*|tp-thought)    color="$c_tp" ;;
-                shell-output)       color="$c_shell" ;;
-                shellm-run|run-summary|prompt) color="$c_meta" ;;
-            esac
-
-            # Print: dim(timestamp step_id) color([meta]) content
-            if [[ -n "$_meta" ]]; then
-                printf '%s%s %s%s %s[%s]%s %s\n' \
-                    "$c_dim" "$time_display" "$_step_id" "$c_reset" \
-                    "$color" "$_meta" "$c_reset" \
-                    "$_content"
-            else
-                printf '%s%s %s%s %s\n' \
-                    "$c_dim" "$time_display" "$_step_id" "$c_reset" \
-                    "$_content"
-            fi
-            return 0
-        fi
-
-        local entry_type content source ts step_id traj_hex
-        { read -r entry_type
-          IFS= read -r content
-          read -r source
-          read -r ts
-          read -r step_id
-          read -r traj_hex
-        } < <(
-            printf '%s' "$line" | jq -r --argjson filters "$_filter_json" '
-                def matches_filters($fs):
-                    . as $step |
-                    ($fs | length == 0) or all($fs[];
-                        .key as $k | .vals as $vs |
-                        ($step[$k] // null) as $fv |
-                        ($vs | any(. as $v | $v == ($fv | tostring)))
-                    );
-                def preview:
-                    if   .type == "reasoning"    then
-                        ((.content // .thought // "")[0:100]) +
-                        (if .cmd then " | " + (.cmd | gsub("\n"; " ") | gsub("\\s+"; " "))[0:120] else "" end)
-                    elif .type == "shell-output"  then (.stdout // "")
-                    elif .type == "shellm-run"    then (.command // "")
-                    elif .type == "run-summary"   then (.tldr // "")
-                    elif .type == "final"         then ((.content // .thought) // "")
-                    elif .type == "fork"          then ("-> " + (.child // ""))
-                    elif .type == "trajectory"    then (if (.parent_traj // .parent) then ("<- parent: " + (.parent_traj // .parent)) else ("root" + (if .identity_dir then " (" + .identity_dir + ")" else "" end)) end)
-                    elif .type == "merge"         then ("<- " + (.content // .from_traj // ""))
-                    else (.content // "")
-                    end;
-                select(matches_filters($filters)) |
-                (.type // "unknown"),
-                (preview | if . == "" then "-" else (split("\n") | if length > 1 then .[0] + "..." else .[0] end) end | gsub("\t"; " ")),
-                (.source // "-"),
-                ((.ts // .timestamp // "0") | tostring),
-                (.step_id // "-"),
-                (._traj_hex // "-")
-            ' 2>/dev/null
-        )
-        [[ -n "$entry_type" ]] || return 0
-
-        # Normalize placeholders back to empty
-        [[ "$content" == "-" ]] && content=""
-        [[ "$source" == "-" ]] && source=""
-        [[ "$step_id" == "-" ]] && step_id=""
-        [[ "$traj_hex" == "-" ]] && traj_hex=""
-
-        # Extract date + time from timestamp
-        local time_display="----/--/-- --:--:--"
-        if [[ "$ts" =~ ^[0-9]{9,10}$ ]]; then
-            time_display=$(date -r "$ts" +"%Y/%m/%d %H:%M:%S" 2>/dev/null) || time_display="----/--/-- --:--:--"
-        elif [[ "$ts" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}:[0-9]{2}:[0-9]{2}) ]]; then
-            time_display="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/${BASH_REMATCH[3]} ${BASH_REMATCH[4]}"
-        elif [[ "$ts" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2}) ]]; then
-            time_display="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/${BASH_REMATCH[3]} --:--:--"
-        fi
-
-        # Color by type
-        local color=""
-        case "$entry_type" in
-            thought|reasoning)  color="$c_thought" ;;
-            action)             color="$c_action" ;;
-            observation)        color="$c_observation" ;;
-            human-msg|message|feedback) color="$c_human" ;;
-            agent-run|agent-msg|final) color="$c_agent" ;;
-            fork|merge|trajectory) color="$c_agent" ;;
-            tp:*|tp-thought)    color="$c_tp" ;;
-            shell-output)       color="$c_shell" ;;
-            shellm-run|run-summary|prompt) color="$c_meta" ;;
-        esac
-
-        local type_tag="$entry_type"
-        [[ -n "$source" ]] && type_tag="$entry_type, $source"
-
-        local short_id="${step_id:0:8}"
-        local traj_tag=""
-        [[ -n "$traj_hex" ]] && traj_tag="${c_dim}${traj_hex}/${c_reset}"
-
-        printf '%s%s%s %s%s%s%s %s[%s]%s %s\n' \
-            "$c_dim" "$time_display" "$c_reset" \
-            "$traj_tag" \
-            "$c_dim" "$short_id" "$c_reset" \
-            "$color" "$type_tag" "$c_reset" \
-            "$content"
-    }
-
-    # Pipe handler: raw output or formatted
-    _process_line() {
-        local line="$1"
-        if [[ "$format" -eq 1 ]]; then
-            _format_line "$line"
-        else
-            # Raw mode: apply filters via jq if set
-            if [[ "$_filter_json" != "[]" ]]; then
-                printf '%s' "$line" | jq -c --argjson filters "$_filter_json" '
-                    def matches_filters($fs):
-                        . as $step |
-                        ($fs | length == 0) or all($fs[];
-                            .key as $k | .vals as $vs |
-                            ($step[$k] // null) as $fv |
-                            ($vs | any(. as $v | $v == ($fv | tostring)))
-                        );
-                    select(matches_filters($filters))
-                ' 2>/dev/null || true
-            else
-                printf '%s\n' "$line"
-            fi
-        fi
-    }
+    # Filter array, format/color detection, palette (shared helper)
+    local _filter_json format
+    local c_reset c_dim c_thought c_action c_observation c_human c_agent c_tp c_shell c_meta
+    _setup_stream_format
 
     # Exit cleanly on SIGINT/SIGPIPE
     trap 'exit 0' INT PIPE
@@ -1065,35 +1093,8 @@ TAILHELP
         _all_files=$(_collect_recursive_files "$traj_file") || true
         [[ -z "$_all_files" ]] && return 0
 
-        # For each file: inject _traj_hex, convert ts to UTC epoch for sorting,
-        # then sort numerically and take last N.
-        local f hex
-        while IFS= read -r f; do
-            [[ -f "$f" ]] || continue
-            hex=$(_parse_hex_id "$f")
-            jq -R -r --arg h "$hex" --argjson filters "$_filter_json" '
-                fromjson? // empty |
-                def matches_filters($fs):
-                    . as $step |
-                    ($fs | length == 0) or all($fs[];
-                        .key as $k | .vals as $vs |
-                        ($step[$k] // null) as $fv |
-                        ($vs | any(. as $v | $v == ($fv | tostring)))
-                    );
-                def to_epoch:
-                    tostring |
-                    sub("\\.[0-9]+"; "") |
-                    (capture("^(?<dt>\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2})(?<sign>[+-])(?<oh>\\d{2}):?(?<om>\\d{2})$") //
-                     {dt: ., sign: "+", oh: "00", om: "00"}) |
-                    ((.oh | tonumber) * 3600 + (.om | tonumber) * 60) as $off |
-                    ((.dt + "Z") | fromdateiso8601) as $local_epoch |
-                    (if .sign == "-" then ($local_epoch + $off) else ($local_epoch - $off) end) |
-                    tostring;
-                . + {_traj_hex: $h} | select(matches_filters($filters))
-                | ((.ts // .timestamp // "0") | to_epoch) + "\t" + tojson
-            ' "$f" 2>/dev/null || true
-        done <<< "$_all_files" \
-            | sort -t$'\t' -k1,1n \
+        local f hex  # also used by the follow block below
+        _sorted_tree_steps \
             | tail -n "$n" \
             | cut -f2- \
             | while IFS= read -r line; do
@@ -1515,228 +1516,11 @@ CATHELP
 
     [[ -f "$traj_file" ]] || return 0
 
-    # Build filter JSON array: [{key:"field", vals:["v1","v2"]}, ...]
-    local _filter_json='[]'
-    local _f
-    for _f in "${filters[@]+"${filters[@]}"}"; do
-        local _fk="${_f%%=*}" _fv="${_f#*=}"
-        _filter_json=$(printf '%s' "$_filter_json" | jq -c --arg k "$_fk" --arg v "$_fv" \
-            '. + [{key: $k, vals: ($v | split(","))}]')
-    done
+    # Filter array, format/color detection, palette (shared helper)
+    local _filter_json format
+    local c_reset c_dim c_thought c_action c_observation c_human c_agent c_tp c_shell c_meta
+    _setup_stream_format
 
-    # Auto-detect formatting: format on TTY, raw when piped
-    local format=1
-    if [[ "$raw" -eq 1 ]]; then
-        format=0
-    elif [[ "$force_format" -eq 1 ]]; then
-        format=1
-    elif [[ ! -t 1 && "${CLICOLOR_FORCE:-0}" == "0" ]]; then
-        format=0
-    fi
-
-    # Auto-detect color
-    if [[ "$use_color" -eq -1 ]]; then
-        if [[ "$format" -eq 1 && ( -t 1 || "${CLICOLOR_FORCE:-0}" != "0" ) ]]; then
-            use_color=1
-        else
-            use_color=0
-        fi
-    fi
-
-    # Color palette
-    local c_reset="" c_dim=""
-    local c_thought="" c_action="" c_observation="" c_human="" c_agent="" c_tp="" c_shell="" c_meta=""
-    if [[ "$use_color" -eq 1 ]]; then
-        c_reset=$'\033[0m'
-        c_dim=$'\033[2m'
-        c_thought=$'\033[36m'     # cyan
-        c_action=$'\033[33m'      # yellow
-        c_observation=$'\033[32m' # green
-        c_human=$'\033[1;37m'     # bold white
-        c_agent=$'\033[35m'       # magenta
-        c_tp=$'\033[34m'          # blue
-        c_shell=$'\033[2m'        # dim
-        c_meta=$'\033[2m'         # dim
-    fi
-
-    # Format a single JSON line (same as cmd_tail's _format_line)
-    _cat_format_line() {
-        local line="$1"
-        [[ -z "$line" ]] && return 0
-
-        if [[ "$all_fields" -eq 1 ]]; then
-            # -a mode: show timestamp step_id colored [field=val ...] <content>
-            local _all_out
-            _all_out=$(printf '%s' "$line" | jq -r --argjson filters "$_filter_json" '
-                def matches_filters($fs):
-                    . as $step |
-                    ($fs | length == 0) or all($fs[];
-                        .key as $k | .vals as $vs |
-                        ($step[$k] // null) as $fv |
-                        ($vs | any(. as $v | $v == ($fv | tostring)))
-                    );
-                select(matches_filters($filters)) |
-                ((.ts // .timestamp // "0") | tostring) + "\t" +
-                (.step_id // "") + "\t" +
-                (.type // "") + "\t" +
-                ((.content // "") | tostring | gsub("\n"; "\\n") | gsub("\t"; "\\t")) + "\t" +
-                ([to_entries[] | select(.key != "ts" and .key != "timestamp" and .key != "_traj_hex" and .key != "content" and .key != "step_id") |
-                    .key + "=" + (.value | tostring | gsub("\n"; "\\n") | gsub("\t"; "\\t"))] | join(" "))
-            ' 2>/dev/null) || return 0
-            [[ -z "$_all_out" ]] && return 0
-
-            local _ts _step_id _type _content _meta
-            _ts=$(printf '%s' "$_all_out" | cut -f1)
-            _step_id=$(printf '%s' "$_all_out" | cut -f2)
-            _type=$(printf '%s' "$_all_out" | cut -f3)
-            _content=$(printf '%s' "$_all_out" | cut -f4)
-            _meta=$(printf '%s' "$_all_out" | cut -f5-)
-
-            # Extract date + time from timestamp
-            local time_display="----/--/-- --:--:--"
-            if [[ "$_ts" =~ ^[0-9]{9,10}$ ]]; then
-                time_display=$(date -r "$_ts" +"%Y/%m/%d %H:%M:%S" 2>/dev/null) || time_display="----/--/-- --:--:--"
-            elif [[ "$_ts" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}:[0-9]{2}:[0-9]{2}) ]]; then
-                time_display="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/${BASH_REMATCH[3]} ${BASH_REMATCH[4]}"
-            elif [[ "$_ts" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2}) ]]; then
-                time_display="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/${BASH_REMATCH[3]} --:--:--"
-            fi
-
-            # Color by type (same scheme as non -a)
-            local color=""
-            case "$_type" in
-                thought|reasoning)  color="$c_thought" ;;
-                action)             color="$c_action" ;;
-                observation)        color="$c_observation" ;;
-                human-msg|message|feedback) color="$c_human" ;;
-                agent-run|agent-msg|final) color="$c_agent" ;;
-                fork|merge|trajectory) color="$c_agent" ;;
-                tp:*|tp-thought)    color="$c_tp" ;;
-                shell-output)       color="$c_shell" ;;
-                shellm-run|run-summary|prompt) color="$c_meta" ;;
-            esac
-
-            # Print: dim(timestamp step_id) color([meta]) content
-            if [[ -n "$_meta" ]]; then
-                printf '%s%s %s%s %s[%s]%s %s\n' \
-                    "$c_dim" "$time_display" "$_step_id" "$c_reset" \
-                    "$color" "$_meta" "$c_reset" \
-                    "$_content"
-            else
-                printf '%s%s %s%s %s\n' \
-                    "$c_dim" "$time_display" "$_step_id" "$c_reset" \
-                    "$_content"
-            fi
-            return 0
-        fi
-
-        local entry_type content source ts step_id traj_hex
-        { read -r entry_type
-          IFS= read -r content
-          read -r source
-          read -r ts
-          read -r step_id
-          read -r traj_hex
-        } < <(
-            printf '%s' "$line" | jq -r --argjson filters "$_filter_json" '
-                def matches_filters($fs):
-                    . as $step |
-                    ($fs | length == 0) or all($fs[];
-                        .key as $k | .vals as $vs |
-                        ($step[$k] // null) as $fv |
-                        ($vs | any(. as $v | $v == ($fv | tostring)))
-                    );
-                def preview:
-                    if   .type == "reasoning"    then
-                        ((.content // .thought // "")[0:100]) +
-                        (if .cmd then " | " + (.cmd | gsub("\n"; " ") | gsub("\\s+"; " "))[0:120] else "" end)
-                    elif .type == "shell-output"  then (.stdout // "")
-                    elif .type == "shellm-run"    then (.command // "")
-                    elif .type == "run-summary"   then (.tldr // "")
-                    elif .type == "final"         then ((.content // .thought) // "")
-                    elif .type == "fork"          then ("-> " + (.child // ""))
-                    elif .type == "trajectory"    then (if (.parent_traj // .parent) then ("<- parent: " + (.parent_traj // .parent)) else ("root" + (if .identity_dir then " (" + .identity_dir + ")" else "" end)) end)
-                    elif .type == "merge"         then ("<- " + (.content // .from_traj // ""))
-                    else (.content // "")
-                    end;
-                select(matches_filters($filters)) |
-                (.type // "unknown"),
-                (preview | if . == "" then "-" else (split("\n") | if length > 1 then .[0] + "..." else .[0] end) end | gsub("\t"; " ")),
-                (.source // "-"),
-                ((.ts // .timestamp // "0") | tostring),
-                (.step_id // "-"),
-                (._traj_hex // "-")
-            ' 2>/dev/null
-        )
-        [[ -n "$entry_type" ]] || return 0
-
-        # Normalize placeholders back to empty
-        [[ "$content" == "-" ]] && content=""
-        [[ "$source" == "-" ]] && source=""
-        [[ "$step_id" == "-" ]] && step_id=""
-        [[ "$traj_hex" == "-" ]] && traj_hex=""
-
-        # Extract date + time from timestamp
-        local time_display="----/--/-- --:--:--"
-        if [[ "$ts" =~ ^[0-9]{9,10}$ ]]; then
-            time_display=$(date -r "$ts" +"%Y/%m/%d %H:%M:%S" 2>/dev/null) || time_display="----/--/-- --:--:--"
-        elif [[ "$ts" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}:[0-9]{2}:[0-9]{2}) ]]; then
-            time_display="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/${BASH_REMATCH[3]} ${BASH_REMATCH[4]}"
-        elif [[ "$ts" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2}) ]]; then
-            time_display="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/${BASH_REMATCH[3]} --:--:--"
-        fi
-
-        # Color by type
-        local color=""
-        case "$entry_type" in
-            thought|reasoning)  color="$c_thought" ;;
-            action)             color="$c_action" ;;
-            observation)        color="$c_observation" ;;
-            human-msg|message|feedback) color="$c_human" ;;
-            agent-run|agent-msg|final) color="$c_agent" ;;
-            fork|merge|trajectory) color="$c_agent" ;;
-            tp:*|tp-thought)    color="$c_tp" ;;
-            shell-output)       color="$c_shell" ;;
-            shellm-run|run-summary|prompt) color="$c_meta" ;;
-        esac
-
-        local type_tag="$entry_type"
-        [[ -n "$source" ]] && type_tag="$entry_type, $source"
-
-        local short_id="${step_id:0:8}"
-        local traj_tag=""
-        [[ -n "$traj_hex" ]] && traj_tag="${c_dim}${traj_hex}/${c_reset}"
-
-        printf '%s%s%s %s%s%s%s %s[%s]%s %s\n' \
-            "$c_dim" "$time_display" "$c_reset" \
-            "$traj_tag" \
-            "$c_dim" "$short_id" "$c_reset" \
-            "$color" "$type_tag" "$c_reset" \
-            "$content"
-    }
-
-    # Output a single line (raw or formatted)
-    _cat_output() {
-        local line="$1"
-        if [[ "$format" -eq 1 ]]; then
-            _cat_format_line "$line"
-        else
-            if [[ "$_filter_json" != "[]" ]]; then
-                printf '%s' "$line" | jq -c --argjson filters "$_filter_json" '
-                    def matches_filters($fs):
-                        . as $step |
-                        ($fs | length == 0) or all($fs[];
-                            .key as $k | .vals as $vs |
-                            ($step[$k] // null) as $fv |
-                            ($vs | any(. as $v | $v == ($fv | tostring)))
-                        );
-                    select(matches_filters($filters))
-                ' 2>/dev/null || true
-            else
-                printf '%s\n' "$line"
-            fi
-        fi
-    }
 
     trap 'exit 0' INT PIPE
 
@@ -1746,38 +1530,11 @@ CATHELP
         _all_files=$(_collect_recursive_files "$traj_file") || true
         [[ -z "$_all_files" ]] && return 0
 
-        # For each file: inject _traj_hex, filter, convert ts to UTC epoch for sorting
-        local f hex
-        while IFS= read -r f; do
-            [[ -f "$f" ]] || continue
-            hex=$(_parse_hex_id "$f")
-            jq -R -r --arg h "$hex" --argjson filters "$_filter_json" '
-                fromjson? // empty |
-                def matches_filters($fs):
-                    . as $step |
-                    ($fs | length == 0) or all($fs[];
-                        .key as $k | .vals as $vs |
-                        ($step[$k] // null) as $fv |
-                        ($vs | any(. as $v | $v == ($fv | tostring)))
-                    );
-                def to_epoch:
-                    tostring |
-                    sub("\\.[0-9]+"; "") |
-                    (capture("^(?<dt>\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2})(?<sign>[+-])(?<oh>\\d{2}):?(?<om>\\d{2})$") //
-                     {dt: ., sign: "+", oh: "00", om: "00"}) |
-                    ((.oh | tonumber) * 3600 + (.om | tonumber) * 60) as $off |
-                    ((.dt + "Z") | fromdateiso8601) as $local_epoch |
-                    (if .sign == "-" then ($local_epoch + $off) else ($local_epoch - $off) end) |
-                    tostring;
-                . + {_traj_hex: $h} | select(matches_filters($filters))
-                | ((.ts // .timestamp // "0") | to_epoch) + "\t" + tojson
-            ' "$f" 2>/dev/null || true
-        done <<< "$_all_files" \
-            | sort -t$'\t' -k1,1n \
+        _sorted_tree_steps \
             | cut -f2- \
             | if [[ "$format" -eq 1 ]]; then
                 while IFS= read -r line; do
-                    _cat_format_line "$line"
+                    _format_line "$line"
                 done
               else
                 # Raw mode: lines were already filtered by the per-file jq
@@ -1785,7 +1542,7 @@ CATHELP
                 cat
               fi
     elif [[ "$format" -eq 0 ]]; then
-        # Raw mode: one pass over the whole file. The per-line _cat_output
+        # Raw mode: one pass over the whole file. The per-line _process_line
         # spawns a jq per step when filters are set, which on a large
         # trajectory (tens of thousands of steps) turns every filtered
         # cat into minutes of process spawning.
@@ -1806,7 +1563,7 @@ CATHELP
         fi
     else
         while IFS= read -r line; do
-            _cat_output "$line"
+            _process_line "$line"
         done < "$traj_file"
     fi
 }
@@ -1893,32 +1650,6 @@ cmd_exists() {
 }
 
 # cmd_info removed — use cmd_show with a trajectory ID instead
-
-# ---------------------------------------------------------------------------
-# isroot
-# ---------------------------------------------------------------------------
-
-cmd_isroot() {
-    local traj_dir_opt="" traj_id_opt=""
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --traj_dir)  traj_dir_opt="${2:?--traj_dir requires DIR}"; shift 2 ;;
-            -*)          die "isroot: unknown option: $1" ;;
-            *)
-                if [[ -z "$traj_id_opt" ]]; then
-                    traj_id_opt="$1"
-                else
-                    die "isroot: unexpected argument: $1"
-                fi
-                shift
-                ;;
-        esac
-    done
-
-    local traj_file
-    traj_file=$(require_traj_file "$traj_dir_opt" "$traj_id_opt" "isroot")
-    _is_root_file "$traj_file"
-}
 
 # ---------------------------------------------------------------------------
 # root — walk up parent chain to find root
@@ -2322,19 +2053,6 @@ cmd_list() {
     fi
 }
 
-# Backward-compat aliases
-cmd_all()      { cmd_list "$@"; }
-cmd_parents()  { cmd_list --children 0 "$@"; }
-cmd_children() { cmd_list --parents 0 "$@"; }
-
-cmd_repl() {
-    # Prefer the renamed TUI binary; fall back to a pre-rename build.
-    local tui
-    tui=$(command -v shelly-tui || command -v shellm-tui) \
-        || die "traj repl needs shelly-tui on PATH (build it from tui/)"
-    exec "$tui" traj "$@"
-}
-
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # check — validate trajectory JSONL for malformed lines
@@ -2449,17 +2167,11 @@ case "$cmd" in
     count)    cmd_count "$@" ;;
     last)     cmd_last "$@" ;;
     cat)      cmd_cat "$@" ;;
-    dump)     cmd_cat "$@" ;;  # backwards compat alias
     exists)   cmd_exists "$@" ;;
     path)     cmd_path "$@" ;;
     list)     cmd_list "$@" ;;
-    isroot)   cmd_isroot "$@" ;;
     root)     cmd_root "$@" ;;
     check)    cmd_check "$@" ;;
-    repl)     cmd_repl ;;
-    all)      cmd_all "$@" ;;
-    parents)  cmd_parents "$@" ;;
-    children) cmd_children "$@" ;;
     help|-h|--help) usage 0 ;;
     *) die "unknown command: $cmd" ;;
 esac

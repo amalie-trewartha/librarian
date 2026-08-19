@@ -1074,49 +1074,6 @@ action_promote() {
     _show_kernel_budget
 }
 
-action_demote() {
-    local name="$1"
-    local force="$2"
-
-    [[ -z "$SKILLS_KERNEL_DIR" ]] && die "No kernel directory configured (set SKILLS_KERNEL_DIR)"
-
-    # Find skill in kernel
-    local skill_path=""
-    local actual_name=""
-    if [[ -d "$SKILLS_KERNEL_DIR/$name" && -f "$SKILLS_KERNEL_DIR/$name/SKILL.md" ]]; then
-        skill_path="$SKILLS_KERNEL_DIR/$name"
-        actual_name="$name"
-    else
-        local kdir
-        for kdir in "$SKILLS_KERNEL_DIR"/*/; do
-            [[ -f "${kdir}SKILL.md" ]] || continue
-            local kname
-            kname=$(frontmatter_field "${kdir}SKILL.md" "name")
-            if [[ "$kname" == "$name" ]]; then
-                skill_path="${kdir%/}"
-                actual_name="$name"
-                break
-            fi
-        done
-    fi
-
-    [[ -z "$skill_path" ]] && die "Skill '$name' not found in kernel"
-
-    # Refuse to demote mem unless --force
-    if [[ "$actual_name" == "mem" && "$force" -eq 0 ]]; then
-        die "Cannot demote 'mem' (core skill). Use --force to override."
-    fi
-
-    # Move to skills dir
-    local dirname
-    dirname=$(basename "$skill_path")
-    mkdir -p "$SKILLS_DIR"
-    mv "$skill_path" "$SKILLS_DIR/$dirname"
-
-    info "Demoted ${_bold}$name${_reset} from kernel"
-    _show_kernel_budget
-}
-
 action_kernel() {
     if [[ -z "$SKILLS_KERNEL_DIR" || ! -d "$SKILLS_KERNEL_DIR" ]]; then
         echo "No kernel directory configured (set SKILLS_KERNEL_DIR)." >&2
@@ -1279,7 +1236,6 @@ Commands I can run:
   skills init [name]                        Scaffold a new skill
   skills list-json                          List skills as JSON
   skills promote <name>                     Promote a skill to my kernel (always loaded)
-  skills demote <name>                      Demote a kernel skill back to on-demand
   skills kernel                             Show kernel skills with token counts
   skills remote                             List configured skill remotes
   skills remote add <url|path>              Add a skill remote
@@ -1352,7 +1308,6 @@ Usage:
   skills init [name]                        Scaffold a new skill in current dir
   skills list-json                          List skills as JSON (for programmatic use)
   skills promote <name>                     Promote a skill to the kernel
-  skills demote <name>                      Demote a kernel skill back to on-demand
   skills kernel                             Show kernel skills with token counts
   skills prompt                             Print skills system prompt (for LLM context)
   skills remote                             List configured remotes
@@ -1420,7 +1375,6 @@ EOF
 
 main() {
     local action=""
-    local action_arg=""
     local project=0
     local force=0
     local init_name=""
@@ -1441,7 +1395,6 @@ main() {
             check)     action="check";    shift ;;
             init)      action="init";     shift ;;
             promote)   action="promote";  shift ;;
-            demote)    action="demote";   shift ;;
             kernel)    action="kernel";   shift ;;
             list-json) action="list-json"; shift ;;
             prompt)    action="prompt";   shift ;;
@@ -1502,17 +1455,6 @@ main() {
                 init_desc="${2:?--description requires a value}"
                 shift 2
                 ;;
-            # Legacy flag forms (still supported)
-            --list)      action="list";     shift ;;
-            --install)   action="install";  shift ;;
-            --remove)    action="remove";   shift ;;
-            --show)      action="show";     shift ;;
-            --check)     action="check";    shift ;;
-            --list-json) action="list-json"; shift ;;
-            --init)      action="init";     shift ;;
-            --promote)   action="promote";  shift ;;
-            --demote)    action="demote";   shift ;;
-            --kernel)    action="kernel";   shift ;;
             -*)
                 die "Unknown option: $1 (try skills --help)"
                 ;;
@@ -1535,7 +1477,6 @@ main() {
             check)     action="check";    _positional=("${_positional[@]:1}") ;;
             init)      action="init";     _positional=("${_positional[@]:1}") ;;
             promote)   action="promote";  _positional=("${_positional[@]:1}") ;;
-            demote)    action="demote";   _positional=("${_positional[@]:1}") ;;
             kernel)    action="kernel";   _positional=("${_positional[@]:1}") ;;
             prompt)    action="prompt";   _positional=("${_positional[@]:1}") ;;
             remote)    action="remote";   _positional=("${_positional[@]:1}") ;;
@@ -1578,10 +1519,6 @@ main() {
         promote)
             [[ -z "$remaining" ]] && die "promote requires a skill name"
             action_promote "$remaining"
-            ;;
-        demote)
-            [[ -z "$remaining" ]] && die "demote requires a skill name"
-            action_demote "$remaining" "$force"
             ;;
         search)
             [[ -z "$remaining" ]] && die "search requires a query"

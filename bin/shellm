@@ -140,21 +140,6 @@ debug() {
     fi
 }
 
-make_workspace_name() {
-    local context="$1"
-    local timestamp
-    timestamp=$(date +%Y-%m-%d-%H-%M-%S)
-    local rand
-    rand=$(head -c4 /dev/urandom | od -An -tx1 | tr -d ' \n')
-    # Sanitize context: lowercase, spaces→hyphens, strip non-alnum/hyphens, collapse hyphens, truncate to 70 chars
-    local slug
-    slug=$(printf '%s' "$context" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-' | sed 's/--*/-/g; s/^-//; s/-$//' | cut -c1-70)
-    if [[ -z "$slug" ]]; then
-        slug="unnamed"
-    fi
-    echo "${timestamp}_${rand}_${slug}"
-}
-
 usage_text() {
     cat <<'EOF'
 Usage:
@@ -250,12 +235,6 @@ truncate_output() {
     fi
 }
 
-# Escape a string for safe embedding in JSON
-json_escape() {
-    local s="$1"
-    printf '%s' "$s" | jq -Rsa .
-}
-
 redact_sensitive() {
     local input="$1"
     local output="$input"
@@ -270,57 +249,6 @@ redact_sensitive() {
 # ---------------------------------------------------------------------------
 # Trajectory helpers
 # ---------------------------------------------------------------------------
-
-# Resolve a traj_id to its file path within traj_dir.
-# Mirrors traj's _resolve_traj_id (which is internal to bin/traj).
-_resolve_traj_id() {
-    local traj_dir="$1" traj_id="$2"
-
-    # 1. Exact path
-    if [[ -f "$traj_dir/$traj_id" ]]; then
-        printf '%s\n' "$traj_dir/$traj_id"
-        return
-    fi
-
-    # 2. Directory-based: $traj_dir/$traj_id/trajectory.jsonl
-    if [[ -f "$traj_dir/$traj_id/trajectory.jsonl" ]]; then
-        printf '%s\n' "$traj_dir/$traj_id/trajectory.jsonl"
-        return
-    fi
-
-    # 3. UUID handling: extract first segment as hex prefix for glob matching.
-    local hex_prefix="$traj_id"
-    if [[ "$traj_id" == *-*-*-*-* ]]; then
-        hex_prefix="${traj_id%%-*}"
-    fi
-
-    # 4. Directory glob: find directories named <hex_prefix>-*
-    local match
-    match=$(find "$traj_dir" -type d -name "${hex_prefix}-*" 2>/dev/null | head -1)
-    if [[ -n "$match" && -f "$match/trajectory.jsonl" ]]; then
-        printf '%s\n' "$match/trajectory.jsonl"
-        return
-    fi
-
-    # 5. Legacy .jsonl suffix
-    if [[ "$traj_id" != *.jsonl && -f "$traj_dir/${traj_id}.jsonl" ]]; then
-        printf '%s\n' "$traj_dir/${traj_id}.jsonl"
-        return
-    fi
-
-    # 6. Legacy flat file glob: *_<hex_prefix>_*.jsonl
-    match=$(find "$traj_dir" -maxdepth 1 -name "*_${hex_prefix}_*.jsonl" -not -path '*/blobs/*' 2>/dev/null | head -1)
-    if [[ -n "$match" ]]; then
-        printf '%s\n' "$match"
-        return
-    fi
-
-    return 1
-}
-
-_shellm_time() {
-    date +%s
-}
 
 extract_reasoning() {
     local response="$1"
@@ -566,6 +494,13 @@ resolve_shellm_tool_path() {
     local path
 
     path=$(tool_sibling_path "$shellm_path" "$tool")
+    if [[ -x "$path" ]]; then
+        realpath "$path"
+        return 0
+    fi
+
+    # Non-core tools live in tools/ next to bin/ in a checkout.
+    path=$(dirname "$shellm_path")/../tools/$tool
     if [[ -x "$path" ]]; then
         realpath "$path"
         return 0
@@ -1812,6 +1747,32 @@ ${combined}"
     printf '%s' "$summary_json" | traj append --traj_dir "$traj_dir" "$traj_id" >/dev/null 2>/dev/null || true
 }
 
+# Stream lines past $2 from $1 to stderr (redacted), then print the new
+# total line count on stdout so the caller can update its cursor.
+_stream_new_output() {
+    local output_file="$1" lines_read="$2"
+    local total_lines
+    total_lines=$(wc -l < "$output_file" 2>/dev/null || echo 0)
+    total_lines=$(echo "$total_lines" | tr -d ' ')
+    if [[ "$total_lines" -gt "$lines_read" ]]; then
+        local new_count=$((total_lines - lines_read))
+        local skip_n=$((lines_read + 1))
+        # Use tail + head to get new lines (bash 3.2 safe)
+        tail -n +"$skip_n" "$output_file" | head -n "$new_count" | while IFS= read -r line; do
+            local redacted_line
+            redacted_line=$(redact_sensitive "$line")
+            if [[ "$QUIET" -eq 0 ]]; then
+                if [[ "$redacted_line" == +* ]]; then
+                    printf '\033[36m  $ %s\033[0m\n' "${redacted_line#+ }" >&2
+                else
+                    printf '\033[90m  │ %s\033[0m\n' "$redacted_line" >&2
+                fi
+            fi
+        done
+    fi
+    printf '%s\n' "$total_lines"
+}
+
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
@@ -2433,27 +2394,7 @@ exit \$__shellm_rc
         # Foreground: poll output file and stream new lines to stderr
         local lines_read=0
         while kill -0 "$exec_pid" 2>/dev/null; do
-            # Read any new lines from the output file
-            local total_lines
-            total_lines=$(wc -l < "$output_file" 2>/dev/null || echo 0)
-            total_lines=$(echo "$total_lines" | tr -d ' ')
-            if [[ "$total_lines" -gt "$lines_read" ]]; then
-                local new_count=$((total_lines - lines_read))
-                local skip_n=$((lines_read + 1))
-                # Use tail + head to get new lines (bash 3.2 safe)
-                tail -n +"$skip_n" "$output_file" | head -n "$new_count" | while IFS= read -r line; do
-                    local redacted_line
-                    redacted_line=$(redact_sensitive "$line")
-                    if [[ "$QUIET" -eq 0 ]]; then
-                        if [[ "$redacted_line" == +* ]]; then
-                            printf '\033[36m  $ %s\033[0m\n' "${redacted_line#+ }" >&2
-                        else
-                            printf '\033[90m  │ %s\033[0m\n' "$redacted_line" >&2
-                        fi
-                    fi
-                done
-                lines_read="$total_lines"
-            fi
+            lines_read=$(_stream_new_output "$output_file" "$lines_read")
             sleep 0.2
         done
 
@@ -2465,24 +2406,7 @@ exit \$__shellm_rc
         wait "$watchdog_pid" 2>/dev/null || true
 
         # Drain any remaining output lines
-        local total_lines
-        total_lines=$(wc -l < "$output_file" 2>/dev/null || echo 0)
-        total_lines=$(echo "$total_lines" | tr -d ' ')
-        if [[ "$total_lines" -gt "$lines_read" ]]; then
-            local new_count=$((total_lines - lines_read))
-            local skip_n=$((lines_read + 1))
-            tail -n +"$skip_n" "$output_file" | head -n "$new_count" | while IFS= read -r line; do
-                local redacted_line
-                redacted_line=$(redact_sensitive "$line")
-                if [[ "$QUIET" -eq 0 ]]; then
-                    if [[ "$redacted_line" == +* ]]; then
-                        printf '\033[36m  $ %s\033[0m\n' "${redacted_line#+ }" >&2
-                    else
-                        printf '\033[90m  │ %s\033[0m\n' "$redacted_line" >&2
-                    fi
-                fi
-            done
-        fi
+        _stream_new_output "$output_file" "$lines_read" >/dev/null
 
         # Check if we timed out. The marker carries why, so the feedback the
         # model gets names the real cause instead of guessing at a prompt.

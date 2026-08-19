@@ -188,17 +188,6 @@ _resolve_traj_file() {
         printf '%s' "$match/trajectory.jsonl"; return
     fi
 
-    # 4. Legacy .jsonl suffix
-    if [[ "$traj_id" != *.jsonl && -f "$traj_dir/${traj_id}.jsonl" ]]; then
-        printf '%s' "$traj_dir/${traj_id}.jsonl"; return
-    fi
-
-    # 5. Legacy flat file glob
-    match=$(find "$traj_dir" -maxdepth 1 -name "*_${hex_prefix}_*.jsonl" -not -path '*/blobs/*' 2>/dev/null | head -1)
-    if [[ -n "$match" ]]; then
-        printf '%s' "$match"; return
-    fi
-
     return 1
 }
 

@@ -581,6 +581,16 @@ write_usage() {
 # Streaming handlers
 # ---------------------------------------------------------------------------
 
+# Shared stream tail: if no SSE data arrived, the buffered lines are an API
+# error body. Reads the caller's _saw_data/_err_buf via dynamic scoping.
+_die_if_no_stream_data() {
+    [[ "$_saw_data" -eq 0 && -n "$_err_buf" ]] || return 0
+    local _err
+    _err=$(printf '%s' "$_err_buf" | jq -r '.error.message // empty' 2>/dev/null || true)
+    [[ -n "$_err" ]] && die_retryable "API error: $_err"
+    die_retryable "API error: $_err_buf"
+}
+
 stream_anthropic() {
     local _saw_data=0 _err_buf="" _u_in="" _u_out=""
     while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
@@ -636,12 +646,7 @@ stream_anthropic() {
 "
         fi
     done
-    if [[ "$_saw_data" -eq 0 && -n "$_err_buf" ]]; then
-        local _err
-        _err=$(printf '%s' "$_err_buf" | jq -r '.error.message // empty' 2>/dev/null || true)
-        [[ -n "$_err" ]] && die_retryable "API error: $_err"
-        die_retryable "API error: $_err_buf"
-    fi
+    _die_if_no_stream_data
 }
 
 stream_openai() {
@@ -690,12 +695,7 @@ stream_openai() {
 "
         fi
     done
-    if [[ "$_saw_data" -eq 0 && -n "$_err_buf" ]]; then
-        local _err
-        _err=$(printf '%s' "$_err_buf" | jq -r '.error.message // empty' 2>/dev/null || true)
-        [[ -n "$_err" ]] && die_retryable "API error: $_err"
-        die_retryable "API error: $_err_buf"
-    fi
+    _die_if_no_stream_data
 }
 
 stream_gemini() {
@@ -738,12 +738,7 @@ stream_gemini() {
 "
         fi
     done
-    if [[ "$_saw_data" -eq 0 && -n "$_err_buf" ]]; then
-        local _err
-        _err=$(printf '%s' "$_err_buf" | jq -r '.error.message // empty' 2>/dev/null || true)
-        [[ -n "$_err" ]] && die_retryable "API error: $_err"
-        die_retryable "API error: $_err_buf"
-    fi
+    _die_if_no_stream_data
 }
 
 # OpenRouter is OpenAI-compatible (SSE chat/completions chunks)
