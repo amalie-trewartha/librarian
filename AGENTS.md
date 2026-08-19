@@ -19,7 +19,9 @@ the rename is migrated once with `deploy/migrate-units.sh` (see
 deploy/DEPLOY.md). What deliberately keeps the `shellm` name: the
 `/opt/shellm` deploy path, the `shellm` and `shellm-telegram` UNIX users,
 `~shellm/.shellm`, the per-identity `.shellm/` subdirectory, and the
-`*.shellm.net` domains.
+`*.shellm.net` domains. If you take one of those on, or any other
+structural change to a live box, read `deploy/MIGRATIONS.md` first — it
+lists the couplings that fail *silently*.
 
 Shelly creates a persistent identity whose mind is a loop of LLM calls
 run by a dispatcher. The identity has a name (default `ada`), and that

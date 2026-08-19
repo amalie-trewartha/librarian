@@ -152,6 +152,10 @@ pre-demo backup. Two caveats:
 
 ## Migrating a pre-rename box (one time)
 
+> Doing a *different* structural migration on a live box? Read
+> `deploy/MIGRATIONS.md` first — it is the general playbook this section
+> is one instance of.
+
 Boxes provisioned before the shelly rename run `shellm-*` systemd units.
 `deploy/update.sh` refuses to deploy onto them and points here, because the
 cutover stops the identity dispatchers — a mind restart with a drain of up

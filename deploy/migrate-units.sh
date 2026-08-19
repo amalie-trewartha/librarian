@@ -17,6 +17,10 @@ set -euo pipefail
 # Everything the migration touches is backed up first, and --rollback puts
 # it all back, so a failed cutover is recoverable without a redeploy.
 #
+# Writing a migration like this one? deploy/MIGRATIONS.md is the playbook:
+# the compat-first principle, the couplings that fail silently, and the
+# verification checklist.
+#
 # Out of scope on purpose (these stay "shellm"): the /opt/shellm path, the
 # shellm and shellm-telegram UNIX users, ~shellm/.shellm, the per-identity
 # .shellm/ subdir, and the *.shellm.net domains. Each is a physical move
