@@ -540,7 +540,7 @@ _ctx_resolve_R() {
 
 # Write one sealed tier-1 block over filtered-step indices [s,e) (TSV lines s+1..e).
 _ctx_seal_tier1() {
-    local s=$1 e=$2 file rows text ids fid lid body
+    local s=$1 e=$2 file rows text fid lid body
     file=$(_ctx_blockfile 1 "$s" "$e"); [[ -f "$file" ]] && return 0
     # Keepalive: _ctx_run breaks locks idle >30min as stale, but a --backfill
     # legitimately seals for hours. Refresh the lock before each seal so a

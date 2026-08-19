@@ -234,20 +234,6 @@ _abs_path() {
     (cd "$dir" 2>/dev/null && pwd) || printf '%s' "$dir"
 }
 
-# Build --var flags for skill-declared env vars
-_build_skill_var_flags() {
-    local identity_dir="$1"
-    local -a flags=()
-    while IFS= read -r vname; do
-        [[ -z "$vname" ]] && continue
-        local vval="${!vname:-}"
-        [[ -n "$vval" ]] && flags+=(--var "$vname=$vval")
-    done < <(collect_skill_vars "$identity_dir")
-    if [[ ${#flags[@]} -gt 0 ]]; then
-        printf '%s\n' "${flags[@]}"
-    fi
-}
-
 # Build common shellm flags: --env, --workdir, --var, --bin.
 # Honors SHELLM_THINKER_ENV to override the env (e.g. =local to skip Docker).
 _build_shellm_flags() {
@@ -294,10 +280,4 @@ _build_shellm_flags() {
         path=$(command -v "$cmd" 2>/dev/null) || continue
         printf '%s\n' "--bin" "$path"
     done
-}
-
-# Resolve the directory of the thinker calling this library
-_thinker_dir() {
-    local script="$1"
-    cd "$(dirname "$(realpath "$script")")" && pwd
 }

@@ -818,34 +818,32 @@ _start_dispatcher() {
     printf '%s' "$dispatcher_pid"
 }
 
-_cleanup_dispatcher() {
-    local run_dir="$IDENTITY_DIR/run"
+# Tear down a dispatcher's run-dir state, shared by _cleanup_dispatcher and
+# _stop_dispatcher: kill tail feeder trees (a bare kill leaves the pipeline's
+# tail alive), then sweep feeders that escaped the PID-tree kill — the kill
+# races against wrapper death, and once the pipeline wrapper dies its
+# tail/tagger stages reparent to init and escape pgrep -P (_kill_traj_tails
+# kills by the traj file path embedded in the tail's argv). Finally remove
+# the FIFO, sub_map, traj_files, pending-trigger flags, and ownership token
+# (removing the token also makes any stray dispatcher instance exit on its
+# next heartbeat).
+_cleanup_run_state() {
+    local run_dir="$1"
     local tail_pids_file="$run_dir/tail_pids"
-    local fifo="$run_dir/dispatch.fifo"
-
-    # Kill tail process trees (a bare kill leaves the pipeline's tail alive)
     if [[ -f "$tail_pids_file" ]]; then
+        local pid
         while IFS= read -r pid; do
             [[ -n "$pid" ]] && _kill_tree "$pid" TERM
         done < "$tail_pids_file"
         rm -f "$tail_pids_file"
     fi
-
-    # Belt-and-suspenders: the PID-tree kill above races against wrapper
-    # death — once the pipeline wrapper dies, its tail/tagger stages reparent
-    # to init and escape pgrep -P, leaking a tail -F per trajectory. The
-    # tail's argv embeds the traj file path, so kill by exact pattern; the
-    # tagger stage then exits on EOF from the dead tail.
-    _kill_traj_tails "$run_dir"
-
-    # Remove FIFO
-    rm -f "$fifo"
-
-    # Clean up sub_map, traj_files, pending-trigger flags, and ownership token
-    # (removing the token also makes any stray dispatcher instance exit on
-    # its next heartbeat)
-    rm -f "$run_dir/sub_map" "$run_dir/traj_files" "$run_dir/dispatcher.token"
+    _kill_traj_tails "$run_dir" ${2:+"$2"}
+    rm -f "$run_dir/dispatch.fifo" "$run_dir/sub_map" "$run_dir/traj_files" "$run_dir/dispatcher.token"
     rm -rf "$run_dir/pending"
+}
+
+_cleanup_dispatcher() {
+    _cleanup_run_state "$IDENTITY_DIR/run"
 }
 
 # Dispatcher INT/TERM handler. Sanctioned stops announce themselves:
@@ -926,27 +924,10 @@ _stop_dispatcher() {
         printf 'No dispatcher running.\n' >&2
     fi
 
-    # Kill tail process trees (a bare kill leaves the pipeline's tail alive)
-    local tail_pids_file="$run_dir/tail_pids"
-    if [[ -f "$tail_pids_file" ]]; then
-        local tail_pid
-        while IFS= read -r tail_pid; do
-            [[ -n "$tail_pid" ]] && _kill_tree "$tail_pid" TERM
-        done < "$tail_pids_file"
-        rm -f "$tail_pids_file"
-    fi
-
-    # Sweep tail feeders that escaped the PID-tree kill (see _kill_traj_tails)
-    _kill_traj_tails "$run_dir" "$traj_files_snapshot"
+    _cleanup_run_state "$run_dir" "$traj_files_snapshot"
 
     # Vitals check: warn if any tail feeders survived the kill/sweep
     _warn_stray_tails
-
-    # Clean up FIFO, sub_map, traj_files, pending-trigger flags, and ownership
-    # token (removing the token also makes any stray dispatcher instance exit
-    # on its next heartbeat)
-    rm -f "$run_dir/dispatch.fifo" "$run_dir/sub_map" "$run_dir/traj_files" "$run_dir/dispatcher.token"
-    rm -rf "$run_dir/pending"
 }
 
 # After starting a fresh dispatcher, tell the mind if it was dead: when the
@@ -1391,12 +1372,6 @@ cmd_status() {
     fi
     printf '\n'
 
-    # Determine if dispatcher is alive for thinker status labels
-    local dispatcher_running=0
-    if [[ "$dispatcher_state" != "stopped" ]]; then
-        dispatcher_running=1
-    fi
-
     # Build map of active step processes per thinker
     local step_pids_file="$run_dir/step_pids"
     # Associative-style tracking using name matching (bash 3.2 compat)
@@ -1417,7 +1392,7 @@ cmd_status() {
         local name
         name=$(basename "$thinker_dir")
         local status
-        if [[ "$dispatcher_running" -eq 0 ]] || ! grep -qx "$name" "$run_dir/active_thinkers" 2>/dev/null; then
+        if [[ "$dispatcher_state" == "stopped" ]] || ! grep -qx "$name" "$run_dir/active_thinkers" 2>/dev/null; then
             status="stopped"
         else
             # Count active step processes for this thinker

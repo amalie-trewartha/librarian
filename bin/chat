@@ -48,6 +48,22 @@ case "${1:-}" in -h|--help|help) ;; *)
 # Commands
 # ---------------------------------------------------------------------------
 
+# Default --from from .chatrc; require --to (pre-filled from IDENTITY_NAME).
+# Reads/writes the caller's `from` and `to` locals via dynamic scoping.
+_resolve_from_to() {
+    if [[ -z "$from" ]]; then
+        from=$(_chatrc_get "default_send_from")
+        if [[ -z "$from" ]]; then
+            die "No --from specified and no default_send_from in $CHATRC.
+Create a .chatrc file with:
+  mkdir -p \$(dirname $CHATRC) && echo 'default_send_from=your-name' > $CHATRC"
+        fi
+    fi
+    if [[ -z "$to" ]]; then
+        die "No --to specified and IDENTITY_NAME not set."
+    fi
+}
+
 cmd_send() {
     local message="" from="" to="${IDENTITY_NAME:-}"
     while [[ $# -gt 0 ]]; do
@@ -64,18 +80,7 @@ cmd_send() {
     fi
     [[ -z "$message" ]] && die "No message provided. Usage: chat send [--from <name>] [--to <name>] <message>"
 
-    # Resolve --from default from .chatrc
-    if [[ -z "$from" ]]; then
-        from=$(_chatrc_get "default_send_from")
-        if [[ -z "$from" ]]; then
-            die "No --from specified and no default_send_from in $CHATRC.
-Create a .chatrc file with:
-  mkdir -p \$(dirname $CHATRC) && echo 'default_send_from=your-name' > $CHATRC"
-        fi
-    fi
-
-    # Default --to to IDENTITY_NAME
-    [[ -z "$to" ]] && die "No --to specified and IDENTITY_NAME not set."
+    _resolve_from_to
 
     # A self-addressed message re-triggers the identity's own message
     # subscriptions, which can loop it into replying to itself forever.
@@ -192,17 +197,7 @@ cmd_send_file() {
     [[ -z "$filepath" ]] && die "Usage: chat send-file [--from <name>] [--to <name>] <filename>"
     [[ -f "$filepath" ]] || die "File not found: $filepath"
 
-    # Resolve --from default from .chatrc
-    if [[ -z "$from" ]]; then
-        from=$(_chatrc_get "default_send_from")
-        if [[ -z "$from" ]]; then
-            die "No --from specified and no default_send_from in $CHATRC.
-Create a .chatrc file with:
-  mkdir -p \$(dirname $CHATRC) && echo 'default_send_from=your-name' > $CHATRC"
-        fi
-    fi
-
-    [[ -z "$to" ]] && die "No --to specified and IDENTITY_NAME not set."
+    _resolve_from_to
 
     local filename
     filename=$(basename "$filepath")

@@ -38,12 +38,6 @@ ${field}: ${value}
     fi
 }
 
-# Remove a frontmatter field from a file
-_rm_fm_field() {
-    local file="$1" field="$2"
-    _sed_i "/^${field}:.*/d" "$file"
-}
-
 # Find a goal file by ID prefix query. Prints the file path.
 _find_goal() {
     local query="$1"
@@ -207,12 +201,6 @@ cmd_show() {
     printf 'Current goals:\n%s\n' "$goals"
 }
 
-# Write or update a priority field in a mem file's frontmatter.
-_set_priority() {
-    local file="$1" new_pri="$2"
-    _set_fm_field "$file" "priority" "$new_pri"
-}
-
 cmd_move() {
     local task_id="${1:-}"
     local direction="${2:-}"
@@ -285,7 +273,7 @@ cmd_move() {
 
     # Write sequential priorities
     for i in "${!final[@]}"; do
-        _set_priority "${final[$i]}" "$((i + 1))"
+        _set_fm_field "${final[$i]}" "priority" "$((i + 1))"
     done
 
     local moved_name

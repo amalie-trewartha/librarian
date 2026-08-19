@@ -37,16 +37,21 @@ msg_from=$(printf '%s' "$step_json" | jq -r '.from // "human"' 2>/dev/null) || t
 # Only reply to messages addressed to this identity.
 [[ "$msg_to" == "$IDENTITY_NAME" ]] || exit 0
 
+# Append an observation step crediting this thinker, tagged with the
+# trigger step when known. $1 = content, $2 (optional) = decision field.
+_obs() {
+    jq -nc --arg content "$1" --arg source "$THINKER_NAME" \
+        --arg trigger "$trigger_step_id" --arg decision "${2:-}" \
+        '{type:"observation", content:$content, source:$source}
+         + (if $decision == "" then {} else {decision: $decision} end)
+         + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
+        | traj append >/dev/null || true
+}
+
 # Self-message guard: replying would create a self-chat loop.
 if [[ "$msg_from" == "$IDENTITY_NAME" ]]; then
     printf '  self-message — dropping with observation\n' >&2
-    jq -nc \
-        --arg content "self-message dropped: you chat-sent a message to yourself and it will not be replied to (replying would loop). To message someone else use: chat reply <their-name> <message>. To keep a note for later, write it as a thought step instead. Your message was: $(printf '%.200s' "$trigger_content")" \
-        --arg source "$THINKER_NAME" \
-        --arg trigger "$trigger_step_id" \
-        '{type:"observation", content:$content, source:$source}
-         + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
-        | traj append >/dev/null || true
+    _obs "self-message dropped: you chat-sent a message to yourself and it will not be replied to (replying would loop). To message someone else use: chat reply <their-name> <message>. To keep a note for later, write it as a thought step instead. Your message was: $(printf '%.200s' "$trigger_content")"
     exit 0
 fi
 
@@ -173,36 +178,18 @@ reply=$(printf '%s' "$reply" | sed -E '1s/^[[:space:]]*chat reply [A-Za-z0-9._-]
 first_line=$(printf '%s' "$reply" | head -n 1 | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')
 if [[ "$first_line" == "NO_REPLY" ]]; then
     printf '  model declined to reply (NO_REPLY)\n' >&2
-    jq -nc \
-        --arg content "Chose not to reply to $msg_from — their message needed no reply (already answered, or a bare acknowledgment). Their message was: $(printf '%.200s' "$trigger_content")" \
-        --arg source "$THINKER_NAME" \
-        --arg trigger "$trigger_step_id" \
-        '{type:"observation", content:$content, source:$source, decision:"no-reply"}
-         + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
-        | traj append >/dev/null || true
+    _obs "Chose not to reply to $msg_from — their message needed no reply (already answered, or a bare acknowledgment). Their message was: $(printf '%.200s' "$trigger_content")" no-reply
     exit 0
 fi
 
 reply_args=()
 [[ -n "$trigger_step_id" ]] && reply_args+=(--reply-to "$trigger_step_id")
 if [[ -n "$reply" ]] && printf '%s' "$reply" | chat reply ${reply_args[@]+"${reply_args[@]}"} "$msg_from"; then
-    jq -nc \
-        --arg content "Replied to $msg_from: $(printf '%.200s' "$reply")" \
-        --arg source "$THINKER_NAME" \
-        --arg trigger "$trigger_step_id" \
-        '{type:"observation", content:$content, source:$source, decision:"replied"}
-         + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
-        | traj append >/dev/null || true
+    _obs "Replied to $msg_from: $(printf '%.200s' "$reply")" replied
     printf '  [reply -> %s] %s\n' "$msg_from" "$(printf '%s' "$reply" | head -1)"
     exit 0
 fi
 
 # Reply failed — surface it so the monolith can pick it up.
 printf '  reply failed — appending failure observation\n' >&2
-jq -nc \
-    --arg content "reply failed: could not send a reply to $msg_from (empty model output or chat error — see responder log). Their message was: $(printf '%.200s' "$trigger_content")" \
-    --arg source "$THINKER_NAME" \
-    --arg trigger "$trigger_step_id" \
-    '{type:"observation", content:$content, source:$source, decision:"reply-failed"}
-     + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
-    | traj append >/dev/null || true
+_obs "reply failed: could not send a reply to $msg_from (empty model output or chat error — see responder log). Their message was: $(printf '%.200s' "$trigger_content")" reply-failed

@@ -45,10 +45,6 @@ debug() {
     fi
 }
 
-ensure_dir() {
-    mkdir -p "$MEM_DIR"
-}
-
 slugify() {
     local text="$1"
     printf '%s' "$text" \
@@ -120,7 +116,7 @@ action_add() {
         [[ -z "$text" ]] && die "No text provided"
     fi
 
-    ensure_dir
+    mkdir -p "$MEM_DIR"
 
     local timestamp hex slug filename summary created
     timestamp=$(date +%Y-%m-%d-%H-%M-%S)
@@ -416,11 +412,8 @@ main() {
                 MEM_DIR="${2:?--dir requires a path}"
                 shift 2
                 ;;
-            -*)
-                # Could be --type inside add, so break and let subcommand handle
-                break
-                ;;
             *)
+                # Could be --type inside add, so break and let subcommand handle
                 break
                 ;;
         esac

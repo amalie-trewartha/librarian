@@ -294,47 +294,6 @@ _extract_shelllm_meta() {
         '{requires: {env: $env, bins: $bins, anyBins: $anybins, os: $os}}'
 }
 
-# Returns 0 if all requirements are met, 1 otherwise. No output.
-# Takes the JSON from _extract_shelllm_meta as $1.
-_requirements_met() {
-    local meta="$1"
-    [[ "$meta" == "{}" || -z "$meta" ]] && return 0
-
-    # Check env vars
-    local var
-    while IFS= read -r var; do
-        [[ -z "$var" ]] && continue
-        [[ -z "${!var:-}" ]] && return 1
-    done < <(printf '%s' "$meta" | jq -r '(.requires.env // [])[]' 2>/dev/null)
-
-    # Check required bins
-    local bin
-    while IFS= read -r bin; do
-        [[ -z "$bin" ]] && continue
-        command -v "$bin" >/dev/null 2>&1 || return 1
-    done < <(printf '%s' "$meta" | jq -r '(.requires.bins // [])[]' 2>/dev/null)
-
-    # Check anyBins (at least one must exist)
-    local any_count=0 any_found=0
-    while IFS= read -r bin; do
-        [[ -z "$bin" ]] && continue
-        any_count=$((any_count + 1))
-        command -v "$bin" >/dev/null 2>&1 && any_found=1
-    done < <(printf '%s' "$meta" | jq -r '(.requires.anyBins // [])[]' 2>/dev/null)
-    [[ "$any_count" -gt 0 && "$any_found" -eq 0 ]] && return 1
-
-    # Check OS
-    local os_count
-    os_count=$(printf '%s' "$meta" | jq -r '(.requires.os // []) | length' 2>/dev/null)
-    if [[ "${os_count:-0}" -gt 0 ]]; then
-        local current_os
-        current_os=$(uname -s | tr '[:upper:]' '[:lower:]')
-        printf '%s' "$meta" | jq -e --arg os "$current_os" '(.requires.os // []) | index($os) != null' >/dev/null 2>&1 || return 1
-    fi
-
-    return 0
-}
-
 # Returns a comma-separated summary of missing requirements.
 # Takes the JSON from _extract_shelllm_meta as $1.
 _missing_summary() {
@@ -563,15 +522,17 @@ action_list() {
             _seen_paths="${_seen_paths}${name}	${skill_path}
 "
 
-            # Check requirements
-            local meta eligible=1 missing=""
+            # Check requirements (empty summary == all requirements met)
+            local meta eligible=1 missing
             meta=$(_extract_shelllm_meta "${skill_dir}SKILL.md")
-            if ! _requirements_met "$meta"; then
+            missing=$(_missing_summary "$meta")
+            if [[ -n "$missing" ]]; then
                 eligible=0
-                missing=$(_missing_summary "$meta")
             fi
 
-            if [[ "$eligible" -eq 0 ]]; then
+            # Ineligible skills go to the Skipped footer, unless --all
+            # promotes them into the main list annotated with what's missing.
+            if [[ "$eligible" -eq 0 && "$show_all" -eq 0 ]]; then
                 if [[ "$format" != "prompt" ]]; then
                     [[ ${#desc} -gt 60 ]] && desc="${desc:0:57}..."
                     skipped+="$(printf "  ${_bold}%-20s${_reset} %-60b ${_cyan}[%s]${_reset} ${_yellow}(missing: %s)${_reset}\n    ${_dim}%s${_reset}\n" \
@@ -585,6 +546,10 @@ action_list() {
 
             if [[ "$format" == "prompt" ]]; then
                 printf -- '- %s: %s\n' "$name" "$desc"
+            elif [[ "$eligible" -eq 0 ]]; then
+                [[ ${#desc} -gt 60 ]] && desc="${desc:0:57}..."
+                printf "  ${_bold}%-20s${_reset} %-60b ${_cyan}[%s]${_reset} ${_yellow}(missing: %s)${_reset}\n    ${_dim}%s${_reset}\n" \
+                    "$name" "${_dim}${desc}" "$label" "$missing" "$skill_path"
             else
                 [[ ${#desc} -gt 60 ]] && desc="${desc:0:57}..."
                 printf "  ${_bold}%-20s${_reset} %-60b ${_cyan}[%s]${_reset}\n    ${_dim}%s${_reset}\n" \
@@ -1384,24 +1349,6 @@ main() {
     local show_requires=0
     local -a _positional=()
 
-    # Parse subcommand first (if present)
-    if [[ $# -gt 0 && "${1:0:1}" != "-" ]]; then
-        case "$1" in
-            list)      action="list";     shift ;;
-            search)    action="search";   shift ;;
-            install)   action="install";  shift ;;
-            remove)    action="remove";   shift ;;
-            show)      action="show";     shift ;;
-            check)     action="check";    shift ;;
-            init)      action="init";     shift ;;
-            promote)   action="promote";  shift ;;
-            kernel)    action="kernel";   shift ;;
-            list-json) action="list-json"; shift ;;
-            prompt)    action="prompt";   shift ;;
-            remote)    action="remote";   shift ;;
-        esac
-    fi
-
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -h|--help)
@@ -1470,6 +1417,7 @@ main() {
     if [[ -z "$action" && ${#_positional[@]} -gt 0 ]]; then
         case "${_positional[0]}" in
             list)      action="list";     _positional=("${_positional[@]:1}") ;;
+            search)    action="search";   _positional=("${_positional[@]:1}") ;;
             list-json) action="list-json"; _positional=("${_positional[@]:1}") ;;
             install)   action="install";  _positional=("${_positional[@]:1}") ;;
             remove)    action="remove";   _positional=("${_positional[@]:1}") ;;
