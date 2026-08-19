@@ -37,7 +37,7 @@ SHELLM_HOME="${SHELLY_HOME:-${SHELLM_HOME:-$_default_home}}"
 PREFIX="${PREFIX:-$HOME/.local/bin}"
 SYMLINKS="${SYMLINKS:-0}"
 RUN_INIT=0
-TOOLS=(shellm shellm-docker shellm-docker-broker skills mem llm shellm-explore context traj identity thinkers chat focus recap shelly-init persona)
+TOOLS=(shellm shellm-docker shellm-docker-broker skills mem llm shellm-explore context traj identity thinkers chat focus recap shelly-init shelly-killall persona)
 
 # ---------------------------------------------------------------------------
 # Dependency checks (shared by both modes)
