@@ -49,7 +49,7 @@ export TELEGRAM_BOT_TOKEN=...       # from @BotFather
 export TELEGRAM_ADMIN_ID=...        # your numeric user id; message the bot
                                     # once and read it from the bridge log
 export SHELLY_TELEGRAM_IDENTITY=audel  # default (legacy SHELLM_TELEGRAM_IDENTITY still honored)
-bin/shelly-telegram-bridge [ROOT]   # ROOT = serve root, default repo root
+tools/shelly-telegram-bridge [ROOT]   # ROOT = serve root, default repo root
 ```
 
 The identity must exist (`identity new audel`) with a running dispatcher

@@ -743,7 +743,7 @@ def create_app(
 
     # -- Import / export ---------------------------------------------------
     # Archives are produced/consumed by `identity export` / `identity import`
-    # (bin/identity); the endpoints only move bytes. Export stays available in
+    # (tools/identity); the endpoints only move bytes. Export stays available in
     # read-only mode: it reveals nothing the viewer doesn't already show, and
     # it doubles as the backup path.
 

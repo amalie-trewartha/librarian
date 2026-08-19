@@ -63,7 +63,7 @@ materials() {
     ls -1 "$REPO_ROOT/thinkers" | grep -v '^_' || true
     printf '```\n\nBundled skills (skills/<name>/SKILL.md):\n```\n'
     ls -1 "$REPO_ROOT/skills" 2>/dev/null || true
-    printf '```\n\nAlso mutable: bin/identity _seed_thoughts() (newborn seed thoughts).\n\n'
+    printf '```\n\nAlso mutable: tools/identity _seed_thoughts() (newborn seed thoughts).\n\n'
 
     if [[ -f "$IMPROVE_DIR/decisions.md" ]]; then
         printf '# Decision ledger (what prior generations proposed, and what became of it)\n\n'

@@ -17,7 +17,7 @@
 #  - SupplementaryGroups=shellm grants read access to the identity's
 #    trajectory under /opt/shellm (group r-x on the home dir).
 #
-# ExecStart uses the project venv directly (not bin/shelly-telegram-bridge):
+# ExecStart uses the project venv directly (not tools/shelly-telegram-bridge):
 # uv would try to write the shellm-owned venv, which this user cannot.
 
 [Unit]
@@ -34,12 +34,12 @@ EnvironmentFile=/etc/shellm/telegram.env
 StateDirectory=shellm-telegram
 Environment="HOME=/var/lib/shellm-telegram"
 Environment="SHELLM_TELEGRAM_STATE_DIR=/var/lib/shellm-telegram"
-ExecStart=@SHELLM_HOME@/app/telegram/.venv/bin/shelly-telegram-bridge @SHELLM_HOME@/app
+ExecStart=@SHELLM_HOME@/app/telegram/.venv/tools/shelly-telegram-bridge @SHELLM_HOME@/app
 Restart=always
 RestartSec=5
 
 # Kill switch: `systemctl stop shelly-telegram-bridge` mutes Telegram
-# without touching the agent (bin/shelly-killall stops the agent itself).
+# without touching the agent (tools/shelly-killall stops the agent itself).
 
 [Install]
 WantedBy=multi-user.target

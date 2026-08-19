@@ -12,7 +12,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(dirname "$HERE")"
 
-PATH="$REPO/bin:$PATH"
+PATH="$REPO/bin:$REPO/tools:$PATH"
 unset IDENTITY_NAME IDENTITY_DIR MEM_DIR SKILLS_DIR TRAJ_DIR TRAJ_ID 2>/dev/null || true
 
 WORK=$(mktemp -d)

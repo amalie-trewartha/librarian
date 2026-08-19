@@ -40,11 +40,12 @@ def stub_bin(tmp_path: Path, monkeypatch) -> Path:
     stub = tmp_path / "stub-bin"
     stub.mkdir()
     monkeypatch.setattr(control, "BIN_DIR", stub)
+    monkeypatch.setattr(control, "TOOLS_DIR", stub)
     return stub
 
 
 def _write_identity_stub(stub: Path, *, exit_code: int = 0, stderr: str = "") -> None:
-    """Stub bin/identity: logs env+argv; `export` writes bytes to the -o
+    """Stub tools/identity: logs env+argv; `export` writes bytes to the -o
     target, `import` prints imported names on stdout."""
     script = stub / "identity"
     script.write_text(

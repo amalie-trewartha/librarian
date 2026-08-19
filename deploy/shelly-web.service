@@ -32,7 +32,7 @@ Environment="SHELLY_WEB_SELF_UPDATE=1"
 # root-owned wrapper (sudo rule: /etc/sudoers.d/shelly-thinkers). Unset it
 # to fall back to spawning dispatchers directly (dev behavior).
 Environment="SHELLY_THINKERSCTL=/usr/local/bin/shelly-thinkersctl"
-ExecStart=@SHELLM_HOME@/app/bin/shelly-web @SHELLM_HOME@/app --host 127.0.0.1 --port 8080
+ExecStart=@SHELLM_HOME@/app/tools/shelly-web @SHELLM_HOME@/app --host 127.0.0.1 --port 8080
 Restart=always
 RestartSec=3
 # Cap the trajectory-cache balloon (2026-08-13: repeated 5-6GB RSS OOM
@@ -50,12 +50,12 @@ MemoryMax=5G
 # named thinker kicks) and agent-spawned background jobs can still be in
 # this cgroup, and the default KillMode=control-group would kill them on
 # any restart (including the dash's self-update). Agents have their own
-# kill switches: the UI's Kill All button and bin/shelly-killall.
+# kill switches: the UI's Kill All button and tools/shelly-killall.
 KillMode=process
 
 # The agent needs broad shell access by design — do NOT run anything else on
 # this machine. Kill switches: `systemctl stop shelly-web` stops the control
-# plane; `@SHELLM_HOME@/app/bin/shelly-killall` stops all agent processes.
+# plane; `@SHELLM_HOME@/app/tools/shelly-killall` stops all agent processes.
 
 [Install]
 WantedBy=multi-user.target

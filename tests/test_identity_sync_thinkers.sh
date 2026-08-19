@@ -17,7 +17,7 @@ unset IDENTITY_DIR IDENTITY_NAME IDENTITY_MEM_DIR IDENTITY_SKILLS_DIR IDENTITY_S
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(dirname "$HERE")"
-PATH="$REPO/bin:$PATH"
+PATH="$REPO/bin:$REPO/tools:$PATH"
 
 pass=0
 fail=0
@@ -30,7 +30,7 @@ WORK=$(mktemp -d)
 trap 'cd /; rm -rf "$WORK"' EXIT
 cd "$WORK"
 
-# Isolate HOME. bin/identity turns on symlink mode from
+# Isolate HOME. tools/identity turns on symlink mode from
 # $HOME/.shellm-thinkers/.use-symlinks, and its bundled source is the repo's
 # own thinkers/ when run from a checkout — so on a --symlinks install this
 # test's identity got thinkers/monolith as a symlink INTO the repo, and the

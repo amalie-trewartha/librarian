@@ -1,6 +1,6 @@
 """Fork-tree resolution for trajectory directories.
 
-Ports bin/shellm-explore's tree walk: a trajectory dir contains nested child
+Ports tools/shellm-explore's tree walk: a trajectory dir contains nested child
 trajectory dirs; fork steps carry child (uuid) + child_ref (relative path).
 """
 

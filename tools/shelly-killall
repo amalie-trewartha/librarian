@@ -5,7 +5,7 @@ set -euo pipefail
 #
 # Targets (by exact argv patterns, not a loose grep, so editors, greps, and
 # shells that merely mention shellm/shelly paths are never touched):
-#   - shellm agent loops (bin/shellm, bin/shellm-explore, bin/sub, bin/chat)
+#   - shellm agent loops (bin/shellm, tools/shellm-explore, bin/sub, bin/chat)
 #   - llm API callers and their streaming curl children
 #   - thinkers dispatchers and thinker step scripts
 #   - traj tail followers and orphaned `tail -F .../trajectory.jsonl` feeders
@@ -42,7 +42,7 @@ done
 # Script processes appear as "<...>/bash <path>/<script> args" via shebang,
 # so anchoring on "bash " + the script path is both precise and complete.
 PATTERNS=(
-    'bash [^ ]*/bin/(shellm|shellm-explore|llm|chat|sub)( |$)'
+    'bash [^ ]*/(bin|tools)/(shellm|shellm-explore|llm|chat|sub)( |$)'
     'bash [^ ]*/bin/thinkers( |$)'
     'bash [^ ]*/thinkers/[^ /]+/step( |$)'
     'bash [^ ]*/bin/traj tail'

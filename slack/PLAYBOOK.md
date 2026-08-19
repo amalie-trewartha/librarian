@@ -31,7 +31,7 @@ rebuild and copy the archive off the box yourself, e.g. to S3, since the
 rebuild destroys the disk:
 
 ```bash
-deploy/scripts/run 'cd /opt/shellm/app && sudo -u shellm bin/identity export audel -o /tmp/audel.tgz && ls -la /tmp/audel.tgz'
+deploy/scripts/run 'cd /opt/shellm/app && sudo -u shellm tools/identity export audel -o /tmp/audel.tgz && ls -la /tmp/audel.tgz'
 ```
 
 After the rebuild, copy the archive back and run `identity import`.

@@ -102,7 +102,7 @@ terraform deploy writes this drop-in automatically.)
 |---|---|
 | Logs | `journalctl -u shelly-web -f` |
 | Restart web server (agents keep running — the unit's `KillMode=process` signals only the server; stopping the service doesn't stop agents either) | `sudo systemctl restart shelly-web` |
-| Stop every agent process | `sudo -u shellm /opt/shellm/app/bin/shelly-killall` |
+| Stop every agent process | `sudo -u shellm /opt/shellm/app/tools/shelly-killall` |
 | Update to latest code | see below; or click the navbar build stamp → "Pull latest & restart" (needs `SHELLY_WEB_SELF_UPDATE=1` in the unit, which the shipped unit sets) |
 | View-only mode | add `Environment="SHELLY_WEB_READONLY=1"` to the override.conf drop-in (see §4) |
 
@@ -144,7 +144,7 @@ pre-demo backup. Two caveats:
   ```bash
   scp big.shellm.tgz vm:/tmp/ && ssh vm \
       'sudo -u shellm env IDENTITY_DIR=/opt/shellm/app/.identities \
-       /opt/shellm/app/bin/identity import /tmp/big.shellm.tgz'
+       /opt/shellm/app/tools/identity import /tmp/big.shellm.tgz'
   ```
 
   Uploads are also capped server-side via `SHELLY_WEB_MAX_IMPORT_MB`
@@ -204,5 +204,5 @@ own migration and none of them need to happen for the unit rename.
 Run the tunnel from any machine you already have (dev box, spare Mac):
 create the same dashboard tunnel + Access app, run
 `cloudflared service install <TOKEN>` locally, point the public hostname
-at `http://localhost:8080`, and start `./bin/shelly-web`. Same URL, same
+at `http://localhost:8080`, and start `./tools/shelly-web`. Same URL, same
 login, zero infra — it just stops when your laptop sleeps.

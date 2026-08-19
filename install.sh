@@ -37,7 +37,10 @@ SHELLM_HOME="${SHELLY_HOME:-${SHELLM_HOME:-$_default_home}}"
 PREFIX="${PREFIX:-$HOME/.local/bin}"
 SYMLINKS="${SYMLINKS:-0}"
 RUN_INIT=0
-TOOLS=(shellm shellm-docker shellm-docker-broker skills mem llm shellm-explore context traj identity thinkers chat focus recap shelly-init shelly-killall persona)
+# Core agent tools (bin/) and the management/aux CLIs around them (tools/).
+BIN_TOOLS=(shellm shellm-docker shellm-docker-broker skills mem llm context traj thinkers chat focus recap)
+AUX_TOOLS=(identity shellm-explore shelly-init shelly-killall persona)
+TOOLS=("${BIN_TOOLS[@]}" "${AUX_TOOLS[@]}")
 
 # ---------------------------------------------------------------------------
 # Dependency checks (shared by both modes)
@@ -135,13 +138,15 @@ EOF
 }
 
 _install_tools() {
-    local tool
+    local tool dir
     for tool in "${TOOLS[@]}"; do
+        dir=bin
+        [[ -f "tools/$tool" ]] && dir=tools
         if [[ "$SYMLINKS" -eq 1 ]]; then
-            ln -sf "$(pwd)/bin/$tool" "$PREFIX/$tool"
+            ln -sf "$(pwd)/$dir/$tool" "$PREFIX/$tool"
             echo "Linked $tool → $PREFIX/$tool"
         else
-            cp "bin/$tool" "$PREFIX/$tool"
+            cp "$dir/$tool" "$PREFIX/$tool"
             chmod +x "$PREFIX/$tool"
             echo "Installed $tool → $PREFIX/$tool"
         fi

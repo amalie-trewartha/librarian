@@ -135,6 +135,7 @@ def stub_bin(tmp_path: Path, monkeypatch) -> Path:
     stub = tmp_path / "stub-bin"
     stub.mkdir()
     monkeypatch.setattr(control, "BIN_DIR", stub)
+    monkeypatch.setattr(control, "TOOLS_DIR", stub)
     return stub
 
 

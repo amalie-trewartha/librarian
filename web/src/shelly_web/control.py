@@ -23,6 +23,11 @@ from shelly_web.env import getenv
 BIN_DIR = Path(
     getenv("SHELLY_BIN_DIR") or Path(__file__).resolve().parents[3] / "bin"
 )
+# Management CLIs (identity, shelly-killall) live in <repo>/tools, apart from
+# the core agent tools in bin/.
+TOOLS_DIR = Path(
+    getenv("SHELLY_TOOLS_DIR") or Path(__file__).resolve().parents[3] / "tools"
+)
 
 DEFAULT_TIMEOUT = 60
 # tar+gzip over a long-lived identity's trajectories can take a while
@@ -44,7 +49,7 @@ def identity_lock(identity_id: str) -> threading.Lock:
 
 
 def identity_env(identity: IdentityInfo, root: Path | None = None) -> dict[str, str]:
-    """Replicate the env exports of `identity shell` (bin/identity:302-325)."""
+    """Replicate the env exports of `identity shell` (tools/identity:302-325)."""
     info = _parse_info_txt(identity.path / "info.txt")
     d = str(identity.path)
     root_traj = info.get("root_trajectory", "")
@@ -71,7 +76,7 @@ def identity_env(identity: IdentityInfo, root: Path | None = None) -> dict[str, 
             "CHATRC": f"{d}/chat/.chatrc",
             "THINK_TICK_INTERVAL": info.get("interval", "0"),
             "THINK_CONTEXT_TAIL": os.environ.get("THINK_CONTEXT_TAIL", "30"),
-            "PATH": f"{BIN_DIR}:{env.get('PATH', '')}",
+            "PATH": f"{BIN_DIR}:{TOOLS_DIR}:{env.get('PATH', '')}",
         }
     )
     # Pin THINK_MODEL only when something actually specifies it. A fabricated
@@ -287,7 +292,7 @@ def llm_probe(root: Path) -> dict:
     model = model or os.environ.get("SHELLM_MODEL", "")
 
     env = os.environ.copy()
-    env["PATH"] = f"{BIN_DIR}:{env.get('PATH', '')}"
+    env["PATH"] = f"{BIN_DIR}:{TOOLS_DIR}:{env.get('PATH', '')}"
     env["SHELLM_WEB_SERVE_ROOT"] = str(root)
     env["LLM_RETRIES"] = "0"
     args = ["--no-stream", "--raw", "-t", "60"]
@@ -351,7 +356,7 @@ def chat_send(root: Path, identity: IdentityInfo, content: str, from_name: str) 
 
 def identity_new(root: Path, name: str) -> dict:
     proc = run_cli(
-        [str(BIN_DIR / "identity"), "new", name], _identities_root_env(root), root
+        [str(TOOLS_DIR / "identity"), "new", name], _identities_root_env(root), root
     )
     _raise_for_failure(proc)
     return {
@@ -366,9 +371,9 @@ def _identities_root_env(root: Path) -> dict[str, str]:
     """Env for identity-CLI calls that operate on the serve root's .identities
     (same shape as identity_new builds inline)."""
     env = os.environ.copy()
-    env["PATH"] = f"{BIN_DIR}:{env.get('PATH', '')}"
+    env["PATH"] = f"{BIN_DIR}:{TOOLS_DIR}:{env.get('PATH', '')}"
     env["IDENTITY_DIR"] = str(root / ".identities")
-    # With IDENTITY_NAME set, bin/identity treats IDENTITY_DIR as an active
+    # With IDENTITY_NAME set, tools/identity treats IDENTITY_DIR as an active
     # identity and rebases to its parent — make sure we pass the root form.
     env.pop("IDENTITY_NAME", None)
     return env
@@ -378,7 +383,7 @@ def _export_to_tempfile(root: Path, args: list[str], env: dict[str, str]) -> Pat
     fd, tmp = tempfile.mkstemp(suffix=".shellm.tgz")
     os.close(fd)
     proc = run_cli(
-        [str(BIN_DIR / "identity"), "export", *args, "-o", tmp],
+        [str(TOOLS_DIR / "identity"), "export", *args, "-o", tmp],
         env,
         root,
         timeout=EXPORT_IMPORT_TIMEOUT,
@@ -411,7 +416,7 @@ def identity_import(root: Path, archive: Path, name: str | None = None) -> dict:
     if name:
         args.extend(["--name", name])
     proc = run_cli(
-        [str(BIN_DIR / "identity"), *args],
+        [str(TOOLS_DIR / "identity"), *args],
         _identities_root_env(root),
         root,
         timeout=EXPORT_IMPORT_TIMEOUT,
@@ -429,8 +434,8 @@ def identity_import(root: Path, archive: Path, name: str | None = None) -> dict:
 
 def killall(dry_run: bool = False) -> dict:
     env = os.environ.copy()
-    env["PATH"] = f"{BIN_DIR}:{env.get('PATH', '')}"
-    args = [str(BIN_DIR / "shelly-killall")] + (["--dry-run"] if dry_run else [])
+    env["PATH"] = f"{BIN_DIR}:{TOOLS_DIR}:{env.get('PATH', '')}"
+    args = [str(TOOLS_DIR / "shelly-killall")] + (["--dry-run"] if dry_run else [])
     proc = run_cli(args, env, BIN_DIR.parent)
     _raise_for_failure(proc)
     return {"ok": True, "dry_run": dry_run, "stdout": proc.stdout, "stderr": proc.stderr}

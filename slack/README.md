@@ -27,7 +27,7 @@ format.
 export SLACK_BOT_TOKEN=xoxb-...     # see "Slack app lifecycle" below
 export SLACK_APP_TOKEN=xapp-...
 export SHELLY_SLACK_IDENTITY=audel  # default (legacy SHELLM_SLACK_IDENTITY still honored)
-bin/shelly-slack-bridge [ROOT]      # ROOT = serve root, default repo root
+tools/shelly-slack-bridge [ROOT]      # ROOT = serve root, default repo root
 ```
 
 The identity must exist (`identity new audel`) with a running dispatcher

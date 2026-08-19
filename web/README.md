@@ -12,16 +12,16 @@ Modeled after the Harbor Job Viewer: https://github.com/harbor-framework/harbor
 
 ```bash
 # Serve the shellm repo itself (finds all identity dirs under it)
-bin/shelly-web
+tools/shelly-web
 
 # Serve any directory containing identity dirs
-bin/shelly-web ~/some/dir
+tools/shelly-web ~/some/dir
 
 # Dev mode: vite dev server (hot reload) + uvicorn --reload
-bin/shelly-web --dev
+tools/shelly-web --dev
 
 # Options
-bin/shelly-web [ROOT] [--port N] [--host H] [--rebuild] [--dev]
+tools/shelly-web [ROOT] [--port N] [--host H] [--rebuild] [--dev]
 ```
 
 Requires [uv](https://docs.astral.sh/uv/) for the backend and a JS package
@@ -81,7 +81,7 @@ web/
 ## Development
 
 ```bash
-bin/shelly-web --dev            # backend :8080-8089, frontend :5173
+tools/shelly-web --dev            # backend :8080-8089, frontend :5173
 cd web && uv run pytest         # backend tests
 cd web/viewer && npm run typecheck
 ```

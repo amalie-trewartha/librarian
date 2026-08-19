@@ -31,7 +31,7 @@ mind-bus steps, or fork trees — exactly the semantics we want to see.
 ## Architecture
 
 ```
-bin/shelly-web                     bash launcher (uv run --project web)
+tools/shelly-web                     bash launcher (uv run --project web)
 web/src/shelly_web/                FastAPI backend
   server.py                        create_app(root, static_dir); /api/*; SPA catch-all
   discovery.py                     identity scan: dirs with info.txt (root_trajectory=)
@@ -48,7 +48,7 @@ web/viewer/                        React Router 7 SPA (ssr:false), Tailwind v4, 
                                    traj-context.ts, highlighter.tsx (shiki)
 ```
 
-Serving modes (both via `bin/shelly-web`):
+Serving modes (both via `tools/shelly-web`):
 - **Prod (default)**: build frontend if missing (bun > pnpm > npm, override
   `SHELLY_WEB_JS`), copy to `src/shelly_web/static/`, single uvicorn serves
   API + static with an SPA catch-all registered after all `/api` routes.
@@ -62,7 +62,7 @@ Serving modes (both via `bin/shelly-web`):
 Grouping needs filesystem knowledge the client can't have (resolving
 `child_ref` relpaths and bare child UUIDs against `<hex8>-*` dirs, checking
 blob existence), and the reference logic already existed in portable form in
-`bin/traj` and `bin/shellm-explore`. One normalized wire shape keeps the
+`bin/traj` and `tools/shellm-explore`. One normalized wire shape keeps the
 client era-agnostic (see data-model.md). The client keeps only presentation
 state: filters, expand, follow.
 

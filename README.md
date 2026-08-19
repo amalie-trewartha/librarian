@@ -88,6 +88,9 @@ The full backstory and design philosophy:
 
 ## The tools
 
+The harness itself is `bin/` — the tools the running mind executes, under 10K
+lines of code (`cloc bin/`):
+
 | Tool | What it does |
 |------|-------------|
 | **shellm** | The RLM core — sends context to an LLM, executes the bash it writes back, repeats |
@@ -95,14 +98,23 @@ The full backstory and design philosophy:
 | **traj** | Trajectory operations — append-only jsonl DAGs with fork and merge |
 | **context** | Renders a trajectory into an LLM messages array with tiered compaction |
 | **thinkers** | The mind — reactive thought processes run by a dispatcher |
-| **identity** | Create and manage identities (persona, memories, activate script) |
-| **persona** | Talk to and manage an identity by name, from anywhere |
 | **chat** / **focus** | Messages and goals on an identity's trajectory |
 | **mem** / **skills** | File-based memory store; SKILL.md-based abilities |
 | **recap** | Summarize a trajectory into themes and episodes |
+| **shellm-docker** / **-broker** | Sandboxed execution — brokered Docker with a strict policy |
+| **glob** / **view** / **put** / **sub** | Small file tools the agent uses instead of coreutils sharp edges |
+
+Everything you run *around* the mind lives in `tools/`:
+
+| Tool | What it does |
+|------|-------------|
+| **identity** | Create and manage identities (persona, memories, activate script) |
+| **persona** | Talk to and manage an identity by name, from anywhere |
+| **shelly-init** | One-time bootstrap: interview, first identity, first thoughts |
 | **shellm-explore** | Visualize run trees; LLM-powered reports on what happened and why |
 | **shelly-web** | The dashboard — watch a mind think in the browser |
 | **bridges** | Slack and Telegram connectors into the same inner experience |
+| **shelly-killall** | Panic button — stop every Shelly-related process |
 
 ## Learn more
 

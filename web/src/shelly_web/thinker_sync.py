@@ -161,7 +161,7 @@ def _atomic_copy(src: Path, dest: Path) -> None:
 
 def _install_subscriptions(bundled_dir: Path, installed_dir: Path, identity_dir: Path) -> None:
     """Fresh install only: copy subscriptions.jsonl and inject the identity's
-    root traj_id, mirroring bin/identity's _ensure_thinkers."""
+    root traj_id, mirroring tools/identity's _ensure_thinkers."""
     src = bundled_dir / "subscriptions.jsonl"
     dest = installed_dir / "subscriptions.jsonl"
     if dest.exists() or not src.is_file():

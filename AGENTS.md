@@ -97,7 +97,7 @@ Replies take 15 to 45 seconds while the monolith thinker wakes.
 
 - Any script that sources an identity's `activate` must first load
   `<app>/.env` and then the state home's `.env` (see `_load_env` in
-  `bin/persona`). Sourcing `activate` bare makes the think model fall
+  `tools/persona`). Sourcing `activate` bare makes the think model fall
   back to an expensive default with no key.
 - `chat send` dies without a sender name. It comes from the identity's
   own chatrc (`<identity>/chat/.chatrc`, seeded by the installer), not
