@@ -592,8 +592,8 @@ docker_broker_prepare_container() {
     [[ -n "${_SHELLM_CONTAINER:-}" ]] || return 0
 
     local client_path
-    client_path=$(tool_sibling_path "$shellm_path" "shellm-docker")
-    [[ -x "$client_path" ]] || die "Broker mode requires shellm-docker next to shellm: $client_path"
+    client_path=$(resolve_shellm_tool_path "$shellm_path" "shellm-docker" || true)
+    [[ -x "$client_path" ]] || die "Broker mode requires shellm-docker next to shellm or in ../tools"
 
     docker exec --user 0:0 -w / "$_SHELLM_CONTAINER" sh -c '
         if [ -x /usr/local/bin/shellm-docker ] && [ ! -e /usr/local/bin/docker ]; then

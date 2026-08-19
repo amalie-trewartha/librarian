@@ -101,13 +101,14 @@ lines of code (`cloc bin/`):
 | **chat** / **focus** | Messages and goals on an identity's trajectory |
 | **mem** / **skills** | File-based memory store; SKILL.md-based abilities |
 | **recap** | Summarize a trajectory into themes and episodes |
-| **shellm-docker** / **-broker** | Sandboxed execution — brokered Docker with a strict policy |
+| **shellm-docker** | Constrained docker facade staged into sandbox containers for generated code |
 | **glob** / **view** / **put** / **sub** | Small file tools the agent uses instead of coreutils sharp edges |
 
 Everything you run *around* the mind lives in `tools/`:
 
 | Tool | What it does |
 |------|-------------|
+| **shellm-docker-broker** | Host-side policy server for brokered Docker; never present in the mind's environment |
 | **identity** | Create and manage identities (persona, memories, activate script) |
 | **persona** | Talk to and manage an identity by name, from anywhere |
 | **shelly-init** | One-time bootstrap: interview, first identity, first thoughts |

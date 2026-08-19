@@ -38,8 +38,8 @@ PREFIX="${PREFIX:-$HOME/.local/bin}"
 SYMLINKS="${SYMLINKS:-0}"
 RUN_INIT=0
 # Core agent tools (bin/) and the management/aux CLIs around them (tools/).
-BIN_TOOLS=(shellm shellm-docker shellm-docker-broker skills mem llm context traj thinkers chat focus recap)
-AUX_TOOLS=(identity shellm-explore shelly-init shelly-killall persona)
+BIN_TOOLS=(shellm shellm-docker skills mem llm context traj thinkers chat focus recap)
+AUX_TOOLS=(shellm-docker-broker identity shellm-explore shelly-init shelly-killall persona)
 TOOLS=("${BIN_TOOLS[@]}" "${AUX_TOOLS[@]}")
 
 # ---------------------------------------------------------------------------

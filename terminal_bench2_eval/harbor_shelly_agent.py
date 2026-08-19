@@ -136,6 +136,9 @@ docker version --format '{{.Client.Version}}' >/dev/null
         for tool in tools:
             src = self.host_bin_dir / tool
             if not src.is_file():
+                # Aux tools live in tools/ next to bin/ in a checkout.
+                src = self.host_bin_dir.parent / "tools" / tool
+            if not src.is_file():
                 self.logger.warning(f"tool {tool} not found at {src}")
                 continue
             await environment.upload_file(

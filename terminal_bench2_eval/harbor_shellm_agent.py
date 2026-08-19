@@ -183,6 +183,9 @@ docker version --format '{{.Client.Version}}' >/dev/null
         ):
             src = host_dir / tool
             if not src.is_file():
+                # Aux tools live in tools/ next to bin/ in a checkout.
+                src = host_dir.parent / "tools" / tool
+            if not src.is_file():
                 self.logger.warning(f"shellm sibling tool {tool} not found at {src}")
                 continue
             await environment.upload_file(

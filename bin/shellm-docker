@@ -93,7 +93,8 @@ send_socket() {
     local socket="$broker_dir/broker.sock"
     [[ -S "$socket" ]] || die "broker socket not found: $socket"
     command -v socat >/dev/null 2>&1 || die "socket transport requires socat in the shellm container"
-    printf '%s' "$request" | socat - "UNIX-CONNECT:$socket"
+    printf '%s' "$request" | socat - "UNIX-CONNECT:$socket" || \
+        die "cannot reach broker socket at $socket (is shellm-docker-broker running on the host?)"
 }
 
 send_filesystem() {
@@ -115,10 +116,25 @@ send_filesystem() {
     printf '%s' "$request" > "$tmp"
     mv "$tmp" "$req"
 
+    # A live broker sweeps requests/ into processing/ every 0.2s, so a
+    # request still sitting here after a few seconds means no broker is
+    # listening. Fail fast so the caller gets an error it can act on,
+    # instead of waiting out the full response timeout below.
+    local pickup_timeout="${SHELLM_DOCKER_PICKUP_TIMEOUT:-15}"
+    local waited=0
+    while [[ -f "$req" ]]; do
+        if [[ "$waited" -ge "$pickup_timeout" ]]; then
+            rm -f "$req"
+            die "broker did not pick up the request after ${pickup_timeout}s (is shellm-docker-broker running on the host?)"
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
     # Harbor tasks can legitimately run for several hours; let Harbor's own
     # per-task timeout be the primary bound instead of cutting Docker off first.
     local timeout="${SHELLM_DOCKER_REQUEST_TIMEOUT:-14400}"
-    local waited=0
+    waited=0
     while [[ ! -f "$res" ]]; do
         if [[ "$waited" -ge "$timeout" ]]; then
             rm -f "$req" "$tmp"
