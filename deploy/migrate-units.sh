@@ -252,6 +252,18 @@ for pair in "${UNIT_PAIRS[@]}"; do
     run rm -f "$SYSD/$legacy"
 done
 
+# Deleting a unit file leaves systemd holding a stale not-found/failed
+# entry for the old name, which then shows up in `systemctl --failed` —
+# the first thing incident triage reads. Clear them so the box does not
+# advertise phantom failures forever.
+for pair in "${UNIT_PAIRS[@]}"; do
+    run systemctl reset-failed "${pair%%:*}" || true
+done
+for ident in "${INSTANCES[@]:-}"; do
+    [[ -n "$ident" ]] || continue
+    run systemctl reset-failed "shellm-thinkers@$ident.service" || true
+done
+
 # The box-local drop-in (CORS origin, etc.) has to follow the unit name or
 # it stops applying — silently, since systemd just ignores an orphan dir.
 # Moved verbatim: it is operator-owned config, and any legacy SHELLM_* var
