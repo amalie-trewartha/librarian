@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# deploy/scripts/pull — copy one file off the box over SSM (no SSH, no S3).
+#
+# Usage: deploy/scripts/pull <remote-path> [local-path]
+# The file travels as base64 chunks through the non-interactive SSM
+# channel (~20KB per round-trip, so roughly 5-10KB/s): fine for logs
+# and small artifacts, wrong tool above a few MB. Refuses files >50MB;
+# if those become routine the fix is a scratch S3 bucket, not this.
+
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+case "${1:-}" in
+    -h|--help|"") sed -n '2,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
+require_tools terraform aws jq
+require_state
+require_aws
+
+remote=$1
+local_path=${2:-$(basename "$remote")}
+chunk_size=20000
+max_bytes=$((50 * 1024 * 1024))
+
+local_md5() {
+    if command -v md5sum >/dev/null 2>&1; then md5sum "$1" | cut -d' ' -f1
+    else md5 -q "$1"; fi
+}
+
+info "checking $remote on the box"
+meta=$(run_script_on_box "stat -c %s '$remote' && md5sum '$remote' | cut -d' ' -f1") \
+    || die "cannot read $remote on the box"
+size=$(sed -n 1p <<<"$meta")
+remote_md5=$(sed -n 2p <<<"$meta")
+(( size <= max_bytes )) \
+    || die "$remote is $size bytes — over this tool's 50MB limit (see header)"
+
+# The encoded file must persist on the box between send-command calls;
+# clean it up even if the pull dies partway.
+remote_b64="/tmp/shellm-pull.$$.b64"
+cleanup() { run_script_on_box "rm -f '$remote_b64'" >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+
+info "encoding on the box ($size bytes)"
+total=$(run_script_on_box "base64 -w0 '$remote' > '$remote_b64' && wc -c < '$remote_b64'" \
+    | tr -d '[:space:]')
+chunks=$(( (total + chunk_size - 1) / chunk_size ))
+info "pulling $chunks chunks (~$((chunks * 3))s)"
+
+tmp_b64="$local_path.pull-b64.$$"
+tmp_out="$local_path.pull-tmp.$$"
+trap 'cleanup; rm -f "$tmp_b64" "$tmp_out"' EXIT
+
+: > "$tmp_b64"
+offset=1
+i=0
+while (( offset <= total )); do
+    i=$((i + 1))
+    info "chunk $i/$chunks"
+    part=$(run_script_on_box "tail -c +$offset '$remote_b64' | head -c $chunk_size") \
+        || die "chunk $i/$chunks failed"
+    printf '%s' "$part" >> "$tmp_b64"
+    offset=$((offset + chunk_size))
+done
+
+got=$(wc -c < "$tmp_b64" | tr -d '[:space:]')
+[[ "$got" == "$total" ]] || die "reassembled $got base64 bytes, expected $total"
+
+# Decode from stdin: GNU base64 takes a filename argument but macOS's
+# doesn't, and stdin works on both.
+base64 -d < "$tmp_b64" > "$tmp_out"
+got_md5=$(local_md5 "$tmp_out")
+[[ "$got_md5" == "$remote_md5" ]] \
+    || die "md5 mismatch: box has $remote_md5, pulled $got_md5"
+
+mv "$tmp_out" "$local_path"
+rm -f "$tmp_b64"
+info "OK: $local_path ($size bytes, md5 $remote_md5)"
