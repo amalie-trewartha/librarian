@@ -57,7 +57,7 @@ shellm streams everything live. Commands show in cyan, output in dim:
 Found 42 results
 ```
 
-If a command hangs (waiting for interactive input), the inactivity watchdog kills it after `SHELLM_INACTIVITY_TIMEOUT` seconds (default 30) and gives the LLM structured feedback on what went wrong.
+If a command hangs (waiting for interactive input), the inactivity watchdog kills it after `SHELLM_INACTIVITY_TIMEOUT` seconds (default 30) and gives the LLM structured feedback on what went wrong. Blocks that are waiting on a nested `shellm` run get a longer limit, see [Interactive command handling](#interactive-command-handling).
 
 ### Completion signals
 
@@ -138,6 +138,8 @@ DETECTED: Confirmation prompt. Retry with --yes, -y, --force,
 ```
 
 The LLM sees this and retries with non-interactive flags. For commands that truly need interaction, the LLM can use tmux to create a PTY session and interact with it step by step.
+
+A nested `shellm` run is an exception, because it produces no output for as long as its own model call is thinking. Every block gets an activity beacon file, whose path arrives as `SHELLM_ACTIVITY_FILE`, and a nested run stamps it every `SHELLM_BEACON_INTERVAL` seconds while it works. The watchdog treats a stamped beacon as activity, so a block waiting on sub-runs is not killed at `SHELLM_INACTIVITY_TIMEOUT`. A block that is silent for `SHELLM_INACTIVITY_MAX` seconds (default 900) is killed anyway, so a wedged sub-run cannot hold a run open forever, and the feedback in that case names the sub-run instead of guessing at an interactive prompt.
 
 ## Docker sandboxing
 
@@ -317,6 +319,8 @@ All configuration is available as both CLI flags and environment variables. Flag
 | `--max-tokens` | `SHELLM_MAX_TOKENS` | model's max output cap | Max tokens per API response |
 | `--effort` | `SHELLM_EFFORT` | `high` | Thinking effort: low, medium, high, xhigh, max |
 | — | `SHELLM_INACTIVITY_TIMEOUT` | `30` | Seconds before killing idle execution |
+| — | `SHELLM_INACTIVITY_MAX` | `900` | Seconds before killing execution that is silent but has a live nested run |
+| — | `SHELLM_BEACON_INTERVAL` | `5` | Seconds between activity beacon stamps from a nested run |
 | `--workdir DIR` | — | fresh per-run dir | Working directory for the run |
 | `--here` | — | off | Shorthand for `--workdir "$PWD"` |
 | `--env NAME` | `SHELLM_ENV` | auto-generated | Named execution environment (Docker container or `local`) |

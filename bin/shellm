@@ -82,6 +82,8 @@ SHELLM_DOCKER_SOCKET="${SHELLM_DOCKER_SOCKET:-/var/run/docker.sock}"
 SHELLM_ALLOW_NESTED_DOCKER="${SHELLM_ALLOW_NESTED_DOCKER:-0}"
 SHELLM_TEMP_DOCKER="${SHELLM_TEMP_DOCKER:-0}"
 SHELLM_INACTIVITY_TIMEOUT="${SHELLM_INACTIVITY_TIMEOUT:-30}"
+SHELLM_INACTIVITY_MAX="${SHELLM_INACTIVITY_MAX:-900}"
+SHELLM_BEACON_INTERVAL="${SHELLM_BEACON_INTERVAL:-5}"
 VERBOSE=0
 QUIET=0
 
@@ -211,6 +213,9 @@ Environment:
   SHELLM_ENV              Named env (execution environment)
   SHELLM_TEMP_DOCKER      Set to 1 to teardown Docker container on exit
   SHELLM_INACTIVITY_TIMEOUT  Seconds before killing idle execution (default: 30)
+  SHELLM_INACTIVITY_MAX   Seconds before killing execution that is silent but
+                          has a live nested shellm run (default: 900)
+  SHELLM_BEACON_INTERVAL  Seconds between activity beacon touches (default: 5)
   SHELLM_WORKDIR          (Internal) Working directory for current run
 
 Context is passed to generated code as environment variables:
@@ -353,6 +358,35 @@ _find_latest_traj() {
 # Interactive prompt detection
 # ---------------------------------------------------------------------------
 
+# The parent run's watchdog kills a bash block that produces no output for
+# SHELLM_INACTIVITY_TIMEOUT seconds. A nested shellm run is silent for exactly
+# as long as its own model call is thinking, so real delegation was being
+# killed at 30s (2026-08-18 RLM usage analysis). The parent hands every block a
+# beacon path; a nested run stamps it while it works, which lets the watchdog
+# tell "a sub-run is thinking" apart from "this block is waiting on stdin".
+_SHELLM_BEACON_PID=""
+start_activity_beacon() {
+    local beacon="${SHELLM_ACTIVITY_FILE:-}"
+    [[ -n "$beacon" ]] || return 0
+    [[ -d "$(dirname "$beacon")" && -w "$(dirname "$beacon")" ]] || return 0
+    local owner=$$
+    (
+        # Exit with the run that started us, so an orphaned beacon can never
+        # hold a parent block open forever.
+        while kill -0 "$owner" 2>/dev/null; do
+            date +%s > "$beacon" 2>/dev/null || exit 0
+            sleep "$SHELLM_BEACON_INTERVAL"
+        done
+    ) &
+    _SHELLM_BEACON_PID=$!
+}
+
+stop_activity_beacon() {
+    [[ -n "$_SHELLM_BEACON_PID" ]] || return 0
+    kill "$_SHELLM_BEACON_PID" 2>/dev/null || true
+    _SHELLM_BEACON_PID=""
+}
+
 detect_interactive_prompt() {
     local tail_bytes="$1"
     # Normalize: lowercase, collapse whitespace
@@ -390,9 +424,32 @@ build_inactivity_feedback() {
     local output="$1"
     local prompt_type="$2"
     local timeout="$3"
+    local reason="${4:-idle}"
+    local had_nested="${5:-0}"
 
     local last_output
     last_output=$(truncate_output "$output")
+
+    # A block that ran a nested shellm run was not sitting at a prompt, so the
+    # interactive-input advice below would send the model looking for a flag
+    # that does not exist. Say what actually happened instead.
+    if [[ "$reason" == "nested" || "$had_nested" -eq 1 ]]; then
+        if [[ "$reason" == "nested" ]]; then
+            printf 'Execution was KILLED after %s seconds with no output\n' "$timeout"
+            printf 'A nested shellm run was still alive, so this was not an interactive\n'
+            printf 'prompt. The sub-run either wedged or needed longer than the ceiling.\n'
+        else
+            printf 'Execution was KILLED after %s seconds of inactivity\n' "$timeout"
+            printf 'A nested shellm run was alive in this block but stopped reporting,\n'
+            printf 'so it probably died rather than hung.\n'
+        fi
+        printf '\nLast output before timeout:\n%s\n' "$last_output"
+        printf '\nTo run sub-work that takes longer, give the sub-run a smaller task,\n'
+        printf 'cap it with --max-iterations, or split it across several sub-runs.\n'
+        printf 'Background each sub-run with its output redirected to a file, then read\n'
+        printf 'the files in a later step instead of waiting inside this one.\n'
+        return 0
+    fi
 
     local advice=""
     case "$prompt_type" in
@@ -1488,11 +1545,16 @@ When to use sub-runs:
 
 How to spawn a sub-run:
 ```bash
-shellm "Implement approach A: <detailed description>" > /tmp/approach_a.txt &
-shellm "Implement approach B: <detailed description>" > /tmp/approach_b.txt &
+shellm "Implement approach A: <detailed description>" > /tmp/approach_a.txt 2>&1 &
+shellm "Implement approach B: <detailed description>" > /tmp/approach_b.txt 2>&1 &
 wait
 # Compare results, pick the best
+cat /tmp/approach_a.txt /tmp/approach_b.txt
 ```
+
+Always redirect a sub-run's stdout and stderr to a file, as above. A backgrounded sub-run that writes to the pipes it inherited loses its output once the step that started it ends.
+
+A sub-run is silent while its own model call is thinking, and the inactivity watchdog knows about that: while a sub-run is alive the block is treated as working, so waiting on sub-runs does not get you killed at SHELLM_INACTIVITY_TIMEOUT. The limit that still applies is SHELLM_INACTIVITY_MAX (default 900s) of no output at all from the block, so size sub-work to finish inside it. For longer work, give each sub-run a smaller task, cap it with `--max-iterations`, or start it in one step and read its output file in a later step rather than waiting here.
 
 Pass context to sub-runs with `-f FILE` or via stdin. Always give sub-runs a clear, self-contained task description — they have no memory of your conversation.
 
@@ -2049,6 +2111,7 @@ run_loop() {
     _cleanup_ws_name="${_SHELLM_ACTIVE_ENV:-}"
     _cleanup_ctx_pid="${_ctx_summary_pid:-}"
     cleanup() {
+        stop_activity_beacon
         # Give run-summary background process time to finish
         if [[ -n "$_cleanup_ctx_pid" ]] && kill -0 "$_cleanup_ctx_pid" 2>/dev/null; then
             local _ctx_wait=0
@@ -2266,6 +2329,7 @@ exit \$__shellm_rc
             ROOT_TRAJ_ID="${ROOT_TRAJ_ID:-$_run_traj_id}"
             SHELLM_RUNDIR="$rundir"
             _SHELLM_ROOT_RUNDIR="$_SHELLM_ROOT_RUNDIR"
+            SHELLM_ACTIVITY_FILE="$rundir/.activity"
             PATH="$(dirname "$shellm_path"):$PATH"
         )
         # Forward --var values
@@ -2292,7 +2356,9 @@ exit \$__shellm_rc
         local exec_pid_file="$rundir/.exec_pid"
         local watchdog_pid_file="$rundir/.watchdog_pid"
         local timeout_marker="$rundir/.timeout"
+        local activity_file="$rundir/.activity"
         : > "$output_file"
+        : > "$activity_file"
         rm -f "$timeout_marker" "$exec_pid_file" "$watchdog_pid_file"
         local exit_code=0
         local timed_out=0
@@ -2311,6 +2377,10 @@ exit \$__shellm_rc
         (
             local last_size=0
             local stale_seconds=0
+            local quiet_seconds=0
+            local last_beacon=""
+            local kill_reason=""
+            local kill_limit=""
             while kill -0 "$exec_pid" 2>/dev/null; do
                 sleep 1
                 local cur_size
@@ -2318,17 +2388,35 @@ exit \$__shellm_rc
                 cur_size=$(echo "$cur_size" | tr -d ' ')
                 if [[ "$cur_size" -eq "$last_size" ]]; then
                     stale_seconds=$((stale_seconds + 1))
+                    quiet_seconds=$((quiet_seconds + 1))
                 else
                     stale_seconds=0
+                    quiet_seconds=0
                     last_size="$cur_size"
                 fi
+                # A nested shellm run stamps the beacon while it works, so its
+                # silence counts as activity. quiet_seconds keeps running, so a
+                # sub-run that wedges still dies at SHELLM_INACTIVITY_MAX.
+                local cur_beacon
+                cur_beacon=$(cat "$activity_file" 2>/dev/null || true)
+                if [[ -n "$cur_beacon" && "$cur_beacon" != "$last_beacon" ]]; then
+                    last_beacon="$cur_beacon"
+                    stale_seconds=0
+                fi
                 if [[ "$stale_seconds" -ge "$SHELLM_INACTIVITY_TIMEOUT" ]]; then
-                    touch "$timeout_marker"
+                    kill_reason="idle"
+                    kill_limit="$SHELLM_INACTIVITY_TIMEOUT"
+                elif [[ "$quiet_seconds" -ge "$SHELLM_INACTIVITY_MAX" ]]; then
+                    kill_reason="nested"
+                    kill_limit="$SHELLM_INACTIVITY_MAX"
+                fi
+                if [[ -n "$kill_reason" ]]; then
+                    printf '%s %s\n' "$kill_reason" "$kill_limit" > "$timeout_marker"
                     # Name the target: a silent watchdog kill is
                     # indistinguishable from an external one in a
                     # post-mortem (2026-08-12 dispatcher death).
-                    printf '%s [shellm-watchdog] inactivity timeout (%ss): killing exec pid %s\n' \
-                        "$(date -u +%FT%TZ)" "$SHELLM_INACTIVITY_TIMEOUT" "$exec_pid" >&2
+                    printf '%s [shellm-watchdog] %s timeout (%ss): killing exec pid %s\n' \
+                        "$(date -u +%FT%TZ)" "$kill_reason" "$kill_limit" "$exec_pid" >&2
                     kill "$exec_pid" 2>/dev/null || true
                     # Give it a moment, then force-kill if needed
                     sleep 2
@@ -2394,21 +2482,37 @@ exit \$__shellm_rc
             done
         fi
 
-        # Check if we timed out
+        # Check if we timed out. The marker carries why, so the feedback the
+        # model gets names the real cause instead of guessing at a prompt.
+        local kill_reason="idle"
+        local kill_limit="$SHELLM_INACTIVITY_TIMEOUT"
         if [[ -f "$timeout_marker" ]]; then
             timed_out=1
+            local _marker
+            _marker=$(cat "$timeout_marker" 2>/dev/null || true)
+            if [[ -n "$_marker" ]]; then
+                kill_reason="${_marker%% *}"
+                kill_limit="${_marker##* }"
+            fi
         fi
+        # A stamped beacon means a nested shellm run was alive in this block.
+        local had_nested=0
+        [[ -s "$activity_file" ]] && had_nested=1
 
         local output
         output=$(cat "$output_file")
-        rm -f "$output_file" "$exec_pid_file" "$watchdog_pid_file" "$timeout_marker"
+        rm -f "$output_file" "$exec_pid_file" "$watchdog_pid_file" "$timeout_marker" "$activity_file"
         local _exec_s=$(( $(date +%s) - _exec_t0 ))
 
         debug "Exit code: $exit_code, timed_out: $timed_out"
 
         # Show exit status
         if [[ "$timed_out" -eq 1 ]]; then
-            progress "\033[1;31mKILLED — inactivity timeout (${SHELLM_INACTIVITY_TIMEOUT}s)\033[0m"
+            if [[ "$kill_reason" == "nested" ]]; then
+                progress "\033[1;31mKILLED — sub-run silent for ${kill_limit}s\033[0m"
+            else
+                progress "\033[1;31mKILLED — inactivity timeout (${kill_limit}s)\033[0m"
+            fi
         elif [[ "$exit_code" -eq 0 ]]; then
             progress_dim "Exit 0"
         else
@@ -2442,7 +2546,7 @@ exit \$__shellm_rc
             local prompt_type
             prompt_type=$(detect_interactive_prompt "$tail_bytes")
             local feedback
-            feedback=$(build_inactivity_feedback "$output" "$prompt_type" "$SHELLM_INACTIVITY_TIMEOUT")
+            feedback=$(build_inactivity_feedback "$output" "$prompt_type" "$kill_limit" "$kill_reason" "$had_nested")
             output_json=$(jq -n \
                 --rawfile stdout "$_stdout_tmp" \
                 --arg stderr "" \
@@ -2580,6 +2684,7 @@ exit \$__shellm_rc
 
 main() {
     _SHELLM_ORIGINAL_CMD="shellm $*"
+    start_activity_beacon
     local context_files=()
     local print_prompt=0
     local _SHELLM_ENV_NAME="${SHELLM_ENV:-}"
