@@ -30,6 +30,15 @@ WORK=$(mktemp -d)
 trap 'cd /; rm -rf "$WORK"' EXIT
 cd "$WORK"
 
+# Isolate HOME. bin/identity turns on symlink mode from
+# $HOME/.shellm-thinkers/.use-symlinks, and its bundled source is the repo's
+# own thinkers/ when run from a checkout — so on a --symlinks install this
+# test's identity got thinkers/monolith as a symlink INTO the repo, and the
+# "hand-edited prompt" write below landed in the real thinkers/monolith/
+# prompt.md (observed 2026-08-19). Copy mode is also what these assertions
+# actually mean: "a local edit survives" only makes sense for a real copy.
+export HOME="$WORK"
+
 fake_thinker() { # fake_thinker <dir>
     mkdir -p "$1"
     printf '#!/usr/bin/env bash\ntrue\n' > "$1/step"; chmod +x "$1/step"
