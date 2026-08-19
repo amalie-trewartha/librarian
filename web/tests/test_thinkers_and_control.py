@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from shellm_web import control, thinkers
-from shellm_web.server import create_app
+from shelly_web import control, thinkers
+from shelly_web.server import create_app
 
 ROOT_TRAJ = "eeeeeeee-5555-4555-8555-555555555555"
 

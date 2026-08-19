@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-from shellm_web import discovery, safety, tree
+from shelly_web import discovery, safety, tree
 
 
 def _root_dir(identity_dir: Path) -> Path:

@@ -29,8 +29,8 @@ Cloudflare Access; the app itself stays auth-free.
 ## 1. Provision the app
 
 ```bash
-git clone https://github.com/laude-institute/shellm.git
-sudo bash shellm/deploy/setup.sh          # or run from your checkout
+git clone https://github.com/laude-institute/shelly.git
+sudo bash shelly/deploy/setup.sh          # or run from your checkout
 ```
 
 The script creates a `shellm` system user, clones the repo to

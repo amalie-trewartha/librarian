@@ -1,5 +1,5 @@
 [project]
-name = "shellm-web"
+name = "shelly-web"
 version = "0.1.0"
 description = "Web viewer for shellm mind logs and trajectory trees"
 requires-python = ">=3.12"
@@ -10,7 +10,9 @@ dependencies = [
 ]
 
 [project.scripts]
-shellm-web = "shellm_web.cli:main"
+shelly-web = "shelly_web.cli:main"
+# Back-compat alias for the deployed systemd unit; remove after the box migration.
+shellm-web = "shelly_web.cli:main"
 
 [dependency-groups]
 dev = [
@@ -23,4 +25,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/shellm_web"]
+packages = ["src/shelly_web"]

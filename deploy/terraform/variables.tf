@@ -19,7 +19,7 @@ variable "root_volume_gb" {
 variable "shellm_repo" {
   description = "Git repo to deploy"
   type        = string
-  default     = "https://github.com/andyk/shellm.git"
+  default     = "https://github.com/laude-institute/shelly.git"
 }
 
 variable "shellm_branch" {

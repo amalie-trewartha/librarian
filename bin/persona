@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# persona — talk to and manage a shellm identity by name, from anywhere.
+# persona — talk to and manage a Shelly identity by name, from anywhere.
 # No cd, no `identity shell` needed.
 #
-# shellm-init links each identity's name to this tool (e.g. `ada`), so the
+# shelly-init links each identity's name to this tool (e.g. `ada`), so the
 # name IS the command:
 #
 #   ada                    chat with them (TUI if built, simple loop otherwise)
@@ -19,7 +19,15 @@ set -euo pipefail
 
 die() { printf 'persona: error: %s\n' "$*" >&2; exit 1; }
 
-SHELLM_HOME="${SHELLM_HOME:-$HOME/.shellm}"
+# New SHELLY_* env names win; the SHELLM_* internal names stay because the
+# tools underneath (thinkers, llm, shellm) still read them.
+# State home: SHELLY_HOME/SHELLM_HOME if set; else ~/.shelly, falling back
+# to a pre-rename ~/.shellm when only that exists.
+_default_home="$HOME/.shelly"
+[[ ! -d "$_default_home" && -d "$HOME/.shellm" ]] && _default_home="$HOME/.shellm"
+SHELLM_HOME="${SHELLY_HOME:-${SHELLM_HOME:-$_default_home}}"
+SHELLM_APP_DIR="${SHELLY_APP_DIR:-${SHELLM_APP_DIR:-}}"
+SHELLM_WEB_ARGS="${SHELLY_WEB_ARGS:-${SHELLM_WEB_ARGS:-}}"
 
 # ---------------------------------------------------------------------------
 # Locate the checkout and the identity
@@ -49,11 +57,11 @@ _resolve_app_dir() {
     return 1
 }
 
-APP_DIR=$(_resolve_app_dir) || die "can't find the shellm checkout. Set SHELLM_APP_DIR=/path/to/shellm"
+APP_DIR=$(_resolve_app_dir) || die "can't find the shelly checkout. Set SHELLY_APP_DIR=/path/to/shelly"
 export PATH="$APP_DIR/bin:$PATH"
 IDENTITY_ROOT="$APP_DIR/.identities"
 
-# Env files, real environment first (same layering as llm and shellm-init).
+# Env files, real environment first (same layering as llm and shelly-init).
 # Without this, activate's THINK_MODEL fallback can't see SHELLM_MODEL and
 # the mind starts on the wrong model.
 _load_env() {
@@ -91,7 +99,7 @@ fi
 
 # The command name to show in messages (`ada stop` vs `persona ada stop`):
 # the bare name only if it actually resolves to a persona link — it may
-# instead be an unrelated command or a shellm tool (e.g. an identity named
+# instead be an unrelated command or a shelly tool (e.g. an identity named
 # "chat").
 CMD="persona $NAME"
 if [[ "$(readlink "$(command -v "$NAME" 2>/dev/null)" 2>/dev/null)" == *"/persona" ]]; then
@@ -190,7 +198,7 @@ cmd_dash() {
     mkdir -p "$SHELLM_HOME/logs" "$SHELLM_HOME/run"
     pid=$(cat "$pidfile" 2>/dev/null || true)
     if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
-        command -v uv >/dev/null 2>&1 || die "the dash needs uv — run shellm-init to set it up"
+        command -v uv >/dev/null 2>&1 || die "the dash needs uv — run shelly-init to set it up"
         # In a container, bind on all interfaces so a published port works
         if [[ -z "${SHELLM_WEB_ARGS:-}" && ( -f /.dockerenv || -f /run/.containerenv ) ]]; then
             SHELLM_WEB_ARGS="--host 0.0.0.0"
@@ -198,11 +206,11 @@ cmd_dash() {
         echo "Starting the dash..."
         : > "$log"
         # shellcheck disable=SC2086
-        nohup shellm-web "$APP_DIR" ${SHELLM_WEB_ARGS:-} >>"$log" 2>&1 &
+        nohup shelly-web "$APP_DIR" ${SHELLM_WEB_ARGS:-} >>"$log" 2>&1 &
         printf '%s\n' "$!" > "$pidfile"
         local _
         for _ in $(seq 1 300); do
-            grep -q 'shellm-web serving' "$log" 2>/dev/null && break
+            grep -qE 'shell(m|y)-web serving' "$log" 2>/dev/null && break
             kill -0 "$(cat "$pidfile")" 2>/dev/null || { tail -20 "$log" >&2; die "the dash failed to start (log: $log)"; }
             sleep 1
         done
@@ -243,7 +251,7 @@ cmd_say() {
 
 cmd_chat() {
     _activate
-    if command -v shellm-tui >/dev/null 2>&1; then
+    if command -v shelly-tui >/dev/null 2>&1 || command -v shellm-tui >/dev/null 2>&1; then
         exec chat repl
     fi
     # Simple fallback loop when the Rust TUI isn't built

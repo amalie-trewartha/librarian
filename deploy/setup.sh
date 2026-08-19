@@ -11,14 +11,14 @@ set -euo pipefail
 #   sudo bash deploy/setup.sh
 #
 # Override defaults via env:
-#   SHELLM_REPO=https://github.com/laude-institute/shellm.git
+#   SHELLM_REPO=https://github.com/laude-institute/shelly.git
 #   SHELLM_BRANCH=main
 #   SHELLM_HOME=/opt/shellm
 #
 # After this script: put your (spend-capped!) API key in
 # /opt/shellm/app/.env and set up the Cloudflare tunnel — see DEPLOY.md.
 
-SHELLM_REPO="${SHELLM_REPO:-https://github.com/laude-institute/shellm.git}"
+SHELLM_REPO="${SHELLM_REPO:-https://github.com/laude-institute/shelly.git}"
 SHELLM_BRANCH="${SHELLM_BRANCH:-main}"
 SHELLM_HOME="${SHELLM_HOME:-/opt/shellm}"
 SHELLM_USER="shellm"
@@ -65,8 +65,8 @@ sudo -u "$SHELLM_USER" bash -c "
     cd '$APP_DIR/web/viewer'
     bun install --frozen-lockfile
     bun run build
-    rm -rf '$APP_DIR/web/src/shellm_web/static'
-    cp -R build/client '$APP_DIR/web/src/shellm_web/static'
+    rm -rf '$APP_DIR/web/src/shelly_web/static'
+    cp -R build/client '$APP_DIR/web/src/shelly_web/static'
     cd '$APP_DIR/web' && uv sync
 "
 

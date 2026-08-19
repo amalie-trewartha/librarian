@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# install.sh — install shellm tools onto PATH.
+# install.sh — install Shelly's tools onto PATH.
 #
 # Two ways in:
 #
@@ -9,14 +9,15 @@ set -euo pipefail
 #     ./install.sh [options]
 #
 #   One-liner (no checkout needed):
-#     curl -fsSL https://raw.githubusercontent.com/laude-institute/shellm/main/install.sh | bash
+#     curl -fsSL https://raw.githubusercontent.com/laude-institute/shelly/main/install.sh | bash
 #
-# The one-liner clones the repo to ~/.shellm/app, symlink-installs the tools,
-# then hands off to `shellm-init` to bootstrap a first identity and start the
+# The one-liner clones the repo to ~/.shelly/app (or a pre-existing
+# ~/.shellm), symlink-installs the tools,
+# then hands off to `shelly-init` to bootstrap a first identity and start the
 # local dash. Pass args through the pipe with `| bash -s -- <args>`.
 #
 # Prefer to read before you run? Same thing, two steps:
-#     curl -fsSLO https://raw.githubusercontent.com/laude-institute/shellm/main/install.sh
+#     curl -fsSLO https://raw.githubusercontent.com/laude-institute/shelly/main/install.sh
 #     less install.sh && bash install.sh --init
 #
 # Everything side-effectful happens inside main(), invoked on the LAST line of
@@ -24,14 +25,19 @@ set -euo pipefail
 # `curl | bash`) parses but executes nothing. Keep it that way: top level is
 # only defaults, function definitions, and that final call.
 
-SHELLM_REPO="${SHELLM_REPO:-https://github.com/laude-institute/shellm.git}"
-SHELLM_BRANCH="${SHELLM_BRANCH:-main}"
-SHELLM_HOME="${SHELLM_HOME:-$HOME/.shellm}"
+# New SHELLY_* env names win; legacy SHELLM_* spellings still honored.
+# State home: SHELLY_HOME/SHELLM_HOME if set; else ~/.shelly, falling back
+# to a pre-rename ~/.shellm when only that exists.
+SHELLM_REPO="${SHELLY_REPO:-${SHELLM_REPO:-https://github.com/laude-institute/shelly.git}}"
+SHELLM_BRANCH="${SHELLY_BRANCH:-${SHELLM_BRANCH:-main}}"
+_default_home="$HOME/.shelly"
+[ ! -d "$_default_home" ] && [ -d "$HOME/.shellm" ] && _default_home="$HOME/.shellm"
+SHELLM_HOME="${SHELLY_HOME:-${SHELLM_HOME:-$_default_home}}"
 
 PREFIX="${PREFIX:-$HOME/.local/bin}"
 SYMLINKS="${SYMLINKS:-0}"
 RUN_INIT=0
-TOOLS=(shellm shellm-docker shellm-docker-broker skills mem llm shellm-explore context traj identity thinkers chat focus recap shellm-init persona)
+TOOLS=(shellm shellm-docker shellm-docker-broker skills mem llm shellm-explore context traj identity thinkers chat focus recap shelly-init persona)
 
 # ---------------------------------------------------------------------------
 # Dependency checks (shared by both modes)
@@ -104,12 +110,12 @@ _usage() {
     cat <<'EOF'
 Usage: ./install.sh [options]
 
-Installs shellm tools from bin/ to a directory on your PATH.
+Installs Shelly's tools from bin/ to a directory on your PATH.
 
 Options:
   --prefix DIR   Install directory (default: ~/.local/bin)
   --symlinks     Create symlinks instead of copies (edits take effect without reinstalling)
-  --init         After installing, run `shellm-init` to bootstrap a first
+  --init         After installing, run `shelly-init` to bootstrap a first
                  identity and start the local dash (the curl|bash one-liner
                  does this by default)
   -h, --help     Show this help
@@ -117,7 +123,8 @@ Options:
 Environment variables:
   PREFIX         Same as --prefix
   SYMLINKS=1     Same as --symlinks
-  SHELLM_HOME    shellm state directory (default: ~/.shellm)
+  SHELLY_HOME    Shelly state directory (default: ~/.shelly, or ~/.shellm
+                 when only that exists; legacy SHELLM_HOME also honored)
 
 Examples:
   ./install.sh                          # copy to ~/.local/bin
@@ -220,7 +227,7 @@ _install_thinkers() {
 }
 
 # PATH: make sure the tools are reachable — for this process (so --init can
-# chain into shellm-init) and, with consent, for future shells.
+# chain into shelly-init) and, with consent, for future shells.
 # A same-named system binary in a dir BEFORE $PREFIX silently shadows the tool
 # we just installed (macOS ships /usr/sbin/chat, /usr/bin/view). Verify each
 # installed tool actually resolves to OUR copy; warn if not. Install still
@@ -315,7 +322,7 @@ main() {
 
     if [[ "$RUN_INIT" -eq 1 ]]; then
         echo
-        exec "$PREFIX/shellm-init"
+        exec "$PREFIX/shelly-init"
     fi
 }
 

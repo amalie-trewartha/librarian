@@ -26,7 +26,7 @@ One line installs everything, interviews you to bring a shelly agent to life,
 and opens a dashboard where you can watch their mind run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/laude-institute/shellm/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/laude-institute/shelly/main/install.sh | bash
 ```
 
 You'll need an LLM API key (Anthropic, OpenAI, Gemini, or OpenRouter) —
@@ -45,8 +45,8 @@ ada dash             # open the dashboard
 Prefer a sandbox? The same flow in a long-lived docker container:
 
 ```bash
-docker run -it --name shellm --restart unless-stopped -p 8080:8080 buildpack-deps:curl \
-  bash -c 'curl -fsSL https://raw.githubusercontent.com/laude-institute/shellm/main/install.sh | bash; exec bash'
+docker run -it --name shelly --restart unless-stopped -p 8080:8080 buildpack-deps:curl \
+  bash -c 'curl -fsSL https://raw.githubusercontent.com/laude-institute/shelly/main/install.sh | bash; exec bash'
 ```
 
 Details, non-interactive/CI installs, and the from-a-checkout path:
@@ -101,7 +101,7 @@ The full backstory and design philosophy:
 | **mem** / **skills** | File-based memory store; SKILL.md-based abilities |
 | **recap** | Summarize a trajectory into themes and episodes |
 | **shellm-explore** | Visualize run trees; LLM-powered reports on what happened and why |
-| **shellm-web** | The dashboard — watch a mind think in the browser |
+| **shelly-web** | The dashboard — watch a mind think in the browser |
 | **bridges** | Slack and Telegram connectors into the same inner experience |
 
 ## Learn more

@@ -251,6 +251,10 @@ cmd_history() {
 }
 
 cmd_repl() {
+    # Prefer the renamed TUI binary; fall back to a pre-rename build.
+    if command -v shelly-tui >/dev/null 2>&1; then
+        exec shelly-tui "$@"
+    fi
     exec shellm-tui "$@"
 }
 

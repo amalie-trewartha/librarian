@@ -122,7 +122,7 @@ if [[ -f /etc/shellm/telegram.env ]]; then
 fi
 
 echo "==> Forcing frontend rebuild on restart"
-sudo -u shellm rm -rf "$APP_DIR/web/src/shellm_web/static"
+sudo -u shellm rm -rf "$APP_DIR/web/src/shelly_web/static"
 
 echo "==> Restarting shellm-web (rebuild takes ~1-2 min)"
 sudo systemctl restart shellm-web

@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from shellm_web.activity import _parse_etime
-from shellm_web.server import create_app
+from shelly_web.activity import _parse_etime
+from shelly_web.server import create_app
 
 ROOT_TRAJ = "ffffffff-6666-4666-8666-666666666666"
 IDENTITY_ID = ".identities~act"

@@ -1677,6 +1677,10 @@ cmd_logs() {
 # ---------------------------------------------------------------------------
 
 cmd_repl() {
+    # Prefer the renamed TUI binary; fall back to a pre-rename build.
+    if command -v shelly-tui >/dev/null 2>&1; then
+        exec shelly-tui thinkers "$@"
+    fi
     exec shellm-tui thinkers "$@"
 }
 

@@ -1,4 +1,4 @@
-from shellm_telegram.outbound import RecentPosts
+from shelly_telegram.outbound import RecentPosts
 
 
 def test_recent_posts_dedupe_window():
@@ -15,8 +15,8 @@ def test_run_delivers_only_chat_sourced_messages(tmp_path, monkeypatch):
     must not reach Telegram."""
     import threading
 
-    from shellm_telegram import outbound
-    from shellm_telegram.config import Config
+    from shelly_telegram import outbound
+    from shelly_telegram.config import Config
 
     steps = [
         # legit reply, stamped by bin/chat

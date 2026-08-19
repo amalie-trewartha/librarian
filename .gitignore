@@ -12,10 +12,12 @@ plans/
 design/Bobbys-Brain
 
 # Compiled binaries (built by install.sh from tui/ sources)
+bin/shelly-tui
 bin/shellm-tui
 
 # Identity instances are runtime data (logs, trajectories, memories, etc.)
 .identities/
+web/src/shelly_web/static/
 web/src/shellm_web/static/
 web/viewer/build/
 web/viewer/node_modules/
@@ -31,6 +33,9 @@ web/viewer/.react-router/
 
 # Box-commit review log (deploy/scripts/audel-commits)
 .audel-pulled
+
+# Claude Code session handoff docs (local working notes)
+handoff/
 
 # stray backup files
 *.bak

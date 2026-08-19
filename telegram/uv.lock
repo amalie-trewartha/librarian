@@ -132,7 +132,7 @@ wheels = [
 ]
 
 [[package]]
-name = "shellm-telegram"
+name = "shelly-telegram-bridge"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

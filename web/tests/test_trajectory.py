@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from shellm_web import discovery
-from shellm_web.trajectory import load_trajectory, step_preview
+from shelly_web import discovery
+from shelly_web.trajectory import load_trajectory, step_preview
 
 REPO = Path(__file__).parents[2]
 GEN1 = REPO / "improve" / "generations" / "gen-001" / "identities"
@@ -72,7 +72,7 @@ def test_run_id_grouping_exact_with_interleaved_runs():
     """New-format logs: membership comes from the explicit run_id stamp,
     so two concurrent runs interleaving in one mind log group exactly —
     the case the old stack heuristic could not attribute."""
-    from shellm_web.trajectory import normalize
+    from shelly_web.trajectory import normalize
 
     raw = [
         _step("trajectory", "t0"),
@@ -148,7 +148,7 @@ def test_launched_by_and_nonaction_triggers():
     """launched_by is surfaced on the run group, and trigger_step joins any
     step type (a monologue thought triggering a generic thinker's run), with
     one step able to trigger several runs."""
-    from shellm_web.trajectory import normalize
+    from shelly_web.trajectory import normalize
 
     raw = [
         _step("trajectory", "t0"),
@@ -176,7 +176,7 @@ def test_launched_by_and_nonaction_triggers():
 def test_merge_writeback_normalization():
     """shellm's forked-child write-back is a merge step: writeback link built
     from from_traj, never grouped into a run."""
-    from shellm_web.trajectory import normalize
+    from shelly_web.trajectory import normalize
 
     raw = [
         _step("trajectory", "t0"),
@@ -208,7 +208,7 @@ def test_blob_fields_survive_normalization():
         "stdout_bytes": 16290,
         "stdout_truncated": True,
     }
-    from shellm_web.trajectory import normalize
+    from shelly_web.trajectory import normalize
 
     result = normalize([raw], Path("/nonexistent"))
     step = result["steps"][0]

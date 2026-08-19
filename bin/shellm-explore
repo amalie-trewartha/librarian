@@ -24,7 +24,12 @@ fi
 # Argument parsing
 # ---------------------------------------------------------------------------
 
-TRAJ_DIR="${TRAJ_DIR:-$HOME/.shellm/.trajectories}"
+# State home: SHELLY_HOME/SHELLM_HOME if set; else ~/.shelly, falling back
+# to a pre-rename ~/.shellm when only that exists.
+_explore_home="$HOME/.shelly"
+[[ ! -d "$_explore_home" && -d "$HOME/.shellm" ]] && _explore_home="$HOME/.shellm"
+_explore_home="${SHELLY_HOME:-${SHELLM_HOME:-$_explore_home}}"
+TRAJ_DIR="${TRAJ_DIR:-$_explore_home/.trajectories}"
 RUN_ID=""
 REPORT=0
 LIST_MODE=0
@@ -51,7 +56,7 @@ Arguments:
 
 Options:
   -l, --list          List recent runs (default when no RUN_ID given)
-  --traj-dir DIR      Trajectories directory (default: $TRAJ_DIR or ~/.shellm/.trajectories)
+  --traj-dir DIR      Trajectories directory (default: $TRAJ_DIR)
   -n N                Number of runs to list (default: 20, 0 for all)
   -w N                Truncate summaries to N characters (default: 85, 0 for no limit)
   --report            Generate an LLM-powered analysis of the run tree

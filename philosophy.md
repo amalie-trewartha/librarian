@@ -1,5 +1,5 @@
 # The Shell is Back at the Center of Computing
-## Philosophy and Introduction to shellm
+## Philosophy and Introduction to Shelly
 
 In 1971, Ken Thompson wrote the first Unix shell. It was a command interpreter — a thin loop that read a line, found a program, ran it, and waited. That's all it did. That was enough.
 
@@ -35,7 +35,7 @@ No one defined a `count_links_by_domain` tool. The capability emerged from compo
 
 ## shellm: an LLM that lives in bash
 
-This line of thinking led me to build [shellm](https://github.com/laude-institute/shellm) — a recursive LLM that operates inside a bash shell. It's a port of Alex Zhang's [Recursive Language Models](https://alexzhang13.github.io/blog/2025/rlm/) concept, reimplemented in bash, for bash.
+This line of thinking led me to build [shellm](https://github.com/laude-institute/shelly) — a recursive LLM that operates inside a bash shell. It's a port of Alex Zhang's [Recursive Language Models](https://alexzhang13.github.io/blog/2025/rlm/) concept, reimplemented in bash, for bash.
 
 The idea is simple. shellm runs a loop:
 
@@ -122,7 +122,7 @@ This is the Ken Thompson way. Memory isn't a feature of a monolithic agent frame
 
 ### skills: learned abilities as markdown
 
-`skills` manages a local directory of skills following the [SKILL.md open standard](https://github.com/laude-institute/shellm). Each skill is a directory with a `SKILL.md` file — YAML frontmatter for metadata, markdown for instructions. Skills can be installed from GitHub repos, created locally, searched, and listed.
+`skills` manages a local directory of skills following the [SKILL.md open standard](https://github.com/laude-institute/shelly). Each skill is a directory with a `SKILL.md` file — YAML frontmatter for metadata, markdown for instructions. Skills can be installed from GitHub repos, created locally, searched, and listed.
 
 ```bash
 skills --install owner/repo     # install from GitHub

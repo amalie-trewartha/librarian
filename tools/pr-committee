@@ -12,8 +12,8 @@ set -euo pipefail
 # Chair: one strong model merges the final round — dedupes, counts
 # agreement, checks each finding against the diff, and writes the report.
 #
-# Model calls go through shellm's bin/llm, so OPENROUTER_API_KEY from the
-# repo .env (or ~/.shellm/.env) is all the auth needed for every vendor.
+# Model calls go through Shelly's bin/llm, so OPENROUTER_API_KEY from the
+# repo .env (or the state home's .env) is all the auth needed for every vendor.
 #
 # Usage:
 #   tools/pr-committee [PR_NUMBER] [options]
@@ -32,7 +32,7 @@ set -euo pipefail
 #                    accepts). Default: $PRC_MODELS or the built-in four.
 #   --chair MODEL    Synthesis model. Default: $PRC_CHAIR or claude-opus-5.
 #   --debate         Add the cross-examination round before synthesis.
-#   --out DIR        Run directory. Default: ~/.shellm/pr-committee/<run>
+#   --out DIR        Run directory. Default: <state-home>/pr-committee/<run>
 #   --post           Post the final report as a PR comment (off by default).
 #   --dry-run        Build the brief and print size stats; call no models.
 #
@@ -98,6 +98,12 @@ STAMP=$(date +%Y%m%d-%H%M%S)
 # Gather the brief: metadata, full changed files, diff
 # ---------------------------------------------------------------------------
 
+# State home for run dirs: SHELLY_HOME/SHELLM_HOME if set; else ~/.shelly,
+# falling back to a pre-rename ~/.shellm when only that exists.
+_pc_home="$HOME/.shelly"
+[[ ! -d "$_pc_home" && -d "$HOME/.shellm" ]] && _pc_home="$HOME/.shellm"
+_pc_home="${SHELLY_HOME:-${SHELLM_HOME:-$_pc_home}}"
+
 if [[ -n "$DIFF_RANGE" ]]; then
     # Local range mode: everything from git, nothing from GitHub.
     [[ "$DIFF_RANGE" == *..* ]] || die "--diff wants an A..B range (e.g. main..HEAD)"
@@ -106,7 +112,7 @@ if [[ -n "$DIFF_RANGE" ]]; then
     REPO=$(basename "$(git rev-parse --show-toplevel)")
     TARGET="range $DIFF_RANGE"
     TITLE="$DIFF_RANGE ($(git rev-list --count "$DIFF_RANGE") commits)"
-    OUT="${OUT:-$HOME/.shellm/pr-committee/${REPO}-diff-${DIFF_RANGE//[^A-Za-z0-9._-]/-}-${STAMP}}"
+    OUT="${OUT:-$_pc_home/pr-committee/${REPO}-diff-${DIFF_RANGE//[^A-Za-z0-9._-]/-}-${STAMP}}"
     mkdir -p "$OUT"
     echo "== $TARGET in $REPO"
     echo "== run dir: $OUT"
@@ -142,7 +148,7 @@ else
         PR="${open_prs[0]}"
     fi
     TARGET="PR #$PR"
-    OUT="${OUT:-$HOME/.shellm/pr-committee/${REPO//\//-}-pr${PR}-${STAMP}}"
+    OUT="${OUT:-$_pc_home/pr-committee/${REPO//\//-}-pr${PR}-${STAMP}}"
     mkdir -p "$OUT"
     echo "== $TARGET on $REPO"
     echo "== run dir: $OUT"

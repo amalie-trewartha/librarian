@@ -1,7 +1,7 @@
 {
   "name": "Audel",
   "short_name": "Audel",
-  "description": "Direct chat with shellm identities",
+  "description": "Direct chat with Shelly identities",
   "start_url": "/talk",
   "scope": "/",
   "display": "standalone",

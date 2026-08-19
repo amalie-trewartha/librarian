@@ -1,6 +1,6 @@
-# shellm-slack
+# shelly-slack-bridge
 
-A Slack Socket Mode bridge that connects one shellm identity to a Slack
+A Slack Socket Mode bridge that connects one Shelly identity to a Slack
 workspace. Org members DM the bot or @mention it in channels; messages land
 in the identity's mind log as `message` steps, and the identity's replies
 are posted back to the right conversation.
@@ -8,7 +8,7 @@ are posted back to the right conversation.
 ## How it works
 
 ```
-Slack <=(Socket Mode websocket)=> shellm-slack-bridge
+Slack <=(Socket Mode websocket)=> shelly-slack-bridge
     inbound:  event -> from_name "slack-<user>-<channel>[-<thread_ts>]"
               -> POST <web>/api/identities/<id>/chat
     outbound: tail trajectory.jsonl -> message steps where from=<identity>
@@ -26,20 +26,21 @@ format.
 ```bash
 export SLACK_BOT_TOKEN=xoxb-...     # see "Slack app lifecycle" below
 export SLACK_APP_TOKEN=xapp-...
-export SHELLM_SLACK_IDENTITY=audel  # default
-bin/shellm-slack-bridge [ROOT]      # ROOT = serve root, default repo root
+export SHELLY_SLACK_IDENTITY=audel  # default (legacy SHELLM_SLACK_IDENTITY still honored)
+bin/shelly-slack-bridge [ROOT]      # ROOT = serve root, default repo root
 ```
 
 The identity must exist (`identity new audel`) with a running dispatcher
-(`thinkers start monolith`), and shellm-web must be serving the same root
-(default `http://127.0.0.1:8080`, override with `SHELLM_WEB_URL`).
+(`thinkers start monolith`), and shelly-web must be serving the same root
+(default `http://127.0.0.1:8080`, override with `SHELLY_WEB_URL`; legacy `SHELLM_WEB_URL` still honored).
 
 Socket Mode is outbound-only: no public endpoint, works behind NAT, and
 keeps the zero-ingress deploy design. In production both the bridge and the
 web server run as systemd units on the dedicated box (see
 `deploy/terraform-slack/`).
 
-Other settings: `SHELLM_SLACK_STATE_DIR` (cursor + thread state, default
+Other settings: `SHELLY_SLACK_STATE_DIR`, legacy `SHELLM_SLACK_STATE_DIR`
+(cursor + thread state, default
 `<identity>/run/slack-bridge/`), `SLACK_THREAD_FOLLOWUPS=1` (answer
 un-mentioned replies in threads the bot is already part of).
 

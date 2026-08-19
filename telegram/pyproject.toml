@@ -1,5 +1,5 @@
 [project]
-name = "shellm-telegram"
+name = "shelly-telegram-bridge"
 version = "0.1.0"
 description = "Telegram Bot API bridge for a shellm identity"
 requires-python = ">=3.12"
@@ -8,7 +8,9 @@ dependencies = [
 ]
 
 [project.scripts]
-shellm-telegram-bridge = "shellm_telegram.cli:main"
+shelly-telegram-bridge = "shelly_telegram.cli:main"
+# Back-compat alias for the deployed systemd unit; remove after the box migration.
+shellm-telegram-bridge = "shelly_telegram.cli:main"
 
 [dependency-groups]
 dev = [
@@ -20,4 +22,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/shellm_telegram"]
+packages = ["src/shelly_telegram"]

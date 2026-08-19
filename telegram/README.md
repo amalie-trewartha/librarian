@@ -1,13 +1,13 @@
-# shellm-telegram
+# shelly-telegram-bridge
 
-A Telegram Bot API bridge that connects one shellm identity to Telegram.
+A Telegram Bot API bridge that connects one Shelly identity to Telegram.
 Approved people DM the bot, their messages land in the identity's mind log
 as `message` steps, and the identity's replies come back to the same chat.
 
 ## How it works
 
 ```
-Telegram <=(long-poll getUpdates)=> shellm-telegram-bridge
+Telegram <=(long-poll getUpdates)=> shelly-telegram-bridge
     inbound:  message -> from_name "telegram-<user_id>-<chat_id>"
               -> POST <web>/api/identities/<id>/chat
     outbound: tail trajectory.jsonl -> message steps where from=<identity>
@@ -48,16 +48,17 @@ The admin (you) is approved automatically on first start.
 export TELEGRAM_BOT_TOKEN=...       # from @BotFather
 export TELEGRAM_ADMIN_ID=...        # your numeric user id; message the bot
                                     # once and read it from the bridge log
-export SHELLM_TELEGRAM_IDENTITY=audel  # default
-bin/shellm-telegram-bridge [ROOT]   # ROOT = serve root, default repo root
+export SHELLY_TELEGRAM_IDENTITY=audel  # default (legacy SHELLM_TELEGRAM_IDENTITY still honored)
+bin/shelly-telegram-bridge [ROOT]   # ROOT = serve root, default repo root
 ```
 
 The identity must exist (`identity new audel`) with a running dispatcher
-(`thinkers start monolith`), and shellm-web must be serving the same root
-(default `http://127.0.0.1:8080`, override with `SHELLM_WEB_URL`).
+(`thinkers start monolith`), and shelly-web must be serving the same root
+(default `http://127.0.0.1:8080`, override with `SHELLY_WEB_URL`; legacy `SHELLM_WEB_URL` still honored).
 
-Other settings are `SHELLM_TELEGRAM_STATE_DIR` (allowlist, cursors,
-update offset, default `<identity>/run/telegram-bridge/`).
+Other settings are `SHELLY_TELEGRAM_STATE_DIR`, legacy
+`SHELLM_TELEGRAM_STATE_DIR` (allowlist, cursors, update offset, default
+`<identity>/run/telegram-bridge/`).
 
 ## Enabling on the production box
 

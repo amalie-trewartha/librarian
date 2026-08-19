@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# shelly-slack-bridge — Slack Socket Mode bridge for a Shelly identity.
+#
+# Usage:
+#   shelly-slack-bridge [ROOT] [--verbose]
+#
+# ROOT defaults to the shelly repo (parent of this script's directory).
+# Requires uv. Configuration via env: SLACK_BOT_TOKEN, SLACK_APP_TOKEN,
+# SHELLY_SLACK_IDENTITY (default audel), SHELLY_WEB_URL (SHELLM_* names
+# still honored as fallbacks).
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+command -v uv >/dev/null 2>&1 || { echo "shelly-slack-bridge: uv is required (https://docs.astral.sh/uv/)" >&2; exit 1; }
+
+# First arg is ROOT if it isn't a flag; all remaining args pass through.
+if [[ $# -gt 0 && "${1:0:1}" != "-" ]]; then
+    serve_root="$1"
+    shift
+else
+    serve_root="$ROOT_DIR"
+fi
+
+exec uv run --project "$ROOT_DIR/slack" shelly-slack-bridge "$serve_root" "$@"

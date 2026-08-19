@@ -6,10 +6,11 @@ variant.
 ## The one-liner
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/laude-institute/shellm/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/laude-institute/shelly/main/install.sh | bash
 ```
 
-It clones the repo to `~/.shellm/app`, symlinks the tools into
+It clones the repo to `~/.shelly/app` (or `~/.shellm/app` on installs
+that predate the rename), symlinks the tools into
 `~/.local/bin`, asks for an LLM API key, and runs a short optional
 interview: a name, a few words of personality, what they should think
 about when idle. The answers become the agent's core identity and first
@@ -32,7 +33,7 @@ installer from the checkout, so what executes is the same code you can
 read here. To read first:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/laude-institute/shellm/main/install.sh
+curl -fsSLO https://raw.githubusercontent.com/laude-institute/shelly/main/install.sh
 less install.sh && bash install.sh --init
 ```
 
@@ -44,8 +45,8 @@ installer apt-installs its own dependencies (as root in a fresh
 container) and the dashboard binds `0.0.0.0` so the published port works.
 
 ```bash
-docker run -it --name shellm --restart unless-stopped -p 8080:8080 buildpack-deps:curl \
-  bash -c 'curl -fsSL https://raw.githubusercontent.com/laude-institute/shellm/main/install.sh | bash; exec bash'
+docker run -it --name shelly --restart unless-stopped -p 8080:8080 buildpack-deps:curl \
+  bash -c 'curl -fsSL https://raw.githubusercontent.com/laude-institute/shelly/main/install.sh | bash; exec bash'
 ```
 
 Paste your key, answer the interview, then open http://localhost:8080 on
@@ -57,13 +58,13 @@ and the mind and dashboard come back up on their own.
 Day-to-day:
 
 ```bash
-docker exec -it shellm bash -l   # drop back into your agent's world
-docker stop shellm               # pause everything
-docker start shellm              # resume
-docker rm -f shellm              # delete the agent and its whole world
+docker exec -it shelly bash -l   # drop back into your agent's world
+docker stop shelly               # pause everything
+docker start shelly              # resume
+docker rm -f shelly              # delete the agent and its whole world
 ```
 
-Pasting the run command a second time fails with "name shellm already in
+Pasting the run command a second time fails with "name shelly already in
 use". That means your agent already exists; `docker exec` is how you get
 back to it.
 
@@ -77,19 +78,20 @@ default, so a script or a coding agent can install with no interaction:
 
 ```bash
 export OPENROUTER_API_KEY=sk-or-...   # or ANTHROPIC_/OPENAI_/GEMINI_API_KEY
-export SHELLM_IDENTITY_NAME=ada       # optional; the interview's answers
-export SHELLM_IDENTITY_VIBE="curious, warm, and plainspoken"
-export SHELLM_IDENTITY_FOCUS="learning how their own mind works"
-export SHELLM_IDENTITY_USER="I'm Sam, a programmer trying shellm out"
-curl -fsSL https://raw.githubusercontent.com/laude-institute/shellm/main/install.sh | bash
+export SHELLY_IDENTITY_NAME=ada       # optional; the interview's answers
+export SHELLY_IDENTITY_VIBE="curious, warm, and plainspoken"
+export SHELLY_IDENTITY_FOCUS="learning how their own mind works"
+export SHELLY_IDENTITY_USER="I'm Sam, a programmer trying Shelly out"
+curl -fsSL https://raw.githubusercontent.com/laude-institute/shelly/main/install.sh | bash
 ```
 
 A key must be in the environment; everything else is optional.
-`SHELLM_NO_DASH=1` and `SHELLM_NO_THINKERS=1` skip those parts. The
-installer writes `~/.shellm/status.json` with the outcome:
+`SHELLY_NO_DASH=1` and `SHELLY_NO_THINKERS=1` skip those parts. The
+installer writes `status.json` in the state home (`~/.shelly`, or
+`~/.shellm` on pre-rename installs) with the outcome:
 
 ```bash
-jq -r '.mind.status, .dash.status, .dash.url' ~/.shellm/status.json
+jq -r '.mind.status, .dash.status, .dash.url' ~/.shelly/status.json
 ```
 
 [AGENTS.md](../AGENTS.md) covers operating a running identity: paths,
@@ -98,8 +100,8 @@ logs, health checks, and the sharp edges.
 ## From a checkout
 
 ```bash
-git clone https://github.com/laude-institute/shellm.git
-cd shellm
+git clone https://github.com/laude-institute/shelly.git
+cd shelly
 ./install.sh            # add --init to also bootstrap an identity + dash
 ```
 

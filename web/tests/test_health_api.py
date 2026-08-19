@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from shellm_web.server import create_app
+from shelly_web.server import create_app
 
 ROOT_TRAJ = "abababab-7777-4777-8777-777777777777"
 IDENTITY_ID = ".identities~hl"

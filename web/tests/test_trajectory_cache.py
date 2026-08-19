@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from shellm_web import trajectory
-from shellm_web.server import create_app
+from shelly_web import trajectory
+from shelly_web.server import create_app
 
 ROOT_TRAJ = "fbfbfbfb-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
@@ -245,7 +245,7 @@ def test_eviction_and_window_rehydration(traj_dir: Path):
 
 
 def test_search_spans_evicted_history(traj_dir: Path):
-    from shellm_web import search
+    from shelly_web import search
 
     jsonl = traj_dir / "trajectory.jsonl"
     _write(jsonl, [_step(i) for i in range(1, 60)], append=True)
@@ -277,7 +277,7 @@ def test_run_command_rehydrates_after_eviction(traj_dir: Path):
 
 
 def test_chat_index_survives_eviction(traj_dir: Path):
-    from shellm_web import chat
+    from shelly_web import chat
 
     jsonl = traj_dir / "trajectory.jsonl"
     _write(jsonl, [

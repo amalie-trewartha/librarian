@@ -25,12 +25,17 @@ _shellm_load_env() {
 }
 _SHELLM_SCRIPT_PATH=$(realpath "${BASH_SOURCE[0]:-$0}" 2>/dev/null || printf '%s\n' "${BASH_SOURCE[0]:-$0}")
 _shellm_load_env ".env" || true
-_shellm_load_env "${SHELLM_CONF_DIR:-$HOME/.shellm}/.env" || true
-SHELLM_TRAJ_DIR="${SHELLM_TRAJ_DIR:-${TRAJ_DIR:-$HOME/.shellm/trajectories}}"
-SHELLM_ENVS_DIR="${SHELLM_ENVS_DIR:-$HOME/.shellm/envs}"
-SHELLM_WORKDIRS_DIR="${SHELLM_WORKDIRS_DIR:-$HOME/.shellm/workdirs}"
-SHELLM_BROKER_DIR="${SHELLM_BROKER_DIR:-$HOME/.shellm/docker-broker}"
-SHELLM_CONF_DIR="${SHELLM_CONF_DIR:-$HOME/.shellm}"
+# State home: SHELLY_HOME/SHELLM_HOME if set; else ~/.shelly, falling back
+# to a pre-rename ~/.shellm when only that exists.
+_shellm_home="$HOME/.shelly"
+[[ ! -d "$_shellm_home" && -d "$HOME/.shellm" ]] && _shellm_home="$HOME/.shellm"
+_shellm_home="${SHELLY_HOME:-${SHELLM_HOME:-$_shellm_home}}"
+_shellm_load_env "${SHELLM_CONF_DIR:-$_shellm_home}/.env" || true
+SHELLM_TRAJ_DIR="${SHELLM_TRAJ_DIR:-${TRAJ_DIR:-$_shellm_home/trajectories}}"
+SHELLM_ENVS_DIR="${SHELLM_ENVS_DIR:-$_shellm_home/envs}"
+SHELLM_WORKDIRS_DIR="${SHELLM_WORKDIRS_DIR:-$_shellm_home/workdirs}"
+SHELLM_BROKER_DIR="${SHELLM_BROKER_DIR:-$_shellm_home/docker-broker}"
+SHELLM_CONF_DIR="${SHELLM_CONF_DIR:-$_shellm_home}"
 
 # ---------------------------------------------------------------------------
 # Config & defaults
@@ -165,7 +170,7 @@ Options:
   --max-tokens N       Max tokens per response (default: model's max output cap)
   --effort LEVEL       Thinking effort: low, medium, high, xhigh, max (default: high)
   --workdir DIR        Working directory for generated code (default: a
-                       fresh per-run directory under ~/.shellm/workdirs)
+                       fresh per-run directory under <state-home>/workdirs)
   --here               Shorthand for --workdir "$PWD": work on the project
                        in the current directory
   --env NAME           Use/create a named env (Docker container or local)
@@ -177,7 +182,8 @@ Options:
   --docker-access MODE Docker access for generated code: none, broker, socket, dind
   --traj TRAJ_ID         Write steps to an existing trajectory (no child traj or fork)
   --resume               Shorthand for --traj with the most recent trajectory
-  --traj-dir DIR         Trajectory directory (default: $HOME/.shellm/trajectories)
+  --traj-dir DIR         Trajectory directory (default: <state-home>/trajectories,
+                         where the state home is ~/.shelly or legacy ~/.shellm)
   --var NAME=VALUE       Set env var for generated code (repeatable)
   --bin PATH             Make binary available on PATH (repeatable)
   --print-system-prompt Print the system prompt and exit
@@ -794,7 +800,7 @@ docker_setup() {
         docker_run_flags+=(-v "$tool_path:/usr/local/bin/$tool:ro")
     done
 
-    # Make custom workdirs visible when they live outside ~/.shellm.
+    # Make custom workdirs visible when they live outside the state home.
     if [[ "$workspace" != "$runs_mount"* ]]; then
         extra_mounts+=(-v "$workspace:$workspace")
         seen_dirs+=("$workspace")

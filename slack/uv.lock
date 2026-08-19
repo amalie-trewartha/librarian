@@ -132,7 +132,7 @@ wheels = [
 ]
 
 [[package]]
-name = "shellm-slack"
+name = "shelly-slack-bridge"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

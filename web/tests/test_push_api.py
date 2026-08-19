@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from shellm_web import push
-from shellm_web.server import create_app
+from shelly_web import push
+from shelly_web.server import create_app
 
 ROOT_TRAJ = "abababab-7777-4777-8777-777777777777"
 

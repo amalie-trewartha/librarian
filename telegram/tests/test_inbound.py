@@ -3,10 +3,10 @@
 import httpx
 import pytest
 
-from shellm_telegram import inbound as inbound_mod
-from shellm_telegram.allowlist import Allowlist
-from shellm_telegram.config import Config
-from shellm_telegram.inbound import Inbound
+from shelly_telegram import inbound as inbound_mod
+from shelly_telegram.allowlist import Allowlist
+from shelly_telegram.config import Config
+from shelly_telegram.inbound import Inbound
 
 ADMIN = 100
 
