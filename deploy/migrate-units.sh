@@ -194,8 +194,15 @@ for pair in "${UNIT_PAIRS[@]}"; do
     legacy="${pair%%:*}"
     [[ -f "$SYSD/$legacy" ]] || continue
     run cp -a "$SYSD/$legacy" "$BACKUP_DIR/units/$legacy"
-    en=$(systemctl is-enabled "$legacy" 2>/dev/null || echo unknown)
-    ac=$(systemctl is-active "$legacy" 2>/dev/null || echo unknown)
+    # `systemctl is-enabled` prints "disabled" AND exits 1, so a naive
+    # `|| echo unknown` appends a second line and splits the manifest
+    # record in two — which would leave rollback unable to see the
+    # `active` field and silently not restart the unit. Take the status
+    # separately, and keep only the first line.
+    en=$(systemctl is-enabled "$legacy" 2>/dev/null) || true
+    ac=$(systemctl is-active "$legacy" 2>/dev/null) || true
+    en=${en%%$'\n'*}; [[ -n "$en" ]] || en=unknown
+    ac=${ac%%$'\n'*}; [[ -n "$ac" ]] || ac=unknown
     manifest+="$legacy"$'\t'"$en"$'\t'"$ac"$'\n'
     printf '    %-34s enabled=%-10s active=%s\n' "$legacy" "$en" "$ac"
 done
