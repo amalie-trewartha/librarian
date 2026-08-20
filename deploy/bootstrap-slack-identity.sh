@@ -56,7 +56,7 @@ set -o pipefail
 # An earlier version detected a running dispatcher first with
 # `thinkers status | grep -q`, which under pipefail loses a SIGPIPE race
 # (grep -q exits at first match, status dies writing the rest, the matched
-# check reads as false) — that silent miss left Audel keyless in laudesters
+# check reads as false) — that silent miss left Audel keyless in the workspace
 # on 2026-08-04 until manually cycled. Detection is exactly the kind of
 # step that fails silently; don't detect, just stop.
 echo "==> Restarting thinkers with current environment"
