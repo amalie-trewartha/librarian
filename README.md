@@ -6,122 +6,143 @@
 ███      █████ ██  ██ █████ █████ █████   ██
 ```
 
-**Shelly** is an open-source microharness agent framework — a handful of
-small, composable bash tools that add up to
-**persistent agency**: an agent with a continuous, self-guided inner
-monologue. You give them a name and a personality; they keep thinking
-whether or not you're talking to them, decide their own interests and
-priorities, start their own projects, and ping you when they have
-something to say. Every interaction — Slack, Telegram, chat, their own
-idle thoughts — lands in one unified inner experience.
+**Shelly** is an open source agent microharness, a complete agent harness
+with a core of less than 10K lines of Bash. Shelly's defining feature is
+**persistent agency**. Your agent keeps thinking between external
+interactions in a self-guided loop inspired by human inner monologue. A
+message from a human doesn't start a session. It lands in the agent's
+thought stream as one more observation, and the agent decides if and when
+to respond. You give your agent a name and a personality, and it sets its
+own interests and priorities, starts its own projects, and pings you when
+it has something to say.
 
-At the heart of Shelly is **shellm**, a CLI implementation of
-[Recursive Language Models](https://alexzhang13.github.io/blog/2025/rlm/)
-in bash: the agent thinks by writing shell commands, running them, and
-iterating. There is one tool, and it is bash.
+At the heart of Shelly is `shellm`, a Bash implementation of a
+[recursive language model (RLM)](https://alexzhang13.github.io/blog/2025/rlm/).
+The agent thinks by writing shell commands, running them, and reading the
+output. No tool system besides Bash is needed.
 
 ## Get started
 
-One line installs everything, interviews you to bring a shelly agent to life,
-and opens a dashboard where you can watch their mind run:
+One line installs everything, interviews you to bring a Shelly agent to
+life, and opens a dashboard where you can watch its mind run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/laude-institute/shelly/main/install.sh | bash
 ```
 
-You'll need an LLM API key (Anthropic, OpenAI, Gemini, or OpenRouter) —
-use a dedicated, spend-capped one: your agent runs real shell commands
-and thinks around the clock.
+You'll need an LLM API key (Anthropic, OpenAI, Gemini, or OpenRouter).
+Use a dedicated, spend-capped key, because your agent runs real shell
+commands and thinks around the clock. How much the background thinking
+costs depends on how quickly the agent loops and which model backs it. At
+the settings we run our agent with, it comes to $1 to $2 an hour.
 
-Their name becomes a command:
+The agent's name becomes a command:
 
 ```bash
 ada hello!           # one message, wait for the reply
 ada                  # chat
-ada stop / ada start # pause / resume their mind
+ada stop / ada start # pause / resume its mind
 ada dash             # open the dashboard
 ```
 
-Prefer a sandbox? The same flow in a long-lived docker container:
+You can also run the same flow inside a long-lived Docker container:
 
 ```bash
 docker run -it --name shelly --restart unless-stopped -p 8080:8080 buildpack-deps:curl \
   bash -c 'curl -fsSL https://raw.githubusercontent.com/laude-institute/shelly/main/install.sh | bash; exec bash'
 ```
 
-Details, non-interactive/CI installs, and the from-a-checkout path:
-[docs/install.md](docs/install.md).
+Details, non-interactive/CI installs, and installing from a checkout are
+in [docs/install.md](docs/install.md).
 
 ## Key ideas
 
-- **Minimal composable tools.** In the spirit of Ken Thompson's Unix
-  philosophy: small CLI executables (`shellm`, `traj`, `llm`, `context`,
-  `mem`, `skills`, ...), each pure bash, each doing one thing well,
-  composing through pipes, files, and environment variables.
-- **All tool calling via bash.** No tool schemas, no function menus. The
-  model writes shell commands; `curl` is the HTTP client, `jq` is the
-  JSON processor, `python3 -c` is the escape hatch.
-- **Docker by default.** Execution auto-sandboxes into a container when
-  Docker is available; container reuse keeps it light. Local mode
-  supported.
-- **Trajectories are a DAG.** A trajectory is an append-only jsonl file
-  with fork and merge, so sub-sub-\*-agents branch off and merge back —
-  and can use the viewer to understand how they fit into the big picture.
-- **Context is a non-destructive function of the trajectory.** Nothing is
-  ever compacted away in place. Exponentially tiered summarization keeps
-  the agent's full life experience in context at gracefully decaying
-  resolution — the further in the past, the more summarized.
-- **The full past stays explorable.** The agent has tooling to dive
-  arbitrarily deep into its own history, down to any single step.
-- **Recursive self-awareness and improvement.** An agent can spin up new
-  agents — clones or clean slates — and merging life experiences is
-  trivial, because they're just trajectories.
-- **python-env-like semantics.** Each identity has an `activate` script;
-  humans and agents co-work in the same familiar paradigm.
-- **Turn-taking or continuous thought.** Works as a classic
-  request/response tool, or as an autoregressive next-thought loop where
-  human messages are simply observations injected into the thought
-  stream.
+- **Persistent agency.** The agent runs a continuous loop that generates
+  its next thought. Messages from Slack, Telegram, or the chat app are
+  injected into the thought stream as observations, and the agent decides
+  if and when to respond. Classic turn-taking request/response mode works
+  too.
+- **Built around Ken Thompson's philosophy.** The core tooling is a
+  handful of small Bash executables (`shellm`, `traj`, `llm`, `context`,
+  `mem`, `skills`, ...), each doing one thing well and composing through
+  pipes, files, and environment variables. The model writes shell
+  commands, so `curl` is the HTTP client and `jq` is the JSON processor.
+- **An agent's trajectory is a DAG of jsonl files** with fork and merge.
+  An agent has access to everything it has thought and done, and the
+  tooling to explore it down to any single step.
+- **Context is a projection of the trajectory.** Nothing is compacted
+  away in place. Compaction and agent introspection operate on the same
+  files with the same tools.
+- **Tiered context compaction.** The entire trajectory stays in context
+  at exponentially decaying resolution. Recent entries appear verbatim,
+  and older entries are progressively summarized. The tiers act as an
+  index, so the agent can retrieve raw entries when it needs them.
+- **Subagents see their ancestors' trajectories.** A subagent can see why
+  it was created, what the parent already tried, and how it fits into the
+  big picture.
+- **Docker by default.** Generated code sandboxes itself into a container
+  whenever Docker is available, and container reuse keeps restarts cheap.
+  Local mode works too.
+- **Self-improvement by fork, test, merge.** An agent forks the Shelly
+  codebase (and optionally its own trajectory), changes something, and
+  runs. Merge the change back if it worked, or discard the agent and its
+  changes if it didn't. No rollback machinery is needed.
 
-The full backstory and design philosophy:
+The full backstory and design philosophy are in
 [philosophy.md](philosophy.md).
 
 ## The tools
 
-The harness itself is `bin/` — the tools the running mind executes, under 10K
-lines of code (`cloc bin/`):
+To make a minimal agent, you need:
+
+- a loop that repeatedly generates the next thought (`thinkers`, which
+  calls `llm`),
+- a way for a thought to reason and act (`shellm`, with Bash as the only
+  tool),
+- a way to record the agent's trajectory, its life so far (`traj`), and
+- a way to turn that trajectory into the context for the next call into
+  the LLM (`context`).
+
+Shelly also gives an agent a few convenience tools, such as a way to
+distill and codify its experience (`mem`) and a way to save and reuse
+procedures for specialized tasks (`skills`). The core is the tools the
+running mind executes, the executables in `bin/` plus the thought
+processes in `thinkers/`, and it comes to 9.6K lines by cloc's count. A
+harness this small can be read end to end, and it is easy to modify and
+experiment with.
 
 | Tool | What it does |
 |------|-------------|
-| **shellm** | The RLM core — sends context to an LLM, executes the bash it writes back, repeats |
-| **llm** | Multi-provider LLM CLI — Anthropic, OpenAI, Gemini, OpenRouter behind one interface |
-| **traj** | Trajectory operations — append-only jsonl DAGs with fork and merge |
+| **shellm** | The RLM core. It sends context to an LLM, runs the bash the LLM writes back, and repeats |
+| **llm** | Multi-provider LLM CLI. Anthropic, OpenAI, Gemini, and OpenRouter behind one interface |
+| **traj** | Trajectory operations on append-only jsonl DAGs with fork and merge |
 | **context** | Renders a trajectory into an LLM messages array with tiered compaction |
-| **thinkers** | The mind — reactive thought processes run by a dispatcher |
+| **thinkers** | The mind. Reactive thought processes run by a dispatcher |
 | **chat** / **focus** | Messages and goals on an identity's trajectory |
-| **mem** / **skills** | File-based memory store; SKILL.md-based abilities |
-| **recap** | Summarize a trajectory into themes and episodes |
+| **mem** / **skills** | File-based memory store and SKILL.md-based abilities |
+| **recap** | Summarizes a trajectory into themes and episodes |
 | **shellm-docker** | Constrained docker facade staged into sandbox containers for generated code |
-| **glob** / **view** / **put** / **sub** | Small file tools the agent uses instead of coreutils sharp edges |
+| **glob** / **view** / **put** / **sub** | Small file tools the agent uses instead of the sharp edges of coreutils |
 
 Everything you run *around* the mind lives in `tools/`:
 
 | Tool | What it does |
 |------|-------------|
-| **shellm-docker-broker** | Host-side policy server for brokered Docker; never present in the mind's environment |
-| **identity** | Create and manage identities (persona, memories, activate script) |
-| **persona** | Talk to and manage an identity by name, from anywhere |
+| **shellm-docker-broker** | Host-side policy server for brokered Docker, never present in the mind's environment |
+| **identity** | Creates and manages identities (persona, memories, activate script) |
+| **persona** | Talks to and manages an identity by name, from anywhere |
 | **shelly-init** | One-time bootstrap: interview, first identity, first thoughts |
-| **shellm-explore** | Visualize run trees; LLM-powered reports on what happened and why |
-| **shelly-web** | The dashboard — watch a mind think in the browser |
-| **bridges** | Slack and Telegram connectors into the same inner experience |
-| **shelly-killall** | Panic button — stop every Shelly-related process |
+| **shellm-explore** | Visualizes run trees and writes LLM-powered reports on what happened and why |
+| **shelly-web** | The dashboard, where you watch a mind think in the browser |
+| **shelly-slack-bridge** / **shelly-telegram-bridge** | Slack and Telegram connectors into the same inner experience |
+| **shelly-killall** | Panic button that stops every Shelly-related process |
 
 ## Learn more
 
-- [philosophy.md](philosophy.md) — why the shell, and the full design story
-- [docs/shellm.md](docs/shellm.md) — the shellm engine reference: the loop,
-  context passing, Docker sandboxing, envs, the `llm` tool, options
+- [philosophy.md](philosophy.md) — the case for applying Ken Thompson's
+  philosophy to agent microharnesses, and the full design story
+- [docs/shellm.md](docs/shellm.md) — the shellm engine reference: the
+  loop, context passing, Docker sandboxing, envs, the `llm` tool, options
 - [docs/install.md](docs/install.md) — every install variant, including
   CI/non-interactive and long-lived Docker
 - [AGENTS.md](AGENTS.md) — operating a running identity (for humans and
@@ -129,9 +150,12 @@ Everything you run *around* the mind lives in `tools/`:
 
 ## Acknowledgements
 
-shellm is a port of [Recursive Language Models
-(RLM)](https://alexzhang13.github.io/blog/2025/rlm/) by Alex Zhang to
-bash, for bash.
+The recursive language model idea in `shellm` comes in part from the
+[Recursive LLM](https://github.com/andyk/recursive_llm) experiment (April
+2023) and from Alex Zhang's [Recursive LM
+(RLM)](https://alexzhang13.github.io/blog/2025/rlm/) project (October
+2025). The continuous thinking behind Shelly's persistent agency grew out
+of the [Headlong](https://github.com/andyk/headlong) research project.
 
 ## License
 
