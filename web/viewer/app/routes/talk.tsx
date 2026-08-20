@@ -15,7 +15,7 @@ import {
 } from "~/lib/pwa";
 
 export function meta() {
-  return [{ title: "Audel" }];
+  return [{ title: "Shelly · talk" }];
 }
 
 function relativeTime(iso: string | null): string {

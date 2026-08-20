@@ -1,7 +1,7 @@
 [project]
 name = "shelly-web"
 version = "0.1.0"
-description = "Web viewer for shellm mind logs and trajectory trees"
+description = "Web viewer for Shelly mind logs and trajectory trees"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",

@@ -1,8 +1,9 @@
 # Security posture of the chat integrations
 
-This doc summarizes how each way of talking to a shellm identity is
-secured. It covers the Slack bridge (`slack/`), the phone chat PWA at
-chat.shellm.net (`web/`), and the Telegram bridge (`telegram/`). Read
+This doc summarizes how each way of talking to a Shelly identity is
+secured. It covers the Slack bridge (`slack/`), the phone chat PWA
+(`web/`, served behind Cloudflare Access), and the Telegram bridge
+(`telegram/`). Read
 this before widening access to any of them.
 
 ## What all three share
@@ -34,8 +35,8 @@ it is `systemctl stop shelly-telegram-bridge`.
 
 ## Slack
 
-Who can talk to the identity. Anyone in the laudesters Slack workspace,
-by DM or by mention. Workspace membership is the only gate, and the
+Who can talk to the identity. Anyone in the Slack workspace the app is
+installed in, by DM or by mention. Workspace membership is the only gate, and the
 bridge does not have its own allowlist.
 
 How it connects. The bridge holds two long-lived Slack tokens and opens
@@ -48,12 +49,13 @@ tokens and post as the bot anywhere the bot is installed. The Telegram
 bridge avoids the same gap by design (see below), and moving the Slack
 tokens out of the shared `.env` the same way would close it.
 
-## Phone chat PWA (chat.shellm.net)
+## Phone chat PWA
 
 Who can talk to the identity. Only people who pass the Cloudflare Access
-app in front of chat.shellm.net. Access requires Google SSO or a one
-time code, and the allowlist is nick@jalbert.io plus the @laude.org
-domain. A second, path-scoped Access app bypasses login only for the app
+app in front of the chat domain. Access requires Google SSO or a one
+time code, and the allowlist is the operator's email plus, optionally,
+an email domain (`allowed_emails` / `allowed_email_domains` in the terraform
+stack). A second, path-scoped Access app bypasses login only for the app
 manifest and icons, which Android fetches without cookies during
 install.
 
@@ -65,8 +67,8 @@ Push notifications. The push subscription store and the VAPID keys live
 on the box, and only `pwa-*` names can subscribe. The keys die with the
 box, and phones resubscribe on the next launch.
 
-Known gaps. Anyone with a @laude.org account can reach the chat, which
-is the intended trust circle today. The push files are readable by the
+Known gaps. If an email domain is allowed, anyone with an account in
+that domain can reach the chat; that is the intended trust circle. The push files are readable by the
 agent's user, but they only allow sending notifications to subscribed
 phones, not reading anything.
 

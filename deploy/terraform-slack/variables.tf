@@ -92,7 +92,7 @@ variable "env_parameter" {
     GEMINI_API_KEY, OPENROUTER_API_KEY, ...). Create/update it out-of-band
     from your local shellm/.env (never enters Terraform state):
       aws ssm put-parameter --name /shellm/env --type SecureString \
-          --value "$(cat ~/laude/repos/shellm/.env)" --overwrite \
+          --value "$(cat /path/to/shelly/.env)" --overwrite \
           --region <region>
     First boot writes it to /opt/shellm/app/.env, so instance rebuilds
     self-heal. NOTE: user-data runs once per instance — after changing the

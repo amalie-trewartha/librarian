@@ -1,7 +1,7 @@
 [project]
 name = "shelly-slack-bridge"
 version = "0.1.0"
-description = "Slack Socket Mode bridge for a shellm identity"
+description = "Slack Socket Mode bridge for a Shelly identity"
 requires-python = ">=3.12"
 dependencies = [
     "slack-bolt>=1.20",

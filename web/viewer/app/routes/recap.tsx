@@ -18,7 +18,7 @@ import { fetchIdentityStatus, fetchRecap, refreshRecap } from "~/lib/api";
 import type { RecapStepRef } from "~/lib/types";
 
 export function meta() {
-  return [{ title: "shellm · recap" }];
+  return [{ title: "Shelly · recap" }];
 }
 
 /** A step reference that deep-links into the mind log (scroll + highlight). */

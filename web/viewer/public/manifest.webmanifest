@@ -1,6 +1,6 @@
 {
-  "name": "Audel",
-  "short_name": "Audel",
+  "name": "Shelly",
+  "short_name": "Shelly",
   "description": "Direct chat with Shelly identities",
   "start_url": "/talk",
   "scope": "/",

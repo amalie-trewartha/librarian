@@ -11,7 +11,7 @@ domain                = "example.com"
 subdomain             = "agents"
 
 allowed_emails = [
-  "nick@jalbert.io",
+  "you@example.com",
   "boss@example.com",
 ]
 
@@ -20,7 +20,7 @@ allowed_emails = [
 # URI https://<team>.cloudflareaccess.com/cdn-cgi/access/callback) — see
 # deploy/terraform-slack/README.md for the consent-screen choice. Leave
 # unset for OTP-only.
-# allowed_email_domains  = ["laude.org"]
+# allowed_email_domains  = ["example.com"]
 # google_oauth_client_id = "1234-abc.apps.googleusercontent.com"
 # Secret: prefer TF_VAR_google_oauth_client_secret from op via .envrc (see
 # envrc.example). Setting it here works too (gitignored; state holds it

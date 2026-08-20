@@ -11,7 +11,18 @@ set -euo pipefail
 # SHELLY_SLACK_IDENTITY (default audel), SHELLY_WEB_URL (SHELLM_* names
 # still honored as fallbacks).
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Resolve through symlinks (install.sh --symlinks puts this on PATH), then
+# fall back to the checkout recorded by install.sh / shelly-init.
+ROOT_DIR="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.." && pwd)"
+if [[ ! -d "$ROOT_DIR/slack" ]]; then
+    _home="${SHELLY_HOME:-${SHELLM_HOME:-$HOME/.shelly}}"
+    [[ -d "$_home" ]] || _home="$HOME/.shellm"
+    _rec=$(cat "$_home/app_dir" 2>/dev/null || true)
+    if [[ -n "$_rec" && -d "$_rec/slack" ]]; then ROOT_DIR="$_rec"
+    elif [[ -d "$_home/app/slack" ]]; then ROOT_DIR="$_home/app"
+    else echo "shelly-slack-bridge: can't find the shelly checkout (slack/ missing); set SHELLY_HOME or run from a checkout" >&2; exit 1
+    fi
+fi
 
 command -v uv >/dev/null 2>&1 || { echo "shelly-slack-bridge: uv is required (https://docs.astral.sh/uv/)" >&2; exit 1; }
 

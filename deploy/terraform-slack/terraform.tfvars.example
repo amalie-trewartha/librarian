@@ -24,14 +24,14 @@ env_parameter = "/shellm-slack/env"
 # Dash access (observability) — Slack traffic itself never enters here;
 # the bridge dials out via Socket Mode
 allowed_emails = [
-  "nick@jalbert.io",
+  "you@example.com",
 ]
 
 # Optional: let a whole Google Workspace domain SSO into the dash. Create an
 # OAuth client in Google Cloud console first (type Web application, redirect
 # URI https://<team>.cloudflareaccess.com/cdn-cgi/access/callback) — see
 # README for the consent-screen choice. Leave unset for OTP-only.
-# allowed_email_domains  = ["laude.org"]
+# allowed_email_domains  = ["example.com"]
 # google_oauth_client_id = "1234-abc.apps.googleusercontent.com"
 # Secret: prefer TF_VAR_google_oauth_client_secret from op via .envrc (see
 # envrc.example). Setting it here works too (gitignored; state holds it

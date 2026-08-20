@@ -144,7 +144,7 @@ echo "piped message" | cowsay
 After writing, validate:
 1. `skills check <name>` -- requirements parse correctly
 2. `skills show <name>` -- content renders correctly
-3. Try a real prompt: `shelly send "use the X skill to do Y"` and watch what the agent does
+3. Try a real prompt: `<name> say "use the X skill to do Y"` (your identity's persona command) and watch what the agent does
 4. Iterate based on whether the agent uses the skill correctly
 
 ## Common mistakes

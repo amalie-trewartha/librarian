@@ -80,7 +80,7 @@ _resolve_app_dir() {
 }
 
 APP_DIR=$(_resolve_app_dir) || die "can't find the shelly checkout. Set SHELLY_APP_DIR=/path/to/shelly"
-export PATH="$APP_DIR/bin:$PATH"
+export PATH="$APP_DIR/bin:$APP_DIR/tools:$PATH"
 
 # ---------------------------------------------------------------------------
 # TTY-aware prompting (stdin may be the curl pipe)
@@ -468,7 +468,7 @@ _link_persona_command() {
 
 _start_thinkers() {
     [[ "${SHELLM_NO_THINKERS:-0}" != "1" ]] || { info "Skipping thinkers (SHELLM_NO_THINKERS=1)"; return 0; }
-    info "Starting ${NAME}'s mind (monolith thinker)"
+    info "Starting ${NAME}'s mind (monolith + responder thinkers)"
     (
         cd "$APP_DIR"
         # activate is written for interactive shells; its internal greps may
@@ -481,7 +481,9 @@ _start_thinkers() {
         set -o pipefail
         [[ -n "${IDENTITY_NAME:-}" ]] || { echo "shelly-init: activate did not set IDENTITY_NAME" >&2; exit 1; }
         thinkers stop --self >/dev/null 2>&1 || true
-        thinkers start monolith
+        # monolith = the inner loop; responder = immediate chat replies.
+        # Both, or the first `ada hello` goes unanswered.
+        thinkers start monolith responder
     )
 }
 

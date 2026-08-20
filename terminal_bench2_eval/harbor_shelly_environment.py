@@ -18,7 +18,7 @@ from pathlib import Path
 from harbor.environments.docker.docker import DockerEnvironment
 
 
-class ShellmDockerEnvironment(DockerEnvironment):
+class ShellyDockerEnvironment(DockerEnvironment):
     """DockerEnvironment that drops resource limits to support DinD setups."""
 
     def _write_mounts_compose_file(self) -> Path:  # type: ignore[override]

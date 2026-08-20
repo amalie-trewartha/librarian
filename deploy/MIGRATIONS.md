@@ -2,8 +2,7 @@
 
 Playbook for changing something structural on a box that is running a mind
 (renaming systemd units, moving paths, changing users). Written after the
-2026-08-19 `shellm-*` -> `shelly-*` unit rename; the specifics of that run
-are in `~/laude/notes/20260819/shelly-unit-migration.md`.
+2026-08-19 `shellm-*` -> `shelly-*` unit rename.
 
 Read this before designing the change, not after.
 

@@ -18,7 +18,8 @@ pre-rename installs keep their state); explicit `SHELLY_HOME` or
 the rename is migrated once with `deploy/migrate-units.sh` (see
 deploy/DEPLOY.md). What deliberately keeps the `shellm` name: the
 `/opt/shellm` deploy path, the `shellm` and `shellm-telegram` UNIX users,
-`~shellm/.shellm`, the per-identity `.shellm/` subdirectory, and the
+`~shellm/.shellm`, the per-identity `.shellm/` subdirectory, the
+`~/.shellm-thinkers` template dir that install.sh seeds, and the
 `*.shellm.net` domains. If you take one of those on, or any other
 structural change to a live box, read `deploy/MIGRATIONS.md` first — it
 lists the couplings that fail *silently*.
@@ -90,6 +91,9 @@ Replies take 15 to 45 seconds while the monolith thinker wakes.
   `status.json`, `logs/` (`init.log`, `web.log`), `run/web.pid`,
   `app_dir` (path to the checkout).
 - `~/.shelly/app/` — the checkout, when installed by the one-liner.
+- `~/.local/bin/` — the installed tools (symlinks for the one-liner).
+- `~/.skills/core-skills/` and `~/.shellm-thinkers/` — the bundled skills
+  and thinker templates that new identities are seeded from.
 - `<app>/.identities/<name>/` — the identity: persona, memories,
   trajectory, `run/dispatcher.pid`, and its `activate` script.
 

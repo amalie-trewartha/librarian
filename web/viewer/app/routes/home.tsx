@@ -33,7 +33,7 @@ import {
 import type { Identity } from "~/lib/types";
 
 export function meta() {
-  return [{ title: "shellm · identities" }];
+  return [{ title: "Shelly · identities" }];
 }
 
 function relativeTime(iso: string | null): string {
@@ -214,7 +214,7 @@ function KillAllButton() {
   const mutation = useMutation({
     mutationFn: killAll,
     onSuccess: (result) => {
-      const summary = result.stdout.trim() || "No shellm processes found.";
+      const summary = result.stdout.trim() || "No Shelly processes found.";
       if (result.dry_run) {
         if (window.confirm(`${summary}\n\nProceed with kill?`)) {
           mutation.mutate(false);
@@ -234,7 +234,7 @@ function KillAllButton() {
       variant="destructive"
       size="sm"
       disabled={mutation.isPending}
-      title="Kill every shellm process on this machine (dispatchers, agents, thinker steps)"
+      title="Kill every Shelly process on this machine (dispatchers, agents, thinker steps)"
       onClick={() => mutation.mutate(true)}
     >
       <Skull className="size-3" />

@@ -15,7 +15,18 @@ set -euo pipefail
 # project venv directly so the bridge can run as its own user (uv would try
 # to write the service-owned venv). This launcher is for local dev.
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Resolve through symlinks (install.sh --symlinks puts this on PATH), then
+# fall back to the checkout recorded by install.sh / shelly-init.
+ROOT_DIR="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.." && pwd)"
+if [[ ! -d "$ROOT_DIR/telegram" ]]; then
+    _home="${SHELLY_HOME:-${SHELLM_HOME:-$HOME/.shelly}}"
+    [[ -d "$_home" ]] || _home="$HOME/.shellm"
+    _rec=$(cat "$_home/app_dir" 2>/dev/null || true)
+    if [[ -n "$_rec" && -d "$_rec/telegram" ]]; then ROOT_DIR="$_rec"
+    elif [[ -d "$_home/app/telegram" ]]; then ROOT_DIR="$_home/app"
+    else echo "shelly-telegram-bridge: can't find the shelly checkout (telegram/ missing); set SHELLY_HOME or run from a checkout" >&2; exit 1
+    fi
+fi
 
 command -v uv >/dev/null 2>&1 || { echo "shelly-telegram-bridge: uv is required (https://docs.astral.sh/uv/)" >&2; exit 1; }
 

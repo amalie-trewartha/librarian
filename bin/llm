@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # llm — Minimal multi-provider LLM CLI tool
-# Supports Anthropic, OpenAI, and Gemini APIs.
+# Supports the Anthropic, OpenAI, Gemini, and OpenRouter APIs.
 
 # ---------------------------------------------------------------------------
 # Defaults

@@ -19,7 +19,7 @@ becomes a command:
 
 ```bash
 ada                  # chat with them
-ada hello!           # one message, wait for the reply
+ada hello            # one message, wait for the reply
 ada stop / ada start # pause / resume their mind
 ada dash             # open the dashboard
 ```
@@ -105,6 +105,34 @@ cd shelly
 ./install.sh            # add --init to also bootstrap an identity + dash
 ```
 
-This copies the tools in `bin/` to `~/.local/bin`. Use `--symlinks` to
+This copies the tools in `bin/` and `tools/` to `~/.local/bin`, the core
+skills to `~/.skills/core-skills`, the bundled thinker templates to
+`~/.shellm-thinkers`, and builds the Rust TUI if cargo is present. Use `--symlinks` to
 symlink instead (edits take effect without reinstalling), or
 `--prefix /usr/local/bin` for a different location.
+
+## Stopping and uninstalling
+
+`ada stop` pauses the mind (the thinkers) and `ada start` resumes it. If
+something is running away, `shelly-killall` stops every Shelly process on
+the machine (dispatchers, thinker steps, shellm runs, the dashboard);
+`shelly-killall --dry-run` shows what it would stop.
+
+The installer touches these places, and removing them uninstalls Shelly:
+
+- `~/.shelly/` — the state home: `.env` (your API key), `status.json`,
+  logs, and, for the one-liner, the checkout itself in `~/.shelly/app/`.
+  Identities live inside the checkout at `<app>/.identities/`, so this is
+  also where your agent's memories and trajectory are. Copy that directory
+  first if you want to keep them.
+- `~/.local/bin/` — one symlink (or copy) per tool, plus a symlink named
+  after each identity (`ada`) that points at `persona`. `ls -l
+  ~/.local/bin | grep -i shelly` finds them.
+- `~/.skills/core-skills/` and `~/.shellm-thinkers/` — the bundled
+  skills and thinker templates.
+- A `PATH` line the installer offered to add to your shell rc file
+  (`~/.zshrc` or `~/.bashrc`).
+
+Run `shelly-killall` first so nothing is writing while you delete. For the
+Docker variant, `docker rm -f shelly` removes the container and everything
+in it.

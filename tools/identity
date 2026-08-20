@@ -186,7 +186,7 @@ _ensure_thinkers() {
         if [[ -d "$_rdest" && ! -d "$bundled_dir/$_retired" \
               && -f "$_rdest/step" && -f "$_rdest/subscriptions.jsonl" \
               && ! -e "$_rdest/disabled" ]]; then
-            printf 'retired by shellm upgrade %s — this thinker was consolidated into monolith/responder; delete this file to re-enable\n' \
+            printf 'retired by Shelly upgrade %s — this thinker was consolidated into monolith/responder; delete this file to re-enable\n' \
                 "$(date +%Y-%m-%d)" > "$_rdest/disabled"
             echo "Retired bundled thinker '$_retired' (disabled marker written; dir kept)" >&2
         fi

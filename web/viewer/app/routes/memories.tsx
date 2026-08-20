@@ -20,7 +20,7 @@ import {
 import { cn } from "~/lib/utils";
 
 export function meta() {
-  return [{ title: "shellm · memories" }];
+  return [{ title: "Shelly · memories" }];
 }
 
 export default function MemoriesPage() {

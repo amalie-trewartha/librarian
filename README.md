@@ -30,20 +30,28 @@ life, and opens a dashboard where you can watch its mind run:
 curl -fsSL https://raw.githubusercontent.com/laude-institute/shelly/main/install.sh | bash
 ```
 
-You'll need an LLM API key (Anthropic, OpenAI, Gemini, or OpenRouter).
-Use a dedicated, spend-capped key, because your agent runs real shell
-commands and thinks around the clock. How much the background thinking
+You'll need bash 3.2+, git, curl, jq, and an LLM API key (Anthropic,
+OpenAI, Gemini, or OpenRouter); the dashboard also needs
+[uv](https://docs.astral.sh/uv/) and bun or node, and the installer offers
+to fetch those. Use a dedicated, spend-capped key, because your agent runs
+real shell commands and thinks around the clock. With Docker installed
+the commands run in a container; without it they run directly on your
+machine as you. How much the background thinking
 costs depends on how quickly the agent loops and which model backs it. At
 the settings we run our agent with, it comes to $1 to $2 an hour.
 
 The agent's name becomes a command:
 
 ```bash
-ada hello!           # one message, wait for the reply
+ada hello            # one message, wait for the reply
 ada                  # chat
 ada stop / ada start # pause / resume its mind
 ada dash             # open the dashboard
 ```
+
+`shelly-killall` stops every Shelly process on the machine if you need a
+panic button. Stopping for good and removing everything is covered in
+[docs/install.md](docs/install.md#stopping-and-uninstalling).
 
 You can also run the same flow inside a long-lived Docker container:
 
@@ -136,6 +144,7 @@ Everything you run *around* the mind lives in `tools/`:
 | **shelly-web** | The dashboard, where you watch a mind think in the browser |
 | **shelly-slack-bridge** / **shelly-telegram-bridge** | Slack and Telegram connectors into the same inner experience |
 | **shelly-killall** | Panic button that stops every Shelly-related process |
+| **pr-committee** | Multi-model pull request review, used on this repo |
 
 ## Learn more
 
@@ -147,6 +156,10 @@ Everything you run *around* the mind lives in `tools/`:
   CI/non-interactive and long-lived Docker
 - [AGENTS.md](AGENTS.md) — operating a running identity (for humans and
   coding agents): paths, logs, health checks, sharp edges
+- [web/](web/README.md), [slack/](slack/README.md),
+  [telegram/](telegram/README.md) — the dashboard and the chat bridges
+- [deploy/](deploy/README.md) — running an agent on a dedicated box
+  (systemd units, terraform, operations)
 
 ## Acknowledgements
 
@@ -159,4 +172,4 @@ of the [Headlong](https://github.com/andyk/headlong) research project.
 
 ## License
 
-[Apache 2.0](LICENSE)
+[Apache 2.0](LICENSE). Copyright 2026 Laude Institute.

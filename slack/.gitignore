@@ -1,6 +1,6 @@
-# Slack CLI runtime state: dev-app links and cache are per-developer.
-# (.slack/config.json and .slack/apps.json — the deployed-app link — are
-# committed so the whole team drives the same app.)
-.slack/apps.dev.json
+# Slack CLI runtime state: app links, project id, and cache are per-workspace
+# and per-developer. Run `slack install` / `slack app link` yourself; nothing
+# in .slack/ is shared through git.
+.slack/
 .slack/cache/
 .venv/

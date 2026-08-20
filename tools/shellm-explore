@@ -29,7 +29,7 @@ fi
 _explore_home="$HOME/.shelly"
 [[ ! -d "$_explore_home" && -d "$HOME/.shellm" ]] && _explore_home="$HOME/.shellm"
 _explore_home="${SHELLY_HOME:-${SHELLM_HOME:-$_explore_home}}"
-TRAJ_DIR="${TRAJ_DIR:-$_explore_home/.trajectories}"
+TRAJ_DIR="${SHELLM_TRAJ_DIR:-${TRAJ_DIR:-$_explore_home/trajectories}}"
 RUN_ID=""
 REPORT=0
 LIST_MODE=0

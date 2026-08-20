@@ -10,7 +10,7 @@ mkdir -p "$JOBS_DIR"
 
 uvx harbor run \
   --agent-import-path harbor_shelly_agent:ShellyAgent \
-  --environment-import-path harbor_shelly_environment:ShellmDockerEnvironment \
+  --environment-import-path harbor_shelly_environment:ShellyDockerEnvironment \
   --dataset terminal-bench@2.0 \
   --model anthropic/claude-opus-4-7 \
   --ak effort=max \

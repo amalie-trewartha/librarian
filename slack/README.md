@@ -31,22 +31,23 @@ tools/shelly-slack-bridge [ROOT]      # ROOT = serve root, default repo root
 ```
 
 The identity must exist (`identity new audel`) with a running dispatcher
-(`thinkers start monolith`), and shelly-web must be serving the same root
+(`thinkers start monolith responder`), and shelly-web must be serving the same root
 (default `http://127.0.0.1:8080`, override with `SHELLY_WEB_URL`; legacy `SHELLM_WEB_URL` still honored).
 
 Socket Mode is outbound-only: no public endpoint, works behind NAT, and
-keeps the zero-ingress deploy design. In production both the bridge and the
-web server run as systemd units on the dedicated box (see
-`deploy/terraform-slack/`).
+keeps the zero-ingress deploy design. On a deployed box both the bridge and
+the web server run as systemd units (`deploy/shelly-slack-bridge.service`,
+`deploy/shelly-web.service`); `deploy/terraform-slack/` is the stack Laude
+runs its own Slack-connected agent on.
 
 Other settings: `SHELLY_SLACK_STATE_DIR`, legacy `SHELLM_SLACK_STATE_DIR`
 (cursor + thread state, default
 `<identity>/run/slack-bridge/`), `SLACK_THREAD_FOLLOWUPS=1` (answer
 un-mentioned replies in threads the bot is already part of).
 
-For the end-to-end procedure of installing Audel into a new workspace
-(Slack app, tokens, SSM env, rebuild, verification), see
-[PLAYBOOK.md](PLAYBOOK.md).
+For the end-to-end procedure we used to install our agent, Audel, into a
+workspace on that stack (Slack app, tokens, SSM env, rebuild, verification),
+see [PLAYBOOK.md](PLAYBOOK.md).
 
 ## Slack app lifecycle (Slack CLI)
 

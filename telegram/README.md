@@ -53,14 +53,18 @@ tools/shelly-telegram-bridge [ROOT]   # ROOT = serve root, default repo root
 ```
 
 The identity must exist (`identity new audel`) with a running dispatcher
-(`thinkers start monolith`), and shelly-web must be serving the same root
+(`thinkers start monolith responder`), and shelly-web must be serving the same root
 (default `http://127.0.0.1:8080`, override with `SHELLY_WEB_URL`; legacy `SHELLM_WEB_URL` still honored).
 
 Other settings are `SHELLY_TELEGRAM_STATE_DIR`, legacy
 `SHELLM_TELEGRAM_STATE_DIR` (allowlist, cursors, update offset, default
 `<identity>/run/telegram-bridge/`).
 
-## Enabling on the production box
+## Enabling on a deployed box
+
+This section describes the box provisioned by `deploy/` (it is how Laude
+runs its own agent); for a local or hand-managed machine, the "Running
+locally" steps above are all you need.
 
 There is no bootstrap flag for this bridge, because the box's user_data
 must never change (changing it replaces the instance and destroys the

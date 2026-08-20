@@ -38,8 +38,8 @@ PREFIX="${PREFIX:-$HOME/.local/bin}"
 SYMLINKS="${SYMLINKS:-0}"
 RUN_INIT=0
 # Core agent tools (bin/) and the management/aux CLIs around them (tools/).
-BIN_TOOLS=(shellm shellm-docker skills mem llm context traj thinkers chat focus recap)
-AUX_TOOLS=(shellm-docker-broker identity shellm-explore shelly-init shelly-killall persona)
+BIN_TOOLS=(shellm shellm-docker skills mem llm context traj thinkers chat focus recap glob view put sub)
+AUX_TOOLS=(shellm-docker-broker identity shellm-explore shelly-init shelly-killall persona shelly-web shelly-slack-bridge shelly-telegram-bridge)
 TOOLS=("${BIN_TOOLS[@]}" "${AUX_TOOLS[@]}")
 
 # ---------------------------------------------------------------------------
@@ -113,7 +113,9 @@ _usage() {
     cat <<'EOF'
 Usage: ./install.sh [options]
 
-Installs Shelly's tools from bin/ to a directory on your PATH.
+Installs Shelly's tools from bin/ and tools/ to a directory on your PATH,
+plus the core skills (~/.skills/core-skills), the bundled thinker templates
+(~/.shellm-thinkers), and the Rust TUI if cargo is available.
 
 Options:
   --prefix DIR   Install directory (default: ~/.local/bin)

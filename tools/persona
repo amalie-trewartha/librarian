@@ -58,7 +58,7 @@ _resolve_app_dir() {
 }
 
 APP_DIR=$(_resolve_app_dir) || die "can't find the shelly checkout. Set SHELLY_APP_DIR=/path/to/shelly"
-export PATH="$APP_DIR/bin:$PATH"
+export PATH="$APP_DIR/bin:$APP_DIR/tools:$PATH"
 IDENTITY_ROOT="$APP_DIR/.identities"
 
 # Env files, real environment first (same layering as llm and shelly-init).

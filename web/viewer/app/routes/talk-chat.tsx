@@ -16,8 +16,8 @@ import type { ChatMessage } from "~/lib/types";
 import { getPwaName, pwaSender, setLastIdentity } from "~/lib/pwa";
 import { cn } from "~/lib/utils";
 
-export function meta() {
-  return [{ title: "Audel" }];
+export function meta({ params }: { params: { identityId?: string } }) {
+  return [{ title: params.identityId ? `${params.identityId} · talk` : "Shelly · talk" }];
 }
 
 // After a send: poll fast for this long so the reply lands near-instantly.

@@ -127,7 +127,7 @@ from your laptop:
 
 ```bash
 aws ssm put-parameter --name /shellm/env --type SecureString \
-    --value "$(cat ~/laude/repos/shellm/.env)" --overwrite \
+    --value "$(cat /path/to/shelly/.env)" --overwrite \
     --region <your-region>
 ```
 

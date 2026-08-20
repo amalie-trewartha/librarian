@@ -43,7 +43,7 @@ The LLM has full shell access. It can curl APIs, parse data with jq, write Pytho
 shellm streams everything live. Commands show in cyan, output in dim:
 
 ```
-▶ Iteration 1/25 — calling LLM API...
+▶ Iteration 1 — calling claude-opus-4-7...
 ▶ Executing bash (12 lines):
     curl -s "https://api.example.com/data" | jq '.results'
     ...
@@ -186,7 +186,7 @@ Docker access from inside the sandbox is off by default. `--docker-access broker
 
 An **env** is a named execution environment — either a Docker container or "local" (the host machine). Multiple runs can share an env, so installed packages and system modifications persist across conversations.
 
-Each run records its metadata and conversation history in a trajectory file under the trajectories directory (`$TRAJ_DIR`, default `~/.shellm/.trajectories/`). The trajectory is an append-only JSONL file named `YYYY-MM-DD-HH-MM-SS_XXXXXXXX_slug.jsonl` whose first step is a `shellm-run` record capturing the command, workdir, model, and env.
+Each run records its metadata and conversation history in a trajectory under the trajectories directory (`SHELLM_TRAJ_DIR`, default `~/.shelly/trajectories/`; the legacy `TRAJ_DIR` and `~/.shellm` are still honored). Each trajectory is a directory named `<hex8>-<slug>/` holding an append-only `trajectory.jsonl`. The first line is the `{"type":"trajectory"}` header and the next is a `shellm-run` step capturing the command, workdir, model, and env.
 
 Each run also has a **workdir** — a directory where generated code executes:
 
@@ -197,11 +197,11 @@ Each run also has a **workdir** — a directory where generated code executes:
 - Files created by the agent persist across iterations
 - Sub-runs are tracked as forked branches in the trajectory, not as nested directories
 
-Env metadata is stored in `~/.shellm/envs/<name>/`.
+Env metadata is stored in `~/.shelly/envs/<name>/` (`SHELLM_ENVS_DIR`).
 
 ```bash
-# List past runs
-traj list
+# List recent runs
+shellm-explore
 
 # Use a custom workdir
 shellm --workdir ./my-run research something complex
@@ -218,7 +218,7 @@ With Docker, the workdir is bind-mounted into the container at the same path, so
 
 ## Run summary
 
-At the start of every run, a background process appends a `run-summary` step to the trajectory: a fast model (`SHELLM_SUMMARY_MODEL`, defaults to Haiku) reads the input context and produces a one-line **tldr**, plus a **full_summary** for large inputs. It runs asynchronously and doesn't slow the main loop. `shellm-explore` uses it to label runs in tree visualizations.
+At the start of every run, a background process appends a `run-summary` step to the trajectory: a fast model (`SHELLM_SUMMARY_MODEL`, falling back to `SHELLM_FAST_MODEL`, then Haiku on Anthropic runs) reads the input context and produces a one-line **tldr**, plus a **full_summary** for large inputs. It runs asynchronously and doesn't slow the main loop. `shellm-explore` uses it to label runs in tree visualizations.
 
 ## Exploring runs with shellm-explore
 
@@ -253,8 +253,8 @@ With `--report`, it sends the full tree context to an LLM and generates an analy
 # Simple prompt (provider auto-detected from model name)
 echo "what is 2+2" | llm -m claude-opus-4-7
 
-# Streaming with thinking
-llm --stream --thinking -m claude-opus-4-7 "explain quicksort"
+# Extended thinking (streaming is on by default; --no-stream turns it off)
+llm --thinking -m claude-opus-4-7 "explain quicksort"
 
 # OpenAI
 llm -m gpt-4o "summarize this" < article.txt
@@ -289,8 +289,8 @@ mem add "the user prefers dark mode"
 mem add --type todo "buy groceries"
 mem list                    # List all (date + slug)
 mem search "user prefs"     # Semantic search (uses shellm)
-mem edit <name> "new text"  # Update a memory
-mem forget <name>           # Delete by name or prefix
+mem edit <id> "new text"    # Update a memory by hex ID
+mem forget <id>             # Delete by hex ID
 ```
 
 Types: `memory`, `todo`, `objective`, `value`, `belief`, `fact`, `preference`, `note`. Memories are stored as individual `.md` files in `MEM_DIR` (default: `./.memories/`). Every piece of state is a text file — inspectable, greppable, editable with any editor.
@@ -299,14 +299,14 @@ Types: `memory`, `todo`, `objective`, `value`, `belief`, `fact`, `preference`, `
 
 ```bash
 skills                      # List installed skills
-skills "web research"       # Search installed and remote (GitHub) skills
-skills --install owner/repo # Install from GitHub
-skills --show web-research  # Show a skill's full instructions
-skills --init my-new-skill  # Create a new skill
-skills --remove old-skill   # Remove a skill
+skills search "web research" # Search installed and remote (GitHub) skills
+skills install owner/repo   # Install from GitHub
+skills show web-research    # Show a skill's full instructions
+skills init my-new-skill    # Create a new skill
+skills remove old-skill     # Remove a skill
 ```
 
-Skills can declare requirements (env vars, binaries, OS) in their YAML frontmatter under `metadata.shelllm.requires`. By default, `skills list` only shows skills whose requirements are met. Use `skills check <name>` to diagnose a specific skill's requirements. Skills live in `SKILLS_DIR` (default: `~/.skills/`).
+Skills can declare requirements (env vars, binaries, OS) in their YAML frontmatter under `metadata.shelllm.requires`. By default, `skills list` only shows skills whose requirements are met. Use `skills check <name>` to diagnose a specific skill's requirements. Skills live in `SKILLS_DIR` (default: `./.skills/`); the bundled core skills are installed to `~/.skills/core-skills` and added as a remote.
 
 ## Options
 
@@ -333,6 +333,14 @@ All configuration is available as both CLI flags and environment variables. Flag
 | `-f FILE` | — | — | Add file context (repeatable) |
 | `-v, --verbose` | — | off | Show debug output |
 | `-q, --quiet` | — | off | Suppress progress output, keep only final answer |
+| `-s, --system-prompt TEXT` | `SHELLM_SYSTEM_PROMPT` | built-in | Replace the system prompt (`--system-prompt-file FILE` reads it from a file; `--print-system-prompt` shows the default) |
+| `--traj ID` / `--resume` | — | new run | Write steps into an existing trajectory (`--resume` = the most recent one) instead of forking a new child |
+| `--traj-dir DIR` | `SHELLM_TRAJ_DIR` | `~/.shelly/trajectories` | Where trajectories are written |
+| `--var NAME=VALUE` | — | — | Pass a variable into the sandbox environment (repeatable) |
+| `--bin PATH` | — | — | Stage an extra executable into the sandbox (repeatable) |
+| `--new-env` | — | off | Force a fresh env instead of reusing one (cannot combine with `--env`) |
+| — | `SHELLM_FAST_MODEL` | — | Cheap model for utility calls (run summaries) |
+| — | `SHELLM_ENVS_DIR`, `SHELLM_WORKDIRS_DIR`, `SHELLM_BROKER_DIR`, `SHELLM_CONF_DIR` | under `~/.shelly` | State directories |
 
 You can also put settings in a `.env` file in the working directory:
 

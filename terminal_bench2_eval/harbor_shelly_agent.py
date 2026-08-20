@@ -211,7 +211,6 @@ docker version --format '{{.Client.Version}}' >/dev/null
             "SHELLM_TEMP_DOCKER": "1",
             "SHELLM_NO_BANNER": "1",
             "SHELLM_MODEL": mn or "claude-opus-4-7",
-            "SHELLY_MODEL": mn or "claude-opus-4-7",
             # Don't set SHELLM_ALLOW_NESTED_DOCKER — inside the task
             # container /.dockerenv exists, so shellm will detect it's
             # in Docker and use local execution (no nested container).

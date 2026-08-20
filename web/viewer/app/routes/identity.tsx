@@ -32,7 +32,7 @@ import { useMindlog } from "~/lib/use-mindlog";
 import type { NormalizedStep } from "~/lib/types";
 
 export function meta() {
-  return [{ title: "shellm · mind log" }];
+  return [{ title: "Shelly · mind log" }];
 }
 
 export function scrollToStep(step: {

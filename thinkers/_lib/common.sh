@@ -275,7 +275,7 @@ _build_shellm_flags() {
 
     # Standard binaries
     local cmd
-    for cmd in mem traj skills context llm shellm chat; do
+    for cmd in mem traj skills context llm shellm chat glob view put sub; do
         local path
         path=$(command -v "$cmd" 2>/dev/null) || continue
         printf '%s\n' "--bin" "$path"

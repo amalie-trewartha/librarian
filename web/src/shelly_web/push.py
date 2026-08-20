@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 from shelly_web import discovery
+from shelly_web.env import getenv
 
 log = logging.getLogger("shelly-web.push")
 
@@ -198,7 +199,7 @@ class PushWatcher(threading.Thread):
                     subscription_info=target["subscription"],
                     data=payload,
                     vapid_private_key=str(pem_path),
-                    vapid_claims={"sub": "mailto:nick@jalbert.io"},
+                    vapid_claims={"sub": getenv("SHELLY_VAPID_SUB", "mailto:admin@example.com")},
                 )
             except WebPushException as exc:
                 status = getattr(exc.response, "status_code", None)

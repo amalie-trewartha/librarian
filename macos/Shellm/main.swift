@@ -575,7 +575,6 @@ struct SettingsView: View {
                     .onSubmit { testConnection() }
                 HStack(spacing: 8) {
                     Button("localhost:8080") { model.serverURL = "http://localhost:8080"; testConnection() }
-                    Button("chat.shellm.net") { model.serverURL = "https://chat.shellm.net"; testConnection() }
                     Spacer()
                     if testing {
                         ProgressView().scaleEffect(0.5).frame(width: 16, height: 16)

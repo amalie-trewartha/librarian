@@ -76,8 +76,8 @@ else
     # (shelly-slack-agent's), but is not that unit's main process, so
     # stopping it sweeps nothing.
     thinkers stop --self || true
-    echo "==> Starting monolith thinker"
-    thinkers start monolith
+    echo "==> Starting monolith + responder thinkers"
+    thinkers start monolith responder
 fi
 
 echo "==> Persona '$name' ready"

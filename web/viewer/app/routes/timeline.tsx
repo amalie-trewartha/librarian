@@ -20,7 +20,7 @@ import { TrajContext } from "~/lib/traj-context";
 import { cn } from "~/lib/utils";
 
 export function meta() {
-  return [{ title: "shellm · timeline" }];
+  return [{ title: "Shelly · timeline" }];
 }
 
 // Swatch opacity mirrors the canvas: triggers are always on, the rest rest

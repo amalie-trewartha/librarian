@@ -2103,10 +2103,11 @@ CHECKHELP
 
     local -a files=("$traj_file")
     if [[ "$recursive" -eq 1 ]]; then
-        local _all
+        local _all _f
         _all=$(_collect_recursive_files "$traj_file") || true
         if [[ -n "$_all" ]]; then
-            mapfile -t files <<< "$_all"
+            files=()
+            while IFS= read -r _f; do files+=("$_f"); done <<< "$_all"
         fi
     fi
 
