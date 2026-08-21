@@ -9,7 +9,7 @@ set -euo pipefail
 #
 #   ada                    chat with them (TUI if built, simple loop otherwise)
 #   ada say <message>      send one message and wait briefly for the reply
-#   ada start / stop       resume / pause their mind (the thinkers)
+#   ada start / stop       resume / pause their mind (the thinkers) and the dash
 #   ada status             mind + dash status
 #   ada dash               start the dashboard if needed and open it
 #   ada shell              subshell with their environment (advanced)
@@ -151,19 +151,24 @@ cmd_start() {
     _activate
     if _dispatcher_pid >/dev/null; then
         echo "$NAME's mind is already running."
-        return 0
+    else
+        thinkers start monolith
+        echo "$NAME is thinking again."
     fi
-    thinkers start monolith
-    echo "$NAME is thinking again."
+    local url
+    if url=$(_dash_start); then
+        echo "dash: $url"
+    fi
 }
 
 cmd_stop() {
     _activate
     if ! _dispatcher_pid >/dev/null; then
         echo "$NAME's mind is already stopped."
-        return 0
+    else
+        thinkers stop
     fi
-    thinkers stop
+    _dash_stop
     echo "$NAME is paused. Resume with: $CMD start"
 }
 
@@ -190,17 +195,20 @@ cmd_shell() {
     exec env IDENTITY_DIR="$IDENTITY_ROOT" identity shell "$NAME"
 }
 
-cmd_dash() {
+# _dash_start — start the dash if it isn't running; print its URL on stdout.
+# Progress goes to stderr. Returns non-zero (with a reason on stderr) if it
+# can't be started, so callers decide whether that's fatal.
+_dash_start() {
     local log="$SHELLM_HOME/logs/web.log" pidfile="$SHELLM_HOME/run/web.pid" pid url
     mkdir -p "$SHELLM_HOME/logs" "$SHELLM_HOME/run"
     pid=$(cat "$pidfile" 2>/dev/null || true)
     if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
-        command -v uv >/dev/null 2>&1 || die "the dash needs uv — run headlong-init to set it up"
+        command -v uv >/dev/null 2>&1 || { echo "the dash needs uv — run headlong-init to set it up" >&2; return 1; }
         # In a container, bind on all interfaces so a published port works
         if [[ -z "${SHELLM_WEB_ARGS:-}" && ( -f /.dockerenv || -f /run/.containerenv ) ]]; then
             SHELLM_WEB_ARGS="--host 0.0.0.0"
         fi
-        echo "Starting the dash..."
+        echo "Starting the dash..." >&2
         : > "$log"
         # shellcheck disable=SC2086
         nohup headlong-web "$APP_DIR" ${SHELLM_WEB_ARGS:-} >>"$log" 2>&1 &
@@ -208,13 +216,56 @@ cmd_dash() {
         local _
         for _ in $(seq 1 300); do
             grep -qE '(shellm|shelly|headlong)-web serving' "$log" 2>/dev/null && break
-            kill -0 "$(cat "$pidfile")" 2>/dev/null || { tail -20 "$log" >&2; die "the dash failed to start (log: $log)"; }
+            kill -0 "$(cat "$pidfile")" 2>/dev/null || { tail -20 "$log" >&2; echo "the dash failed to start (log: $log)" >&2; return 1; }
             sleep 1
         done
     fi
     url=$(grep -o 'http://[^ ]*' "$log" 2>/dev/null | tail -1)
-    [[ -n "$url" ]] || die "dash is running but no URL found in $log"
+    [[ -n "$url" ]] || { echo "dash is running but no URL found in $log" >&2; return 1; }
+    printf '%s\n' "$url"
+}
+
+# _dash_wait_ready URL — the "serving" log line is printed just before the
+# server binds, so a browser opened on it can land on a connection error or a
+# stale service-worker page. Poll until the URL answers (30s cap); never fails.
+_dash_wait_ready() {
+    local url="$1" _
+    command -v curl >/dev/null 2>&1 || { sleep 2; return 0; }
+    for _ in $(seq 1 60); do
+        curl -fsS -o /dev/null --max-time 2 "$url" 2>/dev/null && return 0
+        sleep 0.5
+    done
+    return 0
+}
+
+# _dash_stop — stop the dash started by _dash_start (or headlong-init). The
+# pid file holds the `headlong-web` wrapper; take its whole process tree so
+# the uv/python server underneath goes too.
+_dash_stop() {
+    local pidfile="$SHELLM_HOME/run/web.pid" pid
+    pid=$(cat "$pidfile" 2>/dev/null || true)
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        echo "Stopping the dash (PID $pid)..."
+        _kill_tree "$pid" TERM
+        local _
+        for _ in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || break; sleep 0.25; done
+        kill -0 "$pid" 2>/dev/null && _kill_tree "$pid" KILL
+    fi
+    rm -f "$pidfile"
+    return 0
+}
+
+_kill_tree() {  # _kill_tree PID SIGNAL — signal PID and all its descendants
+    local c
+    for c in $(pgrep -P "$1" 2>/dev/null); do _kill_tree "$c" "$2"; done
+    kill -s "$2" "$1" 2>/dev/null || true
+}
+
+cmd_dash() {
+    local url
+    url=$(_dash_start) || die "couldn't start the dash"
     echo "$url"
+    _dash_wait_ready "$url"
     case "$(uname -s)" in
         Darwin) open "$url" 2>/dev/null || true ;;
         Linux)
@@ -290,8 +341,8 @@ Usage:
   $CMD <message>       send one message and wait briefly for the reply
   $CMD say <message>   the same, explicitly (for messages starting with a
                        word like 'stop' or 'status')
-  $CMD start           resume their mind
-  $CMD stop            pause their mind
+  $CMD start           resume their mind (and the dash)
+  $CMD stop            pause their mind and stop the dash
   $CMD status          mind + dash status
   $CMD dash            start the dashboard if needed and open it
   $CMD shell           subshell with their environment (advanced)

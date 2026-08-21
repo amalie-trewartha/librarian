@@ -237,7 +237,9 @@ Paste just the key itself — headlong-init figures out the provider from it.
 The agent you're about to create runs continuously and executes shell
 commands — use a DEDICATED, SPEND-CAPPED key. With the default model
 (Claude Sonnet 4.5) expect roughly $1–2 an hour while it runs, about
-$25–50 a day; more if you talk to it a lot.
+$25–50 a day; more if you talk to it a lot. You can pause it at any time
+(`ada stop`, using whatever name you pick) — a paused agent spends nothing —
+and resume with `ada start`.
 
 EOF
         _prompt_key || die "no key entered"
@@ -559,12 +561,26 @@ _start_dash() {
     echo "headlong-init: the dash didn't come up within 5 minutes; check $log" >&2
 }
 
+# The "serving" log line is printed just before the server binds, so a browser
+# opened on it can land on a connection error or a stale service-worker page.
+# Poll until the URL answers (30s cap) before opening; never fails.
+_wait_dash_ready() {
+    local _
+    command -v curl >/dev/null 2>&1 || { sleep 2; return 0; }
+    for _ in $(seq 1 60); do
+        curl -fsS -o /dev/null --max-time 2 "$DASH_URL" 2>/dev/null && return 0
+        sleep 0.5
+    done
+    return 0
+}
+
 _open_dash() {
     [[ -n "$DASH_URL" ]] || return 0
     case "$(uname -s)" in
-        Darwin) open "$DASH_URL" 2>/dev/null || true ;;
+        Darwin) _wait_dash_ready; open "$DASH_URL" 2>/dev/null || true ;;
         Linux)
             if command -v xdg-open >/dev/null 2>&1 && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+                _wait_dash_ready
                 xdg-open "$DASH_URL" 2>/dev/null || true
             fi
             ;;
@@ -591,9 +607,12 @@ _open_dash
 
 # How to address them in the summary: their own name only if it resolves to
 # a persona link (it may instead be an unrelated command we refused to stomp)
+PERSONA_BIN="$(cd "$(dirname "$0")" && pwd)"
 PERSONA_CMD="persona $NAME"
+PERSONA_PATH="$PERSONA_BIN/persona $NAME"
 if [[ "$(readlink "$(command -v "$NAME" 2>/dev/null)" 2>/dev/null)" == *"/persona" ]]; then
     PERSONA_CMD="$NAME"
+    PERSONA_PATH="$PERSONA_BIN/$NAME"
 fi
 
 # Machine-readable outcome for agents and scripts. Snapshot of this run;
@@ -637,6 +656,7 @@ $NAME is running.
   Chat with them       $PERSONA_CMD          (or just: $PERSONA_CMD hello)
   Pause / resume       $PERSONA_CMD stop  /  $PERSONA_CMD start
   Everything else      $PERSONA_CMD --help
+  Not on PATH yet?     $PERSONA_PATH
 ────────────────────────────────────────────────────────
 EOF
 
