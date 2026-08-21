@@ -258,6 +258,8 @@ class ChatModel: ObservableObject {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
 
+    private var hotkeyRetryTask: Task<Void, Never>?
+
     init() {
         startPolling()
         registerHotkey()
@@ -390,14 +392,31 @@ class ChatModel: ObservableObject {
             },
             userInfo: selfPtr
         ) else {
-            NSLog("Shellm: CGEvent tap failed — Accessibility permission not granted")
+            NSLog("Shellm: CGEvent tap failed — Accessibility not granted, will retry")
+            startHotkeyRetry()
             return
         }
 
+        hotkeyRetryTask?.cancel()
+        hotkeyRetryTask = nil
         eventTap = tap
         runLoopSource = CFMachPortCreateRunLoopSource(nil, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        NSLog("Shellm: CGEvent tap registered successfully")
+    }
+
+    private func startHotkeyRetry() {
+        guard hotkeyRetryTask == nil else { return }
+        hotkeyRetryTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                if AXIsProcessTrusted() {
+                    await MainActor.run { self?.registerHotkey() }
+                    return
+                }
+            }
+        }
     }
 
     func togglePanel() {
