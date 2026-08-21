@@ -259,10 +259,16 @@ _ensure_path() {
         *":$PREFIX:"*) _warn_shadowed; return 0 ;;
     esac
     export PATH="$PREFIX:$PATH"
+    # Tell headlong-init (exec'd below) that the calling shell does NOT have
+    # $PREFIX on its PATH yet, so it can hand the user a shell that does.
+    export HEADLONG_PATH_ADDED="$PREFIX"
     local path_line="export PATH=\"$PREFIX:\$PATH\"" rc="" reply=""
     case "$(basename "${SHELL:-}")" in
         zsh)  rc="$HOME/.zshrc" ;;
-        bash) rc="$HOME/.bashrc" ;;
+        bash)
+            # macOS terminals open login shells, which read ~/.bash_profile
+            # and skip ~/.bashrc unless the profile sources it.
+            if [[ "$(uname -s)" == Darwin ]]; then rc="$HOME/.bash_profile"; else rc="$HOME/.bashrc"; fi ;;
     esac
     # In a container (throwaway env), don't ask — just persist the PATH.
     local in_container=0

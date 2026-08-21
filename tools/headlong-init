@@ -234,8 +234,10 @@ _ensure_api_key() {
 
 Headlong needs an LLM API key (Anthropic, OpenAI, Gemini, or OpenRouter).
 Paste just the key itself — headlong-init figures out the provider from it.
-The person you're about to create runs continuously and executes shell
-commands — use a DEDICATED, SPEND-CAPPED key.
+The agent you're about to create runs continuously and executes shell
+commands — use a DEDICATED, SPEND-CAPPED key. With the default model
+(Claude Sonnet 4.5) expect roughly $1–2 an hour while it runs, about
+$25–50 a day; more if you talk to it a lot.
 
 EOF
         _prompt_key || die "no key entered"
@@ -296,7 +298,7 @@ _interview() {
     [[ "$HAS_TTY" -eq 1 ]] || return 0
     cat >/dev/tty <<'EOF'
 
-Time to bring someone to life. They start with a baseline personality —
+Time to launch your Headlong agent. It starts with a baseline personality —
 answer as much or as little as you like (Enter keeps the default).
 
 EOF
@@ -629,7 +631,7 @@ fi
 cat <<EOF
 
 ────────────────────────────────────────────────────────
-$NAME is alive.
+$NAME is running.
 
   Watch their mind     ${DASH_DISPLAY:-$PERSONA_CMD dash}
   Chat with them       $PERSONA_CMD          (or just: $PERSONA_CMD hello)
@@ -637,3 +639,22 @@ $NAME is alive.
   Everything else      $PERSONA_CMD --help
 ────────────────────────────────────────────────────────
 EOF
+
+# The one-liner (`curl | bash`) runs in a child process, so the shell the user
+# typed it in cannot see the PATH entry install.sh just added — `$NAME` would
+# be "command not found" until they open a new terminal. install.sh exports
+# HEADLONG_PATH_ADDED when that is the case; hand the user a fresh interactive
+# shell (PATH inherited) so the commands above work right now. No tty, or a
+# PATH that was already fine: nothing to do.
+if [[ -n "${HEADLONG_PATH_ADDED:-}" && "$HAS_TTY" -eq 1 ]]; then
+    _shell="${SHELL:-bash}"
+    if [[ -x "$_shell" ]]; then
+        echo "Opening a new shell so '$PERSONA_CMD' is on your PATH (or, in any other shell:"
+        echo "  export PATH=\"$HEADLONG_PATH_ADDED:\$PATH\")"
+        echo
+        unset HEADLONG_PATH_ADDED
+        exec "$_shell" -i </dev/tty
+    fi
+    echo "Run this first so '$PERSONA_CMD' is on your PATH:"
+    echo "  export PATH=\"$HEADLONG_PATH_ADDED:\$PATH\""
+fi
