@@ -28,7 +28,7 @@ check_not() { local label="$1"; shift; if "$@" >/dev/null 2>&1; then bad "$label
 
 WORK=$(mktemp -d)
 trap 'cd /; rm -rf "$WORK"' EXIT
-cd "$WORK"
+cd "$WORK" || exit 1
 
 # Isolate HOME. tools/identity turns on symlink mode from
 # $HOME/.headlong-thinkers/.use-symlinks, and its bundled source is the repo's

@@ -550,7 +550,8 @@ generate_report() {
     _collect_contexts "$root_traj"
 
     # Build the prompt
-    local user_prompt="Here is a shellm run tree visualization:
+    local user_prompt
+    user_prompt="Here is a shellm run tree visualization:
 
 \`\`\`
 ${tree_output}

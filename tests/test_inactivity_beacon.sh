@@ -119,12 +119,12 @@ else
     bad "nested run past SHELLM_INACTIVITY_MAX is killed" "$(tail -3 "$WORK/err")"
 fi
 # The feedback the model sees is a trajectory step, not terminal output.
-ceiling_traj="$HEADLONG_HOME/trajectories"/*ceiling-case/trajectory.jsonl
-if grep -q 'A nested shellm run was still alive' $ceiling_traj 2>/dev/null; then
+ceiling_traj=("$HEADLONG_HOME/trajectories"/*ceiling-case/trajectory.jsonl)
+if grep -q 'A nested shellm run was still alive' "${ceiling_traj[@]}" 2>/dev/null; then
     ok "kill feedback names the sub-run, not an interactive prompt"
 else
     bad "kill feedback names the sub-run, not an interactive prompt" \
-        "$(grep -o '"type":"feedback"[^}]*' $ceiling_traj 2>/dev/null | head -c 200)"
+        "$(grep -o '"type":"feedback"[^}]*' "${ceiling_traj[@]}" 2>/dev/null | head -c 200)"
 fi
 
 # --- case 4: without beacon stamps the same block dies, as it used to --------

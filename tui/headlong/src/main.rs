@@ -1,7 +1,13 @@
-use std::{env, io, mem, process::Stdio, time::{Duration, Instant}};
+use std::{
+    env, io, mem,
+    process::Stdio,
+    time::{Duration, Instant},
+};
 
 use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers, MouseEventKind, EnableMouseCapture, DisableMouseCapture},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -212,7 +218,7 @@ fn parse_ansi_line(line: &str) -> Line<'static> {
             }
             if i < len && chars[i] == 'm' {
                 i += 1; // skip 'm'
-                // Apply SGR codes
+                        // Apply SGR codes
                 let codes: Vec<&str> = params.split(';').collect();
                 let mut ci = 0;
                 while ci < codes.len() {
@@ -236,13 +242,11 @@ fn parse_ansi_line(line: &str) -> Line<'static> {
                         37 => style = style.fg(Color::White),
                         38 => {
                             // 256-color or RGB foreground
-                            if ci + 1 < codes.len() && codes[ci + 1] == "5" {
-                                if ci + 2 < codes.len() {
-                                    if let Ok(n) = codes[ci + 2].parse::<u8>() {
-                                        style = style.fg(Color::Indexed(n));
-                                    }
-                                    ci += 2;
+                            if ci + 2 < codes.len() && codes[ci + 1] == "5" {
+                                if let Ok(n) = codes[ci + 2].parse::<u8>() {
+                                    style = style.fg(Color::Indexed(n));
                                 }
+                                ci += 2;
                             }
                         }
                         39 => style = style.fg(Color::Reset),
@@ -255,13 +259,11 @@ fn parse_ansi_line(line: &str) -> Line<'static> {
                         46 => style = style.bg(Color::Cyan),
                         47 => style = style.bg(Color::White),
                         48 => {
-                            if ci + 1 < codes.len() && codes[ci + 1] == "5" {
-                                if ci + 2 < codes.len() {
-                                    if let Ok(n) = codes[ci + 2].parse::<u8>() {
-                                        style = style.bg(Color::Indexed(n));
-                                    }
-                                    ci += 2;
+                            if ci + 2 < codes.len() && codes[ci + 1] == "5" {
+                                if let Ok(n) = codes[ci + 2].parse::<u8>() {
+                                    style = style.bg(Color::Indexed(n));
                                 }
+                                ci += 2;
                             }
                         }
                         49 => style = style.bg(Color::Reset),
@@ -444,7 +446,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = run(&mut terminal, identity_name, from, initial_mode).await;
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), DisableMouseCapture, LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )?;
 
     result
 }
@@ -523,7 +529,15 @@ async fn run(
         let traj_id = env::var("ROOT_TRAJ_ID")
             .or_else(|_| env::var("TRAJ_ID"))
             .unwrap_or_default();
-        let mut args = vec!["tail", "-f", "--filter", "type=message,human-msg,agent-msg", "-n", "0", "--raw"];
+        let mut args = vec![
+            "tail",
+            "-f",
+            "--filter",
+            "type=message,human-msg,agent-msg",
+            "-n",
+            "0",
+            "--raw",
+        ];
         let traj_id_owned;
         if !traj_id.is_empty() {
             traj_id_owned = traj_id;
@@ -538,7 +552,9 @@ async fn run(
             return;
         };
 
-        let Some(stdout) = child.stdout.take() else { return };
+        let Some(stdout) = child.stdout.take() else {
+            return;
+        };
         let mut lines = BufReader::new(stdout).lines();
 
         while let Ok(Some(line)) = lines.next_line().await {
@@ -608,7 +624,10 @@ async fn run(
             app.cmd_output = lines;
         }
 
-        if app.quit_armed.is_some_and(|t| t.elapsed() > Duration::from_secs(2)) {
+        if app
+            .quit_armed
+            .is_some_and(|t| t.elapsed() > Duration::from_secs(2))
+        {
             app.quit_armed = None;
         }
 
@@ -786,7 +805,10 @@ async fn run(
                                                 .stderr(Stdio::piped());
                                             if let Ok(output) = cmd.output().await {
                                                 if !output.status.success() {
-                                                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                                                    let stderr =
+                                                        String::from_utf8_lossy(&output.stderr)
+                                                            .trim()
+                                                            .to_string();
                                                     if !stderr.is_empty() {
                                                         let _ = err_tx.send(Message {
                                                             sender: "system".into(),
@@ -806,7 +828,8 @@ async fn run(
                                         let tx = cmd_tx.clone();
                                         let args_str = msg;
                                         tokio::spawn(async move {
-                                            let parts: Vec<&str> = args_str.split_whitespace().collect();
+                                            let parts: Vec<&str> =
+                                                args_str.split_whitespace().collect();
                                             let output = run_cmd("thinkers", &parts).await;
                                             let _ = tx.send(output);
                                         });
@@ -819,7 +842,8 @@ async fn run(
                                         let tx = cmd_tx.clone();
                                         let args_str = msg;
                                         tokio::spawn(async move {
-                                            let parts: Vec<&str> = args_str.split_whitespace().collect();
+                                            let parts: Vec<&str> =
+                                                args_str.split_whitespace().collect();
                                             let output = run_cmd("traj", &parts).await;
                                             let _ = tx.send(output);
                                         });
@@ -834,7 +858,8 @@ async fn run(
                                             let base = app.cmd_base.clone();
                                             let args_str = msg;
                                             tokio::spawn(async move {
-                                                let parts: Vec<&str> = args_str.split_whitespace().collect();
+                                                let parts: Vec<&str> =
+                                                    args_str.split_whitespace().collect();
                                                 let output = run_cmd(&base, &parts).await;
                                                 let _ = tx.send(output);
                                             });
@@ -899,7 +924,8 @@ async fn run(
                         }
                     }
                     KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        let inner_w = terminal.size().map_or(78, |s| s.width.saturating_sub(2)) as usize;
+                        let inner_w =
+                            terminal.size().map_or(78, |s| s.width.saturating_sub(2)) as usize;
                         let (cx, cy) = cursor_xy(&app.input, app.cursor, inner_w);
                         if cy > 0 {
                             // Move cursor up one display row
@@ -910,7 +936,8 @@ async fn run(
                         }
                     }
                     KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        let inner_w = terminal.size().map_or(78, |s| s.width.saturating_sub(2)) as usize;
+                        let inner_w =
+                            terminal.size().map_or(78, |s| s.width.saturating_sub(2)) as usize;
                         let (cx, cy) = cursor_xy(&app.input, app.cursor, inner_w);
                         let total = wrap_input(&app.input, inner_w).len() as u16;
                         if cy + 1 < total {
@@ -951,7 +978,8 @@ async fn run(
                     }
                     KeyCode::Up => {
                         // Move cursor up one display row; recall history from the top row
-                        let inner_w = terminal.size().map_or(78, |s| s.width.saturating_sub(2)) as usize;
+                        let inner_w =
+                            terminal.size().map_or(78, |s| s.width.saturating_sub(2)) as usize;
                         if inner_w > 0 {
                             let (cx, cy) = cursor_xy(&app.input, app.cursor, inner_w);
                             if cy > 0 {
@@ -962,7 +990,8 @@ async fn run(
                         }
                     }
                     KeyCode::Down => {
-                        let inner_w = terminal.size().map_or(78, |s| s.width.saturating_sub(2)) as usize;
+                        let inner_w =
+                            terminal.size().map_or(78, |s| s.width.saturating_sub(2)) as usize;
                         if inner_w > 0 {
                             let (cx, cy) = cursor_xy(&app.input, app.cursor, inner_w);
                             let total = wrap_input(&app.input, inner_w).len() as u16;
@@ -1098,11 +1127,8 @@ fn draw(f: &mut Frame, app: &App) {
             f.render_widget(messages, chunks[1]);
         }
         Mode::Thinkers | Mode::Traj | Mode::Command => {
-            let output_lines: Vec<Line> = app
-                .cmd_output
-                .iter()
-                .map(|l| parse_ansi_line(l))
-                .collect();
+            let output_lines: Vec<Line> =
+                app.cmd_output.iter().map(|l| parse_ansi_line(l)).collect();
 
             let para = Paragraph::new(output_lines).wrap(Wrap { trim: false });
             let msg_inner_h = chunks[1].height as usize;
@@ -1137,8 +1163,5 @@ fn draw(f: &mut Frame, app: &App) {
         .scroll((input_scroll, 0));
     f.render_widget(input, chunks[2]);
 
-    f.set_cursor(
-        chunks[2].x + 1 + cx,
-        chunks[2].y + 1 + cy - input_scroll,
-    );
+    f.set_cursor(chunks[2].x + 1 + cx, chunks[2].y + 1 + cy - input_scroll);
 }

@@ -18,6 +18,7 @@ _shellm_load_env() {
     while IFS= read -r key; do
         [[ -n "$key" ]] || continue
         [[ -n "${!key+x}" ]] && continue
+        # shellcheck disable=SC1090  # sourcing the user's own env file
         val=$(set -a; . "$envfile" 2>/dev/null; printf '%s' "${!key}") || continue
         export "$key=$val"
     done < <(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*=.*/\2/p' "$envfile")
@@ -2256,6 +2257,7 @@ run_loop() {
 
         # Build wrapped code that captures FINAL/FINAL_FILE after execution
         local wrapped_code
+        # shellcheck disable=SC1078,SC1079  # one long double-quoted string, built across lines on purpose
         wrapped_code="set -x
 $code
 set +x"$'\n'"

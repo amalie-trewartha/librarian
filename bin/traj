@@ -678,7 +678,8 @@ cmd_show() {
         local stdout_ref
         stdout_ref=$(printf '%s' "$row" | jq -r '.stdout_ref // empty')
         if [[ -n "$stdout_ref" ]]; then
-            local blob_path="$(dirname "$traj_file")/$stdout_ref"
+            local blob_path
+            blob_path="$(dirname "$traj_file")/$stdout_ref"
             if [[ -f "$blob_path" ]]; then
                 local full_stdout
                 full_stdout=$(cat "$blob_path")
@@ -688,7 +689,8 @@ cmd_show() {
         local stderr_ref
         stderr_ref=$(printf '%s' "$row" | jq -r '.stderr_ref // empty')
         if [[ -n "$stderr_ref" ]]; then
-            local blob_path="$(dirname "$traj_file")/$stderr_ref"
+            local blob_path
+            blob_path="$(dirname "$traj_file")/$stderr_ref"
             if [[ -f "$blob_path" ]]; then
                 local full_stderr
                 full_stderr=$(cat "$blob_path")
@@ -1115,6 +1117,7 @@ TAILHELP
                 _tail_pids+=($!)
             done <<< "$_all_files"
             # Wait for any signal; clean up on exit
+            # shellcheck disable=SC2154  # p is the trap body's own loop variable
             trap 'for p in "${_tail_pids[@]}"; do kill "$p" 2>/dev/null; done; exit 0' INT PIPE TERM
             wait
         fi
@@ -1183,8 +1186,8 @@ cmd_search() {
     local grep_mode="-F"  # literal by default
     [[ "$use_regex" -eq 1 ]] && grep_mode="-E"
 
-    local -a grep_args=($grep_mode)
-    [[ -n "$case_flag" ]] && grep_args+=($case_flag)
+    local -a grep_args=("$grep_mode")
+    [[ -n "$case_flag" ]] && grep_args+=("$case_flag")
     [[ "$context_lines" -gt 0 ]] && grep_args+=(-C "$context_lines")
     grep_args+=(-n)  # line numbers
 

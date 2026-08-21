@@ -73,7 +73,12 @@ find_memory() {
     # Hex id match (4-8 char hex prefix in filename)
     if [[ "$id" =~ ^[0-9a-f]{4,8}$ ]]; then
         local id_match
-        id_match=$(ls -1 "$MEM_DIR"/*.md 2>/dev/null | xargs -I{} basename {} .md | grep "_${id}" | head -2) || true
+        local _f _b
+        id_match=$(for _f in "$MEM_DIR"/*.md; do
+            [[ -e "$_f" ]] || continue
+            _b=$(basename "$_f" .md)
+            [[ "$_b" == *"_${id}"* ]] && printf '%s\n' "$_b"
+        done | head -2) || true
         local id_count
         id_count=$(printf '%s' "$id_match" | grep -c . 2>/dev/null) || id_count=0
         [[ "$id_count" -eq 1 ]] && { echo "$MEM_DIR/${id_match}.md"; return; }

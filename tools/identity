@@ -41,6 +41,18 @@ iso_timestamp() {
 }
 
 # Kill Docker containers managed by an identity's shellm envs.
+# Identity directory names (one per line), minus the `default` pointer.
+# A glob over directories, so stray files in IDENTITY_DIR are never listed.
+_identity_names() {
+    local _d
+    for _d in "$IDENTITY_DIR"/*/; do
+        [[ -d "$_d" ]] || continue
+        _d="${_d%/}"; _d="${_d##*/}"
+        [[ "$_d" == default ]] && continue
+        printf '%s\n' "$_d"
+    done
+}
+
 _destroy_containers() {
     local identity_dir="$1"
     local envs_dir="$identity_dir/.shellm/envs"
@@ -83,7 +95,7 @@ _ensure_kernel() {
         bundled=$(_bundled_skill_dir "$skill" 2>/dev/null) || bundled=""
 
         if [[ -n "$bundled" ]]; then
-            rm -rf "$kernel_dir/$skill"
+            rm -rf "${kernel_dir:?}/$skill"
             ln -s "$bundled" "$kernel_dir/$skill"
             debug "Linked $skill kernel skill -> $bundled"
         elif [[ "$skill" == "mem" && ! -f "$kernel_dir/$skill/SKILL.md" ]]; then
@@ -771,7 +783,7 @@ _guard_identity_shell() {
             resolved_dir=$(cd "$IDENTITY_DIR/$target" && pwd) 2>/dev/null || true
         else
             local match
-            match=$(ls -1 "$IDENTITY_DIR" 2>/dev/null | grep -v '^default$' | grep "$target" | head -1) || true
+            match=$(_identity_names | grep "$target" | head -1) || true
             [[ -n "$match" ]] && resolved_dir=$(cd "$IDENTITY_DIR/$match" 2>/dev/null && pwd) || true
         fi
     fi
@@ -898,7 +910,7 @@ cmd_list() {
     fi
 
     local dirs
-    dirs=$(ls -1 "$IDENTITY_DIR" 2>/dev/null | grep -v '^default$') || true
+    dirs=$(_identity_names) || true
     if [[ -z "$dirs" ]]; then
         echo "No identities." >&2
         return
@@ -944,7 +956,7 @@ _resolve_identity_path() {
             identity_path=$(cd "$IDENTITY_DIR/$target" && pwd)
         else
             local matches
-            matches=$(ls -1 "$IDENTITY_DIR" 2>/dev/null | grep -v '^default$' | grep "$target" || true)
+            matches=$(_identity_names | grep "$target" || true)
             local count
             count=$(printf '%s' "$matches" | grep -c . 2>/dev/null) || count=0
             if [[ "$count" -eq 1 ]]; then
@@ -983,7 +995,7 @@ cmd_info() {
             identity_dir=$(cd "$IDENTITY_DIR/$target" && pwd)
         else
             local matches
-            matches=$(ls -1 "$IDENTITY_DIR" 2>/dev/null | grep -v '^default$' | grep "$target" || true)
+            matches=$(_identity_names | grep "$target" || true)
             local count
             count=$(printf '%s' "$matches" | grep -c . 2>/dev/null) || count=0
             if [[ "$count" -eq 1 ]]; then
@@ -1204,7 +1216,7 @@ cmd_default() {
 
     # Prefix/substring match
     local matches
-    matches=$(ls -1 "$IDENTITY_DIR" 2>/dev/null | grep -v '^default$' | grep "$target" || true)
+    matches=$(_identity_names | grep "$target" || true)
     local count
     count=$(printf '%s' "$matches" | grep -c . 2>/dev/null) || count=0
 
@@ -1237,7 +1249,7 @@ cmd_delete() {
     # Destroy Docker containers for this identity
     _destroy_containers "$IDENTITY_DIR/$target"
 
-    rm -rf "$IDENTITY_DIR/$target"
+    rm -rf "${IDENTITY_DIR:?}/$target"
     printf 'Deleted identity: %s\n' "$target" >&2
 }
 
@@ -1269,7 +1281,7 @@ EOF
             identity_dir=$(cd "$IDENTITY_DIR/$target" && pwd)
         else
             local matches
-            matches=$(ls -1 "$IDENTITY_DIR" 2>/dev/null | grep -v '^default$' | grep "$target" || true)
+            matches=$(_identity_names | grep "$target" || true)
             local count
             count=$(printf '%s' "$matches" | grep -c . 2>/dev/null) || count=0
             if [[ "$count" -eq 1 ]]; then
@@ -1435,7 +1447,7 @@ _resolve_default() {
 
 # Check that at least one identity exists. Called before commands that need one.
 _require_identity() {
-    if [[ ! -d "$IDENTITY_DIR" ]] || [[ -z "$(ls -1 "$IDENTITY_DIR" 2>/dev/null | grep -v '^default$')" ]]; then
+    if [[ ! -d "$IDENTITY_DIR" ]] || [[ -z "$(_identity_names)" ]]; then
         die "No identities yet. Create one with: identity new <name>"
     fi
     if [[ ! -L "$IDENTITY_DIR/default" ]] || [[ ! -d "$IDENTITY_DIR/default" ]]; then

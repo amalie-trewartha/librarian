@@ -70,14 +70,13 @@ RUN="feed1111-root"
 ROLLUPS="$TRAJ_ROOT/$RUN/rollups"
 TSV="$ROLLUPS/rendered.tsv"
 RMETA="$ROLLUPS/rendered.meta.json"
-JSONL="$TRAJ_ROOT/$RUN/trajectory.jsonl"
 
 # ---------------------------------------------------------------------------
 # 1. First --context call writes the cache: TSV rows = signal steps, meta
 #    records the raw line count and format version.
 # ---------------------------------------------------------------------------
 mk_traj "$RUN" 25
-out1=$(recap feed1111 --traj_dir "$TRAJ_ROOT" --context --raw-tail 5 2>&1)
+recap feed1111 --traj_dir "$TRAJ_ROOT" --context --raw-tail 5 >/dev/null 2>&1
 rc=$?
 check "first: exits 0"              test "$rc" -eq 0
 check "first: rendered.tsv exists"  test -f "$TSV"
@@ -109,7 +108,7 @@ check "append: meta advanced to 42" test "$(jq -r .raw_lines "$RMETA")" = "42"
 #    nothing duplicates.
 # ---------------------------------------------------------------------------
 jq '.raw_lines = 41' "$RMETA" > "$RMETA.tmp" && mv "$RMETA.tmp" "$RMETA"   # pretend the last row was never recorded
-out3=$(recap feed1111 --traj_dir "$TRAJ_ROOT" --context --raw-tail 5 2>&1)
+recap feed1111 --traj_dir "$TRAJ_ROOT" --context --raw-tail 5 >/dev/null 2>&1
 rc=$?
 check "crash: exits 0"              test "$rc" -eq 0
 check "crash: still 40 signal rows" test "$(wc -l < "$TSV" | tr -d ' ')" = "40"
@@ -121,7 +120,7 @@ check "crash: old rows kept"        grep -q 'CACHE-SENTINEL' "$TSV"
 #    sentinel vanishes), and the row count is right afterwards.
 # ---------------------------------------------------------------------------
 jq '.version = 0' "$RMETA" > "$RMETA.tmp" && mv "$RMETA.tmp" "$RMETA"
-out4=$(recap feed1111 --traj_dir "$TRAJ_ROOT" --context --raw-tail 5 2>&1)
+recap feed1111 --traj_dir "$TRAJ_ROOT" --context --raw-tail 5 >/dev/null 2>&1
 rc=$?
 check "version: exits 0"            test "$rc" -eq 0
 check_not "version: cache rebuilt"  grep -q 'CACHE-SENTINEL' "$TSV"
@@ -133,7 +132,7 @@ check "version: 40 signal rows"     test "$(wc -l < "$TSV" | tr -d ' ')" = "40"
 # ---------------------------------------------------------------------------
 sed 's/thinking about topic 5/& CACHE-SENTINEL/' "$TSV" > "$TSV.sed" && mv "$TSV.sed" "$TSV"
 jq '.raw_lines = 99999' "$RMETA" > "$RMETA.tmp" && mv "$RMETA.tmp" "$RMETA"
-out5=$(recap feed1111 --traj_dir "$TRAJ_ROOT" --context --raw-tail 5 2>&1)
+recap feed1111 --traj_dir "$TRAJ_ROOT" --context --raw-tail 5 >/dev/null 2>&1
 rc=$?
 check "shrink: exits 0"             test "$rc" -eq 0
 check_not "shrink: cache rebuilt"   grep -q 'CACHE-SENTINEL' "$TSV"
@@ -151,7 +150,7 @@ rc=$?
 check "lock: fresh lock blocks"     test "$rc" -ne 0
 check "lock: says in progress"      grep -q 'in progress' <<<"$out6"
 touch -t 202601010000 "$ROLLUPS/.lock"
-out7=$(recap feed1111 --traj_dir "$TRAJ_ROOT" --context --raw-tail 5 2>&1)
+recap feed1111 --traj_dir "$TRAJ_ROOT" --context --raw-tail 5 >/dev/null 2>&1
 rc=$?
 check "lock: stale lock broken"     test "$rc" -eq 0
 check_not "lock: released after"    test -d "$ROLLUPS/.lock"

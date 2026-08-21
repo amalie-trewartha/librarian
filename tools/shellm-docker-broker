@@ -423,7 +423,7 @@ compose_validate_cp_paths() {
     shift
     local workdir="$SHELLM_BROKER_WORKDIR"
     local -a operands=()
-    local arg next
+    local arg
     while [[ $# -gt 0 ]]; do
         arg="$1"
         shift

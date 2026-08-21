@@ -21,6 +21,7 @@ _llm_load_env() {
     while IFS= read -r key; do
         [[ -n "$key" ]] || continue
         [[ -n "${!key+x}" ]] && continue
+        # shellcheck disable=SC1090  # sourcing the user's own env file
         val=$(set -a; . "$envfile" 2>/dev/null; printf '%s' "${!key}") || continue
         export "$key=$val"
     done < <(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*=.*/\2/p' "$envfile")

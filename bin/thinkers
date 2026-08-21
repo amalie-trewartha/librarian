@@ -906,8 +906,7 @@ _stop_dispatcher() {
             # start clears any stale one.
             touch "$run_dir/deliberate_stop" 2>/dev/null || true
             kill -TERM "$pid" 2>/dev/null || true
-            local i
-            for i in 1 2 3 4 5 6 7 8; do
+            for _ in 1 2 3 4 5 6 7 8; do
                 kill -0 "$pid" 2>/dev/null || break
                 sleep 0.25
             done
@@ -1720,7 +1719,7 @@ case "$cmd" in
     watch)    cmd_watch "$@" ;;
     new)      cmd_new "$@" ;;
     logs)     cmd_logs "$@" ;;
-    repl)     cmd_repl ;;
+    repl)     cmd_repl "$@" ;;
     help)     usage ;;
     "")       usage ;;
     *)        die "Unknown command: $cmd (try thinkers --help)" ;;

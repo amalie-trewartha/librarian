@@ -210,7 +210,7 @@ test_selfwake_coalesce() {
     sleep 0.5   # let O2's supersede land too
 
     local obs_files
-    obs_files=$(ls "$TMP/id/run/pending" 2>/dev/null | grep -c '^slowpoke\.observation\.')
+    obs_files=$(compgen -G "$TMP/id/run/pending/slowpoke.observation.*" | wc -l | tr -d ' ')
     if [[ "$obs_files" -eq 1 ]]; then
         ok "self-wake observations coalesce to one pending file"
     else
@@ -252,7 +252,7 @@ test_queue_cap() {
     sleep 2
 
     local count
-    count=$(ls "$TMP/id/run/pending" 2>/dev/null | grep -c '^slowpoke\.action\.')
+    count=$(compgen -G "$TMP/id/run/pending/slowpoke.action.*" | wc -l | tr -d ' ')
     if [[ "$count" -le 16 ]]; then
         ok "pending queue capped at 16 (got $count)"
     else

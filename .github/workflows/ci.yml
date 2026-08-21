@@ -8,14 +8,14 @@
 #   harness        tests/run-all.sh            bash tests for bin/ and tools/
 #   python         pytest                       web, slack, telegram (matrix)
 #   viewer         bun typecheck + build        web/viewer (what the box builds)
-#   tui            cargo check                  tui/headlong
-#   shellcheck     shellcheck -S error          every shell script in the tree
+#   tui            cargo fmt/clippy/check       tui/headlong
+#   shellcheck     shellcheck -S warning        every shell script in the tree
 #   install-smoke  tests/smoke_install.sh       install.sh, both modes, in a
 #                                               bare ubuntu:24.04 container
 #
 # Run the same things locally: tests/run-all.sh, uv run --project web pytest
 # web/tests (and slack, telegram), bun run typecheck/build in web/viewer,
-# cargo check in tui/headlong, tests/smoke_install.sh.
+# cargo fmt --check / clippy / check in tui/headlong, tests/smoke_install.sh.
 
 name: CI
 
@@ -45,7 +45,7 @@ jobs:
       # this themselves too; this is the safety net for new ones).
       SHELLM_ENV: local
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Tools the harness shells out to
         # jq, shellcheck, setsid, flock, timeout, python3 ship on the runner
         # image; uuidgen (uuid-runtime) is installed explicitly so a nested
@@ -63,8 +63,8 @@ jobs:
       matrix:
         project: [web, slack, telegram]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: ${{ matrix.project }}/uv.lock
@@ -81,41 +81,48 @@ jobs:
       run:
         working-directory: web/viewer
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run build
 
   tui:
-    name: cargo check
+    name: cargo fmt + clippy + check
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: tui/headlong
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: tui/headlong
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
       - run: cargo check
-        working-directory: tui/headlong
 
   shellcheck:
     name: shellcheck
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - name: shellcheck -S error on every shell script
+      - uses: actions/checkout@v5
+      - name: shellcheck -S warning on every shell script
         # Every tracked file with a sh/bash shebang, plus *.sh (sourced libs
         # without a shebang carry a `# shellcheck shell=` directive).
-        # Error level only for now; warning level has a known backlog.
+        # Terraform templates (*.tpl) are skipped: their ${var} interpolation
+        # is not shell. Warning level is the gate; the tree is clean at it.
         run: |
           set -euo pipefail
           shellcheck --version
-          files=$( { git ls-files -z | xargs -0 grep -lE '^#!.*\b(ba)?sh\b' ; git ls-files '*.sh'; } | sort -u)
+          files=$( { git ls-files -z | xargs -0 grep -lE '^#!.*\b(ba)?sh\b' ; git ls-files '*.sh'; } | sort -u | grep -v '\.tpl$')
           echo "$files" | wc -l | xargs echo "checking files:"
-          echo "$files" | xargs shellcheck -S error
+          echo "$files" | xargs shellcheck -S warning
 
   install-smoke:
     name: install.sh smoke (ubuntu:24.04)
@@ -129,7 +136,7 @@ jobs:
         run: |
           apt-get update -qq
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git ca-certificates >/dev/null
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Trust the workspace (owned by the runner user, we are root)
         run: git config --global --add safe.directory '*'
       - name: tests/smoke_install.sh

@@ -43,7 +43,7 @@ fi
 # script's set -euo pipefail — so relax the guards around the source.
 set +eu
 set +o pipefail
-# shellcheck disable=SC1091
+# shellcheck disable=SC1090,SC1091
 source "$IDENTITY_DIR/$name/activate"
 set -eu
 set -o pipefail

@@ -277,9 +277,10 @@ run_round() {  # $1=round label; stdin arrives per-model from $2-template files
     local round="$1"; shift
     local pids=() model
     for model in "${ROSTER[@]}"; do
-        local in="$OUT/in-$round-$(safe "$model").md"
-        local out="$OUT/review-$round-$(safe "$model").md"
-        local err="$OUT/err-$round-$(safe "$model").log"
+        local in out err
+        in="$OUT/in-$round-$(safe "$model").md"
+        out="$OUT/review-$round-$(safe "$model").md"
+        err="$OUT/err-$round-$(safe "$model").log"
         ( llm -m "$model" --no-stream --system-prompt-file "$OUT/sys-reviewer.txt" \
               < "$in" > "$out" 2> "$err" ) &
         pids+=($!)
