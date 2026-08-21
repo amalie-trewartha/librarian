@@ -42,13 +42,13 @@ export function IdentityTabs({
       <span className="text-muted-foreground">/</span>
       <h1 className="font-mono text-lg font-semibold">{displayName}</h1>
       <ActivityBadge identityId={identityId} live={live} />
-      <nav className="ml-auto flex items-center gap-1 rounded-lg border p-0.5">
+      <nav className="ml-auto flex max-w-full items-center gap-1 overflow-x-auto rounded-lg border p-0.5 max-sm:ml-0 max-sm:w-full">
         {TABS.map((tab) => (
           <Link
             key={tab.key}
             to={`${base}${tab.path}`}
             className={cn(
-              "rounded-md px-2.5 py-1 text-xs",
+              "shrink-0 rounded-md px-2.5 py-1 text-xs",
               tab.key === active
                 ? "bg-accent font-medium"
                 : "text-muted-foreground hover:text-foreground"

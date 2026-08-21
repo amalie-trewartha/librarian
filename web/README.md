@@ -70,7 +70,8 @@ still honored.
 - **Thinkers** (`/i/<identity>/thinkers`) — per-thinker status,
   dispatcher.log parsed into dispatch events, and a tail of each
   `run/logs/*.log`, with start/stop controls.
-- **Memories** (`/i/<identity>/memories`) — the identity's memory files.
+- **Memories** (`/i/<identity>/memories`) — searchable, type-filtered memory
+  cards with frontmatter summaries and dates, plus the full Markdown reader.
 - **Health** (`/i/<identity>/health`) — reply latency, stalls, and LLM
   provider health inferred from the mind log.
 - **Config** (`/i/<identity>/config`) — the identity's `.env` (model,
