@@ -449,6 +449,7 @@ struct ChatView: View {
     @ObservedObject var model: ChatModel
     var openSettings: () -> Void
     @State private var draft = ""
+    @State private var isAtBottom = true
     @FocusState private var inputFocused: Bool
 
     var body: some View {
@@ -488,19 +489,40 @@ struct ChatView: View {
 
             // Messages
             ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 4) {
-                        ForEach(model.messages) { msg in
-                            MessageRow(msg: msg, identityName: model.identityName)
-                                .id(msg.id)
+                ZStack(alignment: .bottom) {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 4) {
+                            ForEach(model.messages) { msg in
+                                MessageRow(msg: msg, identityName: model.identityName)
+                                    .id(msg.id)
+                            }
+                            // Invisible anchor at the very bottom
+                            Color.clear.frame(height: 1).id("bottom")
+                                .onAppear { isAtBottom = true }
+                                .onDisappear { isAtBottom = false }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                    }
+                    .onChange(of: model.messages.count) {
+                        if isAtBottom, let last = model.messages.last {
+                            withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                         }
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                }
-                .onChange(of: model.messages.count) {
-                    if let last = model.messages.last {
-                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+
+                    if !isAtBottom {
+                        Button {
+                            withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                        } label: {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .font(.title2)
+                                .foregroundStyle(.primary)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(8)
+                        .background(.ultraThinMaterial, in: Circle())
+                        .padding(.bottom, 8)
+                        .transition(.opacity)
                     }
                 }
             }
@@ -570,8 +592,19 @@ struct MessageRow: View {
     }
 
     private func timeString(_ date: Date) -> String {
+        let cal = Calendar.current
+        let now = Date()
         let f = DateFormatter()
-        f.dateFormat = "HH:mm"
+
+        if cal.isDateInToday(date) {
+            f.dateFormat = "h:mm a"
+        } else if cal.isDateInYesterday(date) {
+            f.dateFormat = "'Yesterday' h:mm a"
+        } else if let daysAgo = cal.dateComponents([.day], from: date, to: now).day, daysAgo < 7 {
+            f.dateFormat = "EEEE h:mm a"  // e.g. "Tuesday 3:42 PM"
+        } else {
+            f.dateFormat = "MMM d, h:mm a"  // e.g. "Aug 14, 3:42 PM"
+        }
         return f.string(from: date)
     }
 }
