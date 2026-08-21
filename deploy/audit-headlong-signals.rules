@@ -1,0 +1,14 @@
+# Kernel-level attribution for process kills. After the 2026-08-12
+# unattributed dispatcher death (headlong-thinkers@audel killed by an
+# unidentified INT/TERM with no journal/auth/SSM trace), every delivered
+# SIGINT/SIGKILL/SIGTERM syscall is audited so the sender's pid, comm, and
+# uid are on record. Query with:
+#
+#   ausearch -k headlong-sig
+#
+# Installed to /etc/audit/rules.d/headlong-signals.rules by deploy/setup.sh
+# and re-synced by deploy/update.sh. Signals are rare events and filtering
+# is in-kernel — overhead is negligible.
+-a always,exit -F arch=b64 -S kill -S tkill -S tgkill -F a1=2 -k headlong-sig
+-a always,exit -F arch=b64 -S kill -S tkill -S tgkill -F a1=9 -k headlong-sig
+-a always,exit -F arch=b64 -S kill -S tkill -S tgkill -F a1=15 -k headlong-sig

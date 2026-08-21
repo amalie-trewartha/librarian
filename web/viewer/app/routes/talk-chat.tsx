@@ -17,7 +17,7 @@ import { getPwaName, pwaSender, setLastIdentity } from "~/lib/pwa";
 import { cn } from "~/lib/utils";
 
 export function meta({ params }: { params: { identityId?: string } }) {
-  return [{ title: params.identityId ? `${params.identityId} · talk` : "Shelly · talk" }];
+  return [{ title: params.identityId ? `${params.identityId} · talk` : "Headlong · talk" }];
 }
 
 // After a send: poll fast for this long so the reply lands near-instantly.

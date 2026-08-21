@@ -9,7 +9,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 
 # Load .env files, layered: cwd's .env, then the state home's .env
-# (~/.shelly, or legacy ~/.shellm) fills whatever
+# (~/.headlong) fills whatever
 # is still missing. Each fills in only vars that are NOT already set: the
 # real environment always wins over files — same semantics as bin/shellm
 # and thinkers/_lib/common.sh. Values are extracted by sourcing the file in
@@ -27,11 +27,9 @@ _llm_load_env() {
     return 0
 }
 _llm_load_env ".env" || true
-# State home: SHELLY_HOME/SHELLM_HOME if set; else ~/.shelly, falling back
-# to a pre-rename ~/.shellm when only that exists.
-_llm_home="$HOME/.shelly"
-[[ ! -d "$_llm_home" && -d "$HOME/.shellm" ]] && _llm_home="$HOME/.shellm"
-_llm_home="${SHELLY_HOME:-${SHELLM_HOME:-$_llm_home}}"
+# State home: HEADLONG_HOME (framework) or SHELLM_HOME (tool-level; the
+# thinkers dispatcher exports it per-identity) if set; else ~/.headlong.
+_llm_home="${HEADLONG_HOME:-${SHELLM_HOME:-$HOME/.headlong}}"
 _llm_load_env "$_llm_home/.env" || true
 
 LLM_MODEL="${LLM_MODEL:-}"

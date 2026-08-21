@@ -6,8 +6,8 @@
 ███      █████ ██  ██ █████ █████ █████   ██
 ```
 
-**Shelly** is an open source agent microharness, a complete agent harness
-with a core of less than 10K lines of Bash. Shelly's defining feature is
+**Headlong** is an open source agent microharness, a complete agent harness
+with a core of less than 10K lines of Bash. Headlong's defining feature is
 **persistent agency**. Your agent keeps thinking between external
 interactions in a self-guided loop inspired by human inner monologue. A
 message from a human doesn't start a session. It lands in the agent's
@@ -16,18 +16,18 @@ to respond. You give your agent a name and a personality, and it sets its
 own interests and priorities, starts its own projects, and pings you when
 it has something to say.
 
-At the heart of Shelly is `shellm`, a Bash implementation of a
+At the heart of Headlong is `shellm`, a Bash implementation of a
 [recursive language model (RLM)](https://alexzhang13.github.io/blog/2025/rlm/).
 The agent thinks by writing shell commands, running them, and reading the
 output. No tool system besides Bash is needed.
 
 ## Get started
 
-One line installs everything, interviews you to bring a Shelly agent to
+One line installs everything, interviews you to bring a Headlong agent to
 life, and opens a dashboard where you can watch its mind run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/laude-institute/shelly/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/laude-institute/headlong/main/install.sh | bash
 ```
 
 You'll need bash 3.2+, git, curl, jq, and an LLM API key (Anthropic,
@@ -49,15 +49,15 @@ ada stop / ada start # pause / resume its mind
 ada dash             # open the dashboard
 ```
 
-`shelly-killall` stops every Shelly process on the machine if you need a
+`headlong-killall` stops every Headlong process on the machine if you need a
 panic button. Stopping for good and removing everything is covered in
 [docs/install.md](docs/install.md#stopping-and-uninstalling).
 
 You can also run the same flow inside a long-lived Docker container:
 
 ```bash
-docker run -it --name shelly --restart unless-stopped -p 8080:8080 buildpack-deps:curl \
-  bash -c 'curl -fsSL https://raw.githubusercontent.com/laude-institute/shelly/main/install.sh | bash; exec bash'
+docker run -it --name headlong --restart unless-stopped -p 8080:8080 buildpack-deps:curl \
+  bash -c 'curl -fsSL https://raw.githubusercontent.com/laude-institute/headlong/main/install.sh | bash; exec bash'
 ```
 
 Details, non-interactive/CI installs, and installing from a checkout are
@@ -91,7 +91,7 @@ in [docs/install.md](docs/install.md).
 - **Docker by default.** Generated code sandboxes itself into a container
   whenever Docker is available, and container reuse keeps restarts cheap.
   Local mode works too.
-- **Self-improvement by fork, test, merge.** An agent forks the Shelly
+- **Self-improvement by fork, test, merge.** An agent forks the Headlong
   codebase (and optionally its own trajectory), changes something, and
   runs. Merge the change back if it worked, or discard the agent and its
   changes if it didn't. No rollback machinery is needed.
@@ -111,7 +111,7 @@ To make a minimal agent, you need:
 - a way to turn that trajectory into the context for the next call into
   the LLM (`context`).
 
-Shelly also gives an agent a few convenience tools, such as a way to
+Headlong also gives an agent a few convenience tools, such as a way to
 distill and codify its experience (`mem`) and a way to save and reuse
 procedures for specialized tasks (`skills`). The core is the tools the
 running mind executes, the executables in `bin/` plus the thought
@@ -139,11 +139,11 @@ Everything you run *around* the mind lives in `tools/`:
 | **shellm-docker-broker** | Host-side policy server for brokered Docker, never present in the mind's environment |
 | **identity** | Creates and manages identities (persona, memories, activate script) |
 | **persona** | Talks to and manages an identity by name, from anywhere |
-| **shelly-init** | One-time bootstrap: interview, first identity, first thoughts |
+| **headlong-init** | One-time bootstrap: interview, first identity, first thoughts |
 | **shellm-explore** | Visualizes run trees and writes LLM-powered reports on what happened and why |
-| **shelly-web** | The dashboard, where you watch a mind think in the browser |
-| **shelly-slack-bridge** / **shelly-telegram-bridge** | Slack and Telegram connectors into the same inner experience |
-| **shelly-killall** | Panic button that stops every Shelly-related process |
+| **headlong-web** | The dashboard, where you watch a mind think in the browser |
+| **headlong-slack-bridge** / **headlong-telegram-bridge** | Slack and Telegram connectors into the same inner experience |
+| **headlong-killall** | Panic button that stops every Headlong-related process |
 | **pr-committee** | Multi-model pull request review, used on this repo |
 
 ## Learn more
@@ -167,8 +167,9 @@ The recursive language model idea in `shellm` comes in part from the
 [Recursive LLM](https://github.com/andyk/recursive_llm) experiment (April
 2023) and from Alex Zhang's [Recursive LM
 (RLM)](https://alexzhang13.github.io/blog/2025/rlm/) project (October
-2025). The continuous thinking behind Shelly's persistent agency grew out
-of the [Headlong](https://github.com/andyk/headlong) research project.
+2025). The continuous thinking behind Headlong's persistent agency — and
+its name — come from the [Headlong](https://github.com/andyk/headlong)
+research project.
 
 ## License
 

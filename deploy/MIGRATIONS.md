@@ -2,7 +2,10 @@
 
 Playbook for changing something structural on a box that is running a mind
 (renaming systemd units, moving paths, changing users). Written after the
-2026-08-19 `shellm-*` -> `shelly-*` unit rename.
+2026-08-19 `shellm-*` -> `shelly-*` unit rename, and used again for
+the 2026-08 `shelly-*` -> `headlong-*` rename (which deliberately skipped
+the compat step — see the header of deploy/migrate-units.sh for what that
+trades away).
 
 Read this before designing the change, not after.
 
@@ -47,7 +50,7 @@ loudly.
 1. **Get the box current first, on the old world.** Deploy whatever is
    already on `main` before introducing the migration. This runs `uv sync`
    and the frontend rebuild, so the cutover changes exactly one variable.
-   In 2026-08-19 this step is what installed the new `shelly-*` console
+   In 2026-08-19 this step is what installed the new renamed console
    scripts; without it the new units would have had no binary to exec.
 2. **Land the code without applying it.** `git pull --ff-only` only. Nothing
    restarts. Confirm services are still up.
@@ -115,7 +118,7 @@ against the rename.
 - Dispatcher log shows a **clean** stop (`caught SIGTERM from a deliberate
   stop — exiting clean`). An unclean exit means `Restart=on-failure` and
   the Slack death alert are about to fire.
-- No alert fallback log (`/var/tmp/shelly-thinkers-alert.log`) — its
+- No alert fallback log (`/var/tmp/headlong-thinkers-alert.log`) — its
   presence means a Slack post failed.
 - Trajectory has a fresh step with a timestamp after the restart.
 - Drop-in values still applied.

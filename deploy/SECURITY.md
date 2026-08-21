@@ -1,6 +1,6 @@
 # Security posture of the chat integrations
 
-This doc summarizes how each way of talking to a Shelly identity is
+This doc summarizes how each way of talking to a Headlong identity is
 secured. It covers the Slack bridge (`slack/`), the phone chat PWA
 (`web/`, served behind Cloudflare Access), and the Telegram bridge
 (`telegram/`). Read
@@ -29,9 +29,9 @@ its own namespace, so the channels cannot leak into each other's
 transport, though the shared mind means content can still cross.
 
 Each bridge has a kill switch that mutes the channel without touching
-the agent. For Slack it is `systemctl stop shelly-slack-bridge`, for the
+the agent. For Slack it is `systemctl stop headlong-slack-bridge`, for the
 phone chat it is disabling the Cloudflare Access app, and for Telegram
-it is `systemctl stop shelly-telegram-bridge`.
+it is `systemctl stop headlong-telegram-bridge`.
 
 ## Slack
 

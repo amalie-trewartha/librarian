@@ -19,7 +19,7 @@ CHATRC="${CHATRC:-./.chatrc}"
 
 # Read a key from the chatrc file. Returns empty string if not found.
 # Surrounding whitespace is trimmed to match the web server's parsing
-# (_chatrc_default_from in web/src/shelly_web/server.py).
+# (_chatrc_default_from in web/src/headlong_web/server.py).
 _chatrc_get() {
     local key="$1" value
     [[ -f "$CHATRC" ]] || return 0
@@ -247,8 +247,8 @@ cmd_history() {
 
 cmd_repl() {
     # Prefer the renamed TUI binary; fall back to a pre-rename build.
-    if command -v shelly-tui >/dev/null 2>&1; then
-        exec shelly-tui "$@"
+    if command -v headlong-tui >/dev/null 2>&1; then
+        exec headlong-tui "$@"
     fi
     exec shellm-tui "$@"
 }

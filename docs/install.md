@@ -1,4 +1,4 @@
-# Installing Shelly
+# Installing Headlong
 
 The short version is in the [README](../README.md). This page has every
 variant.
@@ -6,11 +6,10 @@ variant.
 ## The one-liner
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/laude-institute/shelly/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/laude-institute/headlong/main/install.sh | bash
 ```
 
-It clones the repo to `~/.shelly/app` (or `~/.shellm/app` on installs
-that predate the rename), symlinks the tools into
+It clones the repo to `~/.headlong/app`, symlinks the tools into
 `~/.local/bin`, asks for an LLM API key, and runs a short optional
 interview: a name, a few words of personality, what they should think
 about when idle. The answers become the agent's core identity and first
@@ -33,7 +32,7 @@ installer from the checkout, so what executes is the same code you can
 read here. To read first:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/laude-institute/shelly/main/install.sh
+curl -fsSLO https://raw.githubusercontent.com/laude-institute/headlong/main/install.sh
 less install.sh && bash install.sh --init
 ```
 
@@ -45,8 +44,8 @@ installer apt-installs its own dependencies (as root in a fresh
 container) and the dashboard binds `0.0.0.0` so the published port works.
 
 ```bash
-docker run -it --name shelly --restart unless-stopped -p 8080:8080 buildpack-deps:curl \
-  bash -c 'curl -fsSL https://raw.githubusercontent.com/laude-institute/shelly/main/install.sh | bash; exec bash'
+docker run -it --name headlong --restart unless-stopped -p 8080:8080 buildpack-deps:curl \
+  bash -c 'curl -fsSL https://raw.githubusercontent.com/laude-institute/headlong/main/install.sh | bash; exec bash'
 ```
 
 Paste your key, answer the interview, then open http://localhost:8080 on
@@ -58,13 +57,13 @@ and the mind and dashboard come back up on their own.
 Day-to-day:
 
 ```bash
-docker exec -it shelly bash -l   # drop back into your agent's world
-docker stop shelly               # pause everything
-docker start shelly              # resume
-docker rm -f shelly              # delete the agent and its whole world
+docker exec -it headlong bash -l   # drop back into your agent's world
+docker stop headlong               # pause everything
+docker start headlong              # resume
+docker rm -f headlong              # delete the agent and its whole world
 ```
 
-Pasting the run command a second time fails with "name shelly already in
+Pasting the run command a second time fails with "name headlong already in
 use". That means your agent already exists; `docker exec` is how you get
 back to it.
 
@@ -78,20 +77,20 @@ default, so a script or a coding agent can install with no interaction:
 
 ```bash
 export OPENROUTER_API_KEY=sk-or-...   # or ANTHROPIC_/OPENAI_/GEMINI_API_KEY
-export SHELLY_IDENTITY_NAME=ada       # optional; the interview's answers
-export SHELLY_IDENTITY_VIBE="curious, warm, and plainspoken"
-export SHELLY_IDENTITY_FOCUS="learning how their own mind works"
-export SHELLY_IDENTITY_USER="I'm Sam, a programmer trying Shelly out"
-curl -fsSL https://raw.githubusercontent.com/laude-institute/shelly/main/install.sh | bash
+export HEADLONG_IDENTITY_NAME=ada       # optional; the interview's answers
+export HEADLONG_IDENTITY_VIBE="curious, warm, and plainspoken"
+export HEADLONG_IDENTITY_FOCUS="learning how their own mind works"
+export HEADLONG_IDENTITY_USER="I'm Sam, a programmer trying Headlong out"
+curl -fsSL https://raw.githubusercontent.com/laude-institute/headlong/main/install.sh | bash
 ```
 
 A key must be in the environment; everything else is optional.
-`SHELLY_NO_DASH=1` and `SHELLY_NO_THINKERS=1` skip those parts. The
-installer writes `status.json` in the state home (`~/.shelly`, or
-`~/.shellm` on pre-rename installs) with the outcome:
+`HEADLONG_NO_DASH=1` and `HEADLONG_NO_THINKERS=1` skip those parts. The
+installer writes `status.json` in the state home (`~/.headlong`) with
+the outcome:
 
 ```bash
-jq -r '.mind.status, .dash.status, .dash.url' ~/.shelly/status.json
+jq -r '.mind.status, .dash.status, .dash.url' ~/.headlong/status.json
 ```
 
 [AGENTS.md](../AGENTS.md) covers operating a running identity: paths,
@@ -100,39 +99,39 @@ logs, health checks, and the sharp edges.
 ## From a checkout
 
 ```bash
-git clone https://github.com/laude-institute/shelly.git
-cd shelly
+git clone https://github.com/laude-institute/headlong.git
+cd headlong
 ./install.sh            # add --init to also bootstrap an identity + dash
 ```
 
 This copies the tools in `bin/` and `tools/` to `~/.local/bin`, the core
 skills to `~/.skills/core-skills`, the bundled thinker templates to
-`~/.shellm-thinkers`, and builds the Rust TUI if cargo is present. Use `--symlinks` to
+`~/.headlong-thinkers`, and builds the Rust TUI if cargo is present. Use `--symlinks` to
 symlink instead (edits take effect without reinstalling), or
 `--prefix /usr/local/bin` for a different location.
 
 ## Stopping and uninstalling
 
 `ada stop` pauses the mind (the thinkers) and `ada start` resumes it. If
-something is running away, `shelly-killall` stops every Shelly process on
+something is running away, `headlong-killall` stops every Headlong process on
 the machine (dispatchers, thinker steps, shellm runs, the dashboard);
-`shelly-killall --dry-run` shows what it would stop.
+`headlong-killall --dry-run` shows what it would stop.
 
-The installer touches these places, and removing them uninstalls Shelly:
+The installer touches these places, and removing them uninstalls Headlong:
 
-- `~/.shelly/` — the state home: `.env` (your API key), `status.json`,
-  logs, and, for the one-liner, the checkout itself in `~/.shelly/app/`.
+- `~/.headlong/` — the state home: `.env` (your API key), `status.json`,
+  logs, and, for the one-liner, the checkout itself in `~/.headlong/app/`.
   Identities live inside the checkout at `<app>/.identities/`, so this is
   also where your agent's memories and trajectory are. Copy that directory
   first if you want to keep them.
 - `~/.local/bin/` — one symlink (or copy) per tool, plus a symlink named
   after each identity (`ada`) that points at `persona`. `ls -l
-  ~/.local/bin | grep -i shelly` finds them.
-- `~/.skills/core-skills/` and `~/.shellm-thinkers/` — the bundled
+  ~/.local/bin | grep -i headlong` finds them.
+- `~/.skills/core-skills/` and `~/.headlong-thinkers/` — the bundled
   skills and thinker templates.
 - A `PATH` line the installer offered to add to your shell rc file
   (`~/.zshrc` or `~/.bashrc`).
 
-Run `shelly-killall` first so nothing is writing while you delete. For the
-Docker variant, `docker rm -f shelly` removes the container and everything
+Run `headlong-killall` first so nothing is writing while you delete. For the
+Docker variant, `docker rm -f headlong` removes the container and everything
 in it.

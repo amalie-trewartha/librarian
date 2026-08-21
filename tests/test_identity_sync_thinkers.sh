@@ -31,7 +31,7 @@ trap 'cd /; rm -rf "$WORK"' EXIT
 cd "$WORK"
 
 # Isolate HOME. tools/identity turns on symlink mode from
-# $HOME/.shellm-thinkers/.use-symlinks, and its bundled source is the repo's
+# $HOME/.headlong-thinkers/.use-symlinks, and its bundled source is the repo's
 # own thinkers/ when run from a checkout — so on a --symlinks install this
 # test's identity got thinkers/monolith as a symlink INTO the repo, and the
 # "hand-edited prompt" write below landed in the real thinkers/monolith/

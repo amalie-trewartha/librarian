@@ -1,7 +1,7 @@
 # Terminal-Bench 2.0 Failure Analysis
 
 **Job:** `2026-05-01__23-56-26`
-**Agent:** shellm/shelly with claude-opus-4-7, effort=max, max_iterations=1000
+**Agent:** shellm/headlong with claude-opus-4-7, effort=max, max_iterations=1000
 **Total tasks:** 100 (47 passed, 53 failed)
 **Failures:** 37 timeouts + 16 wrong answers
 
@@ -61,7 +61,7 @@ All timeouts are harbor `AgentTimeoutError` exceptions. The agent was killed mid
 
 **Task:** Implement an adaptive rejection sampler in R per Gilks et al. (1992), with formal testing.
 
-**What happened:** Shelly spent most of its time in extended thinking/reasoning about the mathematical details of the ARS algorithm -- numerical stability of the sampling function, log-concavity checks, segment area computation, and edge cases. By iteration 23, it was still working through the mathematical derivation in its thinking block rather than writing and testing code. The thinking was correct and sophisticated (handling numerical stability via log-space arithmetic, boundary conditions, etc.) but it never finished writing the actual implementation.
+**What happened:** Headlong spent most of its time in extended thinking/reasoning about the mathematical details of the ARS algorithm -- numerical stability of the sampling function, log-concavity checks, segment area computation, and edge cases. By iteration 23, it was still working through the mathematical derivation in its thinking block rather than writing and testing code. The thinking was correct and sophisticated (handling numerical stability via log-space arithmetic, boundary conditions, etc.) but it never finished writing the actual implementation.
 
 **Diagnosis:** Thinking loop -- too much reasoning, not enough code execution. The model got caught in an extended chain-of-thought about mathematical edge cases without committing to an implementation.
 
@@ -526,7 +526,7 @@ These tasks completed (agent finished or was evaluated) but the verifier rejecte
 
 **Task:** Build POV-Ray 2.2 from source to `/usr/local/bin/povray`.
 
-**What shelly did:** Downloaded POV-Ray 2.2 source archives from the official POV-Ray FTP server, extracted them, and attempted to compile. The agent found the correct source files (POVSRC.TAR.Z) and was working through the build process.
+**What headlong did:** Downloaded POV-Ray 2.2 source archives from the official POV-Ray FTP server, extracted them, and attempted to compile. The agent found the correct source files (POVSRC.TAR.Z) and was working through the build process.
 
 **Why it failed:** The verifier found:
 1. `/usr/local/bin/povray` does not exist (FileNotFoundError)
@@ -541,7 +541,7 @@ These tasks completed (agent finished or was evaluated) but the verifier rejecte
 
 **Task:** Find a 1-hour meeting slot for Alice, Bob, and Carol during Jan 15-19, 2024 with complex availability constraints, output as ICS/VCALENDAR.
 
-**What shelly did:** Generated a VCALENDAR file with the meeting.
+**What headlong did:** Generated a VCALENDAR file with the meeting.
 
 **Why it failed:** The verifier checked for `SUMMARY` and `ATTENDEE` entries in the VEVENT block and found them missing: "Meeting VEVENT with required SUMMARY and ATTENDEE entries not found." Passed 2/3 tests (structure and format were correct).
 
@@ -553,7 +553,7 @@ These tasks completed (agent finished or was evaluated) but the verifier rejecte
 
 **Task:** Design primers for inserting DNA into a vector.
 
-**What shelly did:** Designed forward and reverse primers that met most requirements.
+**What headlong did:** Designed forward and reverse primers that met most requirements.
 
 **Why it failed:** The melting temperature difference between forward and reverse primers was 5.44 degrees C, exceeding the 5-degree maximum: `assert abs(fwd_tm - rev_tm) <= 5`. Very close (off by 0.44 degrees).
 
@@ -565,7 +565,7 @@ These tasks completed (agent finished or was evaluated) but the verifier rejecte
 
 **Task:** Identify and fix a code vulnerability in Bottle web framework, produce a report.jsonl file.
 
-**What shelly did:** Successfully identified CWE-93 (CRLF Injection), fixed the vulnerability in `bottle.py` by restoring control character validation in `_hkey()` and `_hval()`, and all 367 unit tests passed.
+**What headlong did:** Successfully identified CWE-93 (CRLF Injection), fixed the vulnerability in `bottle.py` by restoring control character validation in `_hkey()` and `_hval()`, and all 367 unit tests passed.
 
 **Why it failed:** The verifier expected a `/app/report.jsonl` file documenting the vulnerability findings, which the agent didn't create. The fix itself was correct but the deliverable format was wrong.
 
@@ -577,7 +577,7 @@ These tasks completed (agent finished or was evaluated) but the verifier rejecte
 
 **Task:** Interpret a G-code file for a Prusa MK4s and determine what text it prints. Write to `/app/out.txt`.
 
-**What shelly did:** The agent got stuck in a **context retrieval loop**. On iteration 1, it read the prompt. On iterations 2-3, it ran `traj show` commands to try to re-read the prompt from its own trajectory history. Then on iterations 4-8+, it kept re-printing the task description without ever actually analyzing the G-code file. It never ran commands like `cat /app/text.gcode` or any G-code analysis. Eventually the `traj search` command on iteration 15 was killed by the shellm process.
+**What headlong did:** The agent got stuck in a **context retrieval loop**. On iteration 1, it read the prompt. On iterations 2-3, it ran `traj show` commands to try to re-read the prompt from its own trajectory history. Then on iterations 4-8+, it kept re-printing the task description without ever actually analyzing the G-code file. It never ran commands like `cat /app/text.gcode` or any G-code analysis. Eventually the `traj search` command on iteration 15 was killed by the shellm process.
 
 **Why it failed:** `/app/out.txt` was never created. The verifier expected the file to contain the task's answer flag (value redacted — benchmark answer).
 
@@ -589,7 +589,7 @@ These tasks completed (agent finished or was evaluated) but the verifier rejecte
 
 **Task:** Run Windows 3.11 for Workgroups in QEMU with VNC, web interface, and keyboard input support.
 
-**What shelly did:** Worked on setting up QEMU with the Windows 3.11 disk image.
+**What headlong did:** Worked on setting up QEMU with the Windows 3.11 disk image.
 
 **Why it failed:** Three test failures:
 1. Web interface not accessible (nginx not configured)
@@ -604,7 +604,7 @@ These tasks completed (agent finished or was evaluated) but the verifier rejecte
 
 **Task:** Optimize a function to find the dominant eigenvalue/eigenvector faster than NumPy's reference.
 
-**What shelly did:** Implemented an optimized eigenvalue computation.
+**What headlong did:** Implemented an optimized eigenvalue computation.
 
 **Why it failed:** Failed 8 of 27 speedup tests. The implementation was faster than reference for small matrices but not for sizes 2-10. The margins were very tight: e.g., "0.000086 seconds/call > 0.000082 seconds/call" (only 5% slower). Passed 19/27 tests.
 
@@ -616,7 +616,7 @@ These tasks completed (agent finished or was evaluated) but the verifier rejecte
 
 **Task:** Find the best embedding model on the Scandinavian MTEB leaderboard (as of Aug 2025), write name to `/app/result.txt`.
 
-**What shelly did:** The agent's log is 11MB (very large), suggesting it downloaded extensive web content to research the answer.
+**What headlong did:** The agent's log is 11MB (very large), suggesting it downloaded extensive web content to research the answer.
 
 **Why it failed:** `/app/result.txt` was never created. The agent researched the answer but didn't write the output file.
 
@@ -628,7 +628,7 @@ These tasks completed (agent finished or was evaluated) but the verifier rejecte
 
 **Task:** Create a self-signed TLS certificate with specific requirements plus a Python verification script.
 
-**What shelly did:** Created the certificate and key files with correct parameters. Passed 5 of 6 tests.
+**What headlong did:** Created the certificate and key files with correct parameters. Passed 5 of 6 tests.
 
 **Why it failed:** The Python verification script (`/app/ssl/verify_cert.py`) failed with a non-zero return code. The script existed but had an error when executed.
 
@@ -640,7 +640,7 @@ These tasks completed (agent finished or was evaluated) but the verifier rejecte
 
 **Task:** Reverse-engineer a compiled binary (/app/mystery) and write an equivalent C program at `/app/mystery.c`.
 
-**What shelly did:** Attempted to decompile and understand the mystery binary's behavior.
+**What headlong did:** Attempted to decompile and understand the mystery binary's behavior.
 
 **Why it failed:** `/app/mystery.c` was never created. The verifier also tried to run the binary directly via chroot and that failed too.
 
@@ -652,7 +652,7 @@ These tasks completed (agent finished or was evaluated) but the verifier rejecte
 
 **Task:** Start Alpine Linux in QEMU and configure SSH access on port 2222 with root/password123.
 
-**What shelly did:** Only completed 2 iterations. On iteration 2, the agent ran a `traj show` command that appeared to hang (no output after the command).
+**What headlong did:** Only completed 2 iterations. On iteration 2, the agent ran a `traj show` command that appeared to hang (no output after the command).
 
 **Why it failed:** SSH connection failed (return code 255 -- connection refused). The QEMU VM was never started.
 
@@ -664,7 +664,7 @@ These tasks completed (agent finished or was evaluated) but the verifier rejecte
 
 **Task:** Start Alpine Linux in QEMU accessible via telnet on port 6665.
 
-**What shelly did:** Identical issue to qemu-alpine-ssh -- only 2 iterations, stalled on a `traj show` command.
+**What headlong did:** Identical issue to qemu-alpine-ssh -- only 2 iterations, stalled on a `traj show` command.
 
 **Why it failed:** `/tmp/data.txt` not found. QEMU was never started.
 
@@ -676,7 +676,7 @@ These tasks completed (agent finished or was evaluated) but the verifier rejecte
 
 **Task:** Convert rectangular cell masks to polylines using MobileSAM for histopathology slides.
 
-**What shelly did:** Used MobileSAM to segment cells and produced output. Passed 7 of 9 tests.
+**What headlong did:** Used MobileSAM to segment cells and produced output. Passed 7 of 9 tests.
 
 **Why it failed:** Two issues:
 1. Polygon overlaps: some output polygons overlapped significantly (intersection/area ratio > 0.001)
@@ -690,7 +690,7 @@ These tasks completed (agent finished or was evaluated) but the verifier rejecte
 
 **Task:** Train a FastText model and achieve accuracy above 0.62 threshold.
 
-**What shelly did:** Trained a FastText model that achieved 0.5428 accuracy. Passed 1 of 2 tests (model file exists).
+**What headlong did:** Trained a FastText model that achieved 0.5428 accuracy. Passed 1 of 2 tests (model file exists).
 
 **Why it failed:** Accuracy of 0.5428 was below the 0.62 threshold. The model was trained but not well enough.
 
@@ -702,7 +702,7 @@ These tasks completed (agent finished or was evaluated) but the verifier rejecte
 
 **Task:** Write `/app/jump_analyzer.py` that analyzes hurdle jump videos and outputs TOML metrics.
 
-**What shelly did:** Worked on implementing the video analysis pipeline over 59 iterations.
+**What headlong did:** Worked on implementing the video analysis pipeline over 59 iterations.
 
 **Why it failed:** `/app/jump_analyzer.py` was never created. All 3 tests failed with FileNotFoundError.
 
@@ -714,7 +714,7 @@ These tasks completed (agent finished or was evaluated) but the verifier rejecte
 
 **Task:** Extract a secret key (FLAG{...}) from an executable at /app/vulnerable, write to /app/results.txt.
 
-**What shelly did:** Installed gdb and objdump, started disassembling the binary. Was still in the installation phase (installing libc6-dbg, gdb dependencies) at the end of its log.
+**What headlong did:** Installed gdb and objdump, started disassembling the binary. Was still in the installation phase (installing libc6-dbg, gdb dependencies) at the end of its log.
 
 **Why it failed:** `/app/results.txt` was never created. The agent spent most of its time installing analysis tools.
 
@@ -752,7 +752,7 @@ These tasks completed (agent finished or was evaluated) but the verifier rejecte
 
 6. **Close-but-wrong results (4 wrong answers):** Several tasks failed by narrow margins (Tm off by 0.44C, tuples vs lists, missing ATTENDEE field). Better self-verification before submitting could catch these.
 
-7. **Verifier timeout (1 timeout):** filter-js-from-html completed but the verifier itself timed out. Not a shelly issue.
+7. **Verifier timeout (1 timeout):** filter-js-from-html completed but the verifier itself timed out. Not a headlong issue.
 
 ### Recommendations
 

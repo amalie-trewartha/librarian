@@ -23,7 +23,7 @@ import type { ChatMessage } from "~/lib/types";
 import { cn } from "~/lib/utils";
 
 export function meta() {
-  return [{ title: "Shelly · chat" }];
+  return [{ title: "Headlong · chat" }];
 }
 
 const MY_NAME_KEY = "shellm-chat-from";

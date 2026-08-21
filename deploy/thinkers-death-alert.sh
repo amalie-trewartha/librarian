@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # deploy/thinkers-death-alert.sh — per-death and back-up Slack notices for
-# shelly-thinkers@<identity>.service. Companion to
+# headlong-thinkers@<identity>.service. Companion to
 # deploy/thinkers-failure-alert.sh (which, with Restart=on-failure on the
 # unit, only fires when auto-restart gives up); this one fires on EVERY
 # unclean death and on the recovery:
@@ -21,7 +21,7 @@ set -euo pipefail
 # otherwise stay silent (normal starts are not news).
 #
 # Same failure-open contract as thinkers-failure-alert.sh: missing config
-# degrades to a line in /var/tmp/shelly-thinkers-alert.log, never a unit
+# degrades to a line in /var/tmp/headlong-thinkers-alert.log, never a unit
 # failure — the alert path must not add its own failure mode on top of a
 # dead mind.
 
@@ -29,9 +29,9 @@ APP_DIR="${1:?usage: thinkers-death-alert.sh APP_DIR IDENTITY died|started}"
 IDENT="${2:?identity name required}"
 MODE="${3:?mode required (died|started)}"
 
-FALLBACK_LOG="/var/tmp/shelly-thinkers-alert.log"
+FALLBACK_LOG="/var/tmp/headlong-thinkers-alert.log"
 RUN_DIR="$APP_DIR/.identities/$IDENT/run"
-unit="shelly-thinkers@${IDENT}.service"
+unit="headlong-thinkers@${IDENT}.service"
 
 if [[ -r "$APP_DIR/.env" ]]; then
     set -a
@@ -40,14 +40,14 @@ if [[ -r "$APP_DIR/.env" ]]; then
     set +a
 fi
 
-# Framework var: SHELLY_ first, legacy SHELLM_ fallback (the box .env still
+# Framework var: HEADLONG_ first, legacy SHELLM_ fallback (the box .env still
 # carries the old name until it is rewritten).
-ALERT_CHANNEL="${SHELLY_ALERT_CHANNEL:-${SHELLM_ALERT_CHANNEL:-}}"
+ALERT_CHANNEL="${HEADLONG_ALERT_CHANNEL:-${SHELLM_ALERT_CHANNEL:-}}"
 
 post_slack() {
     local text="$1"
     if [[ -z "${SLACK_BOT_TOKEN:-}" || -z "$ALERT_CHANNEL" ]]; then
-        printf '%s [thinkers-death-alert] %s (%s); Slack not configured (need SLACK_BOT_TOKEN + SHELLY_ALERT_CHANNEL in %s/.env)\n' \
+        printf '%s [thinkers-death-alert] %s (%s); Slack not configured (need SLACK_BOT_TOKEN + HEADLONG_ALERT_CHANNEL in %s/.env)\n' \
             "$(date -u +%FT%TZ)" "$unit" "$MODE" "$APP_DIR" >> "$FALLBACK_LOG"
         return 0
     fi

@@ -1030,7 +1030,7 @@ wheels = [
 ]
 
 [[package]]
-name = "shelly-web"
+name = "headlong-web"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

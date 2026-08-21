@@ -1,13 +1,13 @@
-# shelly-telegram-bridge
+# headlong-telegram-bridge
 
-A Telegram Bot API bridge that connects one Shelly identity to Telegram.
+A Telegram Bot API bridge that connects one Headlong identity to Telegram.
 Approved people DM the bot, their messages land in the identity's mind log
 as `message` steps, and the identity's replies come back to the same chat.
 
 ## How it works
 
 ```
-Telegram <=(long-poll getUpdates)=> shelly-telegram-bridge
+Telegram <=(long-poll getUpdates)=> headlong-telegram-bridge
     inbound:  message -> from_name "telegram-<user_id>-<chat_id>"
               -> POST <web>/api/identities/<id>/chat
     outbound: tail trajectory.jsonl -> message steps where from=<identity>
@@ -48,15 +48,15 @@ The admin (you) is approved automatically on first start.
 export TELEGRAM_BOT_TOKEN=...       # from @BotFather
 export TELEGRAM_ADMIN_ID=...        # your numeric user id; message the bot
                                     # once and read it from the bridge log
-export SHELLY_TELEGRAM_IDENTITY=audel  # default (legacy SHELLM_TELEGRAM_IDENTITY still honored)
-tools/shelly-telegram-bridge [ROOT]   # ROOT = serve root, default repo root
+export HEADLONG_TELEGRAM_IDENTITY=audel  # default (legacy SHELLM_TELEGRAM_IDENTITY still honored)
+tools/headlong-telegram-bridge [ROOT]   # ROOT = serve root, default repo root
 ```
 
 The identity must exist (`identity new audel`) with a running dispatcher
-(`thinkers start monolith responder`), and shelly-web must be serving the same root
-(default `http://127.0.0.1:8080`, override with `SHELLY_WEB_URL`; legacy `SHELLM_WEB_URL` still honored).
+(`thinkers start monolith responder`), and headlong-web must be serving the same root
+(default `http://127.0.0.1:8080`, override with `HEADLONG_WEB_URL`; legacy `SHELLM_WEB_URL` still honored).
 
-Other settings are `SHELLY_TELEGRAM_STATE_DIR`, legacy
+Other settings are `HEADLONG_TELEGRAM_STATE_DIR`, legacy
 `SHELLM_TELEGRAM_STATE_DIR` (allowlist, cursors, update offset, default
 `<identity>/run/telegram-bridge/`).
 
@@ -105,7 +105,7 @@ The env file does not survive an instance rebuild. After a rebuild,
 repeat step 3 and 4. `deploy/scripts/status` (which `rebuild` runs at
 the end) prints a loud `telegram: NOT SET UP` reminder on the slack
 stack whenever the env file is missing. To turn the bridge off, `sudo systemctl stop
-shelly-telegram-bridge` mutes it without touching the agent, and
+headlong-telegram-bridge` mutes it without touching the agent, and
 removing `/etc/shellm/telegram.env` keeps it from coming back on the
 next deploy.
 

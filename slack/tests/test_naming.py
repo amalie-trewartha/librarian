@@ -2,9 +2,9 @@ import re
 
 import pytest
 
-from shelly_slack import naming
+from headlong_slack import naming
 
-# Mirrors CHAT_FROM_RE in web/src/shelly_web/safety.py — the web API rejects
+# Mirrors CHAT_FROM_RE in web/src/headlong_web/safety.py — the web API rejects
 # from_name values that don't match, so every encoded key must pass.
 CHAT_FROM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 

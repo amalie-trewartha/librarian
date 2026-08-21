@@ -1,5 +1,5 @@
 # The Shell is Back at the Center of Computing
-## Philosophy and Introduction to Shelly
+## Philosophy and Introduction to Headlong
 
 In 1971, Ken Thompson wrote the first Unix shell. It was a command interpreter — a thin loop that read a line, found a program, ran it, and waited. That's all it did. That was enough.
 
@@ -35,7 +35,7 @@ No one defined a `count_links_by_domain` tool. The capability emerged from compo
 
 ## shellm: an LLM that lives in bash
 
-This line of thinking led me to build [shellm](https://github.com/laude-institute/shelly) — a recursive LLM that operates inside a bash shell. It takes the recursive language model idea — the early [Recursive LLM](https://github.com/andyk/recursive_llm) experiment and Alex Zhang's [Recursive Language Models](https://alexzhang13.github.io/blog/2025/rlm/) — and reimplements it in bash, for bash.
+This line of thinking led me to build [shellm](https://github.com/laude-institute/headlong) — a recursive LLM that operates inside a bash shell. It takes the recursive language model idea — the early [Recursive LLM](https://github.com/andyk/recursive_llm) experiment and Alex Zhang's [Recursive Language Models](https://alexzhang13.github.io/blog/2025/rlm/) — and reimplements it in bash, for bash.
 
 The idea is simple. shellm runs a loop:
 
@@ -149,9 +149,9 @@ The summaries come from a `run-summary` step that shellm appends to each traject
 
 With `--report`, shellm-explore goes further: it sends the entire tree — summaries, context, relationships — to an LLM and generates an analysis explaining what the run tree accomplished, why each sub-run exists, and how they connect. It's a post-hoc audit of the agent's reasoning, built from the same primitives as everything else.
 
-### Shelly: a mind that keeps thinking
+### Headlong: a mind that keeps thinking
 
-Everything above is still a tool: you run it, it finishes, it forgets. Shelly is what turns the tools into an agent. Its defining feature is **persistent agency**. The agent keeps thinking between external interactions in a self-guided loop, the way a person's inner monologue keeps going when nobody is talking to them. A message from a human does not start a session. It lands in the agent's thought stream as one more observation, and the agent decides if and when to respond.
+Everything above is still a tool: you run it, it finishes, it forgets. Headlong is what turns the tools into an agent. Its defining feature is **persistent agency**. The agent keeps thinking between external interactions in a self-guided loop, the way a person's inner monologue keeps going when nobody is talking to them. A message from a human does not start a session. It lands in the agent's thought stream as one more observation, and the agent decides if and when to respond.
 
 Three more small tools make that work:
 
@@ -172,7 +172,7 @@ An identity is a directory, and it is all text:
 └── run/                      # dispatcher pid and logs
 ```
 
-`shelly-init` creates the first identity by interviewing you, and the agent's name becomes a command:
+`headlong-init` creates the first identity by interviewing you, and the agent's name becomes a command:
 
 ```bash
 ada hello!           # one message, wait for the reply
@@ -194,7 +194,7 @@ The result is an agent that can:
 And it's all bash scripts. The whole stack — shellm, llm, traj, context, thinkers, mem, skills, and the tools around them — installs with:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/laude-institute/shelly/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/laude-institute/headlong/main/install.sh | bash
 ```
 
 or `./install.sh` from a checkout. The core needs nothing but bash, curl, jq, and git. No Docker required (though shellm uses it for sandboxing when available). A directory of small executables on your PATH. The only non-bash piece is the optional dashboard, a small Python and React app for watching the mind run.
@@ -225,6 +225,6 @@ Compare this to the web-based agent paradigm: browser automation through Playwri
 
 I'm not arguing that every agent should be a bash script. I'm arguing that the *design principles* of Unix — small composable tools, text as the universal interface, the filesystem as the state layer, transparency as a first-class property — are the right principles for building agent systems. And the easiest way to honor those principles is to actually use the system that embodies them.
 
-Ken Thompson's shell was a thin loop: read a line, find a program, run it, wait. shellm is a thin loop too: read a message, ask the LLM, run the code, repeat. Shelly wraps that loop in a mind that never stops: thinkers generate the next thought, traj records it, context projects it back into the next call. Fifty-five years later, the pattern still works. It just needed a new kind of user.
+Ken Thompson's shell was a thin loop: read a line, find a program, run it, wait. shellm is a thin loop too: read a message, ask the LLM, run the code, repeat. Headlong wraps that loop in a mind that never stops: thinkers generate the next thought, traj records it, context projects it back into the next call. Fifty-five years later, the pattern still works. It just needed a new kind of user.
 
 The shell is back. This time, it's the agent runtime.

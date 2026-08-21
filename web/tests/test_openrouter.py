@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from shelly_web import openrouter
-from shelly_web.server import create_app
+from headlong_web import openrouter
+from headlong_web.server import create_app
 
 RAW = {
     "data": [

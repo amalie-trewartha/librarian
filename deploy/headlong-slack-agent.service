@@ -1,0 +1,26 @@
+# headlong-slack-agent systemd unit. Installed by deploy/setup.sh (when
+# SHELLM_INSTALL_SLACK_BRIDGE=1), which substitutes @SHELLM_HOME@.
+#
+# Oneshot persona bootstrap: creates the Slack identity if missing and makes
+# sure its thinker dispatcher is running. Idempotent — re-run any time with
+# `systemctl restart headlong-slack-agent` (also re-run by user_data after the
+# .env lands, and on every boot so the persona survives reboots).
+
+[Unit]
+Description=headlong Slack persona bootstrap (identity + thinkers)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=shellm
+WorkingDirectory=@SHELLM_HOME@/app
+Environment="PATH=@SHELLM_HOME@/.local/bin:@SHELLM_HOME@/.bun/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/bin/bash @SHELLM_HOME@/app/deploy/bootstrap-slack-identity.sh @SHELLM_HOME@/app
+# The dispatcher this launches must outlive the oneshot: signal only the
+# main process, never the whole cgroup (same rationale as headlong-web).
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

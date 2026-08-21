@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# headlong-thinkersctl — root-owned wrapper that lets the shellm user manage
+# per-identity thinker units without a wildcard in sudoers. Installed to
+# /usr/local/bin by deploy/setup.sh; the sudo rule
+# (deploy/sudoers-headlong-thinkers) permits exactly this path and nothing
+# else. A sudoers wildcard like `systemctl stop headlong-thinkers@*` would
+# match spaces too (`stop headlong-thinkers@x sshd`), so the validation
+# lives here instead.
+#
+# Usage: headlong-thinkersctl start|stop|restart|is-active IDENTITY
+
+usage() {
+    echo "usage: headlong-thinkersctl start|stop|restart|is-active IDENTITY" >&2
+    exit 2
+}
+
+[[ $# -eq 2 ]] || usage
+action="$1"
+ident="$2"
+
+case "$action" in
+    start|stop|restart|is-active) ;;
+    *) usage ;;
+esac
+
+# Identity names are directory names under .identities/ — keep the unit
+# instance to one safe token.
+[[ "$ident" =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]] || {
+    echo "error: invalid identity name: $ident" >&2
+    exit 2
+}
+
+exec /usr/bin/systemctl "$action" "headlong-thinkers@${ident}.service"

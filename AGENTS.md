@@ -1,30 +1,30 @@
-# Operating Shelly as a coding agent
+# Operating Headlong as a coding agent
 
 This file is for coding agents (Claude Code, Cursor, and similar). It
-covers installing Shelly without a tty, checking that it is healthy, and
+covers installing Headlong without a tty, checking that it is healthy, and
 the sharp edges that are not obvious from the code.
 
-Naming: **Shelly** is the agent framework — identities, thinkers, the
+Naming: **Headlong** is the agent framework — identities, thinkers, the
 mind log, bridges, the dash. **shellm** is one tool inside it: the
 CLI implementation of Recursive Language Models in bash (`bin/shellm`),
-plus its run machinery (`shellm-docker`, `shellm-explore`). Use "Shelly"
+plus its run machinery (`shellm-docker`, `shellm-explore`). Use "Headlong"
 for the system and "shellm" only for that tool. Framework commands are
-`shelly-*` (`shelly-init`, `shelly-web`, ...; the old `shellm-*` names
-remain as symlinks) and framework env vars are `SHELLY_*` (legacy
+`headlong-*` (`headlong-init`, `headlong-web`, ...; the old `shellm-*` names
+remain as symlinks) and framework env vars are `HEADLONG_*` (legacy
 `SHELLM_*` spellings still honored). The state home defaults to
-`~/.shelly`, falling back to `~/.shellm` when only that exists (so
-pre-rename installs keep their state); explicit `SHELLY_HOME` or
-`SHELLM_HOME` overrides both. Systemd units are `shelly-*`; a box provisioned before
+`~/.headlong`, falling back to `~/.shellm` when only that exists (so
+pre-rename installs keep their state); explicit `HEADLONG_HOME` or
+`SHELLM_HOME` overrides both. Systemd units are `headlong-*`; a box provisioned before
 the rename is migrated once with `deploy/migrate-units.sh` (see
 deploy/DEPLOY.md). What deliberately keeps the `shellm` name: the
 `/opt/shellm` deploy path, the `shellm` and `shellm-telegram` UNIX users,
 `~shellm/.shellm`, the per-identity `.shellm/` subdirectory, the
-`~/.shellm-thinkers` template dir that install.sh seeds, and the
+`~/.headlong-thinkers` template dir that install.sh seeds, and the
 `*.shellm.net` domains. If you take one of those on, or any other
 structural change to a live box, read `deploy/MIGRATIONS.md` first — it
 lists the couplings that fail *silently*.
 
-Shelly creates a persistent identity whose mind is a loop of LLM calls
+Headlong creates a persistent identity whose mind is a loop of LLM calls
 run by a dispatcher. The identity has a name (default `ada`), and that
 name becomes a shell command. A local web dashboard shows the mind's
 trajectory.
@@ -36,14 +36,14 @@ environment variable or a default. A key must be in the environment:
 
 ```bash
 export OPENROUTER_API_KEY=sk-or-...   # or ANTHROPIC_/OPENAI_/GEMINI_API_KEY
-curl -fsSL https://raw.githubusercontent.com/laude-institute/shelly/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/laude-institute/headlong/main/install.sh | bash
 ```
 
-Optional variables: `SHELLY_IDENTITY_NAME`, `SHELLY_IDENTITY_VIBE`,
-`SHELLY_IDENTITY_FOCUS`, `SHELLY_IDENTITY_USER` (the interview answers),
-`SHELLM_MODEL` (otherwise picked per provider; a tool var, so no SHELLY_
-spelling), `SHELLY_NO_DASH=1`,
-`SHELLY_NO_THINKERS=1`. The installer never uses sudo. In a container as
+Optional variables: `HEADLONG_IDENTITY_NAME`, `HEADLONG_IDENTITY_VIBE`,
+`HEADLONG_IDENTITY_FOCUS`, `HEADLONG_IDENTITY_USER` (the interview answers),
+`SHELLM_MODEL` (otherwise picked per provider; a tool var, so no HEADLONG_
+spelling), `HEADLONG_NO_DASH=1`,
+`HEADLONG_NO_THINKERS=1`. The installer never uses sudo. In a container as
 root it apt-installs its own dependencies.
 
 Warning: the installer symlinks tools into `~/.local/bin`. If those names
@@ -52,11 +52,11 @@ already link into a development checkout, the one-liner repoints them to
 
 ## Check the outcome
 
-The installer writes `status.json` in the state home (`~/.shelly`, or
+The installer writes `status.json` in the state home (`~/.headlong`, or
 `~/.shellm` on pre-rename installs) at the end of every run:
 
 ```bash
-jq -r '.identity, .mind.status, .dash.status, .dash.url' ~/.shelly/status.json
+jq -r '.identity, .mind.status, .dash.status, .dash.url' ~/.headlong/status.json
 ```
 
 `mind.status` and `dash.status` are `ok`, `failed`, or `skipped`. The
@@ -64,7 +64,7 @@ file is a snapshot of that run; the live source of truth is the pid files
 it names (`.mind.pid_file`, `.dash.pid_file`). `<name> status` prints the
 same picture for humans.
 
-`dash.url` works from wherever Shelly is installed. When `container` is
+`dash.url` works from wherever Headlong is installed. When `container` is
 true, the URL is container-internal: from the host, use localhost with
 whatever host port was published (`docker run -p <host>:8080`). The
 container cannot know that number.
@@ -86,13 +86,13 @@ Replies take 15 to 45 seconds while the monolith thinker wakes.
 
 ## Where things live
 
-- `~/.shelly/` — state root (`SHELLY_HOME`, legacy `SHELLM_HOME`;
+- `~/.headlong/` — state root (`HEADLONG_HOME`, legacy `SHELLM_HOME`;
   pre-rename installs use `~/.shellm`): `.env` (key + model),
   `status.json`, `logs/` (`init.log`, `web.log`), `run/web.pid`,
   `app_dir` (path to the checkout).
-- `~/.shelly/app/` — the checkout, when installed by the one-liner.
+- `~/.headlong/app/` — the checkout, when installed by the one-liner.
 - `~/.local/bin/` — the installed tools (symlinks for the one-liner).
-- `~/.skills/core-skills/` and `~/.shellm-thinkers/` — the bundled skills
+- `~/.skills/core-skills/` and `~/.headlong-thinkers/` — the bundled skills
   and thinker templates that new identities are seeded from.
 - `<app>/.identities/<name>/` — the identity: persona, memories,
   trajectory, `run/dispatcher.pid`, and its `activate` script.

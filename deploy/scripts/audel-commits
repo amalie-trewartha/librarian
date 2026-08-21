@@ -563,7 +563,7 @@ EOS
 
     info "reconciled. If any commit was amended or rejected, the running agent still has the old code baked in:"
     cat <<EOF
-  SHELLM_TF_STACK=$SHELLM_TF_STACK deploy/scripts/run 'sudo systemctl restart shelly-slack-agent'
+  SHELLM_TF_STACK=$SHELLM_TF_STACK deploy/scripts/run 'sudo systemctl restart headlong-slack-agent'
   plus thinker-sync (dash sync button, or POST /api/identities/.identities~audel/thinker-sync)
 EOF
 }

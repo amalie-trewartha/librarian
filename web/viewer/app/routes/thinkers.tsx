@@ -47,7 +47,7 @@ import type {
 import { cn } from "~/lib/utils";
 
 export function meta() {
-  return [{ title: "Shelly · thinkers" }];
+  return [{ title: "Headlong · thinkers" }];
 }
 
 function kb(bytes: number): string {

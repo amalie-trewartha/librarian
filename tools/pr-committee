@@ -12,7 +12,7 @@ set -euo pipefail
 # Chair: one strong model merges the final round — dedupes, counts
 # agreement, checks each finding against the diff, and writes the report.
 #
-# Model calls go through Shelly's bin/llm, so OPENROUTER_API_KEY from the
+# Model calls go through Headlong's bin/llm, so OPENROUTER_API_KEY from the
 # repo .env (or the state home's .env) is all the auth needed for every vendor.
 #
 # Usage:
@@ -98,11 +98,8 @@ STAMP=$(date +%Y%m%d-%H%M%S)
 # Gather the brief: metadata, full changed files, diff
 # ---------------------------------------------------------------------------
 
-# State home for run dirs: SHELLY_HOME/SHELLM_HOME if set; else ~/.shelly,
-# falling back to a pre-rename ~/.shellm when only that exists.
-_pc_home="$HOME/.shelly"
-[[ ! -d "$_pc_home" && -d "$HOME/.shellm" ]] && _pc_home="$HOME/.shellm"
-_pc_home="${SHELLY_HOME:-${SHELLM_HOME:-$_pc_home}}"
+# State home for run dirs: HEADLONG_HOME/SHELLM_HOME if set; else ~/.headlong.
+_pc_home="${HEADLONG_HOME:-${SHELLM_HOME:-$HOME/.headlong}}"
 
 if [[ -n "$DIFF_RANGE" ]]; then
     # Local range mode: everything from git, nothing from GitHub.

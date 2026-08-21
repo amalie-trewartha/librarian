@@ -1,4 +1,4 @@
-# Deploying shelly-web behind Cloudflare Zero Trust
+# Deploying headlong-web behind Cloudflare Zero Trust
 
 Goal: a private URL (e.g. `https://agents.example.com`) where allow-listed
 people can watch, start/stop, and chat with identities. Architecture:
@@ -8,7 +8,7 @@ boss's browser ── Cloudflare Access (SSO / email OTP)
                         │
                   Cloudflare Tunnel (outbound-only from the VM)
                         │
-                 127.0.0.1:8080  shelly-web (systemd)
+                 127.0.0.1:8080  headlong-web (systemd)
                         │ spawns
                  dispatchers + thinkers (own sessions, survive restarts)
 ```
@@ -29,20 +29,20 @@ Cloudflare Access; the app itself stays auth-free.
 ## 1. Provision the app
 
 ```bash
-git clone https://github.com/laude-institute/shelly.git
-sudo bash shelly/deploy/setup.sh          # or run from your checkout
+git clone https://github.com/laude-institute/headlong.git
+sudo bash headlong/deploy/setup.sh          # or run from your checkout
 ```
 
 The script creates a `shellm` system user, clones the repo to
 `/opt/shellm/app`, installs uv + bun, prebuilds the viewer, and starts the
-`shelly-web` systemd service on `127.0.0.1:8080`. Pass `SHELLM_REPO` /
+`headlong-web` systemd service on `127.0.0.1:8080`. Pass `SHELLM_REPO` /
 `SHELLM_BRANCH` env vars to deploy a fork or feature branch.
 
 Then add the API key:
 
 ```bash
 sudo -u shellm nano /opt/shellm/app/.env    # set ANTHROPIC_API_KEY=...
-sudo systemctl restart shelly-web
+sudo systemctl restart headlong-web
 curl -s localhost:8080/api/health           # {"status":"ok"}
 ```
 
@@ -84,12 +84,12 @@ Add a systemd drop-in (the main unit file is re-synced from the repo on
 every deploy, so don't hand-edit it — drop-ins survive):
 
 ```bash
-sudo mkdir -p /etc/systemd/system/shelly-web.service.d
-sudo tee /etc/systemd/system/shelly-web.service.d/override.conf <<'EOF'
+sudo mkdir -p /etc/systemd/system/headlong-web.service.d
+sudo tee /etc/systemd/system/headlong-web.service.d/override.conf <<'EOF'
 [Service]
-Environment="SHELLY_WEB_ALLOWED_ORIGINS=https://agents.example.com"
+Environment="HEADLONG_WEB_ALLOWED_ORIGINS=https://agents.example.com"
 EOF
-sudo systemctl daemon-reload && sudo systemctl restart shelly-web
+sudo systemctl daemon-reload && sudo systemctl restart headlong-web
 ```
 
 (Default is `*`, which is fine on a laptop but pointless exposure on a
@@ -100,35 +100,35 @@ terraform deploy writes this drop-in automatically.)
 
 | Task | Command |
 |---|---|
-| Logs | `journalctl -u shelly-web -f` |
-| Restart web server (agents keep running — the unit's `KillMode=process` signals only the server; stopping the service doesn't stop agents either) | `sudo systemctl restart shelly-web` |
-| Stop every agent process | `sudo -u shellm /opt/shellm/app/tools/shelly-killall` |
-| Update to latest code | see below; or click the navbar build stamp → "Pull latest & restart" (needs `SHELLY_WEB_SELF_UPDATE=1` in the unit, which the shipped unit sets) |
-| View-only mode | add `Environment="SHELLY_WEB_READONLY=1"` to the override.conf drop-in (see §4) |
+| Logs | `journalctl -u headlong-web -f` |
+| Restart web server (agents keep running — the unit's `KillMode=process` signals only the server; stopping the service doesn't stop agents either) | `sudo systemctl restart headlong-web` |
+| Stop every agent process | `sudo -u shellm /opt/shellm/app/tools/headlong-killall` |
+| Update to latest code | see below; or click the navbar build stamp → "Pull latest & restart" (needs `HEADLONG_WEB_SELF_UPDATE=1` in the unit, which the shipped unit sets) |
+| View-only mode | add `Environment="HEADLONG_WEB_READONLY=1"` to the override.conf drop-in (see §4) |
 
 **Updating:**
 
 ```bash
 sudo -u shellm git -C /opt/shellm/app pull
-sudo -u shellm rm -rf /opt/shellm/app/web/src/shelly_web/static  # forces frontend rebuild
-sudo systemctl restart shelly-web
+sudo -u shellm rm -rf /opt/shellm/app/web/src/headlong_web/static  # forces frontend rebuild
+sudo systemctl restart headlong-web
 ```
 
 **Thinker dispatchers run as per-identity systemd units.** When the dash
 (or the Slack bootstrap) starts an identity's thinkers, the dispatcher runs
-under `shelly-thinkers@<identity>.service` in its own cgroup, so web-server
+under `headlong-thinkers@<identity>.service` in its own cgroup, so web-server
 restarts and OOM kills cannot orphan or kill a mind. The web control plane
-reaches systemd through `/usr/local/bin/shelly-thinkersctl`, a root-owned
+reaches systemd through `/usr/local/bin/headlong-thinkersctl`, a root-owned
 wrapper that validates the action and identity name; the sudo rule in
-`/etc/sudoers.d/shelly-thinkers` permits only that wrapper. All three pieces
+`/etc/sudoers.d/headlong-thinkers` permits only that wrapper. All three pieces
 are installed by `setup.sh` and re-synced by `update.sh`. Useful commands:
-`systemctl status shelly-thinkers@audel` (who owns which processes),
-`journalctl -u shelly-thinkers@audel` (start/stop history). A dispatcher
+`systemctl status headlong-thinkers@audel` (who owns which processes),
+`journalctl -u headlong-thinkers@audel` (start/stop history). A dispatcher
 that dies on its own leaves the unit in a visible `failed` state — the unit
 deliberately does not auto-restart it.
 
 **Kill switches, in escalating order:** Kill All button in the UI →
-`shelly-killall` on the box → `systemctl stop shelly-web` → stop the VM.
+`headlong-killall` on the box → `systemctl stop headlong-web` → stop the VM.
 
 **Moving identities on/off the box:** every identity page has a Config →
 Export button (and the home page has Export all / Import) producing a
@@ -147,7 +147,7 @@ pre-demo backup. Two caveats:
        /opt/shellm/app/tools/identity import /tmp/big.shellm.tgz'
   ```
 
-  Uploads are also capped server-side via `SHELLY_WEB_MAX_IMPORT_MB`
+  Uploads are also capped server-side via `HEADLONG_WEB_MAX_IMPORT_MB`
   (default 512).
 
 ## Migrating a pre-rename box (one time)
@@ -156,7 +156,7 @@ pre-demo backup. Two caveats:
 > `deploy/MIGRATIONS.md` first — it is the general playbook this section
 > is one instance of.
 
-Boxes provisioned before the shelly rename run `shellm-*` systemd units.
+Boxes provisioned before the headlong rename run `shellm-*` systemd units.
 `deploy/update.sh` refuses to deploy onto them and points here, because the
 cutover stops the identity dispatchers — a mind restart with a drain of up
 to three minutes — and update.sh also runs unattended from the dash's
@@ -169,8 +169,8 @@ sudo bash /opt/shellm/app/deploy/migrate-units.sh
 ```
 
 It backs up every unit file, the drop-in directory, the sudo wrapper, the
-sudoers rule, and the audit rules to `/var/backups/shelly-unit-migration`,
-then swaps in the `shelly-*` units and brings the services back in the same
+sudoers rule, and the audit rules to `/var/backups/headlong-unit-migration`,
+then swaps in the `headlong-*` units and brings the services back in the same
 order a reboot would. If anything comes back wrong:
 
 ```bash
@@ -191,7 +191,7 @@ own migration and none of them need to happen for the unit rename.
 
 - The VM is the sandbox. Dedicated key with a spend cap, nothing else on
   the machine, snapshot before demos if you're nervous.
-- `shelly-web` binds `127.0.0.1` and the tunnel is outbound-only, so the
+- `headlong-web` binds `127.0.0.1` and the tunnel is outbound-only, so the
   only path in is through Access. Don't "temporarily" bind `0.0.0.0`.
 - Secrets: root key in `/opt/shellm/app/.env` (mode 600); per-identity
   overrides via the Config tab (stored in `<identity>/.env`).
@@ -204,5 +204,5 @@ own migration and none of them need to happen for the unit rename.
 Run the tunnel from any machine you already have (dev box, spare Mac):
 create the same dashboard tunnel + Access app, run
 `cloudflared service install <TOKEN>` locally, point the public hostname
-at `http://localhost:8080`, and start `./tools/shelly-web`. Same URL, same
+at `http://localhost:8080`, and start `./tools/headlong-web`. Same URL, same
 login, zero infra — it just stops when your laptop sleeps.

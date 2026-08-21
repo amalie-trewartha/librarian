@@ -111,14 +111,14 @@ $IDENTITY_DIR/run/
 
 - Replace `think` with `thinkers` in TOOLS array
 - Replace `thought-processes/` installation block with `thinkers/` installation:
-  - Copy/symlink each `thinkers/*/` to `~/.shelly-thinkers/`
+  - Copy/symlink each `thinkers/*/` to `~/.headlong-thinkers/`
   - Ensure `step`, `start`, `stop` are executable after copy
 - Keep prompts installation (think.md still useful standalone)
 
 ### 8. `bin/identity`
 
 - **`cmd_new()`**: Add `mkdir -p "$identity_dir/thinkers"`, add `_ensure_thinkers()` call after `_ensure_kernel`
-- **`_ensure_thinkers()`** (new helper): Copies bundled thinkers from `~/.shelly-thinkers/` (or repo `thinkers/`) into identity's `thinkers/` dir. Updates `subscriptions.jsonl` to use the identity's root `TRAJ_ID`.
+- **`_ensure_thinkers()`** (new helper): Copies bundled thinkers from `~/.headlong-thinkers/` (or repo `thinkers/`) into identity's `thinkers/` dir. Updates `subscriptions.jsonl` to use the identity's root `TRAJ_ID`.
 - **`_write_activate_script()`**: Add `export THINKERS_DIR="$_id_dir/thinkers"`
 - **`cmd_shell()`**: Add `export THINKERS_DIR="$identity_dir/thinkers"` alongside other exports
 - **Deactivate function**: Add `THINKERS_DIR` to unset list

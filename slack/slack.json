@@ -1,6 +1,6 @@
 {
   "hooks": {
     "get-hooks": "uv run python3 -X utf8 -m slack_cli_hooks.hooks.get_hooks",
-    "start": "uv run shelly-slack-bridge .."
+    "start": "uv run headlong-slack-bridge .."
   }
 }

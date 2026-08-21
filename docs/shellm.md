@@ -186,7 +186,7 @@ Docker access from inside the sandbox is off by default. `--docker-access broker
 
 An **env** is a named execution environment — either a Docker container or "local" (the host machine). Multiple runs can share an env, so installed packages and system modifications persist across conversations.
 
-Each run records its metadata and conversation history in a trajectory under the trajectories directory (`SHELLM_TRAJ_DIR`, default `~/.shelly/trajectories/`; the legacy `TRAJ_DIR` and `~/.shellm` are still honored). Each trajectory is a directory named `<hex8>-<slug>/` holding an append-only `trajectory.jsonl`. The first line is the `{"type":"trajectory"}` header and the next is a `shellm-run` step capturing the command, workdir, model, and env.
+Each run records its metadata and conversation history in a trajectory under the trajectories directory (`SHELLM_TRAJ_DIR`, default `~/.headlong/trajectories/`; the legacy `TRAJ_DIR` is still honored). Each trajectory is a directory named `<hex8>-<slug>/` holding an append-only `trajectory.jsonl`. The first line is the `{"type":"trajectory"}` header and the next is a `shellm-run` step capturing the command, workdir, model, and env.
 
 Each run also has a **workdir** — a directory where generated code executes:
 
@@ -197,7 +197,7 @@ Each run also has a **workdir** — a directory where generated code executes:
 - Files created by the agent persist across iterations
 - Sub-runs are tracked as forked branches in the trajectory, not as nested directories
 
-Env metadata is stored in `~/.shelly/envs/<name>/` (`SHELLM_ENVS_DIR`).
+Env metadata is stored in `~/.headlong/envs/<name>/` (`SHELLM_ENVS_DIR`).
 
 ```bash
 # List recent runs
@@ -335,12 +335,12 @@ All configuration is available as both CLI flags and environment variables. Flag
 | `-q, --quiet` | — | off | Suppress progress output, keep only final answer |
 | `-s, --system-prompt TEXT` | `SHELLM_SYSTEM_PROMPT` | built-in | Replace the system prompt (`--system-prompt-file FILE` reads it from a file; `--print-system-prompt` shows the default) |
 | `--traj ID` / `--resume` | — | new run | Write steps into an existing trajectory (`--resume` = the most recent one) instead of forking a new child |
-| `--traj-dir DIR` | `SHELLM_TRAJ_DIR` | `~/.shelly/trajectories` | Where trajectories are written |
+| `--traj-dir DIR` | `SHELLM_TRAJ_DIR` | `~/.headlong/trajectories` | Where trajectories are written |
 | `--var NAME=VALUE` | — | — | Pass a variable into the sandbox environment (repeatable) |
 | `--bin PATH` | — | — | Stage an extra executable into the sandbox (repeatable) |
 | `--new-env` | — | off | Force a fresh env instead of reusing one (cannot combine with `--env`) |
 | — | `SHELLM_FAST_MODEL` | — | Cheap model for utility calls (run summaries) |
-| — | `SHELLM_ENVS_DIR`, `SHELLM_WORKDIRS_DIR`, `SHELLM_BROKER_DIR`, `SHELLM_CONF_DIR` | under `~/.shelly` | State directories |
+| — | `SHELLM_ENVS_DIR`, `SHELLM_WORKDIRS_DIR`, `SHELLM_BROKER_DIR`, `SHELLM_CONF_DIR` | under `~/.headlong` | State directories |
 
 You can also put settings in a `.env` file in the working directory:
 

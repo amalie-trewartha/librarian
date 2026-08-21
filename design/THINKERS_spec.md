@@ -212,7 +212,7 @@ Walks memory, surfaces associative connections, and injects recalled memories in
 
 ## Installation
 
-Thinkers are installed to `~/.shelly-thinkers/` by `install.sh`. When a new identity is created, `identity new` copies bundled thinkers into `$IDENTITY_DIR/thinkers/` and updates `subscriptions.jsonl` to use the identity's root `TRAJ_ID`.
+Thinkers are installed to `~/.headlong-thinkers/` by `install.sh`. When a new identity is created, `identity new` copies bundled thinkers into `$IDENTITY_DIR/thinkers/` and updates `subscriptions.jsonl` to use the identity's root `TRAJ_ID`.
 
 ## Subscriptions Are Static
 

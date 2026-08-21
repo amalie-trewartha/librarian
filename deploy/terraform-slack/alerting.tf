@@ -1,6 +1,6 @@
 # Box-down alerting: EC2 status-check alarms -> SNS -> Lambda -> Slack.
 #
-# Born from the 2026-08-13 incident: shelly-web OOM-thrash took the whole
+# Born from the 2026-08-13 incident: headlong-web OOM-thrash took the whole
 # box off the network at 09:10 UTC and nothing noticed for 13 hours — the
 # box's own Slack alert scripts can't report the box being dark. These
 # alarms watch from outside:
@@ -10,7 +10,7 @@
 #
 # Auto-reboot is safe against loops (alarm actions fire once per state
 # transition, not per period) and only became safe at all once the boot
-# bootstrap deadlock was fixed (shelly-thinkers@.service After= edge) —
+# bootstrap deadlock was fixed (headlong-thinkers@.service After= edge) —
 # before that, a reboot came up with the persona wedged.
 #
 # The Lambda reads SLACK_BOT_TOKEN + SHELLM_ALERT_CHANNEL from the same

@@ -1,4 +1,4 @@
-from shelly_slack.slackfmt import chunk, clean_inbound, strip_leaked_command, to_mrkdwn
+from headlong_slack.slackfmt import chunk, clean_inbound, strip_leaked_command, to_mrkdwn
 
 
 def test_strip_leaked_command():
@@ -53,7 +53,7 @@ def test_chunk_hard_split_when_no_boundary():
 
 
 def test_recent_posts_dedupe():
-    from shelly_slack.outbound import RecentPosts
+    from headlong_slack.outbound import RecentPosts
 
     recent = RecentPosts(window=300)
     assert not recent.is_duplicate("slack-U1-C2-3.4", "hello", now=1000)

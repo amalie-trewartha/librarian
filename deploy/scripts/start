@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # deploy/scripts/start — start the stopped demo box. The tunnel and
-# shelly-web come back via systemd (~1-2 min after "running").
+# headlong-web come back via systemd (~1-2 min after "running").
 #
 # Usage: deploy/scripts/start
 

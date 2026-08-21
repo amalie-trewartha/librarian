@@ -42,13 +42,13 @@ fi
 %{ endif ~}
 
 # --- pin CORS to the public hostname --------------------------------------
-mkdir -p /etc/systemd/system/shelly-web.service.d
-cat > /etc/systemd/system/shelly-web.service.d/override.conf <<OVERRIDE
+mkdir -p /etc/systemd/system/headlong-web.service.d
+cat > /etc/systemd/system/headlong-web.service.d/override.conf <<OVERRIDE
 [Service]
-Environment="SHELLY_WEB_ALLOWED_ORIGINS=https://${hostname}"
+Environment="HEADLONG_WEB_ALLOWED_ORIGINS=https://${hostname}"
 OVERRIDE
 
 systemctl daemon-reload
-systemctl restart shelly-web
+systemctl restart headlong-web
 
 echo "==> shellm bootstrap done $(date -u)"

@@ -1,0 +1,65 @@
+# headlong-thinkers@<identity> systemd template unit. Installed by
+# deploy/setup.sh (re-synced by deploy/update.sh), which substitutes
+# @SHELLM_HOME@. One instance per identity: headlong-thinkers@audel, etc.
+#
+# The point of this unit is cgroup isolation: a dispatcher started from the
+# web dash used to live inside headlong-web.service's cgroup, where a web
+# OOM-kill/restart orphaned it (and on 2026-08-10 the orphan was then killed
+# by another agent's process-hygiene sweep). Under its own unit, the whole
+# mind — dispatcher, steps, and anything they spawn — has a cgroup of its
+# own, `systemctl status headlong-thinkers@<identity>` shows exactly what
+# belongs to it, and `systemctl stop` reaps everything by construction.
+#
+# The control plane manages instances through /usr/local/bin/headlong-thinkersctl
+# (sudo, see deploy/sudoers-headlong-thinkers), never systemctl directly.
+
+[Unit]
+Description=headlong thinkers for identity %i
+# No After=headlong-slack-agent.service: the bootstrap (a oneshot) starts this
+# unit from inside its own ExecStart, so that ordering edge deadlocked every
+# boot — the queued thinkers job waited on the agent finishing while the
+# agent blocked on the queued job (2026-08-12 and 2026-08-13 incidents).
+# Identity env doesn't need the edge anyway: thinkers-service.sh sources the
+# root .env, identity .env, and activate itself on every start.
+After=network-online.target
+Wants=network-online.target
+# With Restart=on-failure (below), OnFailure fires only once the start
+# limit is exhausted — it now means "died repeatedly, auto-restart GAVE UP,
+# staying down" (deploy/thinkers-failure-alert.sh). Per-death and
+# back-up-again Slack notices come from ExecStopPost/ExecStartPost
+# (deploy/thinkers-death-alert.sh). Deliberate stops post nothing.
+OnFailure=headlong-thinkers-alert@%i.service
+StartLimitIntervalSec=900
+StartLimitBurst=3
+
+[Service]
+# thinkers start forks the dispatcher and exits, writing run/dispatcher.pid
+# first — the forking type + PIDFile lets systemd track the dispatcher as
+# the main process.
+Type=forking
+PIDFile=@SHELLM_HOME@/app/.identities/%i/run/dispatcher.pid
+User=shellm
+WorkingDirectory=@SHELLM_HOME@/app
+Environment="PATH=@SHELLM_HOME@/.local/bin:@SHELLM_HOME@/.bun/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/bin/bash @SHELLM_HOME@/app/deploy/thinkers-service.sh @SHELLM_HOME@/app %i start
+ExecStop=/bin/bash @SHELLM_HOME@/app/deploy/thinkers-service.sh @SHELLM_HOME@/app %i stop
+# Restart=on-failure cannot resurrect a deliberately stopped mind: every
+# sanctioned stop path goes through _stop_dispatcher, which marks the stop
+# (run/deliberate_stop) so the dispatcher's TERM trap exits 0 — a clean
+# exit systemd leaves alone. Only an UNSANCTIONED death (exit 130: crash,
+# or a stray signal like the unattributed 2026-08-12 16:56Z kill that
+# downed the mind for 3h) triggers the restart. Each such death posts to
+# Slack via ExecStopPost, the recovery via ExecStartPost; after 3 unclean
+# deaths in 15 min systemd gives up and OnFailure posts the staying-down
+# alert.
+Restart=on-failure
+RestartSec=60
+ExecStartPost=/bin/bash @SHELLM_HOME@/app/deploy/thinkers-death-alert.sh @SHELLM_HOME@/app %i started
+ExecStopPost=/bin/bash @SHELLM_HOME@/app/deploy/thinkers-death-alert.sh @SHELLM_HOME@/app %i died
+# The stop script waits out the CLI's drain (default 180s) before systemd's
+# final cgroup sweep, so in-flight steps get their chance to finish.
+TimeoutStartSec=120
+TimeoutStopSec=200
+
+[Install]
+WantedBy=multi-user.target

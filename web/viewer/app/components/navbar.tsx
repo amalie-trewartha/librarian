@@ -44,7 +44,7 @@ function pollForNewBuild(oldCommit: string, timeoutMs = 5 * 60 * 1000) {
   const started = Date.now();
   const tick = async () => {
     if (Date.now() - started > timeoutMs) {
-      toast.error("Update timed out — check `journalctl -u shelly-web` on the box");
+      toast.error("Update timed out — check `journalctl -u headlong-web` on the box");
       return;
     }
     try {
@@ -254,7 +254,7 @@ export function Navbar() {
     <header className="sticky top-0 z-50 border-b border-border bg-background">
       <div className="flex h-12 items-center justify-between px-4">
         <Link to="/" className="font-mono text-sm font-semibold tracking-tight">
-          shelly
+          headlong
         </Link>
         <div className="flex items-center gap-3">
           <LlmHealthChip />

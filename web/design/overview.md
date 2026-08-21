@@ -31,8 +31,8 @@ mind-bus steps, or fork trees — exactly the semantics we want to see.
 ## Architecture
 
 ```
-tools/shelly-web                     bash launcher (uv run --project web)
-web/src/shelly_web/                FastAPI backend
+tools/headlong-web                     bash launcher (uv run --project web)
+web/src/headlong_web/                FastAPI backend
   server.py                        create_app(root, static_dir); /api/*; SPA catch-all
   discovery.py                     identity scan: dirs with info.txt (root_trajectory=)
   trajectory.py                    JSONL parse → normalized steps + run groups + previews
@@ -48,13 +48,13 @@ web/viewer/                        React Router 7 SPA (ssr:false), Tailwind v4, 
                                    traj-context.ts, highlighter.tsx (shiki)
 ```
 
-Serving modes (both via `tools/shelly-web`):
+Serving modes (both via `tools/headlong-web`):
 - **Prod (default)**: build frontend if missing (bun > pnpm > npm, override
-  `SHELLY_WEB_JS`), copy to `src/shelly_web/static/`, single uvicorn serves
+  `HEADLONG_WEB_JS`), copy to `src/headlong_web/static/`, single uvicorn serves
   API + static with an SPA catch-all registered after all `/api` routes.
 - **Dev (`--dev`)**: vite dev server on :5173 with `VITE_API_URL` pointing at
   uvicorn `--reload` (via the `create_app_from_env` import-string factory,
-  root passed in `SHELLY_WEB_ROOT`).
+  root passed in `HEADLONG_WEB_ROOT`).
 
 ## Key decisions and rationale
 

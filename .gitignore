@@ -4,14 +4,14 @@
 __pycache__/
 .chatrc
 .harbor-jobs/
-.shelly/
+.headlong/
 .memories/
 .skills/
 .skillsrc
 
 # Identity instances are runtime data (logs, trajectories, memories, etc.)
 .identities/
-web/src/shelly_web/static/
+web/src/headlong_web/static/
 web/viewer/build/
 web/viewer/node_modules/
 web/.venv/

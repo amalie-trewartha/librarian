@@ -20,7 +20,7 @@ import { TrajContext } from "~/lib/traj-context";
 import { scrollToStep } from "~/routes/identity";
 
 export function meta() {
-  return [{ title: "Shelly · sub-trajectory" }];
+  return [{ title: "Headlong · sub-trajectory" }];
 }
 
 export default function SubTrajPage() {

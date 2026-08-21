@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from shelly_web import control
-from shelly_web.server import create_app
+from headlong_web import control
+from headlong_web.server import create_app
 
 ROOT_TRAJ = "ffffffff-6666-4666-8666-666666666666"
 GZIP_BODY = gzip.compress(b"fake archive")

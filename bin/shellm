@@ -25,11 +25,9 @@ _shellm_load_env() {
 }
 _SHELLM_SCRIPT_PATH=$(realpath "${BASH_SOURCE[0]:-$0}" 2>/dev/null || printf '%s\n' "${BASH_SOURCE[0]:-$0}")
 _shellm_load_env ".env" || true
-# State home: SHELLY_HOME/SHELLM_HOME if set; else ~/.shelly, falling back
-# to a pre-rename ~/.shellm when only that exists.
-_shellm_home="$HOME/.shelly"
-[[ ! -d "$_shellm_home" && -d "$HOME/.shellm" ]] && _shellm_home="$HOME/.shellm"
-_shellm_home="${SHELLY_HOME:-${SHELLM_HOME:-$_shellm_home}}"
+# State home: HEADLONG_HOME (framework) or SHELLM_HOME (tool-level; the
+# thinkers dispatcher exports it per-identity) if set; else ~/.headlong.
+_shellm_home="${HEADLONG_HOME:-${SHELLM_HOME:-$HOME/.headlong}}"
 _shellm_load_env "${SHELLM_CONF_DIR:-$_shellm_home}/.env" || true
 SHELLM_TRAJ_DIR="${SHELLM_TRAJ_DIR:-${TRAJ_DIR:-$_shellm_home/trajectories}}"
 SHELLM_ENVS_DIR="${SHELLM_ENVS_DIR:-$_shellm_home/envs}"
@@ -170,7 +168,7 @@ Options:
   --traj TRAJ_ID         Write steps to an existing trajectory (no child traj or fork)
   --resume               Shorthand for --traj with the most recent trajectory
   --traj-dir DIR         Trajectory directory (default: <state-home>/trajectories,
-                         where the state home is ~/.shelly or legacy ~/.shellm)
+                         where the state home is ~/.headlong)
   --var NAME=VALUE       Set env var for generated code (repeatable)
   --bin PATH             Make binary available on PATH (repeatable)
   --print-system-prompt Print the system prompt and exit
@@ -785,7 +783,7 @@ docker_setup() {
     local -a install_packages=(jq curl python3 tmux sudo)
 
     local tool tool_path
-    local -a shellm_tools=(llm traj context shellm-explore shelly skills mem shellm-docker shellm-docker-broker)
+    local -a shellm_tools=(llm traj context shellm-explore headlong skills mem shellm-docker shellm-docker-broker)
     for tool in "${shellm_tools[@]}"; do
         tool_path=$(resolve_shellm_tool_path "$shellm_path" "$tool" || true)
         [[ -n "$tool_path" ]] || continue

@@ -19,7 +19,7 @@ variable "root_volume_gb" {
 variable "shellm_repo" {
   description = "Git repo to deploy"
   type        = string
-  default     = "https://github.com/laude-institute/shelly.git"
+  default     = "https://github.com/laude-institute/headlong.git"
 }
 
 variable "shellm_branch" {
@@ -92,7 +92,7 @@ variable "env_parameter" {
     GEMINI_API_KEY, OPENROUTER_API_KEY, ...). Create/update it out-of-band
     from your local shellm/.env (never enters Terraform state):
       aws ssm put-parameter --name /shellm/env --type SecureString \
-          --value "$(cat /path/to/shelly/.env)" --overwrite \
+          --value "$(cat /path/to/headlong/.env)" --overwrite \
           --region <region>
     First boot writes it to /opt/shellm/app/.env, so instance rebuilds
     self-heal. NOTE: user-data runs once per instance — after changing the
@@ -100,7 +100,7 @@ variable "env_parameter" {
       terraform apply -replace=aws_instance.shellm
     or update the running box in place over SSM:
       aws ssm start-session --target <instance-id> --region <region>
-      # then on the box: re-run the fetch and restart shelly-web
+      # then on the box: re-run the fetch and restart headlong-web
     Set to "" to disable.
   EOT
   type        = string

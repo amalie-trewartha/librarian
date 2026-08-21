@@ -1,7 +1,7 @@
 [project]
-name = "shelly-web"
+name = "headlong-web"
 version = "0.1.0"
-description = "Web viewer for Shelly mind logs and trajectory trees"
+description = "Web viewer for Headlong mind logs and trajectory trees"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
@@ -10,11 +10,7 @@ dependencies = [
 ]
 
 [project.scripts]
-shelly-web = "shelly_web.cli:main"
-# Back-compat alias for the pre-rename systemd units. Keep until the box
-# migration is verified stable: deploy/migrate-units.sh --rollback
-# reinstalls units whose ExecStart calls this name.
-shellm-web = "shelly_web.cli:main"
+headlong-web = "headlong_web.cli:main"
 
 [dependency-groups]
 dev = [
@@ -27,4 +23,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/shelly_web"]
+packages = ["src/headlong_web"]

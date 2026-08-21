@@ -70,7 +70,7 @@ Mapping to the classic stack:
 |---------|-------------|-------|
 | `README.md` | `README.md` (humans) + `AGENTS.md` (agents) | Split entry points |
 | `man <tool>` | `skills show <tool>` | SKILL.md is the new man page |
-| `info` | Conversational exploration via `shelly send` | Generated on demand from primary sources |
+| `info` | Conversational exploration via `headlong send` | Generated on demand from primary sources |
 | `--help` | `--help` (humans) + SKILL.md (agents) | Both audiences keep their interface |
 | `docs/` | `docs/human/` + `docs/agent/` | Optional split for projects with deep docs |
 | `CHANGELOG.md` | `CHANGELOG.md` | Format converges; both audiences benefit |
@@ -120,13 +120,13 @@ The reformulation: **the skill is the man page rewritten for an audience with br
 
 ### Self-describing tools via shipped skills
 
-Every tool ShellLM ships should have a corresponding `SKILL.md` in `skills/`. This means `shelllm`, `shelly`, `mem`, and `skills` itself each have skill files that describe how an agent should use them.
+Every tool ShellLM ships should have a corresponding `SKILL.md` in `skills/`. This means `shelllm`, `headlong`, `mem`, and `skills` itself each have skill files that describe how an agent should use them.
 
 ```
 shelllm/
 └── skills/
     ├── shelllm/SKILL.md
-    ├── shelly/SKILL.md
+    ├── headlong/SKILL.md
     ├── mem/SKILL.md
     └── skills/SKILL.md      # recursion: skills tool described as a skill
 ```
@@ -175,10 +175,10 @@ This is probably over-engineered for now. The two-file approach (`README.md` + `
 
 ## The `housekeeping` skill (replacing the meta-agent idea)
 
-Rather than a long-running self-improver daemon, ship a `housekeeping` skill that any shelly session can invoke:
+Rather than a long-running self-improver daemon, ship a `housekeeping` skill that any headlong session can invoke:
 
 ```bash
-shelly send "run housekeeping"
+headlong send "run housekeeping"
 ```
 
 The skill instructs the agent to:
@@ -195,9 +195,9 @@ This is more Unix-y than a daemon:
 - No long-running process to manage
 - Composable with cron, git hooks, CI, manual invocation
 - Same auth and permissions as everything else
-- Watching can be event-driven (git pre-commit) or scheduled (`cron` calls `shelly send "run housekeeping"`) or manual
+- Watching can be event-driven (git pre-commit) or scheduled (`cron` calls `headlong send "run housekeeping"`) or manual
 
-The "meta agent" exists, but it's just a shelly session running a skill — same architecture as everything else.
+The "meta agent" exists, but it's just a headlong session running a skill — same architecture as everything else.
 
 ## Migration plan for ShellLM itself
 
@@ -205,7 +205,7 @@ Phase 1 — Foundation:
 
 - [ ] Add `AGENTS.md` to the ShellLM repo
 - [ ] Split current README into `README.md` (humans) and `AGENTS.md` (agents)
-- [ ] Write `SKILL.md` for each of `shelllm`, `shelly`, `mem`, `skills`
+- [ ] Write `SKILL.md` for each of `shelllm`, `headlong`, `mem`, `skills`
 - [ ] Place them in `skills/`
 
 Phase 2 — Conventions doc:
@@ -216,7 +216,7 @@ Phase 2 — Conventions doc:
 Phase 3 — Housekeeping skill:
 
 - [ ] Write `skills/housekeeping/SKILL.md`
-- [ ] Test by running `shelly send "run housekeeping"` against the repo
+- [ ] Test by running `headlong send "run housekeeping"` against the repo
 - [ ] Iterate on the skill until it produces useful audits
 
 Phase 4 — Evangelism:

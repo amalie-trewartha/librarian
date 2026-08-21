@@ -1,0 +1,45 @@
+# headlong-telegram-bridge systemd unit. Installed by deploy/update.sh when
+# /etc/shellm/telegram.env exists (telegram is enabled post-hoc on a live
+# box — user_data must never change, so there is no bootstrap flag).
+# @SHELLM_HOME@ is substituted at install time.
+#
+# deploy/update.sh re-syncs this file on every deploy — put box-local
+# changes in a drop-in (headlong-telegram-bridge.service.d/override.conf).
+#
+# Privilege separation, deliberate and load-bearing:
+#  - User=shellm-telegram (NOT shellm): the agent runs as shellm and can
+#    read /proc/<pid>/environ of same-uid processes, so running the bridge
+#    as shellm would hand it the bot token.
+#  - EnvironmentFile is root-owned mode 600; systemd reads it as root
+#    before dropping privileges. The token never touches the shared .env.
+#  - StateDirectory (allowlist + cursors) is owned by shellm-telegram, so
+#    an injected agent cannot approve its own allowlist entries.
+#  - SupplementaryGroups=shellm grants read access to the identity's
+#    trajectory under /opt/shellm (group r-x on the home dir).
+#
+# ExecStart uses the project venv directly (not tools/headlong-telegram-bridge):
+# uv would try to write the shellm-owned venv, which this user cannot.
+
+[Unit]
+Description=headlong Telegram bridge
+After=network-online.target headlong-web.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=shellm-telegram
+SupplementaryGroups=shellm
+WorkingDirectory=@SHELLM_HOME@/app
+EnvironmentFile=/etc/shellm/telegram.env
+StateDirectory=shellm-telegram
+Environment="HOME=/var/lib/shellm-telegram"
+Environment="SHELLM_TELEGRAM_STATE_DIR=/var/lib/shellm-telegram"
+ExecStart=@SHELLM_HOME@/app/telegram/.venv/bin/headlong-telegram-bridge @SHELLM_HOME@/app
+Restart=always
+RestartSec=5
+
+# Kill switch: `systemctl stop headlong-telegram-bridge` mutes Telegram
+# without touching the agent (tools/headlong-killall stops the agent itself).
+
+[Install]
+WantedBy=multi-user.target

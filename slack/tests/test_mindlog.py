@@ -1,6 +1,6 @@
 import json
 
-from shelly_slack.mindlog import find_trajectory, read_new
+from headlong_slack.mindlog import find_trajectory, read_new
 
 
 def _append(path, obj, newline=True):

@@ -107,7 +107,7 @@ done
 # Catches a half-finished rename: code still naming the old unit.
 shipped=$(cd "$REPO/deploy" && ls *.service 2>/dev/null | sed 's/\.service$//' | sed 's/@$//')
 stale=0
-for ref in $(grep -rhoE '\b(shellm|shelly)-(web|thinkers|thinkers-alert|slack-bridge|slack-agent|telegram-bridge)\b' \
+for ref in $(grep -rhoE '\b(shellm|shelly|headlong)-(web|thinkers|thinkers-alert|slack-bridge|slack-agent|telegram-bridge)\b' \
         "$REPO/deploy"/*.sh "$REPO/deploy"/*.service "$REPO/deploy/scripts"/* 2>/dev/null \
         | sort -u); do
     printf '%s\n' "$shipped" | grep -qx "$ref" && continue

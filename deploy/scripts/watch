@@ -11,9 +11,9 @@ case "${1:-}" in
 esac
 
 case "${1:-web}" in
-    web)     unit="shelly-web" ;;
-    bridge)  unit="shelly-slack-bridge" ;;
-    persona) unit="shelly-slack-agent" ;;
+    web)     unit="headlong-web" ;;
+    bridge)  unit="headlong-slack-bridge" ;;
+    persona) unit="headlong-slack-agent" ;;
     *) die "unknown target '${1}' (web|bridge|persona)" ;;
 esac
 
@@ -24,10 +24,10 @@ require_aws
 state=$(instance_state)
 [[ "$state" == "running" ]] || die "instance is '$state' — start it with deploy/scripts/start"
 
-# The box may be either side of the shelly unit rename; journalctl on a
+# The box may be either side of the headlong unit rename; journalctl on a
 # unit that was never installed just sits there printing nothing, which
 # reads as "the service is quiet" rather than "wrong unit name".
 info "Following $unit on $(instance_id) (Ctrl-C detaches)"
 run_on_box "u='$unit'
-[ -f \"/etc/systemd/system/\$u.service\" ] || u=\"shellm-\${u#shelly-}\"
+[ -f \"/etc/systemd/system/\$u.service\" ] || u=\"shelly-\${u#headlong-}\"
 sudo journalctl -u \"\$u\" -n 50 -f"

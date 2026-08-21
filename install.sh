@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# install.sh — install Shelly's tools onto PATH.
+# install.sh — install Headlong's tools onto PATH.
 #
 # Two ways in:
 #
@@ -9,15 +9,14 @@ set -euo pipefail
 #     ./install.sh [options]
 #
 #   One-liner (no checkout needed):
-#     curl -fsSL https://raw.githubusercontent.com/laude-institute/shelly/main/install.sh | bash
+#     curl -fsSL https://raw.githubusercontent.com/laude-institute/headlong/main/install.sh | bash
 #
-# The one-liner clones the repo to ~/.shelly/app (or a pre-existing
-# ~/.shellm), symlink-installs the tools,
-# then hands off to `shelly-init` to bootstrap a first identity and start the
-# local dash. Pass args through the pipe with `| bash -s -- <args>`.
+# The one-liner clones the repo to ~/.headlong/app, symlink-installs the
+# tools, then hands off to `headlong-init` to bootstrap a first identity and
+# start the local dash. Pass args through the pipe with `| bash -s -- <args>`.
 #
 # Prefer to read before you run? Same thing, two steps:
-#     curl -fsSLO https://raw.githubusercontent.com/laude-institute/shelly/main/install.sh
+#     curl -fsSLO https://raw.githubusercontent.com/laude-institute/headlong/main/install.sh
 #     less install.sh && bash install.sh --init
 #
 # Everything side-effectful happens inside main(), invoked on the LAST line of
@@ -25,21 +24,19 @@ set -euo pipefail
 # `curl | bash`) parses but executes nothing. Keep it that way: top level is
 # only defaults, function definitions, and that final call.
 
-# New SHELLY_* env names win; legacy SHELLM_* spellings still honored.
-# State home: SHELLY_HOME/SHELLM_HOME if set; else ~/.shelly, falling back
-# to a pre-rename ~/.shellm when only that exists.
-SHELLM_REPO="${SHELLY_REPO:-${SHELLM_REPO:-https://github.com/laude-institute/shelly.git}}"
-SHELLM_BRANCH="${SHELLY_BRANCH:-${SHELLM_BRANCH:-main}}"
-_default_home="$HOME/.shelly"
-[ ! -d "$_default_home" ] && [ -d "$HOME/.shellm" ] && _default_home="$HOME/.shellm"
-SHELLM_HOME="${SHELLY_HOME:-${SHELLM_HOME:-$_default_home}}"
+# State home: HEADLONG_HOME if set; else ~/.headlong. (An install from a
+# pre-headlong era lives in ~/.shelly or ~/.shellm — move it:
+# mv ~/.shelly ~/.headlong)
+HEADLONG_REPO="${HEADLONG_REPO:-https://github.com/laude-institute/headlong.git}"
+HEADLONG_BRANCH="${HEADLONG_BRANCH:-main}"
+HEADLONG_HOME="${HEADLONG_HOME:-$HOME/.headlong}"
 
 PREFIX="${PREFIX:-$HOME/.local/bin}"
 SYMLINKS="${SYMLINKS:-0}"
 RUN_INIT=0
 # Core agent tools (bin/) and the management/aux CLIs around them (tools/).
 BIN_TOOLS=(shellm shellm-docker skills mem llm context traj thinkers chat focus recap glob view put sub)
-AUX_TOOLS=(shellm-docker-broker identity shellm-explore shelly-init shelly-killall persona shelly-web shelly-slack-bridge shelly-telegram-bridge)
+AUX_TOOLS=(shellm-docker-broker identity shellm-explore headlong-init headlong-killall persona headlong-web headlong-slack-bridge headlong-telegram-bridge)
 TOOLS=("${BIN_TOOLS[@]}" "${AUX_TOOLS[@]}")
 
 # ---------------------------------------------------------------------------
@@ -91,16 +88,16 @@ _require_deps() {
 _bootstrap_and_reexec() {
     _require_deps git curl jq
 
-    local app_dir="$SHELLM_HOME/app"
+    local app_dir="$HEADLONG_HOME/app"
     if [[ -d "$app_dir/.git" ]]; then
         echo "==> Updating existing checkout at $app_dir"
-        if ! git -C "$app_dir" pull --ff-only origin "$SHELLM_BRANCH"; then
+        if ! git -C "$app_dir" pull --ff-only origin "$HEADLONG_BRANCH"; then
             echo "install.sh: warning: could not update $app_dir; installing from what's there" >&2
         fi
     else
-        echo "==> Cloning $SHELLM_REPO ($SHELLM_BRANCH) to $app_dir"
-        mkdir -p "$SHELLM_HOME"
-        git clone --branch "$SHELLM_BRANCH" "$SHELLM_REPO" "$app_dir"
+        echo "==> Cloning $HEADLONG_REPO ($HEADLONG_BRANCH) to $app_dir"
+        mkdir -p "$HEADLONG_HOME"
+        git clone --branch "$HEADLONG_BRANCH" "$HEADLONG_REPO" "$app_dir"
     fi
     exec bash "$app_dir/install.sh" --symlinks --init "$@"
 }
@@ -113,14 +110,14 @@ _usage() {
     cat <<'EOF'
 Usage: ./install.sh [options]
 
-Installs Shelly's tools from bin/ and tools/ to a directory on your PATH,
+Installs Headlong's tools from bin/ and tools/ to a directory on your PATH,
 plus the core skills (~/.skills/core-skills), the bundled thinker templates
-(~/.shellm-thinkers), and the Rust TUI if cargo is available.
+(~/.headlong-thinkers), and the Rust TUI if cargo is available.
 
 Options:
   --prefix DIR   Install directory (default: ~/.local/bin)
   --symlinks     Create symlinks instead of copies (edits take effect without reinstalling)
-  --init         After installing, run `shelly-init` to bootstrap a first
+  --init         After installing, run `headlong-init` to bootstrap a first
                  identity and start the local dash (the curl|bash one-liner
                  does this by default)
   -h, --help     Show this help
@@ -128,8 +125,7 @@ Options:
 Environment variables:
   PREFIX         Same as --prefix
   SYMLINKS=1     Same as --symlinks
-  SHELLY_HOME    Shelly state directory (default: ~/.shelly, or ~/.shellm
-                 when only that exists; legacy SHELLM_HOME also honored)
+  HEADLONG_HOME  Headlong state directory (default: ~/.headlong)
 
 Examples:
   ./install.sh                          # copy to ~/.local/bin
@@ -199,7 +195,7 @@ _install_skills() {
 
 _install_thinkers() {
     [[ -d "thinkers" ]] || return 0
-    local thinkers_prefix="${HOME}/.shellm-thinkers"
+    local thinkers_prefix="${HOME}/.headlong-thinkers"
     mkdir -p "$thinkers_prefix"
     local td name
     if [[ "$SYMLINKS" -eq 1 ]]; then
@@ -234,7 +230,7 @@ _install_thinkers() {
 }
 
 # PATH: make sure the tools are reachable — for this process (so --init can
-# chain into shelly-init) and, with consent, for future shells.
+# chain into headlong-init) and, with consent, for future shells.
 # A same-named system binary in a dir BEFORE $PREFIX silently shadows the tool
 # we just installed (macOS ships /usr/sbin/chat, /usr/bin/view). Verify each
 # installed tool actually resolves to OUR copy; warn if not. Install still
@@ -319,8 +315,8 @@ main() {
 
     # Record where the checkout lives so tools installed as copies (not
     # symlinks) can still find repo assets (web/, identities/, thinkers/).
-    mkdir -p "$SHELLM_HOME"
-    printf '%s\n' "$(pwd)" > "$SHELLM_HOME/app_dir"
+    mkdir -p "$HEADLONG_HOME"
+    printf '%s\n' "$(pwd)" > "$HEADLONG_HOME/app_dir"
 
     _install_tui
     _install_skills
@@ -329,7 +325,7 @@ main() {
 
     if [[ "$RUN_INIT" -eq 1 ]]; then
         echo
-        exec "$PREFIX/shelly-init"
+        exec "$PREFIX/headlong-init"
     fi
 }
 

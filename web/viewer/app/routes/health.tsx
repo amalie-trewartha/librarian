@@ -9,7 +9,7 @@ import type { ActivityState } from "~/lib/types";
 import { cn } from "~/lib/utils";
 
 export function meta() {
-  return [{ title: "Shelly · health" }];
+  return [{ title: "Headlong · health" }];
 }
 
 const STATE_TEXT: Record<ActivityState, string> = {

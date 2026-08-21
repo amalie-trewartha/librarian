@@ -1,0 +1,34 @@
+# headlong-slack-bridge systemd unit. Installed by deploy/setup.sh (when
+# SHELLM_INSTALL_SLACK_BRIDGE=1), which substitutes @SHELLM_HOME@.
+#
+# deploy/update.sh re-syncs this file on every deploy — put box-local
+# changes in a drop-in (headlong-slack-bridge.service.d/override.conf).
+#
+# Socket Mode: the bridge dials OUT to Slack over a websocket; nothing
+# listens. It talks to headlong-web on 127.0.0.1:8080 and tails the persona
+# identity's trajectory file directly. Config comes from the root .env
+# (SLACK_BOT_TOKEN, SLACK_APP_TOKEN, SHELLM_SLACK_IDENTITY).
+
+[Unit]
+Description=headlong Slack Socket Mode bridge
+After=network-online.target headlong-web.service headlong-slack-agent.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=shellm
+WorkingDirectory=@SHELLM_HOME@/app
+# '-' prefix: missing .env (first boot, before the SSM fetch lands) must not
+# fail the unit — the bridge exits and Restart=always retries until it works.
+EnvironmentFile=-@SHELLM_HOME@/app/.env
+Environment="PATH=@SHELLM_HOME@/.local/bin:@SHELLM_HOME@/.bun/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=@SHELLM_HOME@/app/tools/headlong-slack-bridge @SHELLM_HOME@/app
+Restart=always
+RestartSec=5
+# Default KillMode is fine: the bridge spawns no agent processes.
+
+# Kill switch: `systemctl stop headlong-slack-bridge` mutes Slack without
+# touching the agent (tools/headlong-killall stops the agent itself).
+
+[Install]
+WantedBy=multi-user.target

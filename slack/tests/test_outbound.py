@@ -2,8 +2,8 @@
 
 import threading
 
-from shelly_slack import outbound
-from shelly_slack.config import Config
+from headlong_slack import outbound
+from headlong_slack.config import Config
 
 
 def test_run_delivers_only_chat_sourced_messages(tmp_path, monkeypatch):

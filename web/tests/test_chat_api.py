@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from shelly_web.server import create_app
+from headlong_web.server import create_app
 
 ROOT_TRAJ = "ffffffff-6666-4666-8666-666666666666"
 

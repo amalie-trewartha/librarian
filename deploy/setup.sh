@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# deploy/setup.sh — provision a fresh Ubuntu VM to run shelly-web.
+# deploy/setup.sh — provision a fresh Ubuntu VM to run headlong-web.
 #
 # Creates a dedicated `shellm` user, clones the repo to /opt/shellm/app,
 # installs uv + bun for that user, prebuilds the viewer frontend, and
@@ -11,14 +11,14 @@ set -euo pipefail
 #   sudo bash deploy/setup.sh
 #
 # Override defaults via env:
-#   SHELLM_REPO=https://github.com/laude-institute/shelly.git
+#   SHELLM_REPO=https://github.com/laude-institute/headlong.git
 #   SHELLM_BRANCH=main
 #   SHELLM_HOME=/opt/shellm
 #
 # After this script: put your (spend-capped!) API key in
 # /opt/shellm/app/.env and set up the Cloudflare tunnel — see DEPLOY.md.
 
-SHELLM_REPO="${SHELLM_REPO:-https://github.com/laude-institute/shelly.git}"
+SHELLM_REPO="${SHELLM_REPO:-https://github.com/laude-institute/headlong.git}"
 SHELLM_BRANCH="${SHELLM_BRANCH:-main}"
 SHELLM_HOME="${SHELLM_HOME:-/opt/shellm}"
 SHELLM_USER="shellm"
@@ -65,8 +65,8 @@ sudo -u "$SHELLM_USER" bash -c "
     cd '$APP_DIR/web/viewer'
     bun install --frozen-lockfile
     bun run build
-    rm -rf '$APP_DIR/web/src/shelly_web/static'
-    cp -R build/client '$APP_DIR/web/src/shelly_web/static'
+    rm -rf '$APP_DIR/web/src/headlong_web/static'
+    cp -R build/client '$APP_DIR/web/src/headlong_web/static'
     cd '$APP_DIR/web' && uv sync
 "
 
@@ -82,41 +82,37 @@ ENV
 fi
 
 echo "==> Installing systemd service"
-sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$SCRIPT_DIR/shelly-web.service" \
-    > /etc/systemd/system/shelly-web.service
+sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$SCRIPT_DIR/headlong-web.service" \
+    > /etc/systemd/system/headlong-web.service
 systemctl daemon-reload
-systemctl enable --now shelly-web
+systemctl enable --now headlong-web
 
 # Per-identity thinker units: the dash starts/stops dispatchers through
-# shelly-thinkers@<identity>.service (via the sudo wrapper) so they get
-# their own cgroup instead of living inside shelly-web's.
+# headlong-thinkers@<identity>.service (via the sudo wrapper) so they get
+# their own cgroup instead of living inside headlong-web's.
 echo "==> Installing per-identity thinkers unit + control wrapper"
-for unit_tpl in shelly-thinkers@ shelly-thinkers-alert@; do
+for unit_tpl in headlong-thinkers@ headlong-thinkers-alert@; do
     sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$SCRIPT_DIR/${unit_tpl}.service" \
         > "/etc/systemd/system/${unit_tpl}.service"
 done
-# Both names: see the note in deploy/update.sh. The wrapper targets
-# whichever unit template is installed.
-for ctl in shelly-thinkersctl shellm-thinkersctl; do
-    install -o root -g root -m 0755 "$SCRIPT_DIR/shelly-thinkersctl" "/usr/local/bin/$ctl"
-done
-if visudo -cf "$SCRIPT_DIR/sudoers-shelly-thinkers"; then
-    install -o root -g root -m 0440 "$SCRIPT_DIR/sudoers-shelly-thinkers" /etc/sudoers.d/shelly-thinkers
+install -o root -g root -m 0755 "$SCRIPT_DIR/headlong-thinkersctl" /usr/local/bin/headlong-thinkersctl
+if visudo -cf "$SCRIPT_DIR/sudoers-headlong-thinkers"; then
+    install -o root -g root -m 0440 "$SCRIPT_DIR/sudoers-headlong-thinkers" /etc/sudoers.d/headlong-thinkers
 else
-    echo "ERROR: deploy/sudoers-shelly-thinkers failed the visudo check — not installing" >&2
+    echo "ERROR: deploy/sudoers-headlong-thinkers failed the visudo check — not installing" >&2
     exit 1
 fi
 systemctl daemon-reload
 
 # Signal auditing: kernel-level attribution for process kills (see
-# deploy/audit-shelly-signals.rules — added after the 2026-08-12
-# unattributed dispatcher death). ausearch -k shelly-sig names the sender.
+# deploy/audit-headlong-signals.rules — added after the 2026-08-12
+# unattributed dispatcher death). ausearch -k headlong-sig names the sender.
 echo "==> Installing auditd signal rules"
 if ! command -v augenrules >/dev/null 2>&1; then
     DEBIAN_FRONTEND=noninteractive apt-get install -y auditd >/dev/null
 fi
-install -o root -g root -m 0640 "$SCRIPT_DIR/audit-shelly-signals.rules" \
-    /etc/audit/rules.d/shelly-signals.rules
+install -o root -g root -m 0640 "$SCRIPT_DIR/audit-headlong-signals.rules" \
+    /etc/audit/rules.d/headlong-signals.rules
 augenrules --load || echo "WARN: augenrules --load failed — audit rules apply after next reboot" >&2
 
 # Optional component: the Slack bridge (persona bootstrap + Socket Mode
@@ -128,18 +124,18 @@ if [[ "${SHELLM_INSTALL_SLACK_BRIDGE:-0}" == "1" ]]; then
         export PATH=\"\$HOME/.local/bin:\$PATH\"
         cd '$APP_DIR/slack' && uv sync
     "
-    for unit in shelly-slack-agent shelly-slack-bridge; do
+    for unit in headlong-slack-agent headlong-slack-bridge; do
         sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$SCRIPT_DIR/$unit.service" \
             > "/etc/systemd/system/$unit.service"
     done
     systemctl daemon-reload
-    systemctl enable --now shelly-slack-agent shelly-slack-bridge
+    systemctl enable --now headlong-slack-agent headlong-slack-bridge
 fi
 
 echo
-echo "Done. shelly-web is running on 127.0.0.1:8080 (not publicly reachable)."
+echo "Done. headlong-web is running on 127.0.0.1:8080 (not publicly reachable)."
 echo
 echo "Next steps:"
 echo "  1. Add your spend-capped API key to $APP_DIR/.env"
-echo "     then: systemctl restart shelly-web"
+echo "     then: systemctl restart headlong-web"
 echo "  2. Set up the Cloudflare tunnel + Access policy — see deploy/DEPLOY.md"

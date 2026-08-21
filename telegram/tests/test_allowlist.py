@@ -1,4 +1,4 @@
-from shelly_telegram.allowlist import Allowlist
+from headlong_telegram.allowlist import Allowlist
 
 
 def test_approve_revoke_round_trip(tmp_path):

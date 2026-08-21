@@ -1,0 +1,6 @@
+# Installed to /etc/sudoers.d/headlong-thinkers (0440 root:root) by
+# deploy/setup.sh, after a visudo -cf syntax check. Allows the shellm web
+# control plane (user shellm) to manage per-identity thinker units through
+# the validating wrapper only — the wrapper whitelists the action and the
+# identity name, so no wildcard is needed here.
+shellm ALL=(root) NOPASSWD: /usr/local/bin/headlong-thinkersctl

@@ -30,7 +30,7 @@ import {
 import type { EnvEntry } from "~/lib/types";
 
 export function meta() {
-  return [{ title: "Shelly · config" }];
+  return [{ title: "Headlong · config" }];
 }
 
 function useEnvMutations(identityId: string) {
@@ -216,7 +216,7 @@ function ExportSection({ identityId }: { identityId: string }) {
         </h2>
         <span className="text-[11px] text-muted-foreground">
           Snapshot this identity as a portable .tgz — import it on another
-          Shelly dash (or with `identity import`). Secrets (.env) and runtime
+          Headlong dash (or with `identity import`). Secrets (.env) and runtime
           state never leave the box.
         </span>
       </div>

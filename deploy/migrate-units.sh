@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# deploy/migrate-units.sh — one-time cutover from the shellm-* systemd units
-# to shelly-*. Run once per box, in a window someone is watching:
+# deploy/migrate-units.sh — one-time cutover from the shelly-* systemd units
+# to headlong-*. Run once per box, in a window someone is watching:
 #
 #   sudo bash /opt/shellm/app/deploy/migrate-units.sh --dry-run   # rehearse
 #   sudo bash /opt/shellm/app/deploy/migrate-units.sh             # do it
@@ -14,12 +14,23 @@ set -euo pipefail
 # A one-time step that kills the mind must be typed on purpose. update.sh
 # refuses to run while legacy units are installed and points here.
 #
-# Everything the migration touches is backed up first, and --rollback puts
-# it all back, so a failed cutover is recoverable without a redeploy.
+# Unlike the 2026-08-19 shellm->shelly rename, this cutover ships NO
+# back-compat: no legacy console-script aliases, no dual wrapper names, no
+# dual-match in the self-stop guard. That means:
+#
+#   - Between `git pull` + `uv sync` on the rename commit and running this
+#     script, the installed shelly-* units point at console scripts that no
+#     longer exist, and the cgroup self-stop guard in bin/thinkers does not
+#     match the still-running shelly-thinkers@ cgroup. Keep that window
+#     short and supervised; run this script immediately after the deploy.
+#   - --rollback restores the shelly-* unit files it backed up, but their
+#     ExecStart binaries (shelly-web, shelly-slack-bridge, ...) only exist
+#     while the code is on a pre-rename commit. A real rollback is:
+#     git checkout <pre-rename commit>, uv sync each project, THEN
+#     --rollback. The EBS snapshot is the deep backstop.
 #
 # Writing a migration like this one? deploy/MIGRATIONS.md is the playbook:
-# the compat-first principle, the couplings that fail silently, and the
-# verification checklist.
+# the couplings that fail silently, and the verification checklist.
 #
 # Out of scope on purpose (these stay "shellm"): the /opt/shellm path, the
 # shellm and shellm-telegram UNIX users, ~shellm/.shellm, the per-identity
@@ -28,7 +39,7 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/shellm/app}"
 SHELLM_HOME="${SHELLM_HOME:-$(dirname "$APP_DIR")}"
-BACKUP_DIR="${BACKUP_DIR:-/var/backups/shelly-unit-migration}"
+BACKUP_DIR="${BACKUP_DIR:-/var/backups/headlong-unit-migration}"
 # Overridable so the script can be rehearsed against a scratch layout.
 SYSD="${SYSD:-/etc/systemd/system}"
 SUDOERS_D="${SUDOERS_D:-/etc/sudoers.d}"
@@ -37,22 +48,22 @@ LOCAL_BIN="${LOCAL_BIN:-/usr/local/bin}"
 
 # legacy:new. Order matters for stop (below) but not here.
 UNIT_PAIRS=(
-    "shellm-web.service:shelly-web.service"
-    "shellm-thinkers@.service:shelly-thinkers@.service"
-    "shellm-thinkers-alert@.service:shelly-thinkers-alert@.service"
-    "shellm-slack-bridge.service:shelly-slack-bridge.service"
-    "shellm-slack-agent.service:shelly-slack-agent.service"
-    "shellm-telegram-bridge.service:shelly-telegram-bridge.service"
+    "shelly-web.service:headlong-web.service"
+    "shelly-thinkers@.service:headlong-thinkers@.service"
+    "shelly-thinkers-alert@.service:headlong-thinkers-alert@.service"
+    "shelly-slack-bridge.service:headlong-slack-bridge.service"
+    "shelly-slack-agent.service:headlong-slack-agent.service"
+    "shelly-telegram-bridge.service:headlong-telegram-bridge.service"
 )
 
 # Stopped in this order: bridges first so nothing new arrives while the mind
 # drains, then the persona bootstrap, then the dispatchers, then the web
 # control plane last (it is what an operator watches for health).
 STOP_ORDER=(
-    shellm-slack-bridge.service
-    shellm-telegram-bridge.service
-    shellm-slack-agent.service
-    shellm-web.service
+    shelly-slack-bridge.service
+    shelly-telegram-bridge.service
+    shelly-slack-agent.service
+    shelly-web.service
 )
 
 DRY_RUN=0
@@ -99,15 +110,18 @@ thinker_instances() {
 ########################################################################
 if [[ "$MODE" == rollback ]]; then
     [[ -d "$BACKUP_DIR" ]] || { echo "error: no backup at $BACKUP_DIR" >&2; exit 1; }
-    say "Rolling back to the shellm-* units from $BACKUP_DIR"
+    say "Rolling back to the shelly-* units from $BACKUP_DIR"
+    echo "    NOTE: the restored units exec shelly-* console scripts, which" >&2
+    echo "    only exist while the code is on a pre-rename commit. Revert the" >&2
+    echo "    checkout and uv sync BEFORE this, or the units will not start." >&2
 
     # Stop the minds first — same reason as the forward path, and a running
     # dispatcher in a cgroup whose unit file is about to vanish is a mess.
     while read -r ident; do
         [[ -n "$ident" ]] || continue
-        say "Stopping shelly-thinkers@$ident"
-        run systemctl stop "shelly-thinkers@$ident.service" || true
-    done < <(thinker_instances shelly-thinkers)
+        say "Stopping headlong-thinkers@$ident"
+        run systemctl stop "headlong-thinkers@$ident.service" || true
+    done < <(thinker_instances headlong-thinkers)
 
     for pair in "${UNIT_PAIRS[@]}"; do
         new="${pair#*:}"
@@ -115,8 +129,8 @@ if [[ "$MODE" == rollback ]]; then
         run systemctl disable --now "$new" || true
         run rm -f "$SYSD/$new"
     done
-    if [[ -d "$SYSD/shelly-web.service.d" ]]; then
-        run rm -rf "$SYSD/shelly-web.service.d"
+    if [[ -d "$SYSD/headlong-web.service.d" ]]; then
+        run rm -rf "$SYSD/headlong-web.service.d"
     fi
 
     for pair in "${UNIT_PAIRS[@]}"; do
@@ -124,21 +138,21 @@ if [[ "$MODE" == rollback ]]; then
         [[ -f "$BACKUP_DIR/units/$legacy" ]] || continue
         run install -o root -g root -m 0644 "$BACKUP_DIR/units/$legacy" "$SYSD/$legacy"
     done
-    if [[ -d "$BACKUP_DIR/units/shellm-web.service.d" ]]; then
-        run cp -a "$BACKUP_DIR/units/shellm-web.service.d" "$SYSD/"
+    if [[ -d "$BACKUP_DIR/units/shelly-web.service.d" ]]; then
+        run cp -a "$BACKUP_DIR/units/shelly-web.service.d" "$SYSD/"
     fi
 
-    if [[ -f "$BACKUP_DIR/shellm-thinkersctl" ]]; then
-        run install -o root -g root -m 0755 "$BACKUP_DIR/shellm-thinkersctl" $LOCAL_BIN/shellm-thinkersctl
+    if [[ -f "$BACKUP_DIR/shelly-thinkersctl" ]]; then
+        run install -o root -g root -m 0755 "$BACKUP_DIR/shelly-thinkersctl" $LOCAL_BIN/shelly-thinkersctl
     fi
-    if [[ -f "$BACKUP_DIR/sudoers-shellm-thinkers" ]]; then
-        run install -o root -g root -m 0440 "$BACKUP_DIR/sudoers-shellm-thinkers" $SUDOERS_D/shellm-thinkers
+    if [[ -f "$BACKUP_DIR/sudoers-shelly-thinkers" ]]; then
+        run install -o root -g root -m 0440 "$BACKUP_DIR/sudoers-shelly-thinkers" $SUDOERS_D/shelly-thinkers
     fi
-    run rm -f $SUDOERS_D/shelly-thinkers $LOCAL_BIN/shelly-thinkersctl
-    if [[ -f "$BACKUP_DIR/shellm-signals.rules" ]]; then
-        run install -o root -g root -m 0640 "$BACKUP_DIR/shellm-signals.rules" $AUDIT_D/shellm-signals.rules
+    run rm -f $SUDOERS_D/headlong-thinkers $LOCAL_BIN/headlong-thinkersctl
+    if [[ -f "$BACKUP_DIR/shelly-signals.rules" ]]; then
+        run install -o root -g root -m 0640 "$BACKUP_DIR/shelly-signals.rules" $AUDIT_D/shelly-signals.rules
     fi
-    run rm -f $AUDIT_D/shelly-signals.rules
+    run rm -f $AUDIT_D/headlong-signals.rules
 
     run systemctl daemon-reload
 
@@ -156,7 +170,7 @@ if [[ "$MODE" == rollback ]]; then
         fi
     done < "$BACKUP_DIR/manifest"
 
-    say "Rollback done. Check: systemctl status shellm-web shellm-thinkers@audel"
+    say "Rollback done. Check: systemctl status shelly-web shelly-thinkers@audel"
     exit 0
 fi
 
@@ -170,19 +184,35 @@ for pair in "${UNIT_PAIRS[@]}"; do
     [[ -f "$APP_DIR/deploy/$new" ]] \
         || { echo "error: missing $APP_DIR/deploy/$new — is the repo on the rename commit?" >&2; exit 1; }
 done
-[[ -f "$APP_DIR/deploy/shelly-thinkersctl" ]] \
-    || { echo "error: missing $APP_DIR/deploy/shelly-thinkersctl" >&2; exit 1; }
+[[ -f "$APP_DIR/deploy/headlong-thinkersctl" ]] \
+    || { echo "error: missing $APP_DIR/deploy/headlong-thinkersctl" >&2; exit 1; }
+
+# No compat aliases this time: the headlong-* console scripts must already
+# be in the venvs (deploy update.sh ran on the rename commit) or the new
+# units will have nothing to exec.
+for proj_bin in web/.venv/bin/headlong-web slack/.venv/bin/headlong-slack-bridge \
+                telegram/.venv/bin/headlong-telegram-bridge; do
+    proj="${proj_bin%%/*}"
+    # Optional components: only require the binary if the component's legacy
+    # unit is actually installed.
+    case "$proj" in
+        slack)    [[ -f "$SYSD/shelly-slack-bridge.service" ]] || continue ;;
+        telegram) [[ -f "$SYSD/shelly-telegram-bridge.service" ]] || continue ;;
+    esac
+    [[ -x "$APP_DIR/$proj_bin" ]] \
+        || { echo "error: missing $APP_DIR/$proj_bin — run deploy/update.sh (uv sync) on the rename commit first" >&2; exit 1; }
+done
 
 installed_legacy=0
 for pair in "${UNIT_PAIRS[@]}"; do
     [[ -f "$SYSD/${pair%%:*}" ]] && installed_legacy=1
 done
 if [[ $installed_legacy -eq 0 ]]; then
-    say "No shellm-* units installed — already migrated. Nothing to do."
+    say "No shelly-* units installed — already migrated. Nothing to do."
     exit 0
 fi
 
-mapfile -t INSTANCES < <(thinker_instances shellm-thinkers)
+mapfile -t INSTANCES < <(thinker_instances shelly-thinkers)
 say "Thinkers instances to bring back: ${INSTANCES[*]:-(none)}"
 
 ########################################################################
@@ -208,19 +238,19 @@ for pair in "${UNIT_PAIRS[@]}"; do
     en=${en%%$'\n'*}; [[ -n "$en" ]] || en=unknown
     ac=${ac%%$'\n'*}; [[ -n "$ac" ]] || ac=unknown
     manifest+="$legacy"$'\t'"$en"$'\t'"$ac"$'\n'
-    printf '    %-34s enabled=%-10s active=%s\n' "$legacy" "$en" "$ac"
+    printf '    %-36s enabled=%-10s active=%s\n' "$legacy" "$en" "$ac"
 done
-if [[ -d "$SYSD/shellm-web.service.d" ]]; then
-    run cp -a "$SYSD/shellm-web.service.d" "$BACKUP_DIR/units/"
+if [[ -d "$SYSD/shelly-web.service.d" ]]; then
+    run cp -a "$SYSD/shelly-web.service.d" "$BACKUP_DIR/units/"
 fi
-if [[ -f $LOCAL_BIN/shellm-thinkersctl ]]; then
-    run cp -a $LOCAL_BIN/shellm-thinkersctl "$BACKUP_DIR/"
+if [[ -f $LOCAL_BIN/shelly-thinkersctl ]]; then
+    run cp -a $LOCAL_BIN/shelly-thinkersctl "$BACKUP_DIR/"
 fi
-if [[ -f $SUDOERS_D/shellm-thinkers ]]; then
-    run cp -a $SUDOERS_D/shellm-thinkers "$BACKUP_DIR/sudoers-shellm-thinkers"
+if [[ -f $SUDOERS_D/shelly-thinkers ]]; then
+    run cp -a $SUDOERS_D/shelly-thinkers "$BACKUP_DIR/sudoers-shelly-thinkers"
 fi
-if [[ -f $AUDIT_D/shellm-signals.rules ]]; then
-    run cp -a $AUDIT_D/shellm-signals.rules "$BACKUP_DIR/"
+if [[ -f $AUDIT_D/shelly-signals.rules ]]; then
+    run cp -a $AUDIT_D/shelly-signals.rules "$BACKUP_DIR/"
 fi
 
 if [[ $DRY_RUN -eq 1 ]]; then
@@ -239,14 +269,14 @@ for unit in "${STOP_ORDER[@]}"; do
 done
 for ident in "${INSTANCES[@]:-}"; do
     [[ -n "$ident" ]] || continue
-    say "Stopping shellm-thinkers@$ident"
-    run systemctl stop "shellm-thinkers@$ident.service" || true
+    say "Stopping shelly-thinkers@$ident"
+    run systemctl stop "shelly-thinkers@$ident.service" || true
 done
 
 ########################################################################
 # Swap the files
 ########################################################################
-say "Removing legacy units and installing shelly-* units"
+say "Removing legacy units and installing headlong-* units"
 for pair in "${UNIT_PAIRS[@]}"; do
     legacy="${pair%%:*}"
     [[ -f "$SYSD/$legacy" ]] || continue
@@ -265,16 +295,27 @@ for pair in "${UNIT_PAIRS[@]}"; do
 done
 for ident in "${INSTANCES[@]:-}"; do
     [[ -n "$ident" ]] || continue
-    run systemctl reset-failed "shellm-thinkers@$ident.service" || true
+    run systemctl reset-failed "shelly-thinkers@$ident.service" || true
 done
 
 # The box-local drop-in (CORS origin, etc.) has to follow the unit name or
 # it stops applying — silently, since systemd just ignores an orphan dir.
-# Moved verbatim: it is operator-owned config, and any legacy SHELLM_* var
-# in it keeps working through the SHELLY_*-first fallback in shelly_web/env.py.
-if [[ -d "$SYSD/shellm-web.service.d" ]]; then
-    say "Moving drop-in shellm-web.service.d -> shelly-web.service.d"
-    run mv "$SYSD/shellm-web.service.d" "$SYSD/shelly-web.service.d"
+# SHELLY_* var names inside it are rewritten to HEADLONG_* (there is no
+# SHELLY_ fallback in headlong_web/env.py anymore); operator-set SHELLM_*
+# names keep working through env.py's SHELLM_ fallback, which stays until
+# the parked /opt/shellm world is renamed.
+if [[ -d "$SYSD/shelly-web.service.d" ]]; then
+    say "Moving drop-in shelly-web.service.d -> headlong-web.service.d"
+    run mv "$SYSD/shelly-web.service.d" "$SYSD/headlong-web.service.d"
+    if [[ $DRY_RUN -eq 1 ]]; then
+        printf '    [dry-run] rewrite SHELLY_ -> HEADLONG_ in headlong-web.service.d/*.conf\n'
+    else
+        for conf in "$SYSD/headlong-web.service.d"/*.conf; do
+            [[ -f "$conf" ]] || continue
+            sed -i -e 's/\bSHELLY_/HEADLONG_/g' \
+                -e 's|/usr/local/bin/shelly-thinkersctl|/usr/local/bin/headlong-thinkersctl|g' "$conf"
+        done
+    fi
 fi
 
 for pair in "${UNIT_PAIRS[@]}"; do
@@ -289,21 +330,21 @@ for pair in "${UNIT_PAIRS[@]}"; do
     fi
 done
 
-say "Installing shelly-thinkersctl (both names), sudoers, audit rules"
-for ctl in shelly-thinkersctl shellm-thinkersctl; do
-    run install -o root -g root -m 0755 "$APP_DIR/deploy/shelly-thinkersctl" "$LOCAL_BIN/$ctl"
-done
-if [[ -f "$APP_DIR/deploy/sudoers-shelly-thinkers" ]]; then
-    if visudo -cf "$APP_DIR/deploy/sudoers-shelly-thinkers" >/dev/null; then
-        run install -o root -g root -m 0440 "$APP_DIR/deploy/sudoers-shelly-thinkers" $SUDOERS_D/shelly-thinkers
-        run rm -f $SUDOERS_D/shellm-thinkers
+say "Installing headlong-thinkersctl, sudoers, audit rules (single names — no compat)"
+run install -o root -g root -m 0755 "$APP_DIR/deploy/headlong-thinkersctl" "$LOCAL_BIN/headlong-thinkersctl"
+# Sweep BOTH prior generations of the wrapper.
+run rm -f "$LOCAL_BIN/shelly-thinkersctl" "$LOCAL_BIN/shellm-thinkersctl"
+if [[ -f "$APP_DIR/deploy/sudoers-headlong-thinkers" ]]; then
+    if visudo -cf "$APP_DIR/deploy/sudoers-headlong-thinkers" >/dev/null; then
+        run install -o root -g root -m 0440 "$APP_DIR/deploy/sudoers-headlong-thinkers" $SUDOERS_D/headlong-thinkers
+        run rm -f $SUDOERS_D/shelly-thinkers $SUDOERS_D/shellm-thinkers
     else
-        echo "==> ERROR: sudoers-shelly-thinkers failed visudo — keeping the old rule" >&2
+        echo "==> ERROR: sudoers-headlong-thinkers failed visudo — keeping the old rule" >&2
     fi
 fi
-if [[ -f "$APP_DIR/deploy/audit-shelly-signals.rules" ]]; then
-    run install -o root -g root -m 0640 "$APP_DIR/deploy/audit-shelly-signals.rules" $AUDIT_D/shelly-signals.rules
-    run rm -f $AUDIT_D/shellm-signals.rules
+if [[ -f "$APP_DIR/deploy/audit-headlong-signals.rules" ]]; then
+    run install -o root -g root -m 0640 "$APP_DIR/deploy/audit-headlong-signals.rules" $AUDIT_D/headlong-signals.rules
+    run rm -f $AUDIT_D/shelly-signals.rules $AUDIT_D/shellm-signals.rules
     run augenrules --load || echo "==> WARN: augenrules --load failed — rules apply after next reboot" >&2
 fi
 
@@ -312,7 +353,7 @@ run systemctl daemon-reload
 ########################################################################
 # Start
 ########################################################################
-say "Starting shelly-* units"
+say "Starting headlong-* units"
 # Enable whatever was enabled before. Templates are never enabled; their
 # instances come up through the slack persona bootstrap, same as on boot.
 while IFS=$'\t' read -r unit enabled _active; do
@@ -329,10 +370,10 @@ while IFS=$'\t' read -r unit enabled _active; do
 done < <(if [[ $DRY_RUN -eq 1 ]]; then printf '%s' "$manifest"; else cat "$BACKUP_DIR/manifest"; fi)
 
 # Web first so the dash is up to watch the rest. Then the persona bootstrap,
-# whose ExecStart calls `shelly-thinkersctl restart <identity>` and brings
+# whose ExecStart calls `headlong-thinkersctl restart <identity>` and brings
 # the mind back — the same path every reboot takes. Then the bridges.
-for unit in shelly-web.service shelly-slack-agent.service \
-            shelly-slack-bridge.service shelly-telegram-bridge.service; do
+for unit in headlong-web.service headlong-slack-agent.service \
+            headlong-slack-bridge.service headlong-telegram-bridge.service; do
     # In a dry run nothing was installed, so test the repo source instead —
     # otherwise the rehearsal skips the entire start phase and shows
     # nothing about the step most worth rehearsing.
@@ -349,11 +390,11 @@ done
 # it does not manage (a non-persona identity) gets started explicitly.
 for ident in "${INSTANCES[@]:-}"; do
     [[ -n "$ident" ]] || continue
-    if [[ $DRY_RUN -eq 0 ]] && systemctl is-active --quiet "shelly-thinkers@$ident.service"; then
+    if [[ $DRY_RUN -eq 0 ]] && systemctl is-active --quiet "headlong-thinkers@$ident.service"; then
         continue
     fi
-    say "Starting shelly-thinkers@$ident (not brought up by the bootstrap)"
-    run systemctl start "shelly-thinkers@$ident.service" || true
+    say "Starting headlong-thinkers@$ident (not brought up by the bootstrap)"
+    run systemctl start "headlong-thinkers@$ident.service" || true
 done
 
 ########################################################################
@@ -371,23 +412,23 @@ for pair in "${UNIT_PAIRS[@]}"; do
     [[ -f "$SYSD/$new" ]] || continue
     [[ "$new" == *"@.service" ]] && continue   # templates have no state
     st=$(systemctl is-active "$new" 2>/dev/null || true)
-    printf '    %-34s %s\n' "$new" "$st"
+    printf '    %-36s %s\n' "$new" "$st"
     # slack-agent is a oneshot: "active (exited)" is success.
     [[ "$st" == active ]] || fail=1
 done
 for ident in "${INSTANCES[@]:-}"; do
     [[ -n "$ident" ]] || continue
-    st=$(systemctl is-active "shelly-thinkers@$ident.service" 2>/dev/null || true)
-    printf '    %-34s %s\n' "shelly-thinkers@$ident.service" "$st"
+    st=$(systemctl is-active "headlong-thinkers@$ident.service" 2>/dev/null || true)
+    printf '    %-36s %s\n' "headlong-thinkers@$ident.service" "$st"
     [[ "$st" == active ]] || fail=1
     # The self-stop guard matches the dispatcher's cgroup by unit name. If
     # the cgroup does not carry the new name the guard is not protecting
     # this mind, which is the exact failure the rename could introduce.
     dpid=$(cat "$APP_DIR/.identities/$ident/run/dispatcher.pid" 2>/dev/null || true)
-    if [[ -n "$dpid" ]] && grep -q "shelly-thinkers@$ident.service" "/proc/$dpid/cgroup" 2>/dev/null; then
-        printf '    %-34s guard cgroup OK (pid %s)\n' "" "$dpid"
+    if [[ -n "$dpid" ]] && grep -q "headlong-thinkers@$ident.service" "/proc/$dpid/cgroup" 2>/dev/null; then
+        printf '    %-36s guard cgroup OK (pid %s)\n' "" "$dpid"
     else
-        printf '    %-34s GUARD CGROUP NOT CONFIRMED (pid %s)\n' "" "${dpid:-none}"
+        printf '    %-36s GUARD CGROUP NOT CONFIRMED (pid %s)\n' "" "${dpid:-none}"
         fail=1
     fi
 done
@@ -403,6 +444,7 @@ done
 if [[ $fail -ne 0 ]]; then
     echo "==> ERROR: migration finished with problems. Roll back with:" >&2
     echo "      sudo bash $0 --rollback" >&2
+    echo "    (after reverting the checkout — see the header notes)" >&2
     exit 1
 fi
 

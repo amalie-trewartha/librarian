@@ -13,8 +13,8 @@ provisioning, and day-2 instructions all apply here, with these deltas:
   (see `terraform.tfvars.example`; the Slack app itself is created and
   managed from `slack/manifest.json` via the Slack CLI — see `slack/README.md`).
 - `user_data.sh.tpl` runs setup with `SHELLM_INSTALL_SLACK_BRIDGE=1`, which
-  installs the `shelly-slack-agent` (persona bootstrap) and
-  `shelly-slack-bridge` (Socket Mode client) units alongside `shelly-web`.
+  installs the `headlong-slack-agent` (persona bootstrap) and
+  `headlong-slack-bridge` (Socket Mode client) units alongside `headlong-web`.
 - Optional Google SSO for the dash: set `allowed_email_domains` +
   `google_oauth_client_id` in tfvars (see `terraform.tfvars.example`) and
   the client secret via `TF_VAR_google_oauth_client_secret` in `.envrc`

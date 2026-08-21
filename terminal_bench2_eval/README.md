@@ -1,9 +1,9 @@
 # terminal_bench2_eval/
 
-Harness and results for evaluating shellm and Shelly on
+Harness and results for evaluating shellm and Headlong on
 [Terminal-Bench 2](https://www.tbench.ai/) via Harbor. The
 `harbor_*_agent.py` and `harbor_*_environment.py` files adapt shellm and
-Shelly to Harbor's agent and environment interfaces, and
+Headlong to Harbor's agent and environment interfaces, and
 `harbor_assets/` holds the run scripts and prompt template.
 
 The `*_report*.md` files are the write-ups from past eval runs, and

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # deploy/thinkers-failure-alert.sh — OnFailure= hook for
-# shelly-thinkers@<identity>.service (fired via shelly-thinkers-alert@).
+# headlong-thinkers@<identity>.service (fired via headlong-thinkers-alert@).
 # With Restart=on-failure on the unit, OnFailure fires only when the start
 # limit is exhausted, so this alert means "died repeatedly, auto-restart
 # gave up, the mind is STAYING DOWN". Per-death and recovery notices are
@@ -11,15 +11,15 @@ set -euo pipefail
 # Usage: thinkers-failure-alert.sh APP_DIR IDENTITY
 #
 # Config (APP_DIR/.env): SLACK_BOT_TOKEN (already present for the bridge)
-# and SHELLY_ALERT_CHANNEL (legacy SHELLM_ALERT_CHANNEL) — the channel ID to post to (e.g. #shellm-bot's
+# and HEADLONG_ALERT_CHANNEL (legacy SHELLM_ALERT_CHANNEL) — the channel ID to post to (e.g. #shellm-bot's
 # ID; the bot must be a member). Missing config degrades to a line in
-# /var/tmp/shelly-thinkers-alert.log, never a unit failure: the alert path
+# /var/tmp/headlong-thinkers-alert.log, never a unit failure: the alert path
 # must not add its own failure mode on top of a dead mind.
 
 APP_DIR="${1:?usage: thinkers-failure-alert.sh APP_DIR IDENTITY}"
 IDENT="${2:?identity name required}"
 
-FALLBACK_LOG="/var/tmp/shelly-thinkers-alert.log"
+FALLBACK_LOG="/var/tmp/headlong-thinkers-alert.log"
 
 # Belt-and-suspenders: the unit's EnvironmentFile= already loads this (as
 # root); sourcing here covers manual runs. Never fatal — the alert must not
@@ -31,11 +31,11 @@ if [[ -r "$APP_DIR/.env" ]]; then
     set +a
 fi
 
-# Framework var: SHELLY_ first, legacy SHELLM_ fallback (the box .env still
+# Framework var: HEADLONG_ first, legacy SHELLM_ fallback (the box .env still
 # carries the old name until it is rewritten).
-ALERT_CHANNEL="${SHELLY_ALERT_CHANNEL:-${SHELLM_ALERT_CHANNEL:-}}"
+ALERT_CHANNEL="${HEADLONG_ALERT_CHANNEL:-${SHELLM_ALERT_CHANNEL:-}}"
 
-unit="shelly-thinkers@${IDENT}.service"
+unit="headlong-thinkers@${IDENT}.service"
 info=$(systemctl show "$unit" \
     -p Result,ExecMainStatus,ExecMainExitTimestampMonotonic,ExecMainExitTimestamp 2>/dev/null || true)
 log_tail=$(tail -n 8 "$APP_DIR/.identities/$IDENT/run/logs/dispatcher.log" 2>/dev/null || true)
@@ -46,10 +46,10 @@ ${info}
 --- dispatcher.log tail ---
 ${log_tail}
 \`\`\`
-Investigate first, then restart: \`sudo shelly-thinkersctl start ${IDENT}\` on the box."
+Investigate first, then restart: \`sudo headlong-thinkersctl start ${IDENT}\` on the box."
 
 if [[ -z "${SLACK_BOT_TOKEN:-}" || -z "$ALERT_CHANNEL" ]]; then
-    printf '%s [thinkers-alert] %s failed; Slack not configured (need SLACK_BOT_TOKEN + SHELLY_ALERT_CHANNEL in %s/.env)\n' \
+    printf '%s [thinkers-alert] %s failed; Slack not configured (need SLACK_BOT_TOKEN + HEADLONG_ALERT_CHANNEL in %s/.env)\n' \
         "$(date -u +%FT%TZ)" "$unit" "$APP_DIR" >> "$FALLBACK_LOG"
     exit 0
 fi

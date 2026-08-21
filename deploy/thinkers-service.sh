@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # deploy/thinkers-service.sh — ExecStart/ExecStop body for
-# shelly-thinkers@<identity>.service. Runs as the shellm user.
+# headlong-thinkers@<identity>.service. Runs as the shellm user.
 #
 # Usage: thinkers-service.sh APP_DIR IDENTITY start|stop
 #
@@ -11,7 +11,7 @@ set -euo pipefail
 # start every enabled thinker by name. Named start matters: the CLI's bare
 # start only arms the dispatcher, while named start also kicks each thinker
 # once so the mind actually wakes up (same reason the dash expands "start
-# all" to explicit names, web/src/shelly_web/server.py).
+# all" to explicit names, web/src/headlong_web/server.py).
 #
 # stop: drain stop, then wait for in-flight steps to finish so systemd's
 # final cgroup sweep (KillMode=control-group) reaps only what refused to

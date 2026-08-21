@@ -54,4 +54,4 @@ run_script_on_box "
 " || die "writing the env file failed — box unchanged or partially written; check output above"
 
 info "Done. Next: deploy/scripts/update (installs + starts the bridge),"
-info "or if the bridge is already installed: deploy/scripts/run 'sudo systemctl restart shelly-telegram-bridge'"
+info "or if the bridge is already installed: deploy/scripts/run 'sudo systemctl restart headlong-telegram-bridge'"

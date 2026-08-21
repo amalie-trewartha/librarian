@@ -43,19 +43,19 @@ fi
 %{ endif ~}
 
 # --- pin CORS to the public hostname --------------------------------------
-mkdir -p /etc/systemd/system/shelly-web.service.d
-cat > /etc/systemd/system/shelly-web.service.d/override.conf <<OVERRIDE
+mkdir -p /etc/systemd/system/headlong-web.service.d
+cat > /etc/systemd/system/headlong-web.service.d/override.conf <<OVERRIDE
 [Service]
-Environment="SHELLY_WEB_ALLOWED_ORIGINS=https://${hostname}"
+Environment="HEADLONG_WEB_ALLOWED_ORIGINS=https://${hostname}"
 OVERRIDE
 
 systemctl daemon-reload
-systemctl restart shelly-web
+systemctl restart headlong-web
 
 # --- slack: re-run the persona bootstrap and bridge now that .env exists ---
 # setup.sh started both units before the SSM .env landed; the bridge loops
 # on Restart=always until tokens exist, so these restarts settle it fast.
-systemctl restart shelly-slack-agent || true
-systemctl restart shelly-slack-bridge || true
+systemctl restart headlong-slack-agent || true
+systemctl restart headlong-slack-bridge || true
 
 echo "==> shellm bootstrap done $(date -u)"
