@@ -233,13 +233,14 @@ _ensure_api_key() {
         cat >/dev/tty <<'EOF'
 
 Headlong needs an LLM API key (Anthropic, OpenAI, Gemini, or OpenRouter).
-Paste just the key itself — headlong-init figures out the provider from it.
-The agent you're about to create runs continuously and executes shell
-commands — use a DEDICATED, SPEND-CAPPED key. With the default model
-(Claude Sonnet 4.5) expect roughly $1–2 an hour while it runs, about
-$25–50 a day; more if you talk to it a lot. You can pause it at any time
-(`ada stop`, using whatever name you pick) — a paused agent spends nothing —
-and resume with `ada start`.
+Paste just the key itself; headlong-init figures out the provider from it.
+
+  * Use a DEDICATED, SPEND-CAPPED key. The agent you're about to create
+    runs continuously and executes shell commands.
+  * Cost: with the default model (Claude Sonnet 4.5) expect roughly $1–2
+    an hour while it runs, about $25–50 a day; more if you talk to it a lot.
+  * Pause it any time with `ada stop` (using whatever name you pick); a
+    paused agent spends nothing. Resume with `ada start`.
 
 EOF
         _prompt_key || die "no key entered"

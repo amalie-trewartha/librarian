@@ -86,7 +86,7 @@ fi
 ok "bugreport exits 0"
 check "prints the bundle path on stdout" test "$out" = "$OUT"
 check "bundle exists"                    test -s "$OUT"
-check "stderr names the file"            grep -q "Wrote $OUT" "$WORK/stderr"
+check "stderr names the file"            grep -qF "  $OUT" "$WORK/stderr"
 
 X="$WORK/x"; mkdir -p "$X"
 tar -xzf "$OUT" -C "$X" || { bad "bundle is a valid tgz"; exit 1; }

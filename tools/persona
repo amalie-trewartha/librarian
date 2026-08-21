@@ -378,6 +378,10 @@ EOF
     mkdir -p "$top/identity" "$top/home"
 
     echo "Collecting $NAME's identity..." >&2
+    # macOS bsdtar warns "Could not pack extended attributes" on files that
+    # carry com.apple.provenance; we don't want xattrs in the bundle anyway.
+    local -a tarq=()
+    case "$(tar --version 2>/dev/null)" in *bsdtar*) tarq=(--no-xattrs --no-mac-metadata) ;; esac
     local excl=(--exclude='./workdir')
     [[ "$BUGREPORT_INCLUDE_WORKDIR" -eq 1 ]] && excl=()
     # Follow the default -> name symlink; copy files, not the symlink itself.
@@ -387,7 +391,7 @@ EOF
     while IFS= read -r -d '' f; do big+=("${f#./}"); done \
         < <(cd "$iddir" && find . -type f -size +50M -print0 2>/dev/null)
     local f; for f in "${big[@]+"${big[@]}"}"; do excl+=(--exclude="./$f"); done
-    (cd "$iddir" && tar -cf - "${excl[@]+"${excl[@]}"}" .) | tar -xf - -C "$top/identity"
+    (cd "$iddir" && tar "${tarq[@]+"${tarq[@]}"}" -cf - "${excl[@]+"${excl[@]}"}" .) | tar -xf - -C "$top/identity"
 
     # State-home bits: logs, status, app_dir pointer. Never .env.
     local h; for h in logs status.json app_dir; do
@@ -401,13 +405,23 @@ EOF
     echo "Scrubbing secrets..." >&2
     _redact_tree "$top"
 
-    tar -czf "$out" -C "$stage" "$(basename "$top")"
-    echo >&2
-    echo "Wrote $out ($(du -h "$out" | cut -f1))." >&2
-    echo "Attach that file to your bug report. It has no API keys: your .env is" >&2
-    echo "left out and credential-looking values are replaced with <redacted ...>." >&2
-    echo "List what is inside with:  tar tzf $out" >&2
-    printf '%s\n' "$out"
+    tar "${tarq[@]+"${tarq[@]}"}" -czf "$out" -C "$stage" "$(basename "$top")"
+    cat >&2 <<EOF
+
+Wrote $(du -h "$out" | cut -f1 | tr -d ' ') to
+
+  $out
+
+Attach that file to your bug report.
+
+  * It has no API keys: your .env is left out, and credential-looking
+    values are replaced with <redacted ...>.
+  * To see what is inside:  tar tzf "$out"
+
+EOF
+    # The bare path on stdout is for scripts (`open "$(ada bugreport)"`); at a
+    # terminal it would just repeat the line above.
+    [[ -t 1 ]] || printf '%s\n' "$out"
 }
 
 # _bugreport_text IDDIR [BIGFILE...] — the body of report.txt on stdout.
