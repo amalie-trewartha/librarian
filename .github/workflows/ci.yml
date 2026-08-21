@@ -12,10 +12,12 @@
 #   shellcheck     shellcheck -S warning        every shell script in the tree
 #   install-smoke  tests/smoke_install.sh       install.sh, both modes, in a
 #                                               bare ubuntu:24.04 container
+#   gitleaks       gitleaks git (full history)  secrets; allowlist in .gitleaks.toml
 #
 # Run the same things locally: tests/run-all.sh, uv run --project web pytest
 # web/tests (and slack, telegram), bun run typecheck/build in web/viewer,
-# cargo fmt --check / clippy / check in tui/headlong, tests/smoke_install.sh.
+# cargo fmt --check / clippy / check in tui/headlong, tests/smoke_install.sh,
+# gitleaks git . -c .gitleaks.toml.
 
 name: CI
 
@@ -141,3 +143,37 @@ jobs:
         run: git config --global --add safe.directory '*'
       - name: tests/smoke_install.sh
         run: bash tests/smoke_install.sh
+
+  gitleaks:
+    name: gitleaks (full history)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: 8.30.1
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # scan every commit, not just the tip
+      - name: Install gitleaks (pinned release, checksum-verified)
+        # The gitleaks GitHub Action needs a paid license for org repos; the
+        # binary does the same scan for free.
+        run: |
+          set -euo pipefail
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          curl -fsSLO "$base/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSLO "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          grep " gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz\$" "gitleaks_${GITLEAKS_VERSION}_checksums.txt" | sha256sum -c -
+          tar -xzf "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+      - name: Scan all commits
+        # Fails on any finding not allowlisted in .gitleaks.toml. Secrets are
+        # redacted in the log; the SARIF-free JSON report is kept as an
+        # artifact for triage.
+        run: gitleaks git . --config .gitleaks.toml --redact --report-format json --report-path gitleaks-report.json --no-banner -v
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: gitleaks-report
+          path: gitleaks-report.json
+          retention-days: 7

@@ -1,0 +1,20 @@
+# gitleaks config — CI scans the FULL git history on every push to main and
+# every PR (see .github/workflows/ci.yml, job "gitleaks"). Run the same scan
+# locally with:  gitleaks git . -c .gitleaks.toml
+#
+# Every entry below is a triaged, known finding. Add to this file only after
+# deciding the secret is fake or already revoked; a rotated key is still a
+# leak in history, so rotate first, then allowlist.
+
+title = "headlong"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Root commit carried a developer .env (2026-04-07). Triaged 2026-08-21: keys rotated/revoked."
+commits = ["531a18fc3516808475e84075051fc9cdd6db44c7"]
+
+[[allowlists]]
+description = "Fake OpenAI key used as a test fixture in web/tests"
+regexes = ['''sk-oai-9876543210abcdef''']
