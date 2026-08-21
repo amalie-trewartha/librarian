@@ -262,9 +262,14 @@ _build_shellm_flags() {
     # Propagate model + API keys to nested shellm calls. Inside Docker, .env
     # isn't mounted, so without these the nested call hits the final else in
     # bin/shellm's model fallback and fails with "ANTHROPIC_API_KEY is not set".
+    # Keys go by NAME (bare `--var NAME`): shellm reads the value from its
+    # environment, so it never shows up in `ps` or the recorded command line.
     [[ -n "${SHELLM_MODEL:-}" ]] && printf '%s\n' "--var" "SHELLM_MODEL=$SHELLM_MODEL"
     for _ak in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY; do
-        [[ -n "${!_ak:-}" ]] && printf '%s\n' "--var" "$_ak=${!_ak}"
+        if [[ -n "${!_ak:-}" ]]; then
+            export "${_ak?}"
+            printf '%s\n' "--var" "$_ak"
+        fi
     done
 
     # Skill-declared vars

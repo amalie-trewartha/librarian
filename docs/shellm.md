@@ -337,6 +337,7 @@ All configuration is available as both CLI flags and environment variables. Flag
 | `--traj ID` / `--resume` | — | new run | Write steps into an existing trajectory (`--resume` = the most recent one) instead of forking a new child |
 | `--traj-dir DIR` | `SHELLM_TRAJ_DIR` | `~/.headlong/trajectories` | Where trajectories are written |
 | `--var NAME=VALUE` | — | — | Pass a variable into the sandbox environment (repeatable) |
+| `--var NAME` | — | — | Forward `NAME` from shellm's own environment (repeatable). Use this for API keys and other secrets: the value never appears on a command line (`ps`) or in the recorded run command |
 | `--bin PATH` | — | — | Stage an extra executable into the sandbox (repeatable) |
 | `--new-env` | — | off | Force a fresh env instead of reusing one (cannot combine with `--env`) |
 | — | `SHELLM_FAST_MODEL` | — | Cheap model for utility calls (run summaries) |

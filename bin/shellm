@@ -171,6 +171,8 @@ Options:
   --traj-dir DIR         Trajectory directory (default: <state-home>/trajectories,
                          where the state home is ~/.headlong)
   --var NAME=VALUE       Set env var for generated code (repeatable)
+  --var NAME             Forward NAME from the current environment. Use this for
+                         secrets: the value stays off every command line
   --bin PATH             Make binary available on PATH (repeatable)
   --print-system-prompt Print the system prompt and exit
 
@@ -1202,26 +1204,39 @@ make_env_name() {
 # Code execution
 # ---------------------------------------------------------------------------
 
+# execute_code WORKSPACE CODE [NAME=VALUE ...]
+#
+# env_vars carries API keys (the nested-run key, `--var` forwards from the
+# thinkers). Command lines are world-readable (`ps`, /proc/*/cmdline), so the
+# values must never ride on one — not as `env NAME=VALUE ...` and not as
+# `docker exec -e NAME=VALUE`. Both branches export the variables in a
+# subshell and exec from there; docker gets bare `-e NAME` flags, which the
+# docker CLI fills in from its own environment.
 execute_code() {
     local workspace="$1" wrapped_code="$2"
     shift 2
     local env_vars=("$@")
 
     if [[ "$_SHELLM_DOCKER_MODE" -eq 1 ]]; then
-        # Build -e flags for docker exec, replacing host PATH with container PATH
-        local -a docker_env_flags=()
+        # Host PATH is meaningless in the container: drop it, set the
+        # container's own.
+        local -a docker_env_flags=() exports=()
+        local ev
         for ev in "${env_vars[@]}"; do
             if [[ "$ev" == PATH=* ]]; then continue; fi
-            docker_env_flags+=(-e "$ev")
+            exports+=("$ev")
+            docker_env_flags+=(-e "${ev%%=*}")
         done
         docker_env_flags+=(-e "PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin")
         docker_env_flags+=(-e "HOME=$workspace")
-
-        docker exec \
-            "${docker_env_flags[@]}" \
-            -w "$workspace" \
-            "$_SHELLM_CONTAINER" \
-            bash -e -c "$wrapped_code" </dev/null 2>&1
+        (
+            if [[ ${#exports[@]} -gt 0 ]]; then export "${exports[@]}"; fi
+            exec docker exec \
+                "${docker_env_flags[@]}" \
+                -w "$workspace" \
+                "$_SHELLM_CONTAINER" \
+                bash -e -c "$wrapped_code"
+        ) </dev/null 2>&1
     else
         local _extra_path=""
         for _bin_path in "${_SHELLM_EXTRA_BINS[@]+"${_SHELLM_EXTRA_BINS[@]}"}"; do
@@ -1229,22 +1244,22 @@ execute_code() {
             _bin_dir=$(dirname "$_bin_path")
             [[ ":$_extra_path:" != *":$_bin_dir:"* ]] && _extra_path="${_extra_path:+$_extra_path:}$_bin_dir"
         done
-        if [[ -n "$_extra_path" ]]; then
-            local -a _patched_vars=()
-            local _found_path=0
-            for _ev in "${env_vars[@]}"; do
-                if [[ "$_ev" == PATH=* ]]; then
-                    _patched_vars+=("PATH=$_extra_path:${_ev#PATH=}")
-                    _found_path=1
-                else
-                    _patched_vars+=("$_ev")
-                fi
-            done
-            [[ "$_found_path" -eq 0 ]] && _patched_vars+=("PATH=$_extra_path:$PATH")
-            cd "$workspace" && env "${_patched_vars[@]}" bash -e -c "$wrapped_code" </dev/null 2>&1
-        else
-            cd "$workspace" && env "${env_vars[@]}" bash -e -c "$wrapped_code" </dev/null 2>&1
-        fi
+        local -a _patched_vars=()
+        local _found_path=0 _ev
+        for _ev in "${env_vars[@]}"; do
+            if [[ -n "$_extra_path" && "$_ev" == PATH=* ]]; then
+                _patched_vars+=("PATH=$_extra_path:${_ev#PATH=}")
+                _found_path=1
+            else
+                _patched_vars+=("$_ev")
+            fi
+        done
+        [[ -n "$_extra_path" && "$_found_path" -eq 0 ]] && _patched_vars+=("PATH=$_extra_path:$PATH")
+        (
+            cd "$workspace" || exit 1
+            if [[ ${#_patched_vars[@]} -gt 0 ]]; then export "${_patched_vars[@]}"; fi
+            exec bash -e -c "$wrapped_code"
+        ) </dev/null 2>&1
     fi
 }
 
@@ -2617,8 +2632,27 @@ exit \$__shellm_rc
 # Argument parsing & dispatch
 # ---------------------------------------------------------------------------
 
+# The command line as recorded in the shellm-run trajectory row. Trajectories
+# get rendered into prompts, exported and shared, so `--var NAME=VALUE` values
+# whose NAME looks like a credential are masked. (Passing secrets as a bare
+# `--var NAME` keeps them off the command line altogether.)
+_redacted_cmdline() {
+    local out="shellm" prev="" a n
+    for a in "$@"; do
+        if [[ "$prev" == "--var" && "$a" == *=* ]]; then
+            n="${a%%=*}"
+            if [[ "${n^^}" =~ (KEY|TOKEN|SECRET|PASSW|CREDENTIAL) ]]; then
+                a="$n=<redacted>"
+            fi
+        fi
+        out+=" $a"
+        prev="$a"
+    done
+    printf '%s' "$out"
+}
+
 main() {
-    _SHELLM_ORIGINAL_CMD="shellm $*"
+    _SHELLM_ORIGINAL_CMD=$(_redacted_cmdline "$@")
     start_activity_beacon
     local context_files=()
     local print_prompt=0
@@ -2716,7 +2750,17 @@ main() {
                 shift
                 ;;
             --var)
-                _SHELLM_EXTRA_VARS+=("${2:?--var requires NAME=VALUE}")
+                local _var_arg="${2:?--var requires NAME=VALUE or NAME}" _var_name
+                _var_name="${_var_arg%%=*}"
+                [[ "$_var_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "--var: invalid variable name: $_var_name"
+                if [[ "$_var_arg" == *=* ]]; then
+                    _SHELLM_EXTRA_VARS+=("$_var_arg")
+                else
+                    # Bare NAME: take the value from our own environment so it
+                    # never appears on a command line (use this for API keys).
+                    [[ -n "${!_var_name+x}" ]] || die "--var $_var_name: not set in the environment (export it, or pass --var $_var_name=VALUE)"
+                    _SHELLM_EXTRA_VARS+=("$_var_name=${!_var_name}")
+                fi
                 shift 2
                 ;;
             --bin)
