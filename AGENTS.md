@@ -36,7 +36,7 @@ environment variable or a default. A key must be in the environment:
 
 ```bash
 export OPENROUTER_API_KEY=sk-or-...   # or ANTHROPIC_/OPENAI_/GEMINI_API_KEY
-curl -fsSL https://raw.githubusercontent.com/laude-institute/headlong/main/install.sh | bash
+curl -fsSL https://headlong.ai/install.sh | bash
 ```
 
 Optional variables: `HEADLONG_IDENTITY_NAME`, `HEADLONG_IDENTITY_VIBE`,

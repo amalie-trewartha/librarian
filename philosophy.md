@@ -194,7 +194,7 @@ The result is an agent that can:
 And it's all bash scripts. The whole stack — shellm, llm, traj, context, thinkers, mem, skills, and the tools around them — installs with:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/laude-institute/headlong/main/install.sh | bash
+curl -fsSL https://headlong.ai/install.sh | bash
 ```
 
 or `./install.sh` from a checkout. The core needs nothing but bash, curl, jq, and git. No Docker required (though shellm uses it for sandboxing when available). A directory of small executables on your PATH. The only non-bash piece is the optional dashboard, a small Python and React app for watching the mind run.

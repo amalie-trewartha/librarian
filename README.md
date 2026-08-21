@@ -29,7 +29,7 @@ One line installs everything, interviews you to bring a Headlong agent to
 life, and opens a dashboard where you can watch its mind run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/laude-institute/headlong/main/install.sh | bash
+curl -fsSL https://headlong.ai/install.sh | bash
 ```
 
 You'll need bash 3.2+, git, curl, jq, and an LLM API key (Anthropic,
@@ -59,7 +59,7 @@ You can also run the same flow inside a long-lived Docker container:
 
 ```bash
 docker run -it --name headlong --restart unless-stopped -p 8080:8080 buildpack-deps:curl \
-  bash -c 'curl -fsSL https://raw.githubusercontent.com/laude-institute/headlong/main/install.sh | bash; exec bash'
+  bash -c 'curl -fsSL https://headlong.ai/install.sh | bash; exec bash'
 ```
 
 Details, non-interactive/CI installs, and installing from a checkout are

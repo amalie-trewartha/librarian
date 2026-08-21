@@ -9,14 +9,14 @@ set -euo pipefail
 #     ./install.sh [options]
 #
 #   One-liner (no checkout needed):
-#     curl -fsSL https://raw.githubusercontent.com/laude-institute/headlong/main/install.sh | bash
+#     curl -fsSL https://headlong.ai/install.sh | bash
 #
 # The one-liner clones the repo to ~/.headlong/app, symlink-installs the
 # tools, then hands off to `headlong-init` to bootstrap a first identity and
 # start the local dash. Pass args through the pipe with `| bash -s -- <args>`.
 #
 # Prefer to read before you run? Same thing, two steps:
-#     curl -fsSLO https://raw.githubusercontent.com/laude-institute/headlong/main/install.sh
+#     curl -fsSLO https://headlong.ai/install.sh
 #     less install.sh && bash install.sh --init
 #
 # Everything side-effectful happens inside main(), invoked on the LAST line of

@@ -6,7 +6,7 @@ variant.
 ## The one-liner
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/laude-institute/headlong/main/install.sh | bash
+curl -fsSL https://headlong.ai/install.sh | bash
 ```
 
 It clones the repo to `~/.headlong/app`, symlinks the tools into
@@ -32,7 +32,7 @@ installer from the checkout, so what executes is the same code you can
 read here. To read first:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/laude-institute/headlong/main/install.sh
+curl -fsSLO https://headlong.ai/install.sh
 less install.sh && bash install.sh --init
 ```
 
@@ -45,7 +45,7 @@ container) and the dashboard binds `0.0.0.0` so the published port works.
 
 ```bash
 docker run -it --name headlong --restart unless-stopped -p 8080:8080 buildpack-deps:curl \
-  bash -c 'curl -fsSL https://raw.githubusercontent.com/laude-institute/headlong/main/install.sh | bash; exec bash'
+  bash -c 'curl -fsSL https://headlong.ai/install.sh | bash; exec bash'
 ```
 
 Paste your key, answer the interview, then open http://localhost:8080 on
@@ -81,7 +81,7 @@ export HEADLONG_IDENTITY_NAME=ada       # optional; the interview's answers
 export HEADLONG_IDENTITY_VIBE="curious, warm, and plainspoken"
 export HEADLONG_IDENTITY_FOCUS="learning how their own mind works"
 export HEADLONG_IDENTITY_USER="I'm Sam, a programmer trying Headlong out"
-curl -fsSL https://raw.githubusercontent.com/laude-institute/headlong/main/install.sh | bash
+curl -fsSL https://headlong.ai/install.sh | bash
 ```
 
 A key must be in the environment; everything else is optional.
