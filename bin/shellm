@@ -1835,8 +1835,17 @@ run_loop() {
         # --- New trajectory path ---
         # Create the trajectory via traj new
         if [[ -n "${_SHELLM_PARENT_TRAJ_ID:-}" ]]; then
-            # Pre-generate fork step_id for cross-referencing
-            _fork_step_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
+            # Pre-generate fork step_id for cross-referencing. uuidgen is
+            # not on a bare Ubuntu (uuid-runtime), so fall back the way
+            # traj's gen_step_id does instead of failing the nested run.
+            if command -v uuidgen >/dev/null 2>&1; then
+                _fork_step_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
+            elif [[ -r /proc/sys/kernel/random/uuid ]]; then
+                _fork_step_id=$(cat /proc/sys/kernel/random/uuid)
+            else
+                _fork_step_id=$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n' \
+                    | sed -E 's/^(.{8})(.{4})(.{4})(.{4})(.{12})$/\1-\2-\3-\4-\5/')
+            fi
             _new_output=$(traj new --traj_dir "$_run_traj_dir" --slug "$prompt" \
                 --field "parent_traj=$_SHELLM_PARENT_TRAJ_ID" \
                 --field "parent_step=$_fork_step_id")

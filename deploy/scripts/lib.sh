@@ -1,4 +1,5 @@
 # deploy/scripts/lib.sh — shared helpers for the deploy scripts. Source, don't run.
+# shellcheck shell=bash
 #
 # These scripts wrap the terraform/aws incantations from
 # deploy/terraform/README.md. They only need AWS credentials + terraform

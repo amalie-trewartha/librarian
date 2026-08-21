@@ -72,6 +72,19 @@ wait_for_record() {
     done
 }
 
+# Wait until a pending flag matching the glob exists (or timeout seconds
+# elapse). Delivery latency from append to dispatch is platform-dependent
+# (GNU tail -F polls once a second where inotify is unavailable, e.g. in
+# some containers; BSD tail on macOS is near-instant), so the tests wait on
+# observable state rather than fixed sleeps. Polls fast: the flag is removed
+# again when the queued step fires.
+wait_for_pending() {
+    local glob="$1" timeout="${2:-5}" i=0
+    while ! compgen -G "$TMP/id/run/pending/$glob" >/dev/null && [[ "$i" -lt $((timeout * 10)) ]]; do
+        sleep 0.1; i=$((i+1))
+    done
+}
+
 # ---------------------------------------------------------------------------
 # Test 1: a step arriving while the thinker is busy is replayed exactly once,
 # with its payload, after the thinker frees up
@@ -81,9 +94,9 @@ test_pending_replay() {
     start_thinkers
 
     append_step '{"type":"action","content":"A","source":"test"}'
-    sleep 1   # slowpoke picks up A and sleeps
+    wait_for_record 1   # slowpoke picks up A and sleeps
     append_step '{"type":"action","content":"B","source":"test"}'
-    sleep 1
+    wait_for_pending "slowpoke.action.*"
 
     if compgen -G "$TMP/id/run/pending/slowpoke.action.*" >/dev/null; then
         ok "pending trigger queued while thinker busy"
@@ -117,7 +130,7 @@ test_fifo_replay() {
     start_thinkers
 
     append_step '{"type":"action","content":"A","source":"test"}'
-    sleep 1
+    wait_for_record 1   # slowpoke picks up A and sleeps
     append_step '{"type":"action","content":"B","source":"test"}'
     sleep 1
     append_step '{"type":"action","content":"C","source":"test"}'
@@ -153,10 +166,11 @@ test_per_type_flags() {
     start_thinkers
 
     append_step '{"type":"action","content":"A","source":"test"}'
-    sleep 1
+    wait_for_record 1   # slowpoke picks up A and sleeps
     append_step '{"type":"action","content":"B","source":"test"}'
     append_step '{"type":"message","content":"M","from":"andy","to":"testid","source":"chat"}'
-    sleep 1
+    wait_for_pending "slowpoke.action.*"
+    wait_for_pending "slowpoke.message.*"
 
     local flags
     flags=$(ls "$TMP/id/run/pending" 2>/dev/null | sed -E 's/^slowpoke\.([^.]+)\..*/\1/' | sort -u | tr '\n' ' ')
@@ -189,10 +203,11 @@ test_selfwake_coalesce() {
     start_thinkers
 
     append_step '{"type":"action","content":"A","source":"test"}'
-    sleep 1   # slowpoke picks up A and sleeps
+    wait_for_record 1   # slowpoke picks up A and sleeps
     append_step '{"type":"observation","content":"O1","source":"test"}'
     append_step '{"type":"observation","content":"O2","source":"test"}'
-    sleep 1
+    wait_for_pending "slowpoke.observation.*"
+    sleep 0.5   # let O2's supersede land too
 
     local obs_files
     obs_files=$(ls "$TMP/id/run/pending" 2>/dev/null | grep -c '^slowpoke\.observation\.')
@@ -229,7 +244,7 @@ test_queue_cap() {
     start_thinkers
 
     append_step '{"type":"action","content":"A","source":"test"}'
-    sleep 1   # slowpoke picks up A and sleeps
+    wait_for_record 1   # slowpoke picks up A and sleeps
     local i
     for i in $(seq 1 18); do
         append_step "{\"type\":\"action\",\"content\":\"Q$i\",\"source\":\"test\"}"

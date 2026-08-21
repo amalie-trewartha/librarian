@@ -1,0 +1,130 @@
+# CI — runs on every push to main and every pull request.
+#
+# All of these are hermetic: the bash tests stub `llm`/`curl`, the pytest
+# suites need no keys or network beyond package downloads, and the install
+# smoke test clones from the workspace instead of GitHub. No secrets needed.
+#
+# Jobs (all run in parallel, ~3 min wall clock):
+#   harness        tests/run-all.sh            bash tests for bin/ and tools/
+#   python         pytest                       web, slack, telegram (matrix)
+#   viewer         bun typecheck + build        web/viewer (what the box builds)
+#   tui            cargo check                  tui/headlong
+#   shellcheck     shellcheck -S error          every shell script in the tree
+#   install-smoke  tests/smoke_install.sh       install.sh, both modes, in a
+#                                               bare ubuntu:24.04 container
+#
+# Run the same things locally: tests/run-all.sh, uv run --project web pytest
+# web/tests (and slack, telegram), bun run typecheck/build in web/viewer,
+# cargo check in tui/headlong, tests/smoke_install.sh.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch/PR cancels the run in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  harness:
+    name: bash tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools the harness shells out to
+        # jq, shellcheck, setsid, flock, timeout, python3 ship on the runner
+        # image; uuidgen (uuid-runtime) is installed explicitly so a nested
+        # shellm run never depends on the image's package set.
+        run: sudo apt-get install -y -qq uuid-runtime >/dev/null
+      - name: Run tests/test_*.sh
+        run: tests/run-all.sh
+
+  python:
+    name: pytest (${{ matrix.project }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [web, slack, telegram]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: ${{ matrix.project }}/uv.lock
+      - name: Sync (lockfile must be current)
+        run: uv sync --locked --project ${{ matrix.project }}
+      - name: pytest
+        run: uv run --project ${{ matrix.project }} pytest ${{ matrix.project }}/tests -q
+
+  viewer:
+    name: viewer typecheck + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web/viewer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run build
+
+  tui:
+    name: cargo check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tui/headlong
+      - run: cargo check
+        working-directory: tui/headlong
+
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck -S error on every shell script
+        # Every tracked file with a sh/bash shebang, plus *.sh (sourced libs
+        # without a shebang carry a `# shellcheck shell=` directive).
+        # Error level only for now; warning level has a known backlog.
+        run: |
+          set -euo pipefail
+          shellcheck --version
+          files=$( { git ls-files -z | xargs -0 grep -lE '^#!.*\b(ba)?sh\b' ; git ls-files '*.sh'; } | sort -u)
+          echo "$files" | wc -l | xargs echo "checking files:"
+          echo "$files" | xargs shellcheck -S error
+
+  install-smoke:
+    name: install.sh smoke (ubuntu:24.04)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # A bare image, as root, with no jq/curl: exercises install.sh's own
+    # apt-get path and the container branch of its PATH handling.
+    container: ubuntu:24.04
+    steps:
+      - name: Install git (checkout + the smoke test's local clone need it)
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git ca-certificates >/dev/null
+      - uses: actions/checkout@v4
+      - name: Trust the workspace (owned by the runner user, we are root)
+        run: git config --global --add safe.directory '*'
+      - name: tests/smoke_install.sh
+        run: bash tests/smoke_install.sh

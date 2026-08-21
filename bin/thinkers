@@ -501,8 +501,9 @@ _start_dispatcher() {
             local _dlog="$run_dir/logs/$_dname.log"
             # SHELLM_LAUNCHED_BY lands as launched_by on any shellm-run the
             # step script starts, so viewers can attribute runs to thinkers.
-            # shellcheck disable=SC2086 — $_setsid is deliberately unquoted:
-            # "setsid" on Linux, empty (and word-split away) elsewhere.
+            # $_setsid is deliberately unquoted: "setsid" on Linux, empty
+            # (and word-split away) elsewhere.
+            # shellcheck disable=SC2086
             (
                 printf '%s' "$_djson" | SHELLM_LAUNCHED_BY="$_dname" $_setsid "$_dscript"
             ) >> "$_dlog" 2>&1 3<&- &
