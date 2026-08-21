@@ -21,6 +21,7 @@ ada                  # chat with them
 ada hello            # one message, wait for the reply
 ada stop / ada start # pause / resume their mind
 ada dash             # open the dashboard
+ada bugreport        # bundle logs + trajectory (keys scrubbed) for a bug report
 ```
 
 Use a dedicated, spend-capped API key: the agent executes real shell
@@ -109,6 +110,32 @@ skills to `~/.skills/core-skills`, the bundled thinker templates to
 `~/.headlong-thinkers`, and builds the Rust TUI if cargo is present. Use `--symlinks` to
 symlink instead (edits take effect without reinstalling), or
 `--prefix /usr/local/bin` for a different location.
+
+## Reporting a bug
+
+If something goes wrong, run
+
+```bash
+ada bugreport        # or: persona <name> bugreport
+```
+
+and attach the `.tgz` it prints (it lands in your home directory) to a
+GitHub issue or a message to us. The bundle holds what we need to see what
+happened: the agent's trajectory and rollups, memories, thinker logs, the
+dash and install logs, and a `report.txt` with versions and status. Your
+`.env` is not included, and API keys or other credential-looking values are
+scrubbed before the file is written: keys and tokens keep their first and
+last four characters (`<redacted sk-o...cdef>`) so two keys can be told
+apart, passwords are masked whole. The agent's
+`workdir/` is left out unless you pass `--include-workdir`. Look inside
+first if you want: `tar tzf <file>` lists it; unpack it with `tar xzf
+<file>` and read `headlong-bugreport-*/report.txt` for the summary.
+
+Where things live, if you would rather pick files by hand: the state home is
+`~/.headlong/` (`logs/`, `status.json`, `.env`), the checkout is
+`~/.headlong/app/`, and the agent is `~/.headlong/app/.identities/<name>/`
+with the root trajectory at `trajectories/*-root/trajectory.jsonl` and the
+thinker logs under `run/logs/`.
 
 ## Stopping and uninstalling
 

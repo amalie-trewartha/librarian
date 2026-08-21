@@ -13,6 +13,7 @@ set -euo pipefail
 #   ada status             mind + dash status
 #   ada dash               start the dashboard if needed and open it
 #   ada shell              subshell with their environment (advanced)
+#   ada bugreport          bundle logs + trajectory (secrets scrubbed) to share
 #
 #   persona <name> ...     the same, for any identity, without the name link
 #   persona ...            ...or the default identity
@@ -332,6 +333,228 @@ cmd_chat() {
     echo
 }
 
+# ---------------------------------------------------------------------------
+# bugreport — one file to attach to a bug report
+# ---------------------------------------------------------------------------
+
+# Collects the identity dir (trajectory, rollups, memories, thinker logs,
+# persona files), the state-home logs and a report.txt with versions and
+# status, into ~/headlong-bugreport-<name>-<stamp>.tgz. The agent's workdir
+# is left out (arbitrary user files, can be large). Every text file in the
+# bundle goes through _redact_tree first: the literal values of every
+# credential-looking variable from the env files and the live environment,
+# `--var NAME=VALUE` for credential-looking names (older shellm-run rows still
+# carry those), and anything shaped like an sk-... API key.
+cmd_bugreport() {
+    local out=""
+    BUGREPORT_INCLUDE_WORKDIR=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --out)             out="${2:?--out requires a path}"; shift 2 ;;
+            --include-workdir) BUGREPORT_INCLUDE_WORKDIR=1; shift ;;
+            -h|--help)
+                cat <<EOF
+Usage: $CMD bugreport [--out FILE] [--include-workdir]
+
+Bundle what a developer needs to debug $NAME into one .tgz you can attach to
+a bug report: the identity (trajectory, rollups, memories, thinker logs),
+the Headlong logs, and a report.txt with versions, status and the layout.
+API keys and other credential-looking values are scrubbed; your .env is not
+included. Look inside before sending if you are unsure:
+    tar tzf FILE            # list
+    tar xzf FILE            # unpack; then read headlong-bugreport-*/report.txt
+EOF
+                return 0 ;;
+            *) die "bugreport: unknown option: $1" ;;
+        esac
+    done
+    local stamp; stamp=$(date +%Y%m%d-%H%M%S)
+    [[ -n "$out" ]] || out="$HOME/headlong-bugreport-$NAME-$stamp.tgz"
+    local iddir="$IDENTITY_ROOT/$NAME"
+    local stage; stage=$(mktemp -d "${TMPDIR:-/tmp}/headlong-bugreport.XXXXXX")
+    # shellcheck disable=SC2064
+    trap "rm -rf '$stage'" EXIT RETURN
+    local top="$stage/headlong-bugreport-$NAME-$stamp"
+    mkdir -p "$top/identity" "$top/home"
+
+    echo "Collecting $NAME's identity..." >&2
+    local excl=(--exclude='./workdir')
+    [[ "$BUGREPORT_INCLUDE_WORKDIR" -eq 1 ]] && excl=()
+    # Follow the default -> name symlink; copy files, not the symlink itself.
+    # Skip single files over 50MB (noted in report.txt) so a runaway blob
+    # doesn't turn the bundle into a gigabyte.
+    local -a big=()
+    while IFS= read -r -d '' f; do big+=("${f#./}"); done \
+        < <(cd "$iddir" && find . -type f -size +50M -print0 2>/dev/null)
+    local f; for f in "${big[@]+"${big[@]}"}"; do excl+=(--exclude="./$f"); done
+    (cd "$iddir" && tar -cf - "${excl[@]+"${excl[@]}"}" .) | tar -xf - -C "$top/identity"
+
+    # State-home bits: logs, status, app_dir pointer. Never .env.
+    local h; for h in logs status.json app_dir; do
+        if [[ -e "$SHELLM_HOME/$h" ]]; then cp -R "$SHELLM_HOME/$h" "$top/home/" 2>/dev/null || true; fi
+    done
+
+    # report.txt — what a developer asks for in the first reply, all at once.
+    # Best effort: nothing in it may abort the bundle (no git, no df, ...).
+    ( set +e; set +o pipefail; _bugreport_text "$iddir" "${big[@]+"${big[@]}"}" ) > "$top/report.txt" 2>&1 || true
+
+    echo "Scrubbing secrets..." >&2
+    _redact_tree "$top"
+
+    tar -czf "$out" -C "$stage" "$(basename "$top")"
+    echo >&2
+    echo "Wrote $out ($(du -h "$out" | cut -f1))." >&2
+    echo "Attach that file to your bug report. It has no API keys: your .env is" >&2
+    echo "left out and credential-looking values are replaced with <redacted ...>." >&2
+    echo "List what is inside with:  tar tzf $out" >&2
+    printf '%s\n' "$out"
+}
+
+# _bugreport_text IDDIR [BIGFILE...] — the body of report.txt on stdout.
+# Runs with set -e / pipefail off (see the caller).
+_bugreport_text() {
+    local iddir="$1"; shift
+    local -a big=("$@")
+    echo "headlong bug report bundle"
+    echo "generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "identity: $NAME"
+    echo "identity dir: $iddir"
+    echo "state home: $SHELLM_HOME"
+    echo "app dir: $APP_DIR"
+    echo
+    echo "== versions"
+    echo "headlong commit: $(git -C "$APP_DIR" rev-parse --short HEAD 2>/dev/null || echo '(not a git checkout)')"
+    echo "headlong branch: $(git -C "$APP_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+    local dirty; dirty=$(git -C "$APP_DIR" status --short 2>/dev/null | wc -l | tr -d ' ')
+    echo "local edits in checkout: ${dirty:-?} file(s)"
+    echo "os: $(uname -srm 2>/dev/null)"
+    echo "bash: $BASH_VERSION   shell: ${SHELL:-?}"
+    echo "install prefix on PATH: $(command -v persona 2>/dev/null || echo '(persona not on PATH)')"
+    local t; for t in jq curl uv docker cargo python3 git; do
+        if command -v "$t" >/dev/null 2>&1; then
+            printf '%s: %s\n' "$t" "$("$t" --version 2>&1 | head -1)"
+        else
+            printf '%s: missing\n' "$t"
+        fi
+    done
+    echo
+    echo "== model / env (values hidden)"
+    echo "SHELLM_MODEL=${SHELLM_MODEL:-(unset)}"
+    echo "SHELLM_ENV=${SHELLM_ENV:-(unset)}"
+    local e; for e in "$SHELLM_HOME/.env" "$APP_DIR/.env"; do
+        [[ -f "$e" ]] || continue
+        echo "-- $e"
+        sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*=.*/\2=<hidden>/p' "$e"
+    done
+    echo
+    echo "== status"
+    ( cmd_status ) 2>&1 || true
+    echo
+    echo "== identity files"
+    cat "$iddir/info.txt" 2>/dev/null || true
+    echo
+    (cd "$iddir" && du -sh -- * 2>/dev/null) || true
+    echo
+    echo "== trajectories"
+    local tj; for tj in "$iddir"/trajectories/*/trajectory.jsonl; do
+        [[ -f "$tj" ]] || continue
+        printf '%s: %s rows, %s\n' "${tj#"$iddir"/}" "$(wc -l <"$tj" | tr -d ' ')" "$(du -h "$tj" | cut -f1)"
+    done
+    if [[ "${#big[@]}" -gt 0 ]]; then
+        echo
+        echo "== left out (over 50MB)"
+        printf '%s\n' "${big[@]}"
+    fi
+    [[ "${BUGREPORT_INCLUDE_WORKDIR:-0}" -eq 1 ]] || { echo; echo "== left out: workdir/ (pass --include-workdir to add it)"; }
+    echo
+    echo "== disk"
+    df -h "$SHELLM_HOME" 2>/dev/null | tail -1 || true
+    echo
+    echo "== recent thinker log tails"
+    local lg; for lg in "$iddir"/run/logs/*.log; do
+        [[ -f "$lg" ]] || continue
+        echo "-- ${lg#"$iddir"/} (last 30 lines)"
+        tail -30 "$lg" 2>/dev/null
+    done
+}
+
+# _redact_tree DIR — in-place scrub of every text file under DIR. Three
+# passes, in order: literal credential values, `--var NAME=VALUE`, sk- keys.
+# API keys and tokens keep their first and last 4 characters
+# (`<redacted sk-o...cdef>`) so two keys can be told apart; passwords and
+# anything under 20 characters are masked whole.
+_redact_tree() {
+    local root="$1"
+    local -a pairs=() files=()   # pairs: "value<TAB>replacement"
+    # Literal values: credential-looking names from the env files and the
+    # current environment (the env files were loaded into it at startup).
+    local n v e
+    for e in "$SHELLM_HOME/.env" "$APP_DIR/.env"; do
+        [[ -f "$e" ]] || continue
+        while IFS= read -r n; do
+            [[ -n "$n" ]] || continue
+            _is_secret_name "$n" || continue
+            # shellcheck disable=SC1090
+            v=$(set -a; . "$e" 2>/dev/null; printf '%s' "${!n}") || continue
+            [[ "${#v}" -ge 8 ]] && pairs+=("$v	$(_redact_hint "$n" "$v")")
+        done < <(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*=.*/\2/p' "$e")
+    done
+    while IFS= read -r n; do
+        _is_secret_name "$n" || continue
+        v="${!n:-}"
+        [[ "${#v}" -ge 8 ]] && pairs+=("$v	$(_redact_hint "$n" "$v")")
+    done < <(compgen -e)
+    # Text files only (tar'd dirs can carry binaries in blobs/).
+    while IFS= read -r -d '' f; do files+=("$f"); done \
+        < <(find "$root" -type f \( -name '*.jsonl' -o -name '*.json' -o -name '*.log' \
+                -o -name '*.txt' -o -name '*.md' -o -name '*.sh' -o -name '*.yaml' -o -name '*.yml' \
+                -o -name '*.toml' -o -name '*.env' -o -name '*.cfg' -o -name '*.ini' \) -print0 2>/dev/null)
+    [[ "${#files[@]}" -gt 0 ]] || return 0
+    # One sed script for everything, ERE (`sed -E` is in both BSD and GNU sed;
+    # BSD sed has no usable BRE alternation). Write via temp file because
+    # `sed -i` differs between the two.
+    local script="" pr
+    for pr in "${pairs[@]+"${pairs[@]}"}"; do
+        script+="s/$(_sed_escape "${pr%%	*}")/$(_sed_escape "${pr#*	}")/g;"
+    done
+    # --var NAME=VALUE: KEY/TOKEN names keep a 4+4 hint when long enough,
+    # other credential names are masked whole.
+    # (a value starting with "<" is one an earlier pass already replaced)
+    script+='s/--var ([A-Za-z_]*(KEY|TOKEN)[A-Za-z0-9_]*)=([^ "<\\][^ "\\]{3})[^ "\\]{12,}([^ "\\]{4})/--var \1=<redacted \3...\4>/g;'
+    script+='s/--var ([A-Za-z_]*(KEY|TOKEN|SECRET|PASSW|CREDENTIAL)[A-Za-z0-9_]*)=[^ "<\\][^ "\\]*/--var \1=<redacted>/g;'
+    script+='s/sk-([A-Za-z0-9_-]{4})[A-Za-z0-9_-]{12,}([A-Za-z0-9_-]{4})/<redacted sk-\1...\2>/g;'
+    script+='s/sk-[A-Za-z0-9_-]{8,}/<redacted sk-...>/g;'
+    local f tmp
+    for f in "${files[@]}"; do
+        tmp="$f.redact.$$"
+        if sed -E "$script" "$f" > "$tmp" 2>/dev/null; then
+            mv -f "$tmp" "$f"
+        else
+            rm -f "$tmp"
+        fi
+    done
+}
+
+# _redact_hint NAME VALUE — the replacement for VALUE: first/last 4 chars for
+# keys and tokens of 20+ chars, a plain <redacted> otherwise.
+_redact_hint() {
+    local u="${1^^}" v="$2"
+    if [[ "$u" =~ (KEY|TOKEN) && ! "$u" =~ (SECRET|PASSW|CREDENTIAL) && "${#v}" -ge 20 ]]; then
+        printf '<redacted %s...%s>' "${v:0:4}" "${v: -4}"
+    else
+        printf '<redacted>'
+    fi
+}
+
+_is_secret_name() {  # same notion as shellm's trajectory masking
+    local u="${1^^}"
+    [[ "$u" =~ (KEY|TOKEN|SECRET|PASSW|CREDENTIAL) ]]
+}
+
+_sed_escape() {  # escape a literal for use in an ERE sed s/// pattern or replacement
+    printf '%s' "$1" | sed -e 's/[][\/.*^$&+?(){}|\\]/\\&/g'
+}
+
 usage() {
     cat <<EOF
 $CMD — talk to and manage the identity '$NAME'
@@ -346,6 +569,8 @@ Usage:
   $CMD status          mind + dash status
   $CMD dash            start the dashboard if needed and open it
   $CMD shell           subshell with their environment (advanced)
+  $CMD bugreport       bundle logs + trajectory (secrets scrubbed) into one
+                       .tgz to attach to a bug report
 EOF
 }
 
@@ -357,6 +582,7 @@ case "${1:-}" in
     status)      cmd_status ;;
     dash)        cmd_dash ;;
     shell)       cmd_shell ;;
+    bugreport)   shift; cmd_bugreport "$@" ;;
     -h|--help|help) usage ;;
     -*)          die "unknown option: $1 (try: $CMD --help)" ;;
     *)           cmd_say "$@" ;;   # `ada hello there` just talks to them

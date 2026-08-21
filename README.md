@@ -49,6 +49,7 @@ ada hello            # one message, wait for the reply
 ada                  # chat
 ada stop / ada start # pause / resume its mind
 ada dash             # open the dashboard
+ada bugreport        # bundle logs + trajectory (keys scrubbed) for a bug report
 ```
 
 `headlong-killall` stops every Headlong process on the machine if you need a
