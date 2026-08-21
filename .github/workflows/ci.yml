@@ -38,6 +38,12 @@ jobs:
     name: bash tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # The runner has a live Docker daemon, and shellm switches to Docker
+      # mode whenever `docker info` succeeds. The harness tests stub llm on
+      # the host, so force host execution here (tests that spawn shellm pin
+      # this themselves too; this is the safety net for new ones).
+      SHELLM_ENV: local
     steps:
       - uses: actions/checkout@v4
       - name: Tools the harness shells out to

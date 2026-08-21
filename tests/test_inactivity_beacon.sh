@@ -58,6 +58,10 @@ export HEADLONG_HOME="$WORK/home/.headlong"
 export ANTHROPIC_API_KEY="test-key"
 export SHELLM_MODEL="test-model"
 export SHELLM_BEACON_INTERVAL=1
+# shellm defaults to Docker mode whenever `docker info` succeeds (the host
+# socket on a CI runner, say). This test is about the host-side watchdog and
+# beacon, and its llm stub only exists on the host, so pin local execution.
+export SHELLM_ENV=local
 
 # timeout is GNU coreutils, so it is gtimeout on a stock Mac and absent if
 # coreutils is not installed. The runs are bounded by --max-iterations anyway.
