@@ -158,3 +158,70 @@ def test_probe_failure_shape(tmp_path: Path, monkeypatch):
     result = client.post("/api/llm-health/probe").json()
     assert result["ok"] is False
     assert "Provider returned error" in result["error"]
+
+
+# --- last_call marker (bin/llm writes state-home/run/llm_health.json) -----------
+
+
+def _write_marker(home: Path, payload: dict) -> None:
+    (home / "run").mkdir(parents=True, exist_ok=True)
+    (home / "run" / "llm_health.json").write_text(json.dumps(payload))
+
+
+def test_last_call_absent(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("HEADLONG_HOME", str(tmp_path / "home"))
+    assert llm_health.last_call() is None
+
+
+def test_last_call_credit_failure_overrides_status(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HEADLONG_HOME", str(home))
+    _write_marker(
+        home,
+        {
+            "ok": False,
+            "ts": "2026-08-22T09:00:00Z",
+            "provider": "openrouter",
+            "model": "anthropic/claude-sonnet-4.5",
+            "kind": "credit",
+            "http_code": 402,
+            "message": "Insufficient credits. Add more using https://openrouter.ai/settings/credits",
+        },
+    )
+    root = _mk_identity(tmp_path, _thoughts(12, newest_minutes_ago=1, gap_s=30))
+    llm_health._cache.update(ts=0.0, root=None, payload=None)
+    payload = llm_health.llm_health(root)
+    assert payload["status"] == "erroring"
+    last = payload["last_call"]
+    assert last["ok"] is False
+    assert last["kind"] == "credit"
+    assert last["http_code"] == 402
+    assert last["provider"] == "openrouter"
+    assert "Insufficient credits" in last["message"]
+
+
+def test_last_call_ok_keeps_passive_status(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HEADLONG_HOME", str(home))
+    _write_marker(home, {"ok": True, "ts": "2026-08-22T09:00:00Z", "provider": "anthropic", "model": "m"})
+    root = _mk_identity(tmp_path, _thoughts(12, newest_minutes_ago=1, gap_s=30))
+    llm_health._cache.update(ts=0.0, root=None, payload=None)
+    payload = llm_health.llm_health(root)
+    assert payload["status"] == "ok"
+    assert payload["last_call"] == {
+        "ok": True,
+        "ts": "2026-08-22T09:00:00Z",
+        "provider": "anthropic",
+        "model": "m",
+        "kind": None,
+        "http_code": None,
+        "message": None,
+    }
+
+
+def test_last_call_garbage_ignored(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HEADLONG_HOME", str(home))
+    (home / "run").mkdir(parents=True)
+    (home / "run" / "llm_health.json").write_text("{not json")
+    assert llm_health.last_call() is None

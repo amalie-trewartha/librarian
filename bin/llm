@@ -71,6 +71,47 @@ LLM_SPEED_TIME="${LLM_SPEED_TIME:-60}"
 
 die() { echo "llm: error: $*" >&2; exit 1; }
 
+# Last-call health marker: one small JSON in the state home, rewritten after
+# every call, so `ada status`, status.sh and the dash can say "your key ran
+# out of credit" out loud instead of the mind just going quiet.
+#   {"ok":true,"ts":...,"provider":...,"model":...}
+#   {"ok":false,"ts":...,"kind":"credit|auth|rate|other","http_code":402,"message":...,...}
+_llm_health_file="$_llm_home/run/llm_health.json"
+_llm_note() {   # _llm_note ok|error [http_code] [message]
+    local st="$1" code="${2:-}" msg="${3:-}" kind="" m tmp
+    mkdir -p "$_llm_home/run" 2>/dev/null || return 0
+    if [[ "$st" == error ]]; then
+        m=$(printf '%s' "$msg" | tr '[:upper:]' '[:lower:]')
+        # The HTTP code wins when we have one; the message words are the
+        # fallback (streamed errors arrive with no code). A 429 that says
+        # "quota exceeded" (Gemini) is rate limiting, not an empty wallet.
+        case "$code" in
+            402)     kind=credit ;;
+            401|403) kind=auth ;;
+            429)     kind=rate ;;
+        esac
+        if [[ -z "$kind" ]]; then
+            if [[ "$m" =~ (credit|billing|insufficient|quota|balance|payment|funds|budget) ]]; then kind=credit
+            elif [[ "$m" =~ (invalid.*key|authentication|unauthorized|api.key|forbidden|permission) ]]; then kind=auth
+            elif [[ "$m" =~ (rate.limit|too.many.requests|overloaded) ]]; then kind=rate
+            else kind=other; fi
+        fi
+    fi
+    tmp="$_llm_health_file.$$"
+    if jq -n --arg ok "$st" --arg code "$code" --arg msg "$msg" --arg kind "$kind" \
+          --arg provider "${LLM_PROVIDER:-}" --arg model "${LLM_MODEL:-}" \
+          --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          '{ok: ($ok == "ok"), ts: $ts, provider: $provider, model: $model}
+           + (if $ok == "ok" then {} else
+                {kind: $kind, http_code: (if $code == "" then null else ($code | tonumber? // $code) end), message: $msg}
+              end)' > "$tmp" 2>/dev/null; then
+        mv -f "$tmp" "$_llm_health_file" 2>/dev/null || rm -f "$tmp"
+    else
+        rm -f "$tmp"
+    fi
+    return 0
+}
+
 # Stream handlers run inside a retry subshell. die_retryable marks a failure
 # as transient-and-nothing-emitted: the message is stashed for the final
 # attempt's die, and exit 75 (EX_TEMPFAIL) tells the retry loop to go again.
@@ -799,6 +840,7 @@ if [[ "$LLM_STREAM" -eq 1 ]]; then
         rm -f "$_curl_err" "$LLM_RETRY_ERR" "$LLM_DATA_MARKER"
 
         if [[ "$_rc" -eq 0 && -z "$_ce" && "$_emitted" -eq 1 ]]; then
+            _llm_note ok
             break   # success
         fi
         if [[ "$_rc" -eq 0 && -z "$_ce" ]]; then
@@ -815,8 +857,8 @@ if [[ "$LLM_STREAM" -eq 1 ]]; then
             continue
         fi
         # Exhausted or output already emitted: fail like before
-        [[ -n "$_retry_msg" ]] && die "$_retry_msg"
-        [[ -n "$_ce" ]] && die "curl error: $_ce"
+        [[ -n "$_retry_msg" ]] && { _llm_note error "" "$_retry_msg"; die "$_retry_msg"; }
+        [[ -n "$_ce" ]] && { _llm_note error "" "curl error: $_ce"; die "curl error: $_ce"; }
         exit "$_rc"   # mid-stream die already printed its message
     done
 else
@@ -865,11 +907,13 @@ else
     if [[ "$http_code" -ge 400 || "$http_code" == "000" ]]; then
         error_msg=$(jq -r '.error.message // .message // empty' "$local_resp" 2>/dev/null || true)
         rm -f "$local_resp"
+        _llm_note error "$http_code" "${error_msg:-HTTP $http_code}"
         if [[ -n "$error_msg" ]]; then
             die "API error (HTTP $http_code): $error_msg"
         fi
         die "API error (HTTP $http_code)"
     fi
+    _llm_note ok
 
     if [[ -n "$("check_truncated_${LLM_PROVIDER}" < "$local_resp")" ]]; then
         warn_truncated

@@ -11,6 +11,7 @@ The active probe (an actual tiny LLM call) lives in control.llm_probe.
 """
 
 import json
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -18,6 +19,7 @@ from pathlib import Path
 from statistics import median
 
 from headlong_web import discovery, liveness
+from headlong_web.env import getenv
 
 # Scan at most this much of the tail of each mind log
 _TAIL_BYTES = 400 * 1024
@@ -143,6 +145,32 @@ def _identity_signals(identity: discovery.IdentityInfo, now: float) -> dict | No
     }
 
 
+def _state_home() -> Path:
+    """Same resolution as bin/llm: HEADLONG_HOME, SHELLM_HOME, ~/.headlong."""
+    return Path(getenv("HEADLONG_HOME") or os.path.expanduser("~/.headlong"))
+
+
+def last_call() -> dict | None:
+    """The marker bin/llm rewrites after every call (state home, run/llm_health.json):
+    ok, or a classified failure (credit / auth / rate / other). None if absent."""
+    path = _state_home() / "run" / "llm_health.json"
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or "ok" not in data:
+        return None
+    return {
+        "ok": bool(data.get("ok")),
+        "ts": data.get("ts"),
+        "provider": data.get("provider") or None,
+        "model": data.get("model") or None,
+        "kind": data.get("kind"),
+        "http_code": data.get("http_code"),
+        "message": data.get("message"),
+    }
+
+
 def llm_health(root: Path) -> dict:
     now = time.time()
     if (
@@ -167,6 +195,7 @@ def llm_health(root: Path) -> dict:
         for i in identities
     )
 
+    last = last_call()
     if failures_15m >= 3:
         status = "erroring"
     elif failures_1h >= 1 or slow:
@@ -175,6 +204,10 @@ def llm_health(root: Path) -> dict:
         status = "ok"
     else:
         status = "unknown"
+    # A hard failure on the last real call (out of credit, bad key) is the
+    # loudest signal there is; it overrides the passive inference.
+    if last and not last["ok"] and last.get("kind") in ("credit", "auth"):
+        status = "erroring"
 
     payload = {
         "status": status,
@@ -182,6 +215,7 @@ def llm_health(root: Path) -> dict:
         "failures_1h": failures_1h,
         "cadence_slow": slow,
         "identities": identities,
+        "last_call": last,
         "checked_at": datetime.now(tz=timezone.utc).isoformat(),
     }
     _cache.update(ts=now, root=root, payload=payload)

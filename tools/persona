@@ -126,6 +126,45 @@ _activate() {
     fi
 }
 
+# _llm_health_warn — if the last LLM call (any thinker, any tool) failed,
+# say so, loudly, with what to do. Reads the marker bin/llm keeps at
+# $SHELLM_HOME/run/llm_health.json. Returns 0 if something was printed.
+_llm_health_warn() {
+    local f="$SHELLM_HOME/run/llm_health.json" ok kind code msg ts provider hint
+    [[ -f "$f" ]] || return 1
+    ok=$(jq -r '.ok' "$f" 2>/dev/null || echo true)
+    [[ "$ok" == "false" ]] || return 1
+    IFS=$'\t' read -r kind code msg ts provider < <(jq -r '[(.kind // "other"), (.http_code // "" | tostring), (.message // ""), (.ts // ""), (.provider // "")] | @tsv' "$f" 2>/dev/null)
+    case "$provider" in
+        openrouter) hint="https://openrouter.ai/settings/credits" ;;
+        anthropic)  hint="https://console.anthropic.com/settings/billing" ;;
+        openai)     hint="https://platform.openai.com/settings/organization/billing" ;;
+        gemini)     hint="https://aistudio.google.com/ (quota / billing)" ;;
+        *)          hint="your provider's billing page" ;;
+    esac
+    echo
+    case "$kind" in
+        credit)
+            echo "!! LLM: OUT OF CREDIT — the API key has no money left (${provider:-provider}${code:+, HTTP $code}, last tried $ts)."
+            echo "   $NAME's mind keeps trying but every thought fails until the key has credit."
+            echo "   Top up at $hint (or put a new key in $SHELLM_HOME/.env), then: $CMD start"
+            ;;
+        auth)
+            echo "!! LLM: KEY REJECTED — the API key is invalid or revoked (${provider:-provider}${code:+, HTTP $code}, last tried $ts)."
+            echo "   Put a working key in $SHELLM_HOME/.env, then: $CMD start"
+            ;;
+        rate)
+            echo "!! LLM: RATE LIMITED by ${provider:-the provider}${code:+ (HTTP $code)}, last tried $ts. Usually clears on its own."
+            ;;
+        *)
+            echo "!! LLM: the last call failed (${provider:-provider}${code:+, HTTP $code}, last tried $ts)."
+            ;;
+    esac
+    [[ -n "$msg" ]] && echo "   provider said: ${msg:0:200}"
+    echo
+    return 0
+}
+
 _dispatcher_pid() {
     local pid
     pid=$(cat "$IDENTITY_ROOT/$NAME/run/dispatcher.pid" 2>/dev/null || true)
@@ -160,6 +199,7 @@ _print_incoming() {
 
 cmd_start() {
     _activate
+    _llm_health_warn || true
     if _dispatcher_pid >/dev/null; then
         echo "$NAME's mind is already running."
     else
@@ -198,6 +238,7 @@ cmd_status() {
     else
         echo "dash: stopped   (open with: $CMD dash)"
     fi
+    _llm_health_warn || true
     echo
     thinkers status 2>/dev/null || true
 }
@@ -291,6 +332,7 @@ cmd_say() {
     [[ $# -gt 0 ]] || die "usage: $CMD say <message>"
     _activate
     _dispatcher_pid >/dev/null || echo "(note: $NAME's mind is stopped — they won't answer until you run: $CMD start)"
+    _llm_health_warn || true
     local before
     before=$(_messages | _incoming | wc -l | tr -d ' ')
     chat send "$*" >/dev/null 2>&1
@@ -307,6 +349,7 @@ cmd_say() {
     done
     echo
     echo "no reply yet — it will show up in '$CMD' (chat) or the dash."
+    _llm_health_warn || true
 }
 
 cmd_chat() {

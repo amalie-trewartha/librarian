@@ -79,6 +79,21 @@ case "$mode" in
         printf '{"error":{"message":"upstream exploded"}}' > "$out_file"
         printf '500'
         ;;
+    http-402)   # OpenRouter-style insufficient credits
+        printf '{"error":{"message":"Insufficient credits. Add more using https://openrouter.ai/settings/credits","code":402}}' > "$out_file"
+        printf '402'
+        ;;
+    http-401)
+        printf '{"error":{"message":"No auth credentials found","code":401}}' > "$out_file"
+        printf '401'
+        ;;
+    http-429-quota)   # Gemini-style: rate limit whose message says "quota"
+        printf '{"error":{"message":"You exceeded your current quota, please check your plan and billing details.","code":429}}' > "$out_file"
+        printf '429'
+        ;;
+    err-body-credit)   # streaming: HTTP 200 whose body is a credit error, no SSE data
+        printf '{"error":{"message":"Insufficient credits. Add more using https://openrouter.ai/settings/credits","code":402}}\n'
+        ;;
     http-400)
         printf '{"error":{"message":"bad request"}}' > "$out_file"
         printf '400'
@@ -106,6 +121,8 @@ EOF
 chmod +x "$WORK/bin/curl"
 export PATH="$WORK/bin:$PATH"
 export OPENROUTER_API_KEY="test-key"
+export HEADLONG_HOME="$WORK/home"   # bin/llm writes run/llm_health.json here
+mkdir -p "$HEADLONG_HOME"
 export CURL_COUNT="$WORK/count" CURL_MODE_FILE="$WORK/modes"
 export LLM_RETRY_BACKOFF=0
 
@@ -174,6 +191,32 @@ rc=$?
 check "400 fails"                     test "$rc" -ne 0
 check "400 not retried"               test "$(calls)" = "1"
 check "400 message surfaced"          grep -q "bad request" "$WORK/stderr"
+
+# --- health marker: failures and successes leave run/llm_health.json -----------
+HF="$HEADLONG_HOME/run/llm_health.json"
+check "marker written on failure"     test -s "$HF"
+check "marker: ok=false, http 400"    bash -c 'jq -e ".ok == false and .http_code == 400 and .provider == \"openrouter\"" "$1" >/dev/null' _ "$HF"
+check "marker: 400 classified other"  bash -c 'jq -e ".kind == \"other\"" "$1" >/dev/null' _ "$HF"
+reset "http-402"
+LLM_RETRIES=2 run_llm --no-stream >/dev/null
+check "402 fails"                     test "$?" -ne 0
+check "marker: 402 -> kind credit"    bash -c 'jq -e ".ok == false and .kind == \"credit\" and .http_code == 402" "$1" >/dev/null' _ "$HF"
+check "marker: message kept"          bash -c 'jq -e ".message | test(\"credit\")" "$1" >/dev/null' _ "$HF"
+reset "http-401"
+LLM_RETRIES=2 run_llm --no-stream >/dev/null
+check "marker: 401 -> kind auth"      bash -c 'jq -e ".kind == \"auth\"" "$1" >/dev/null' _ "$HF"
+reset "http-429-quota"
+LLM_RETRIES=0 run_llm --no-stream >/dev/null
+check "marker: 429 'quota' -> kind rate (code beats words)" bash -c 'jq -e ".kind == \"rate\" and .http_code == 429" "$1" >/dev/null' _ "$HF"
+reset "http-200"
+out=$(LLM_RETRIES=2 run_llm --no-stream)
+check "marker: success -> ok=true"    bash -c 'jq -e ".ok == true and (has(\"kind\") | not)" "$1" >/dev/null' _ "$HF"
+reset "err-body-credit"
+LLM_RETRIES=1 run_llm >/dev/null
+check "marker: streamed credit error -> kind credit (no http code)" bash -c 'jq -e ".ok == false and .kind == \"credit\" and .http_code == null" "$1" >/dev/null' _ "$HF"
+reset "sse-ok"
+out=$(LLM_RETRIES=1 run_llm)
+check "marker: streamed success -> ok=true" bash -c 'jq -e ".ok == true" "$1" >/dev/null' _ "$HF"
 
 # ---------------------------------------------------------------------------
 # Non-streaming: embedded failures inside a 200 body are not silent successes

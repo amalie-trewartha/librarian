@@ -260,6 +260,7 @@ Paste just the key itself; headlong-init figures out the provider from it.
     an hour while it runs, about $25–50 a day; more if you talk to it a lot.
   * Pause it any time with `ada stop` (using whatever name you pick); a
     paused agent spends nothing. Resume with `ada start`.
+  * If the key runs out of credit, `ada status` and the dash say so.
 
 EOF
         _prompt_key || die "no key entered (quit)"

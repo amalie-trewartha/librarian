@@ -24,6 +24,16 @@ export interface LlmHealthIdentity {
   } | null;
 }
 
+export interface LlmLastCall {
+  ok: boolean;
+  ts: string | null;
+  provider: string | null;
+  model: string | null;
+  kind: "credit" | "auth" | "rate" | "other" | null;
+  http_code: number | string | null;
+  message: string | null;
+}
+
 export interface LlmHealth {
   status: "ok" | "degraded" | "erroring" | "unknown";
   failures_15m: number;
@@ -31,6 +41,7 @@ export interface LlmHealth {
   cadence_slow: boolean;
   checked_at: string;
   identities: LlmHealthIdentity[];
+  last_call?: LlmLastCall | null;
 }
 
 export interface LlmProbeResult {

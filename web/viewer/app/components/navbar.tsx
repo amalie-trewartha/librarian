@@ -64,6 +64,20 @@ function pollForNewBuild(oldCommit: string, timeoutMs = 5 * 60 * 1000) {
   setTimeout(tick, 3000);
 }
 
+/** Headline for a hard failure on the last real LLM call (from bin/llm's
+ * marker). Shown in the chip itself so it is visible on every page. */
+const LAST_CALL_LABEL: Record<string, string> = {
+  credit: "out of credit",
+  auth: "key rejected",
+  rate: "rate limited",
+  other: "last call failed",
+};
+const LAST_CALL_HINT: Record<string, string> = {
+  openrouter: "https://openrouter.ai/settings/credits",
+  anthropic: "https://console.anthropic.com/settings/billing",
+  openai: "https://platform.openai.com/settings/organization/billing",
+};
+
 const HEALTH_DOT: Record<string, string> = {
   ok: "bg-green-500",
   degraded: "bg-amber-500",
@@ -84,7 +98,10 @@ function LlmHealthChip() {
     queryFn: fetchLlmHealth,
     refetchInterval: 30000,
   });
-  if (!health || health.status === "unknown") return null;
+  if (!health || (health.status === "unknown" && !health.last_call)) return null;
+  const last = health.last_call ?? null;
+  const hardFail = !!last && !last.ok && (last.kind === "credit" || last.kind === "auth");
+  const failLabel = last && !last.ok ? LAST_CALL_LABEL[last.kind ?? "other"] : null;
 
   const runProbe = async () => {
     setProbing(true);
@@ -101,12 +118,14 @@ function LlmHealthChip() {
   return (
     <div className="relative">
       <button
-        className="inline-flex h-8 items-center gap-1.5 font-mono text-[11px] leading-none text-muted-foreground hover:text-foreground"
-        title={`LLM provider: ${health.status}`}
+        className={`inline-flex h-8 items-center gap-1.5 font-mono text-[11px] leading-none hover:text-foreground ${
+          hardFail ? "rounded bg-red-600/15 px-2 font-semibold text-red-600" : "text-muted-foreground"
+        }`}
+        title={`LLM provider: ${health.status}${failLabel ? ` — ${failLabel}` : ""}`}
         onClick={() => setOpen(!open)}
       >
         <span className={`inline-block h-2 w-2 rounded-full ${HEALTH_DOT[health.status]}`} />
-        llm
+        {hardFail ? `llm: ${failLabel}` : "llm"}
       </button>
       {open && (
         <>
@@ -120,6 +139,40 @@ function LlmHealthChip() {
                 {health.failures_1h} failure(s) in the last hour
               </span>
             </div>
+            {last && !last.ok && (
+              <div
+                className={`rounded border p-2 ${
+                  hardFail ? "border-red-600/40 bg-red-600/10" : "border-amber-500/40 bg-amber-500/10"
+                }`}
+              >
+                <div className="font-semibold">
+                  Last call failed: {failLabel}
+                  {last.http_code ? ` (HTTP ${last.http_code})` : ""}
+                </div>
+                {last.message && (
+                  <div className="mt-1 break-words text-[11px] text-muted-foreground">{last.message}</div>
+                )}
+                {last.kind === "credit" && (
+                  <div className="mt-1 text-[11px]">
+                    The mind keeps trying but every thought fails until the key has credit.
+                    {last.provider && LAST_CALL_HINT[last.provider] && (
+                      <>
+                        {" "}
+                        Top up at{" "}
+                        <a className="underline" href={LAST_CALL_HINT[last.provider]} target="_blank" rel="noreferrer">
+                          {LAST_CALL_HINT[last.provider]}
+                        </a>
+                        , or put a new key in ~/.headlong/.env, then restart the mind.
+                      </>
+                    )}
+                  </div>
+                )}
+                {last.kind === "auth" && (
+                  <div className="mt-1 text-[11px]">Put a working key in ~/.headlong/.env, then restart the mind.</div>
+                )}
+                {last.ts && <div className="mt-1 text-[10px] text-muted-foreground">last tried {last.ts}</div>}
+              </div>
+            )}
             {health.identities.map((identity) => (
               <div key={identity.id} className="rounded border p-2">
                 <div className="flex items-baseline gap-2 font-mono">

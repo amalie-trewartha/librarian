@@ -93,6 +93,29 @@ else
     [[ -d "$HOME/.headlong-thinkers" ]]   && say "  thinkers:   $HOME/.headlong-thinkers"
 fi
 
+# --- LLM: last call, from the marker bin/llm keeps --------------------------------
+LLM_ALERT=""
+hf="$HEADLONG_HOME/run/llm_health.json"
+if [[ -f "$hf" ]] && [[ "$(jq -r '.ok' "$hf" 2>/dev/null)" == "false" ]]; then
+    IFS=$'\t' read -r lk lc lm lt lp < <(jq -r '[(.kind // "other"), (.http_code // "" | tostring), (.message // ""), (.ts // ""), (.provider // "")] | @tsv' "$hf" 2>/dev/null)
+    case "$lk" in
+        credit) LLM_ALERT="OUT OF CREDIT — the API key has no money left" ;;
+        auth)   LLM_ALERT="KEY REJECTED — the API key is invalid or revoked" ;;
+        rate)   LLM_ALERT="RATE LIMITED" ;;
+        *)      LLM_ALERT="last call failed" ;;
+    esac
+    head_ "LLM"
+    say "  !! $LLM_ALERT (${lp:-provider}${lc:+, HTTP $lc}, last tried $lt)"
+    [[ -n "$lm" ]] && say "     provider said: ${lm:0:160}"
+    case "$lk" in
+        credit) say "     Fix: top up the key (or put a new one in $HEADLONG_HOME/.env), then start the agent again." ;;
+        auth)   say "     Fix: put a working key in $HEADLONG_HOME/.env, then start the agent again." ;;
+    esac
+elif [[ -f "$hf" ]]; then
+    head_ "LLM"
+    say "  ok (last call $(jq -r '.ts' "$hf" 2>/dev/null) via $(jq -r '.provider // "?"' "$hf" 2>/dev/null))"
+fi
+
 # --- identities ---------------------------------------------------------------
 IDS=()
 if [[ -n "$APP_DIR" && -d "$APP_DIR/.identities" ]]; then
