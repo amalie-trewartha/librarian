@@ -144,6 +144,13 @@ something is running away, `headlong-killall` stops every Headlong process on
 the machine (dispatchers, thinker steps, shellm runs, the dashboard);
 `headlong-killall --dry-run` shows what it would stop.
 
+To see what Headlong has on a machine and what is running (read-only, works
+even when nothing is on PATH):
+
+```bash
+curl -fsSL https://headlong.ai/status.sh | bash
+```
+
 To remove Headlong from the machine:
 
 ```bash

@@ -53,8 +53,9 @@ ada bugreport        # bundle logs + trajectory (keys scrubbed) for a bug report
 ```
 
 `headlong-killall` stops every Headlong process on the machine if you need a
-panic button. To remove Headlong entirely, `curl -fsSL
-https://headlong.ai/uninstall.sh | bash` (details in
+panic button. `curl -fsSL https://headlong.ai/status.sh | bash` shows what is
+installed and running; `curl -fsSL https://headlong.ai/uninstall.sh | bash`
+removes it all (details in
 [docs/install.md](docs/install.md#stopping-and-uninstalling)).
 
 You can also run the same flow inside a long-lived Docker container:

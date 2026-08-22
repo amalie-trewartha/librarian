@@ -142,6 +142,15 @@ _killall_bin() {
     command -v headlong-killall 2>/dev/null && return 0
     return 1
 }
+# Process shapes, copied from headlong-killall (the source of truth) for the
+# case where the checkout is already gone; tests/test_status.sh checks parity.
+PATTERNS=(
+    'bash [^ ]*/(bin|tools)/(shellm|shellm-explore|llm|chat|sub)( |$)'
+    'bash [^ ]*/bin/thinkers( |$)'
+    'bash [^ ]*/thinkers/[^ /]+/step( |$)'
+    'bash [^ ]*/bin/traj tail'
+    'tail -n 0 -F [^ ]*trajectory\.jsonl'
+)
 DASH_PAT='(uv run --project [^ ]+ |/\.venv/bin/)(headlong|shellm|shelly)-web( |$)'
 _list_processes() {
     local k
@@ -150,11 +159,7 @@ _list_processes() {
             "$k" --dry-run --web 2>/dev/null | sed -n 's/^  //p'
         else
             local pat
-            for pat in 'bash [^ ]*/(bin|tools)/(shellm|shellm-explore|llm|chat|sub|thinkers)( |$)' \
-                       'bash [^ ]*/thinkers/[^ /]+/step( |$)' 'bash [^ ]*/bin/traj tail' \
-                       'tail -n 0 -F [^ ]*trajectory\.jsonl'; do
-                pgrep -fl "$pat" 2>/dev/null || true
-            done
+            for pat in "${PATTERNS[@]}"; do pgrep -fl "$pat" 2>/dev/null || true; done
         fi
         # The dash, by our own pattern too: an older checkout's killall
         # predates the headlong-web name and would miss it.
