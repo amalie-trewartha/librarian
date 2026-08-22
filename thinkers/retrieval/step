@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# retrieval/step — passive memory recall.
+#
+# Watches the stream and, when a new thought, message, or observation
+# shares enough words with a stored memory, drops that memory back into the
+# stream as an observation ("I'm reminded of ..."). The mind does not ask
+# for it: memories surface when the current step resonates with them. This
+# is the recall process Audel built for itself on 2026-08-05 and later
+# fixed (commit 80cbb1e), ported to the bundled thinker layout.
+#
+# Cheap by design: a word index over $MEM_DIR (build-index.sh, rebuilt here
+# whenever a memory is newer than the index) and no LLM call, unless
+# RETRIEVAL_SEMANTIC=1 adds a `mem search` (one llm call) on each hit.
+#
+# Ships DISABLED (the `disabled` marker next to this file). To turn it on
+# for an identity, delete <identity>/thinkers/retrieval/disabled; on a
+# --symlinks install delete the marker in the checkout too, or
+# `identity sync-thinkers` links it back.
+#
+# Knobs: RETRIEVAL_MIN_HITS (default 2 shared words), RETRIEVAL_SEEN
+# (default 20: a memory is not resurfaced within that many surfacings),
+# RETRIEVAL_INDEX (default <identity>/retrieval/index.tsv).
+
+THINKER_NAME="retrieval"
+SCRIPT_DIR="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
+
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/../_lib/common.sh"
+
+_require_env
+
+INDEX="${RETRIEVAL_INDEX:-$IDENTITY_DIR/retrieval/index.tsv}"
+SEEN="$(dirname "$INDEX")/seen"
+
+step_json=$(cat)
+[[ -z "$step_json" ]] && exit 0
+content=$(printf '%s' "$step_json" | jq -r '.content // empty' 2>/dev/null) || exit 0
+step_source=$(printf '%s' "$step_json" | jq -r '.source // empty' 2>/dev/null) || true
+step_id=$(printf '%s' "$step_json" | jq -r '.step_id // empty' 2>/dev/null) || true
+[[ -z "$content" || "$step_source" == "$THINKER_NAME" ]] && exit 0
+
+# Index missing or older than the newest memory: rebuild (a few ms per memory).
+newest=$(ls -t "$MEM_DIR"/*.md 2>/dev/null | head -1) || true
+[[ -n "$newest" ]] || exit 0
+if [[ ! -s "$INDEX" || "$newest" -nt "$INDEX" ]]; then
+    "$SCRIPT_DIR/build-index.sh" "$MEM_DIR" "$INDEX" >/dev/null 2>&1 || exit 0
+fi
+
+# Words of the step (lowercase, 3+ chars, stopwords out), then the memory
+# that shares the most of them with the step. Index rows: word, id, summary.
+words=$(printf '%s' "$content" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '\n' \
+    | grep -E '^[a-z0-9]{3,}$' | grep -vxF -f "$SCRIPT_DIR/stopwords" | sort -u) || true
+[[ -n "$words" ]] || exit 0
+best=$(awk -F'\t' 'NR==FNR {w[$1]=1; next} ($1 in w) {n[$2]++; s[$2]=$3}
+    END {for (m in n) print n[m] "\t" m "\t" s[m]}' <(printf '%s\n' "$words") "$INDEX" \
+    | sort -rn | head -1) || true
+IFS=$'\t' read -r hits mid summary <<<"$best"
+[[ -n "${mid:-}" && "${hits:-0}" -ge "${RETRIEVAL_MIN_HITS:-2}" ]] || exit 0
+
+# Don't resurface a memory that is still fresh in the stream.
+grep -qxF "$mid" "$SEEN" 2>/dev/null && exit 0
+{ tail -n "$(( ${RETRIEVAL_SEEN:-20} - 1 ))" "$SEEN" 2>/dev/null; printf '%s\n' "$mid"; } > "$SEEN.tmp" \
+    && mv "$SEEN.tmp" "$SEEN"
+
+obs="I'm reminded of memory $mid: $summary ($hits shared words; mem show $mid for the full note)"
+if [[ "${RETRIEVAL_SEMANTIC:-0}" == 1 ]]; then
+    sem=$(timeout 60 mem search "$content" 2>/dev/null | head -3 | tr '\n' ' ') || sem=""
+    [[ -n "$sem" ]] && obs="$obs | mem search: ${sem:0:300}"
+fi
+jq -nc --arg c "$obs" --arg s "$THINKER_NAME" --arg m "$mid" --arg t "$step_id" \
+    '{type:"observation", content:$c, source:$s, retrieved_mem:$m}
+     + (if $t == "" then {} else {trigger_step: $t} end)' \
+    | traj append >/dev/null
