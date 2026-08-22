@@ -2172,6 +2172,8 @@ run_loop() {
         # whole call including empty-response retries (the user-felt time).
         local usage_file="$rundir/.last_usage"
         export LLM_USAGE_FILE="$usage_file"
+        # llm's usage ledger line for this call carries the run id
+        export LLM_RUN_ID="$_run_step_id"
         : > "$usage_file"
         local _llm_t0
         _llm_t0=$(date +%s)

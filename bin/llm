@@ -44,9 +44,14 @@ LLM_THINKING_LEVEL=""
 LLM_EFFORT=""
 LLM_RAW=0
 LLM_PROMPT=""
-# When set, a one-line JSON usage record ({in_tok, out_tok, think_tok}) is
-# written to this path after the call. Best-effort: fields the provider
-# doesn't report are omitted, and no failure here can break the call.
+# Token usage is captured on every call. A caller that wants this call's
+# numbers sets LLM_USAGE_FILE and gets a one-line JSON record
+# ({in_tok, out_tok, think_tok}) written there after the call (bin/shellm
+# stamps it on the reasoning step); when unset, a private temp file stands
+# in. Either way the record is appended, with ts/provider/model, to the usage
+# ledger (see _llm_ledger below) so total spend can be counted across every
+# caller. Best-effort: fields the provider doesn't report are omitted, and no
+# failure here can break the call.
 LLM_USAGE_FILE="${LLM_USAGE_FILE:-}"
 # Transient-failure retries (provider errors, 429/5xx, network). Retries
 # only happen when NOTHING has been emitted yet — a retry after partial
@@ -442,7 +447,7 @@ build_payload_openai() {
 
     # Usage capture on a stream needs the provider to append a final usage
     # chunk (OpenAI-compatible stream_options; OpenRouter supports it too).
-    if [[ -n "$LLM_USAGE_FILE" && "$LLM_STREAM" -eq 1 ]]; then
+    if [[ "$LLM_STREAM" -eq 1 ]]; then
         jq_filter="${jq_filter} + {stream_options: {include_usage: true}}"
     fi
 
@@ -608,13 +613,45 @@ warn_truncated() {
 # Write the LLM_USAGE_FILE record. Args: input tokens, output tokens,
 # reasoning/thinking tokens — non-numeric args are omitted from the record.
 write_usage() {
-    [[ -z "$LLM_USAGE_FILE" ]] && return 0
     jq -nc --arg i "${1:-}" --arg o "${2:-}" --arg t "${3:-}" '
         {}
         + (if ($i | test("^[0-9]+$")) then {in_tok: ($i | tonumber)} else {} end)
         + (if ($o | test("^[0-9]+$")) then {out_tok: ($o | tonumber)} else {} end)
         + (if ($t | test("^[0-9]+$")) then {think_tok: ($t | tonumber)} else {} end)' \
         > "$LLM_USAGE_FILE" 2>/dev/null || true
+}
+
+# Usage ledger: one JSON line per successful call, appended to
+#   $IDENTITY_DIR/usage/llm.jsonl   when running for an identity (thinkers,
+#                                   shellm runs, the responder all have it)
+#   $_llm_home/usage/llm.jsonl      otherwise (hand calls)
+# LLM_USAGE_LEDGER overrides the path (/dev/null disables).
+#   {"ts":...,"provider":...,"model":...,"in_tok":N,"out_tok":N,"think_tok":N,
+#    "identity":...,"run_id":...}
+# identity/run_id are present only when known. The dash usage page and
+# deploy/scripts/audel-metrics count this file, so every llm call counts
+# toward spend, not only the ones bin/shellm stamps on reasoning steps.
+_llm_ledger="${LLM_USAGE_LEDGER:-}"
+if [[ -z "$_llm_ledger" ]]; then
+    if [[ -n "${IDENTITY_DIR:-}" ]]; then
+        _llm_ledger="$IDENTITY_DIR/usage/llm.jsonl"
+    else
+        _llm_ledger="$_llm_home/usage/llm.jsonl"
+    fi
+fi
+_llm_identity="${IDENTITY_NAME:-}"
+[[ -z "$_llm_identity" && -n "${IDENTITY_DIR:-}" ]] && _llm_identity=$(basename "$IDENTITY_DIR")
+_llm_ledger_append() {
+    local rec
+    [[ -s "$LLM_USAGE_FILE" ]] || return 0
+    rec=$(jq -c 'select(type == "object" and length > 0)' "$LLM_USAGE_FILE" 2>/dev/null | head -1) || return 0
+    [[ -n "$rec" ]] || return 0
+    mkdir -p "$(dirname "$_llm_ledger")" 2>/dev/null || return 0
+    jq -nc --argjson u "$rec" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)"         --arg provider "$LLM_PROVIDER" --arg model "$LLM_MODEL"         --arg identity "$_llm_identity" --arg run_id "${LLM_RUN_ID:-${SHELLM_RUN_STEP_ID:-}}" '
+        {ts: $ts, provider: $provider, model: $model} + $u
+        + (if $identity == "" then {} else {identity: $identity} end)
+        + (if $run_id == "" then {} else {run_id: $run_id} end)'         >> "$_llm_ledger" 2>/dev/null || true
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -718,7 +755,7 @@ stream_openai() {
             fi
             # Usage chunk (present when stream_options.include_usage was
             # requested; usually the last data event). Same glob-guard idea.
-            if [[ -n "$LLM_USAGE_FILE" && "$json" == *'"usage"'* && "$json" != *'"usage":null'* ]]; then
+            if [[ "$json" == *'"usage"'* && "$json" != *'"usage":null'* ]]; then
                 local _u=""
                 _u=$(printf '%s' "$json" | jq -r 'select(.usage != null) | [
                         (.usage.prompt_tokens // ""), (.usage.completion_tokens // ""),
@@ -760,7 +797,7 @@ stream_gemini() {
                 fi
             fi
             # usageMetadata rides the final chunk.
-            if [[ -n "$LLM_USAGE_FILE" && "$json" == *'"usageMetadata"'* ]]; then
+            if [[ "$json" == *'"usageMetadata"'* ]]; then
                 local _u=""
                 _u=$(printf '%s' "$json" | jq -r '[
                         (.usageMetadata.promptTokenCount // ""),
@@ -793,7 +830,19 @@ stream_openrouter() { stream_openai; }
 # long" on a large one (Linux caps a single argument at 128 KiB, macOS caps
 # total argv at 1 MiB). The file is reused across retries and removed on exit.
 payload_file=$(mktemp "${TMPDIR:-/tmp}/llm-payload.XXXXXX")
-trap 'rm -f "$payload_file"' EXIT
+# No caller-provided usage file: a private one stands in (the ledger still
+# gets the record) and goes away with the payload file.
+_llm_usage_own=0
+if [[ -z "$LLM_USAGE_FILE" ]]; then
+    LLM_USAGE_FILE=$(mktemp "${TMPDIR:-/tmp}/llm-usage.XXXXXX")
+    _llm_usage_own=1
+fi
+_llm_cleanup() {
+    rm -f "$payload_file"
+    if [[ "$_llm_usage_own" -eq 1 ]]; then rm -f "$LLM_USAGE_FILE"; fi
+    return 0
+}
+trap '_llm_cleanup' EXIT
 "build_payload_${LLM_PROVIDER}" > "$payload_file"
 
 # Get URL and headers
@@ -841,6 +890,7 @@ if [[ "$LLM_STREAM" -eq 1 ]]; then
 
         if [[ "$_rc" -eq 0 && -z "$_ce" && "$_emitted" -eq 1 ]]; then
             _llm_note ok
+            _llm_ledger_append
             break   # success
         fi
         if [[ "$_rc" -eq 0 && -z "$_ce" ]]; then
@@ -919,17 +969,16 @@ else
         warn_truncated
     fi
 
-    if [[ -n "$LLM_USAGE_FILE" ]]; then
-        case "$LLM_PROVIDER" in
-            anthropic) _u=$(jq -r '[(.usage.input_tokens // ""), (.usage.output_tokens // ""), ""] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
-            gemini)    _u=$(jq -r '[(.usageMetadata.promptTokenCount // ""), (.usageMetadata.candidatesTokenCount // ""), (.usageMetadata.thoughtsTokenCount // "")] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
-            *)         _u=$(jq -r '[(.usage.prompt_tokens // ""), (.usage.completion_tokens // ""), (.usage.completion_tokens_details.reasoning_tokens // "")] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
-        esac
-        if [[ -n "$_u" ]]; then
-            IFS=$'\t' read -r _u_in _u_out _u_think <<<"$_u"
-            write_usage "$_u_in" "$_u_out" "$_u_think"
-        fi
+    case "$LLM_PROVIDER" in
+        anthropic) _u=$(jq -r '[(.usage.input_tokens // ""), (.usage.output_tokens // ""), ""] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
+        gemini)    _u=$(jq -r '[(.usageMetadata.promptTokenCount // ""), (.usageMetadata.candidatesTokenCount // ""), (.usageMetadata.thoughtsTokenCount // "")] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
+        *)         _u=$(jq -r '[(.usage.prompt_tokens // ""), (.usage.completion_tokens // ""), (.usage.completion_tokens_details.reasoning_tokens // "")] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
+    esac
+    if [[ -n "$_u" ]]; then
+        IFS=$'\t' read -r _u_in _u_out _u_think <<<"$_u"
+        write_usage "$_u_in" "$_u_out" "$_u_think"
     fi
+    _llm_ledger_append
 
     if [[ "$LLM_RAW" -eq 1 ]]; then
         cat "$local_resp"
