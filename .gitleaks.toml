@@ -20,5 +20,5 @@ description = "Fake OpenAI key used as a test fixture in web/tests"
 regexes = ['''sk-oai-9876543210abcdef''']
 
 [[allowlists]]
-description = "Fake OpenRouter keys used as test fixtures (tests/test_persona_bugreport.sh, tests/test_status.sh). Convention: build fake sk-or-v1- keys from repeats of 0123456789abcdef and no new entry is needed."
-regexes = ['''sk-or-v1-(0123456789abcdef){2,4}''']
+description = "Fake OpenRouter keys used as test fixtures (tests/test_persona_bugreport.sh, tests/test_status.sh) and the 2026-08-22 CI alert probe. Convention: build fake sk-or-v1- keys from repeats of 0123456789abcdef (or its reverse) and no new entry is needed."
+regexes = ['''sk-or-v1-(0123456789abcdef|fedcba9876543210){2,4}''']
