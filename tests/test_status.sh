@@ -56,7 +56,9 @@ check_not "install: key value never printed" grep -q "sk-or-v1-0123" <<<"$out"
 check "install: tools count + agent command" grep -qE "tools:      [0-9]+ of [0-9]+ in $H/.local/bin; agent commands: ada" <<<"$out"
 check "install: identity line, mind stopped" grep -q "ada (default): mind stopped" <<<"$out"
 check "install: dash stopped"                grep -q "^  stopped" <<<"$out"
-check "install: footer hints"                bash -c 'grep -q "<name> bugreport" <<<"$1" && grep -q "uninstall.sh | bash" <<<"$1"' _ "$out"
+check "install: commands use full paths off-PATH" bash -c 'grep -q "bug report bundle:   $2/.local/bin/ada bugreport" <<<"$1" && grep -q "pause ada:           $2/.local/bin/ada stop" <<<"$1" && grep -q "export PATH=\"$2/.local/bin:" <<<"$1" && grep -q "uninstall.sh | bash" <<<"$1"' _ "$out" "$H"
+out2=$(HOME="$H" HEADLONG_HOME="$H/.headlong" PREFIX="$H/.local/bin" PATH="$H/.local/bin:$PATH" bash "$REPO/status.sh" 2>&1)
+check "install: bare commands when on PATH"  bash -c 'grep -q "pause ada:           ada stop" <<<"$1" && ! grep -q "export PATH=" <<<"$1"' _ "$out2"
 # read-only: a fake dispatcher pid that is alive (this shell) shows as running, and nothing was written
 mkdir -p "$APP/.identities/ada/run"; printf '%s\n' "$$" > "$APP/.identities/ada/run/dispatcher.pid"
 out=$(HOME="$H" HEADLONG_HOME="$H/.headlong" PREFIX="$H/.local/bin" bash "$REPO/status.sh" 2>&1)

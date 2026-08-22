@@ -12,6 +12,13 @@ set -uo pipefail
 
 HEADLONG_HOME="${HEADLONG_HOME:-$HOME/.headlong}"
 PREFIX="${PREFIX:-$HOME/.local/bin}"
+ON_PATH=1          # set below; when 0, commands are printed with full paths
+BIN=""             # where to find a tool from THIS shell: "" (on PATH),
+                   # "$PREFIX/" (installed, off PATH) or "$APP_DIR/tools/"
+cmd_for() {        # cmd_for <identity> — how to address it from THIS shell
+    if [[ -L "$PREFIX/$1" && "$(readlink "$PREFIX/$1")" == */persona ]]; then printf '%s%s' "$BIN" "$1"
+    else printf '%spersona %s' "$BIN" "$1"; fi
+}
 TOOLS=(shellm shellm-docker skills mem llm context traj thinkers chat focus recap glob view put sub
        shellm-docker-broker identity shellm-explore headlong-init headlong-killall persona headlong-web
        headlong-slack-bridge headlong-telegram-bridge headlong-tui)
@@ -76,12 +83,18 @@ else
         [[ -L "$f" && "$(readlink "$f")" == */persona && "$(basename "$f")" != persona ]] && persona_links="$persona_links $(basename "$f")"
     done
     say "  tools:      $n of ${#TOOLS[@]} in $PREFIX${persona_links:+; agent commands:$persona_links}"
-    case ":$PATH:" in *":$PREFIX:"*) say "  PATH:       $PREFIX is on PATH" ;; *) say "  PATH:       $PREFIX is NOT on PATH in this shell" ;; esac
+    ON_PATH=0
+    case ":$PATH:" in *":$PREFIX:"*) ON_PATH=1; say "  PATH:       $PREFIX is on PATH" ;; *) say "  PATH:       $PREFIX is NOT on PATH in this shell" ;; esac
+    if [[ "$ON_PATH" -eq 0 ]]; then
+        if [[ -e "$PREFIX/persona" ]]; then BIN="$PREFIX/"
+        elif [[ -n "$APP_DIR" && -x "$APP_DIR/tools/persona" ]]; then BIN="$APP_DIR/tools/"; fi
+    fi
     [[ -d "$HOME/.skills/core-skills" ]]  && say "  skills:     $HOME/.skills/core-skills"
     [[ -d "$HOME/.headlong-thinkers" ]]   && say "  thinkers:   $HOME/.headlong-thinkers"
 fi
 
 # --- identities ---------------------------------------------------------------
+IDS=()
 if [[ -n "$APP_DIR" && -d "$APP_DIR/.identities" ]]; then
     head_ "Identities  ($APP_DIR/.identities)"
     def=""; [[ -L "$APP_DIR/.identities/default" ]] && def=$(basename "$(readlink "$APP_DIR/.identities/default")")
@@ -89,7 +102,7 @@ if [[ -n "$APP_DIR" && -d "$APP_DIR/.identities" ]]; then
     for d in "$APP_DIR/.identities"/*/; do
         [[ -d "$d" ]] || continue
         name=$(basename "$d"); [[ "$name" == default ]] && continue
-        found=1
+        found=1; IDS+=("$name")
         pid=$(cat "$d/run/dispatcher.pid" 2>/dev/null || true)
         if alive "$pid"; then mind="mind running (dispatcher pid $pid)"; else mind="mind stopped"; fi
         tj=$(ls -t "$d"/trajectories/*/trajectory.jsonl 2>/dev/null | head -1)
@@ -120,7 +133,7 @@ procs=$(
 if [[ -n "$procs" ]]; then
     printf '%s\n' "$procs" | cut -c1-${COLUMNS:-110} | sed 's/^/  /'
     say
-    say "  $(printf '%s\n' "$procs" | grep -c '') process(es). Stop one agent: <name> stop   All: headlong-killall --web"
+    say "  $(printf '%s\n' "$procs" | grep -c '') process(es)."
 else
     say "  none"
 fi
@@ -129,7 +142,31 @@ if command -v docker >/dev/null 2>&1; then
     if [[ -n "$c" ]]; then head_ "Docker sandboxes"; printf '%s\n' "$c"; fi
 fi
 
-say
-say "  Bundle details for a bug report:  <name> bugreport"
-say "  Remove everything:                curl -fsSL https://headlong.ai/uninstall.sh | bash"
+# --- commands that work from this shell ---------------------------------------
+head_ "Commands (for this shell)"
+if [[ "$ON_PATH" -eq 0 && -e "$PREFIX/persona" ]]; then
+    say "  $PREFIX is not on PATH here, so these use full paths. To fix:"
+    say "    export PATH=\"$PREFIX:\$PATH\""
+    say
+fi
+cmdrow() { printf '  %-20s %s\n' "$1" "$2"; }
+# Full rows for the default identity (or the only/first one); the rest on
+# one line — same verbs, different name.
+main_id=""; others=()
+for name in "${IDS[@]+"${IDS[@]}"}"; do
+    if [[ -z "$main_id" && ( "$name" == "${def:-}" || -z "${def:-}" ) ]]; then main_id="$name"; else others+=("$name"); fi
+done
+if [[ -n "$main_id" ]]; then
+    c=$(cmd_for "$main_id")
+    cmdrow "pause $main_id:"     "$c stop"
+    cmdrow "resume $main_id:"    "$c start"
+    cmdrow "chat with $main_id:" "$c      (one-shot: $c \"hello there\")"
+    cmdrow "bug report bundle:"  "$c bugreport"
+    if [[ "${#others[@]}" -gt 0 ]]; then
+        cmdrow "other identities:" "${BIN}persona <name> stop|start|bugreport   for: ${others[*]}"
+    fi
+fi
+[[ -x "${BIN:-./}headlong-killall" || -n "$(command -v headlong-killall 2>/dev/null)" || -x "${BIN}headlong-killall" ]] \
+    && cmdrow "stop everything:" "${BIN}headlong-killall --web"
+cmdrow "uninstall:" "curl -fsSL https://headlong.ai/uninstall.sh | bash"
 say
