@@ -5,7 +5,12 @@
 #
 # Computes, from the box's mind log: reply latency split by reply path (fast
 # path vs inside a run) and by whether the message arrived while a run was in
-# progress, run lengths, and duplicate-reply counts. Aggregates on the box
+# progress, run lengths, duplicate-reply counts, and a per-day usage series
+# (messages in/out, model calls, tokens in/out/thinking, runs, steps) plus
+# token totals per model — the "how is usage evolving" view. Tokens come from
+# the identity's llm usage ledger (usage/llm.jsonl, every bin/llm call) on the
+# days it covers, and from the tokens bin/shellm stamps on reasoning steps
+# (shellm runs only) on days before the ledger existed. Aggregates on the box
 # (SSM output is capped at 24KB), caches the data in .metrics/, keeps a dated
 # JSON snapshot next to the cache, and prints a plain-text report. Run it
 # before a change to freeze a baseline, and again after to compare.
@@ -55,6 +60,12 @@ if [[ "$cached" -eq 0 ]]; then
     #     exists — steps appended later with an inherited run_id are Audel's
     #     background processes, not the run.
     #   - llm_s/exec_s duration percentiles, once bin/shellm stamps them.
+#   - per UTC day: messages in/out, model calls, tokens in/out/thinking,
+#     runs started, reasoning steps, log rows; token totals per model.
+#     Calls/tokens per day come from the llm ledger when it has any call
+#     that day (model on each line), else from the reasoning-step stamps
+#     (model taken from the run's shellm-run row via run_id). Same rule as
+#     web/src/headlong_web/usage.py.
     onbox_script="IDENT_DIR=/opt/shellm/app/.identities/$IDENT
 $(cat <<'ONBOX'
 set -euo pipefail
@@ -114,8 +125,22 @@ run_appends = []        # ts of every reasoning/shell-output append (for
                         # locating the iteration boundary after an injection)
 llm_s, exec_s = [], []
 in_tok, out_tok, think_tok = [], [], []
+run_model = {}          # run_id -> model (from the shellm-run row)
+daily = {}              # "YYYY-MM-DD" -> counters (calls/tokens = stamps)
+day_models = {}         # "YYYY-MM-DD" -> model -> {calls, in, out, think} (stamps)
+ledger_daily = {}       # "YYYY-MM-DD" -> {calls, in, out, think, models}
 skipped = 0
 total = 0
+ledger_rows = 0
+
+DAY_KEYS = ("rows", "in_msg", "out_msg", "runs", "reasoning", "calls", "in", "out", "think")
+TOK = ("calls", "in", "out", "think")
+
+def day_key(ts):
+    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d")
+
+def day_of(ts):
+    return daily.setdefault(day_key(ts), dict.fromkeys(DAY_KEYS, 0))
 
 with open(path, encoding="utf-8", errors="replace") as fh:
     for line in fh:
@@ -135,6 +160,13 @@ with open(path, encoding="utf-8", errors="replace") as fh:
             skipped += 1
             continue
         rid = step.get("run_id") or ""
+        dd = day_of(ts)
+        dd["rows"] += 1
+        if t == "shellm-run":
+            dd["runs"] += 1
+            # the run's step_id is the run_id its reasoning/final steps carry
+            if step.get("step_id"):
+                run_model[step["step_id"]] = str(step.get("model") or "?")
         if rid and t not in ("shellm-run", "trajectory"):
             r = runs.setdefault(rid, [ts, ts, None, 0])
             r[0] = min(r[0], ts)
@@ -147,8 +179,10 @@ with open(path, encoding="utf-8", errors="replace") as fh:
             frm, to = step.get("from") or "", step.get("to") or ""
             if to == ident and frm and frm != ident:
                 inbound.append((step.get("step_id") or "", ts, frm))
+                dd["in_msg"] += 1
             elif frm == ident and to and to != ident:
                 outgoing.append((ts, to, step.get("reply_to") or "", bool(rid)))
+                dd["out_msg"] += 1
         elif t == "feedback" and step.get("source") == "dispatcher" and step.get("trigger_step"):
             fb_marked.add(step["trigger_step"])
             fb_events.append((step["trigger_step"], ts))
@@ -156,13 +190,74 @@ with open(path, encoding="utf-8", errors="replace") as fh:
             if rid:
                 run_appends.append(ts)
             if t == "reasoning":
+                dd["reasoning"] += 1
                 if isinstance(step.get("llm_s"), (int, float)):
                     llm_s.append(step["llm_s"])
-                for key, dest in (("in_tok", in_tok), ("out_tok", out_tok), ("think_tok", think_tok)):
+                bm = day_models.setdefault(day_key(ts), {}).setdefault(run_model.get(rid, "?"), dict.fromkeys(TOK, 0))
+                stamped = False
+                for key, dest, short in (("in_tok", in_tok, "in"), ("out_tok", out_tok, "out"), ("think_tok", think_tok, "think")):
                     if isinstance(step.get(key), (int, float)):
                         dest.append(step[key])
+                        dd[short] += int(step[key])
+                        bm[short] += int(step[key])
+                        stamped = True
+                if stamped:
+                    dd["calls"] += 1
+                    bm["calls"] += 1
             elif isinstance(step.get("exec_s"), (int, float)):
                 exec_s.append(step["exec_s"])
+
+# The llm usage ledger: one line per successful bin/llm call from any caller
+# (shellm runs, the responder fast path, other thinkers). Appended by bin/llm
+# unconditionally, so it is the complete spend on the days it covers.
+ledger_path = os.path.join(ident_dir, "usage", "llm.jsonl")
+try:
+    with open(ledger_path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            ledger_rows += 1
+            try:
+                rec = json.loads(line)
+                lts = epoch(rec.get("ts") or "")
+            except (ValueError, TypeError, AttributeError):
+                continue
+            ld = ledger_daily.setdefault(day_key(lts), dict.fromkeys(TOK, 0))
+            lm = ld.setdefault("models", {}).setdefault(str(rec.get("model") or "?"), dict.fromkeys(TOK, 0))
+            stamped = False
+            for key, short in (("in_tok", "in"), ("out_tok", "out"), ("think_tok", "think")):
+                if isinstance(rec.get(key), (int, float)):
+                    ld[short] += int(rec[key])
+                    lm[short] += int(rec[key])
+                    stamped = True
+            if stamped:
+                ld["calls"] += 1
+                lm["calls"] += 1
+except OSError:
+    pass
+
+# Per day, the ledger wins when it has any call; otherwise the stamps stand
+# (days before the ledger existed). by_model sums the winning source per day.
+by_model = {}
+ledger_since = None
+for d in sorted(set(daily) | set(ledger_daily)):
+    dd = daily.setdefault(d, dict.fromkeys(DAY_KEYS, 0))
+    ld = ledger_daily.get(d)
+    if ld and ld["calls"] > 0:
+        for k in TOK:
+            dd[k] = ld[k]
+        dd["source"] = "ledger"
+        models = ld["models"]
+        if ledger_since is None:
+            ledger_since = d
+    else:
+        dd["source"] = "mindlog"
+        models = day_models.get(d, {})
+    for m, v in models.items():
+        bm = by_model.setdefault(m, dict.fromkeys(TOK, 0))
+        for k in TOK:
+            bm[k] += v[k]
 
 # Run spans for busy-at-arrival, sorted for bisect. End at the final step
 # when the run has one, else at the last step seen with that run_id.
@@ -248,6 +343,9 @@ out = {
         "totals": {"in": sum(in_tok), "out": sum(out_tok), "think": sum(think_tok)},
     },
     "injections": injections,
+    "daily": [[d, daily[d]] for d in sorted(daily)],
+    "by_model": by_model,
+    "ledger": {"rows": ledger_rows, "since": ledger_since},
 }
 blob = base64.b64encode(gzip.compress(json.dumps(out, separators=(",", ":")).encode())).decode()
 if len(blob) > 23000:
@@ -360,6 +458,33 @@ if tk.get("in_tok") or tk.get("out_tok"):
     tot = tk.get("totals") or {}
     print("  totals: in %s  out %s  thinking %s"
           % tuple("{:,}".format(int(tot.get(k, 0))) for k in ("in", "out", "think")))
+
+led = d.get("ledger") or {}
+bym = d.get("by_model") or {}
+if bym:
+    print()
+    if led.get("since"):
+        print("tokens per model (llm ledger, every call, from %s; shellm-run stamps only before)" % led["since"])
+    else:
+        print("tokens per model (shellm-run stamps only; llm ledger has no calls yet)")
+    print("  %-32s %6s %13s %12s %12s" % ("model", "calls", "in", "out", "thinking"))
+    for m, v in sorted(bym.items(), key=lambda kv: -kv[1]["in"]):
+        print("  %-32s %6d %13s %12s %12s" % (m[:32], v["calls"],
+              "{:,}".format(v["in"]), "{:,}".format(v["out"]), "{:,}".format(v["think"])))
+
+daily = d.get("daily") or []
+if daily:
+    print()
+    print("per day (utc)")
+    print("  %-10s %5s %5s %5s %6s %7s %11s %10s %10s" % (
+        "day", "in", "out", "runs", "steps", "calls", "tok_in", "tok_out", "tok_think"))
+    for day, v in daily:
+        print("  %-10s %5d %5d %5d %6d %7d %11s %10s %10s" % (
+            day, v["in_msg"], v["out_msg"], v["runs"], v["reasoning"], v["calls"],
+            "{:,}".format(v["in"]), "{:,}".format(v["out"]), "{:,}".format(v["think"])))
+    print("  (in/out = messages; steps = reasoning steps; calls/tok = every llm call on ledger days%s,"
+          % (" (from %s)" % led["since"] if led.get("since") else ""))
+    print("   shellm-run stamps only on earlier days)")
 
 inj = d.get("injections")
 print()
