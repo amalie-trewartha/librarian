@@ -16,10 +16,12 @@ Two append-only sources feed it:
   fast path, other thinkers, hand calls), with ts/model/tokens. bin/llm
   appends it unconditionally, so it is the complete spend.
 
-Per day, the ledger wins when it has any call that day; days before the
-ledger existed (or a day where it could not be written) fall back to the
-mind-log stamps, which cover shellm runs only. The API marks each day with
-its ``source`` so the page can say what the numbers cover.
+Per day, the ledger wins when it has at least as many calls as the stamps
+(a complete ledger is a superset of the stamps); days before the ledger
+existed, the part-day it started on, or a day where it could not be written
+fall back to the mind-log stamps, which cover shellm runs only. The API
+marks each day with its ``source`` so the page can say what the numbers
+cover.
 
 The cache (``<traj_dir>/usage/cache.json``) keeps the per-day counters, the
 run_id -> model map and the byte offset read so far in each file. A refresh
@@ -337,7 +339,8 @@ def _pending_bytes(traj_dir: Path, ledger: Path | None, state: dict | None) -> i
 def _merge_day(day: dict) -> tuple[dict, dict]:
     """One API day: counters plus the tokens of the winning source, and that
     source's per-model map."""
-    source = "ledger" if day["llm"]["calls"] > 0 else "mindlog"
+    llm_calls, run_calls = day["llm"]["calls"], day["run"]["calls"]
+    source = "ledger" if llm_calls > 0 and llm_calls >= run_calls else "mindlog"
     tokens = day["llm"] if source == "ledger" else day["run"]
     out = {key: day.get(key, 0) for key in COUNT_KEYS}
     out.update({key: tokens[key] for key in TOKEN_KEYS})

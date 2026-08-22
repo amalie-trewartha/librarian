@@ -62,9 +62,10 @@ if [[ "$cached" -eq 0 ]]; then
     #   - llm_s/exec_s duration percentiles, once bin/shellm stamps them.
 #   - per UTC day: messages in/out, model calls, tokens in/out/thinking,
 #     runs started, reasoning steps, log rows; token totals per model.
-#     Calls/tokens per day come from the llm ledger when it has any call
-#     that day (model on each line), else from the reasoning-step stamps
-#     (model taken from the run's shellm-run row via run_id). Same rule as
+#     Calls/tokens per day come from the llm ledger when it has at least
+#     as many calls as the stamps that day (a complete ledger is a superset;
+#     model on each line), else from the reasoning-step stamps (model taken
+#     from the run's shellm-run row via run_id). Same rule as
 #     web/src/headlong_web/usage.py.
     onbox_script="IDENT_DIR=/opt/shellm/app/.identities/$IDENT
 $(cat <<'ONBOX'
@@ -237,14 +238,16 @@ try:
 except OSError:
     pass
 
-# Per day, the ledger wins when it has any call; otherwise the stamps stand
-# (days before the ledger existed). by_model sums the winning source per day.
+# Per day, the ledger wins when it has at least as many calls as the stamps
+# (a complete ledger is a superset of them); otherwise the stamps stand (days
+# before the ledger existed, the part-day it started on). by_model sums the
+# winning source per day.
 by_model = {}
 ledger_since = None
 for d in sorted(set(daily) | set(ledger_daily)):
     dd = daily.setdefault(d, dict.fromkeys(DAY_KEYS, 0))
     ld = ledger_daily.get(d)
-    if ld and ld["calls"] > 0:
+    if ld and ld["calls"] > 0 and ld["calls"] >= dd["calls"]:
         for k in TOK:
             dd[k] = ld[k]
         dd["source"] = "ledger"

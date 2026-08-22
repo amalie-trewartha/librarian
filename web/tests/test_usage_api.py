@@ -235,6 +235,28 @@ def test_ledger_is_incremental_and_rebuilds_when_it_shrinks(traj_dir: Path, ledg
     assert state["rows"] == 14   # the log was re-read too
 
 
+def test_partial_ledger_day_keeps_the_stamps(traj_dir: Path, ledger: Path):
+    # The ledger started mid-day on 08-01 (one line) while the stamps already
+    # have one call plus later ones: fewer ledger calls than stamps means the
+    # ledger is partial for that day, so the stamps stand. 08-02 has one
+    # stamp and one ledger line (equal): the ledger wins.
+    log = traj_dir / "trajectory.jsonl"
+    with log.open("a") as fh:
+        fh.write(_run_rows("2026-08-01", "run9", "modelA", 10, 1, 0))   # 2 stamped calls on 08-01
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text(
+        _ledger_row("2026-08-01", "modelA", 10, 1, 0, "10:00")
+        + _ledger_row("2026-08-02", "modelB", 2000, 80, 0, "10:00")
+    )
+    usage.refresh(traj_dir, "usr", ledger=ledger)
+    body = usage.summary(traj_dir, "id", "usr", ledger=ledger)
+    days = dict(body["daily"])
+    assert days["2026-08-01"]["source"] == "mindlog"
+    assert days["2026-08-01"]["calls"] == 2 and days["2026-08-01"]["in"] == 1010
+    assert days["2026-08-02"]["source"] == "ledger"
+    assert body["ledger"]["since"] == "2026-08-02"
+
+
 def test_missing_ledger_is_fine(traj_dir: Path, ledger: Path):
     state = usage.refresh(traj_dir, "usr", ledger=ledger)
     assert state["ledger_rows"] == 0 and state["ledger_offset"] == 0
