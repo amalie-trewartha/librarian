@@ -362,7 +362,7 @@ EOF
     done
     VIBE=$(ask "  A few words on their personality" "$VIBE")
     FOCUS=$(ask "  What should $NAME think about when idle" "$FOCUS")
-    printf '\nAnd about you, so %s knows who they live with (both optional):\n\n' "$NAME" >/dev/tty
+    printf '\nAnd about you, so %s knows who they are talking to (both optional):\n\n' "$NAME" >/dev/tty
     OPERATOR_NAME=$(ask "  Your name" "$OPERATOR_NAME")
     USER_NOTE=$(ask "  Anything else $NAME should know about you? (what you're up to, how they can help)" "$USER_NOTE")
     echo >/dev/tty
@@ -702,6 +702,29 @@ $NAME is running.
   Not on PATH yet?     $PERSONA_PATH
 ────────────────────────────────────────────────────────
 EOF
+
+# What landed on the machine, and the two one-liners again.
+_tilde() { printf '%s' "${1/#"$HOME"/\~}"; }
+_row()   { printf '  %-32s %s\n' "$(_tilde "$1")" "$2"; }
+_print_install_summary() {
+    echo
+    echo "What was installed"
+    _row "$HEADLONG_HOME"            "state home: .env (your API key), logs/, status.json"
+    _row "$APP_DIR"                  "the Headlong checkout"
+    _row "$IDENTITY_ROOT/$NAME"      "$NAME: persona, memories, trajectory"
+    _row "$PERSONA_BIN"              "the tools, and the '$NAME' command"
+    [[ -d "$HOME/.skills/core-skills" ]] && _row "$HOME/.skills/core-skills" "core skills"
+    [[ -d "$HOME/.headlong-thinkers" ]]  && _row "$HOME/.headlong-thinkers"  "thinker templates"
+    [[ -n "${HEADLONG_RC_FILE:-}" ]]     && _row "$HEADLONG_RC_FILE"         "one PATH line added"
+    cat <<'EOF'
+
+At any time, from any shell
+  read-only status:  curl -fsSL https://headlong.ai/status.sh | bash
+  uninstall:         curl -fsSL https://headlong.ai/uninstall.sh | bash
+────────────────────────────────────────────────────────
+EOF
+}
+_print_install_summary
 
 # The one-liner (`curl | bash`) runs in a child process, so the shell the user
 # typed it in cannot see the PATH entry install.sh just added — `$NAME` would

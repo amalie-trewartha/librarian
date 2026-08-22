@@ -88,6 +88,13 @@ _require_deps() {
 _bootstrap_and_reexec() {
     _require_deps git curl jq
 
+    cat <<'EOF'
+
+Headlong installer. At any time, from any shell:
+  read-only status:  curl -fsSL https://headlong.ai/status.sh | bash
+  uninstall:         curl -fsSL https://headlong.ai/uninstall.sh | bash
+
+EOF
     local app_dir="$HEADLONG_HOME/app"
     if [[ -d "$app_dir/.git" ]]; then
         echo "==> Updating existing checkout at $app_dir"
@@ -284,6 +291,7 @@ _ensure_path() {
     if [[ -n "$rc" && "$in_container" -eq 1 ]]; then
         grep -qxF "$path_line" "$rc" 2>/dev/null || printf '\n%s\n' "$path_line" >> "$rc"
         echo "==> Added $PREFIX to PATH in $rc (container — no prompt)."
+        export HEADLONG_RC_FILE="$rc"
     elif [[ -n "$rc" ]] && (: </dev/tty) 2>/dev/null; then
         echo
         printf 'Add %s to your PATH in %s? [Y/n] ' "$PREFIX" "$rc" >/dev/tty
@@ -291,6 +299,7 @@ _ensure_path() {
         if [[ ! "$reply" =~ ^[Nn] ]]; then
             grep -qxF "$path_line" "$rc" 2>/dev/null || printf '\n%s\n' "$path_line" >> "$rc"
             echo "Added to $rc (takes effect in new shells)."
+            export HEADLONG_RC_FILE="$rc"
         fi
         echo
     else
