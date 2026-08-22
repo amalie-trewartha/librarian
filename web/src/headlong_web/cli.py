@@ -181,12 +181,25 @@ def main() -> None:
     parser.add_argument("--dev", action="store_true", help="Run vite dev server + uvicorn --reload")
     parser.add_argument("--rebuild", action="store_true", help="Force a frontend rebuild")
     parser.add_argument(
+        "--build-only",
+        action="store_true",
+        help="Build the frontend (if missing, or with --rebuild) and exit without serving. "
+        "headlong-init runs this in the background so the first start is quick.",
+    )
+    parser.add_argument(
         "--read-only",
         action="store_true",
         help="Disable control endpoints (start/stop/chat/create). "
         "Recommended when binding beyond 127.0.0.1 until auth exists.",
     )
     args = parser.parse_args()
+
+    if args.build_only:
+        if args.rebuild or not (STATIC_DIR / "index.html").is_file():
+            _build_frontend()
+        else:
+            print(f"Frontend already built: {STATIC_DIR}", file=sys.stderr)
+        return
 
     root = Path(args.root).resolve()
     if not root.is_dir():
