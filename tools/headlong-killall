@@ -49,7 +49,10 @@ PATTERNS=(
     'tail -n 0 -F [^ ]*trajectory\.jsonl'
 )
 if [[ "$KILL_WEB" -eq 1 ]]; then
-    PATTERNS+=('(^|[/ ])(headlong|shellm|shelly)-web( |$)')
+    # The dash: `uv run --project <app>/web headlong-web ...` and the venv
+    # entry point under it. Anchored on those shapes, not on the bare name,
+    # so a shell merely mentioning headlong-web (systemctl, grep) is not hit.
+    PATTERNS+=('(uv run --project [^ ]+ |/\.venv/bin/)(headlong|shellm|shelly)-web( |$)')
 fi
 
 # Never kill ourselves or our ancestors (running this from inside an agent

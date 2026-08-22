@@ -104,7 +104,7 @@ check "other .bashrc lines kept"                 grep -q 'alias ll=' "$H1/.bashr
 BK=$(ls -d "$H1"/headlong-identities-backup-* 2>/dev/null | head -1)
 check "identities backed up"                     test -d "$BK/ada"
 check "backup keeps the identity files"          test -f "$BK/ada/info.txt"
-check "output names the backup"                  grep -q "Your identities are in $BK" <<<"$out"
+check "output names the backup + rm hint"        bash -c 'grep -q "Identities backed up to:  $2" <<<"$1" && grep -qF "rm -rf '"'"'$2'"'"'" <<<"$1"' _ "$out" "$BK"
 check "output says uninstalled"                  grep -q 'Headlong is uninstalled' <<<"$out"
 out=$(run_uninstall "$H1" --yes --no-stop 2>&1); rc=$?
 check "second run: nothing to do, rc 0"          bash -c '[[ "$1" -eq 0 ]] && grep -q "Nothing to do" <<<"$2"' _ "$rc" "$out"

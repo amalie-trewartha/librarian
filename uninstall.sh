@@ -142,7 +142,7 @@ _killall_bin() {
     command -v headlong-killall 2>/dev/null && return 0
     return 1
 }
-DASH_PAT='(^|[/ ])(headlong|shellm|shelly)-web( |$)'
+DASH_PAT='(uv run --project [^ ]+ |/\.venv/bin/)(headlong|shellm|shelly)-web( |$)'
 _list_processes() {
     local k
     {
@@ -214,17 +214,42 @@ main() {
         exit 0
     fi
 
-    # --- the plan ---------------------------------------------------------
+    # --- 1. processes: show, ask, stop --------------------------------------
     say
     if [[ "$DRY_RUN" -eq 1 ]]; then say "Headlong uninstall (dry run)"; else say "Headlong uninstall"; fi
-    head_ "Running processes"
+    head_ "Running Headlong processes"
+    local killall_hint="headlong-killall --dry-run --web"
+    local k; if k=$(_killall_bin); then killall_hint="$k --dry-run --web"; fi
     if [[ "$STOP" -eq 0 ]]; then
         say "  (not checked: --no-stop)"
     elif [[ "$nprocs" -gt 0 ]]; then
-        printf '%s\n' "$procs" | sed 's/^/  /'
+        # A glance, not a dump: the first few, each cut to one line.
+        printf '%s\n' "$procs" | head -6 | cut -c1-${COLUMNS:-100} | sed 's/^/  /'
+        [[ "$nprocs" -gt 6 ]] && say "  ... and $((nprocs - 6)) more"
+        say
+        say "  Full list:  $killall_hint"
     else
         say "  none"
     fi
+    if [[ "$nprocs" -gt 0 && "$DRY_RUN" -eq 0 ]]; then
+        if [[ "$YES" -eq 0 && "$HAS_TTY" -eq 0 ]]; then
+            die "no terminal to confirm on. Re-run with --yes to proceed without prompts (see --help)."
+        fi
+        say
+        if ask_yn "Stop these $nprocs process(es)?" n; then
+            head_ "Stopping processes"
+            _kill_processes
+            say "  done"
+        else
+            say
+            say "Leaving them running; nothing changed. Stop them yourself (ada stop, or"
+            say "$killall_hint without --dry-run) and re-run, or pass --no-stop to remove"
+            say "the files anyway."
+            exit 1
+        fi
+    fi
+
+    # --- 2. files: show, ask, remove ---------------------------------------
     head_ "Will remove"
     if _app_is_ours; then
         say "  $APP_DIR   (the checkout)"
@@ -267,18 +292,9 @@ main() {
     if [[ "$YES" -eq 0 && "$HAS_TTY" -eq 0 ]]; then
         die "no terminal to confirm on. Re-run with --yes to proceed without prompts (see --help)."
     fi
-    if [[ "$nprocs" -gt 0 ]]; then
-        ask_yn "Stop the $nprocs process(es) above and remove everything listed?" n || { say "Aborted; nothing changed."; exit 1; }
-    else
-        ask_yn "Remove everything listed?" n || { say "Aborted; nothing changed."; exit 1; }
-    fi
+    ask_yn "Remove everything listed?" n || { say "Aborted; files left in place."; exit 1; }
 
     # --- do it --------------------------------------------------------------
-    if [[ "$nprocs" -gt 0 ]]; then
-        head_ "Stopping processes"
-        _kill_processes
-        say "  done"
-    fi
     if [[ -n "$idroot" && -n "$backup" ]]; then
         head_ "Backing up identities"
         mv "$idroot" "$backup"
@@ -302,9 +318,15 @@ main() {
 
     say
     say "Headlong is uninstalled."
-    [[ -n "$backup" ]] && say "Your identities are in $backup — delete that folder when you no longer want them."
-    [[ "${#rcs[@]}" -gt 0 ]] && say "Open a new terminal for the PATH change to take effect."
-    say "To reinstall:  curl -fsSL https://headlong.ai/install.sh | bash"
+    say
+    if [[ -n "$backup" ]]; then
+        say "  Identities backed up to:  $backup"
+        say "  Delete the backup later:  rm -rf '$backup'"
+        say
+    fi
+    [[ "${#rcs[@]}" -gt 0 ]] && say "  PATH changed: open a new terminal."
+    say "  Reinstall any time:  curl -fsSL https://headlong.ai/install.sh | bash"
+    say
 }
 
 main "$@"
