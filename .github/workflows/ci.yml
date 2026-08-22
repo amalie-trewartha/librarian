@@ -14,6 +14,9 @@
 #   install-smoke  tests/smoke_install.sh       install.sh, both modes, in a
 #                                               bare ubuntu:24.04 container
 #   gitleaks       gitleaks git (full history)  secrets; allowlist in .gitleaks.toml
+#   loc            cloc bin/ thinkers/          the harness stays under
+#                                               LOC_LIMIT code lines (the
+#                                               README's "9.6K lines" claim)
 #   alert-main     Slack post                    after each push to main: red
 #                                               when a job failed, green-again
 #                                               when the previous run was red;
@@ -24,7 +27,7 @@
 # Run the same things locally: tests/run-all.sh, uv run --project web pytest
 # web/tests (and slack, telegram), bun run typecheck/build in web/viewer,
 # cargo fmt --check / clippy / check in tui/headlong, tests/smoke_install.sh,
-# gitleaks git . -c .gitleaks.toml.
+# gitleaks git . -c .gitleaks.toml, cloc bin/ thinkers/.
 
 name: CI
 
@@ -185,6 +188,34 @@ jobs:
           path: gitleaks-report.json
           retention-days: 7
 
+  loc:
+    name: cloc bin/ thinkers/ under limit
+    # The README sells the harness as small enough to read end to end and
+    # quotes cloc's count for bin/ + thinkers/. This keeps that honest: the
+    # job fails when the code-line total (cloc's SUM, blanks and comments
+    # excluded) goes over LOC_LIMIT, so growth is a deliberate choice (raise
+    # the limit here, and the README number) rather than drift.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      LOC_LIMIT: 9750
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install cloc
+        run: sudo apt-get install -y -qq cloc >/dev/null
+      - name: Count and compare
+        run: |
+          set -euo pipefail
+          cloc --version
+          cloc bin/ thinkers/
+          code=$(cloc --quiet --json bin/ thinkers/ | jq -r '.SUM.code')
+          echo "cloc bin/ thinkers/ = ${code} code lines (limit ${LOC_LIMIT})"
+          echo "cloc bin/ thinkers/ = **${code}** code lines (limit ${LOC_LIMIT})" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$code" -gt "$LOC_LIMIT" ]; then
+            echo "::error::bin/ + thinkers/ is ${code} code lines, over the ${LOC_LIMIT} limit. Trim, or raise LOC_LIMIT in .github/workflows/ci.yml and update the README's line count on purpose."
+            exit 1
+          fi
+
   alert-main:
     name: alert on red / green main
     # Runs after every push to main. Posts to Slack when a job failed, and
@@ -193,7 +224,7 @@ jobs:
     # follows green. Same channel as the box's thinkers-alert unit
     # (C0BMVH6LM4K). The token is a bot token with chat:write; the job
     # skips the post if the secret is missing. Skipped entirely on PRs.
-    needs: [harness, python, viewer, tui, shellcheck, install-smoke, gitleaks]
+    needs: [harness, python, viewer, tui, shellcheck, install-smoke, gitleaks, loc]
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
