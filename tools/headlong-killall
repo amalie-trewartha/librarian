@@ -49,7 +49,7 @@ PATTERNS=(
     'tail -n 0 -F [^ ]*trajectory\.jsonl'
 )
 if [[ "$KILL_WEB" -eq 1 ]]; then
-    PATTERNS+=('(^|[/ ])shell(m|y)-web( |$)')
+    PATTERNS+=('(^|[/ ])(headlong|shellm|shelly)-web( |$)')
 fi
 
 # Never kill ourselves or our ancestors (running this from inside an agent

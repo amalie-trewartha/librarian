@@ -99,6 +99,7 @@ _bootstrap_and_reexec() {
         mkdir -p "$HEADLONG_HOME"
         git clone --branch "$HEADLONG_BRANCH" "$HEADLONG_REPO" "$app_dir"
     fi
+    echo
     exec bash "$app_dir/install.sh" --symlinks --init "$@"
 }
 
@@ -120,6 +121,8 @@ Options:
   --init         After installing, run `headlong-init` to bootstrap a first
                  identity and start the local dash (the curl|bash one-liner
                  does this by default)
+  --uninstall    Remove Headlong from this machine (runs uninstall.sh; see
+                 uninstall.sh --help for its options)
   -h, --help     Show this help
 
 Environment variables:
@@ -137,16 +140,21 @@ EOF
 
 _install_tools() {
     local tool dir
+    if [[ "$SYMLINKS" -eq 1 ]]; then
+        echo "==> Linking tools into $PREFIX"
+    else
+        echo "==> Installing tools into $PREFIX"
+    fi
     for tool in "${TOOLS[@]}"; do
         dir=bin
         [[ -f "tools/$tool" ]] && dir=tools
         if [[ "$SYMLINKS" -eq 1 ]]; then
             ln -sf "$(pwd)/$dir/$tool" "$PREFIX/$tool"
-            echo "Linked $tool → $PREFIX/$tool"
+            echo "  Linked $tool → $PREFIX/$tool"
         else
             cp "$dir/$tool" "$PREFIX/$tool"
             chmod +x "$PREFIX/$tool"
-            echo "Installed $tool → $PREFIX/$tool"
+            echo "  Installed $tool → $PREFIX/$tool"
         fi
     done
 }
@@ -161,7 +169,7 @@ _install_tui() {
     for tui_dir in tui/*/; do
         [[ -f "${tui_dir}Cargo.toml" ]] || continue
         name=$(basename "$tui_dir")
-        printf 'Building %s...\n' "$name"
+        printf '==> Building the %s TUI (cargo, release build)\n' "$name"
         (cd "$tui_dir" && cargo build --release --quiet) || {
             printf 'Warning: failed to build %s (skipping)\n' "$name" >&2
             continue
@@ -171,7 +179,7 @@ _install_tui() {
         if [[ -f "$local_bin" ]]; then
             cp "$local_bin" "$PREFIX/$(basename "$local_bin")"
             codesign --force --sign - "$PREFIX/$(basename "$local_bin")" 2>/dev/null || true
-            echo "Installed $(basename "$local_bin") → $PREFIX/$(basename "$local_bin")"
+            echo "  Installed $(basename "$local_bin") → $PREFIX/$(basename "$local_bin")"
         fi
     done
 }
@@ -190,7 +198,7 @@ _install_skills() {
             cp -R "$skill_dir" "$skills_prefix/$name"
         fi
     done
-    echo "Installed core skills → $skills_prefix"
+    echo "==> Installed core skills → $skills_prefix"
 }
 
 _install_thinkers() {
@@ -223,10 +231,10 @@ _install_thinkers() {
         name=$(basename "$entry")
         if [[ ! -d "thinkers/$name" ]]; then
             rm -rf "${thinkers_prefix:?}/$name"
-            echo "Pruned stale thinker template → $name"
+            echo "  Pruned stale thinker template → $name"
         fi
     done
-    echo "Installed thinker templates → $thinkers_prefix"
+    echo "==> Installed thinker templates → $thinkers_prefix"
 }
 
 # PATH: make sure the tools are reachable — for this process (so --init can
@@ -275,14 +283,16 @@ _ensure_path() {
     [[ -f /.dockerenv || -f /run/.containerenv ]] && in_container=1
     if [[ -n "$rc" && "$in_container" -eq 1 ]]; then
         grep -qxF "$path_line" "$rc" 2>/dev/null || printf '\n%s\n' "$path_line" >> "$rc"
-        echo "Added $PREFIX to PATH in $rc (container — no prompt)."
+        echo "==> Added $PREFIX to PATH in $rc (container — no prompt)."
     elif [[ -n "$rc" ]] && (: </dev/tty) 2>/dev/null; then
+        echo
         printf 'Add %s to your PATH in %s? [Y/n] ' "$PREFIX" "$rc" >/dev/tty
         IFS= read -r reply </dev/tty || true
         if [[ ! "$reply" =~ ^[Nn] ]]; then
             grep -qxF "$path_line" "$rc" 2>/dev/null || printf '\n%s\n' "$path_line" >> "$rc"
             echo "Added to $rc (takes effect in new shells)."
         fi
+        echo
     else
         echo
         echo "Warning: $PREFIX is not on your PATH."
@@ -309,6 +319,7 @@ main() {
             --prefix)   PREFIX="${2:?--prefix requires a path}"; shift 2 ;;
             --init)     RUN_INIT=1; shift ;;
             --no-init)  RUN_INIT=0; shift ;;
+            --uninstall) shift; exec bash "$script_dir/uninstall.sh" "$@" ;;
             --help|-h)  _usage; exit 0 ;;
             *) echo "Unknown option: $1 (try --help)" >&2; exit 1 ;;
         esac

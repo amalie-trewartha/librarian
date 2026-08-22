@@ -144,7 +144,23 @@ something is running away, `headlong-killall` stops every Headlong process on
 the machine (dispatchers, thinker steps, shellm runs, the dashboard);
 `headlong-killall --dry-run` shows what it would stop.
 
-The installer touches these places, and removing them uninstalls Headlong:
+To remove Headlong from the machine:
+
+```bash
+curl -fsSL https://headlong.ai/uninstall.sh | bash
+```
+
+(or `./uninstall.sh` / `./install.sh --uninstall` from a checkout). It shows
+what is running and what it will remove, asks once, stops every Headlong
+process, and deletes what the installer put in place. Your agent's
+identities (memories, trajectory) are moved to
+`~/headlong-identities-backup-<date>/` unless you say to delete them.
+`--dry-run` shows the plan without changing anything; `--yes` skips the
+prompts (for scripts); `uninstall.sh --help` lists the rest. If you
+installed from your own clone with `./install.sh`, the clone and the
+identities inside it are left alone.
+
+By hand, the installer touches these places, and removing them uninstalls Headlong:
 
 - `~/.headlong/` — the state home: `.env` (your API key), `status.json`,
   logs, and, for the one-liner, the checkout itself in `~/.headlong/app/`.
