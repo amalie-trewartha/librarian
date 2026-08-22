@@ -695,7 +695,7 @@ cat <<EOF
 $NAME is running.
 
   Watch their mind     ${DASH_DISPLAY:-$PERSONA_CMD dash}
-  Chat with them       $PERSONA_CMD          (or just: $PERSONA_CMD hello)
+  Chat with them       $PERSONA_CMD          (or one-shot: $PERSONA_CMD "hello there")
   Pause / resume       $PERSONA_CMD stop  /  $PERSONA_CMD start
   Something broken?    $PERSONA_CMD bugreport   (bundle to attach to a report)
   Everything else      $PERSONA_CMD --help

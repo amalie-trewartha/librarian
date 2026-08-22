@@ -140,8 +140,18 @@ _messages() {
         | jq -c '.' 2>/dev/null || true
 }
 
-_print_incoming() {  # stdin: message JSON lines; prints ones from the identity
-    jq -r --arg me "$NAME" 'select(.from == $me) | "\($me)> \(.content)"' 2>/dev/null || true
+_incoming() {  # stdin: message JSON lines; passes through the identity's own
+    jq -c --arg me "$NAME" 'select(.from == $me)' 2>/dev/null || true
+}
+
+# _print_incoming — stdin: the identity's message JSON lines; one reply per
+# block: blank line, "name> first line", continuation lines indented to the
+# same column, blank line. Multi-paragraph replies stay readable.
+_print_incoming() {
+    local pad; pad=$(printf '%*s' $(( ${#NAME} + 2 )) '')
+    jq -r --arg me "$NAME" --arg pad "$pad" \
+        '"\n" + $me + "> " + (.content | rtrimstr("\n") | gsub("\n(?=[^\n])"; "\n" + $pad))' 2>/dev/null || true
+    echo
 }
 
 # ---------------------------------------------------------------------------
@@ -282,20 +292,21 @@ cmd_say() {
     _activate
     _dispatcher_pid >/dev/null || echo "(note: $NAME's mind is stopped — they won't answer until you run: $CMD start)"
     local before
-    before=$(_messages | _print_incoming | wc -l | tr -d ' ')
-    chat send "$*" >/dev/null
-    echo "sent. waiting for $NAME (Ctrl-C to stop waiting — replies also appear in the dash)"
+    before=$(_messages | _incoming | wc -l | tr -d ' ')
+    chat send "$*" >/dev/null 2>&1
+    printf 'sent — waiting for %s (Ctrl-C to stop waiting; replies also show in the dash)\n' "$NAME"
     local _
     for _ in $(seq 1 60); do
         sleep 2
         local now
-        now=$(_messages | _print_incoming | wc -l | tr -d ' ')
+        now=$(_messages | _incoming | wc -l | tr -d ' ')
         if [[ "$now" -gt "$before" ]]; then
-            _messages | _print_incoming | tail -n "$((now - before))"
+            _messages | _incoming | tail -n "$((now - before))" | _print_incoming
             return 0
         fi
     done
-    echo "no reply yet — it'll show up in '$CMD' chat or the dash."
+    echo
+    echo "no reply yet — it will show up in '$CMD' (chat) or the dash."
 }
 
 cmd_chat() {
@@ -316,8 +327,7 @@ cmd_chat() {
             sleep 2
             total=$(_messages | wc -l | tr -d ' ')
             if [[ "$total" -gt "$local_seen" ]]; then
-                printf '\n'
-                _messages | tail -n "$((total - local_seen))" | _print_incoming
+                _messages | tail -n "$((total - local_seen))" | _incoming | _print_incoming
                 printf 'you> '
                 local_seen=$total
             fi
@@ -328,7 +338,7 @@ cmd_chat() {
     local line
     while IFS= read -r -p "you> " line; do
         [[ -z "$line" ]] && continue
-        chat send "$line" >/dev/null
+        chat send "$line" >/dev/null 2>&1
     done
     echo
 }
@@ -575,7 +585,8 @@ $CMD — talk to and manage the identity '$NAME'
 
 Usage:
   $CMD                 chat with them
-  $CMD <message>       send one message and wait briefly for the reply
+  $CMD "<message>"     send one message and wait briefly for the reply
+                       (quote it if it has a ' or ? in it)
   $CMD say <message>   the same, explicitly (for messages starting with a
                        word like 'stop' or 'status')
   $CMD start           resume their mind (and the dash)
