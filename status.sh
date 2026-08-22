@@ -105,7 +105,7 @@ if [[ -n "$APP_DIR" && -d "$APP_DIR/.identities" ]]; then
         found=1; IDS+=("$name")
         pid=$(cat "$d/run/dispatcher.pid" 2>/dev/null || true)
         if alive "$pid"; then mind="mind running (dispatcher pid $pid)"; else mind="mind stopped"; fi
-        tj=$(ls -t "$d"/trajectories/*/trajectory.jsonl 2>/dev/null | head -1)
+        tj=$(ls -t "$d"/trajectories/*/trajectory.jsonl 2>/dev/null | head -1 || true)
         last=""; [[ -n "$tj" ]] && last=$(tail -1 "$tj" 2>/dev/null | sed -n 's/.*"ts":"\([^"]*\)".*/\1/p')
         rows=""; [[ -n "$tj" ]] && rows=$(wc -l <"$tj" | tr -d ' ')
         tag=""; [[ "$name" == "$def" ]] && tag=" (default)"

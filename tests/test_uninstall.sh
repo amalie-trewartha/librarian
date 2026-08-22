@@ -136,6 +136,22 @@ check "own clone: no backup made"                bash -c '! ls -d "$1"/headlong-
 check "own clone: state home gone"               test ! -e "$H3/.headlong"
 check "own clone: links gone"                    bash -c '[[ -z "$(ls -A "$1" 2>/dev/null)" ]]' _ "$H3/.local/bin"
 
+# --- 7. more than 6 matching processes must not kill the listing ------------------
+# (printf | head -6 used to EPIPE the printf builtin; under pipefail + set -e the
+# script died silently right after printing the list.) Fake dash-shaped argv via
+# exec -a; dry-run only lists, nothing is signalled.
+fake_pids=()
+for i in 1 2 3 4 5 6 7 8; do
+    ( exec -a "uv run --project /fake$i/app/web headlong-web /fake$i/app" sleep 60 ) & fake_pids+=("$!")
+done
+sleep 0.5
+out=$(run_uninstall "$H3" --dry-run 2>&1); rc=$?
+kill "${fake_pids[@]}" 2>/dev/null; wait "${fake_pids[@]}" 2>/dev/null
+check ">6 processes: dry-run exits 0"          test "$rc" -eq 0
+check ">6 processes: list is trimmed"          grep -qE '^  \.\.\. and [0-9]+ more$' <<<"$out"
+check ">6 processes: full-list hint shown"     grep -q 'Full list:' <<<"$out"
+check ">6 processes: reaches the file plan"    grep -q 'Dry run: nothing changed' <<<"$out"
+
 # --- 6. install.sh --uninstall delegates ----------------------------------------
 check "install.sh --uninstall --help shows uninstall usage" bash -c 'cd "$1" && bash install.sh --uninstall --help | grep -q "^Usage: uninstall.sh"' _ "$REPO"
 check "uninstall.sh --help exits 0"              bash "$REPO/uninstall.sh" --help

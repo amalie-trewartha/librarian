@@ -228,8 +228,11 @@ main() {
     if [[ "$STOP" -eq 0 ]]; then
         say "  (not checked: --no-stop)"
     elif [[ "$nprocs" -gt 0 ]]; then
-        # A glance, not a dump: the first few, each cut to one line.
-        printf '%s\n' "$procs" | head -6 | cut -c1-${COLUMNS:-100} | sed 's/^/  /'
+        # A glance, not a dump: the first few, each cut to one line. Feed
+        # head from a here-string, not a printf pipe: head closing early
+        # would EPIPE the printf builtin and, under pipefail + set -e, kill
+        # the script right here (seen with >6 processes).
+        head -6 <<<"$procs" | cut -c1-"${COLUMNS:-100}" | sed 's/^/  /'
         [[ "$nprocs" -gt 6 ]] && say "  ... and $((nprocs - 6)) more"
         say
         say "  Full list:  $killall_hint"

@@ -722,42 +722,35 @@ if [[ "$IN_CONTAINER" -eq 1 && -n "$DASH_URL" ]]; then
     DASH_DISPLAY="${DASH_URL/0.0.0.0/localhost} (in the browser on your host)"
 fi
 
+_tilde() { printf '%s' "${1/#"$HOME"/\~}"; }
+_row()   { printf '  %-32s %s\n' "$(_tilde "$1")" "$2"; }
 cat <<EOF
 
 ────────────────────────────────────────────────────────
 $NAME is running.
+────────────────────────────────────────────────────────
 
+What was installed
+EOF
+_row "$HEADLONG_HOME"            "state home: .env (your API key), logs/, status.json"
+_row "$APP_DIR"                  "the Headlong checkout"
+_row "$IDENTITY_ROOT/$NAME"      "$NAME: persona, memories, trajectory"
+_row "$PERSONA_BIN"              "the tools, and the '$NAME' command"
+[[ -d "$HOME/.skills/core-skills" ]] && _row "$HOME/.skills/core-skills" "core skills"
+[[ -d "$HOME/.headlong-thinkers" ]]  && _row "$HOME/.headlong-thinkers"  "thinker templates"
+[[ -n "${HEADLONG_RC_FILE:-}" ]]     && _row "$HEADLONG_RC_FILE"         "one PATH line added"
+cat <<EOF
+
+Commands
   Watch their mind     ${DASH_DISPLAY:-$PERSONA_CMD dash}
   Chat with them       $PERSONA_CMD          (or one-shot: $PERSONA_CMD "hello there")
   Pause / resume       $PERSONA_CMD stop  /  $PERSONA_CMD start
   Something broken?    $PERSONA_CMD bugreport   (bundle to attach to a report)
   Everything else      $PERSONA_CMD --help
   Not on PATH yet?     $PERSONA_PATH
-────────────────────────────────────────────────────────
+  Read-only status     curl -fsSL https://headlong.ai/status.sh | bash
+  Uninstall            curl -fsSL https://headlong.ai/uninstall.sh | bash
 EOF
-
-# What landed on the machine, and the two one-liners again.
-_tilde() { printf '%s' "${1/#"$HOME"/\~}"; }
-_row()   { printf '  %-32s %s\n' "$(_tilde "$1")" "$2"; }
-_print_install_summary() {
-    echo
-    echo "What was installed"
-    _row "$HEADLONG_HOME"            "state home: .env (your API key), logs/, status.json"
-    _row "$APP_DIR"                  "the Headlong checkout"
-    _row "$IDENTITY_ROOT/$NAME"      "$NAME: persona, memories, trajectory"
-    _row "$PERSONA_BIN"              "the tools, and the '$NAME' command"
-    [[ -d "$HOME/.skills/core-skills" ]] && _row "$HOME/.skills/core-skills" "core skills"
-    [[ -d "$HOME/.headlong-thinkers" ]]  && _row "$HOME/.headlong-thinkers"  "thinker templates"
-    [[ -n "${HEADLONG_RC_FILE:-}" ]]     && _row "$HEADLONG_RC_FILE"         "one PATH line added"
-    cat <<'EOF'
-
-At any time, from any shell
-  read-only status:  curl -fsSL https://headlong.ai/status.sh | bash
-  uninstall:         curl -fsSL https://headlong.ai/uninstall.sh | bash
-────────────────────────────────────────────────────────
-EOF
-}
-_print_install_summary
 
 # The one-liner (`curl | bash`) runs in a child process, so the shell the user
 # typed it in cannot see the PATH entry install.sh just added — `$NAME` would
