@@ -2,7 +2,8 @@
 #
 # All of these are hermetic: the bash tests stub `llm`/`curl`, the pytest
 # suites need no keys or network beyond package downloads, and the install
-# smoke test clones from the workspace instead of GitHub. No secrets needed.
+# smoke test clones from the workspace instead of GitHub. No secrets needed
+# except for the failure alert at the end.
 #
 # Jobs (all run in parallel, ~3 min wall clock):
 #   harness        tests/run-all.sh            bash tests for bin/ and tools/
@@ -13,6 +14,10 @@
 #   install-smoke  tests/smoke_install.sh       install.sh, both modes, in a
 #                                               bare ubuntu:24.04 container
 #   gitleaks       gitleaks git (full history)  secrets; allowlist in .gitleaks.toml
+#   alert-main-red Slack post                    only when a push to main fails;
+#                                               the one job that uses a secret
+#                                               (SLACK_ALERT_BOT_TOKEN); skipped
+#                                               on PRs and on green runs
 #
 # Run the same things locally: tests/run-all.sh, uv run --project web pytest
 # web/tests (and slack, telegram), bun run typecheck/build in web/viewer,
@@ -177,3 +182,37 @@ jobs:
           name: gitleaks-report
           path: gitleaks-report.json
           retention-days: 7
+
+  alert-main-red:
+    name: alert on red main
+    # Fires only when a push to main has a failed job, so the team hears about
+    # a red badge without anyone remembering to check. Posts to the same Slack
+    # channel the box's thinkers-alert unit uses (C0BMVH6LM4K). The token is a
+    # bot token with chat:write; the job is skipped if the secret is missing.
+    needs: [harness, python, viewer, tui, shellcheck, install-smoke, gitleaks]
+    if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SLACK_CHANNEL: C0BMVH6LM4K
+    steps:
+      - name: Post to Slack
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_ALERT_BOT_TOKEN }}
+          NEEDS: ${{ toJSON(needs) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHORT_SHA: ${{ github.sha }}
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${SLACK_BOT_TOKEN:-}" ]]; then
+            echo "SLACK_ALERT_BOT_TOKEN not set; skipping Slack post" >&2
+            exit 0
+          fi
+          failed=$(jq -r 'to_entries[] | select(.value.result=="failure") | .key' <<<"$NEEDS" | paste -sd, -)
+          subject=$(printf '%s' "$HEAD_MSG" | head -n1 | cut -c1-80)
+          text=":red_circle: CI red on main at ${SHORT_SHA:0:7} (${subject}) — failed: ${failed:-unknown}. ${RUN_URL}"
+          payload=$(jq -n --arg ch "$SLACK_CHANNEL" --arg t "$text" '{channel:$ch, text:$t, unfurl_links:false}')
+          resp=$(curl -fsS -X POST https://slack.com/api/chat.postMessage             -H "Authorization: Bearer $SLACK_BOT_TOKEN"             -H 'content-type: application/json; charset=utf-8'             --data "$payload")
+          jq -e '.ok' <<<"$resp" >/dev/null || { echo "Slack API error: $resp" >&2; exit 1; }
+          echo "posted to $SLACK_CHANNEL"
