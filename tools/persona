@@ -370,8 +370,13 @@ cmd_chat() {
             sleep 2
             total=$(_messages | wc -l | tr -d ' ')
             if [[ "$total" -gt "$local_seen" ]]; then
-                _messages | tail -n "$((total - local_seen))" | _incoming | _print_incoming
-                printf 'you> '
+                # New rows include our own sends; only redraw for real replies
+                # (otherwise every message we type costs a stray blank "you> ").
+                fresh=$(_messages | tail -n "$((total - local_seen))" | _incoming)
+                if [[ -n "$fresh" ]]; then
+                    printf '%s\n' "$fresh" | _print_incoming
+                    printf 'you> '
+                fi
                 local_seen=$total
             fi
         done
