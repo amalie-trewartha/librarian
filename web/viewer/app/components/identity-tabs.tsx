@@ -9,6 +9,7 @@ const TABS = [
   { key: "mindlog", label: "Mind log", path: "/mindlog" },
   { key: "thinkers", label: "Thinkers", path: "/thinkers" },
   { key: "health", label: "Health", path: "/health" },
+  { key: "usage", label: "Usage", path: "/usage" },
   { key: "chat", label: "Chat", path: "/chat" },
   { key: "memories", label: "Memories", path: "/memories" },
   { key: "config", label: "Config", path: "/config" },

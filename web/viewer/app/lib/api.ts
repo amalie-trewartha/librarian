@@ -20,6 +20,7 @@ import type {
   MindlogSearchResult,
   OpenRouterModels,
   Recap,
+  Usage,
   SelfUpdateResult,
   StepDetail,
   SubTrajectory,
@@ -206,6 +207,19 @@ export function refreshRecap(
   rebuild = false
 ): Promise<{ ok: boolean }> {
   return postJson(`/api/identities/${encodeURIComponent(identityId)}/recap/refresh`, {
+    rebuild,
+  });
+}
+
+export function fetchUsage(identityId: string): Promise<Usage> {
+  return getJson(`/api/identities/${encodeURIComponent(identityId)}/usage`);
+}
+
+export function refreshUsage(
+  identityId: string,
+  rebuild = false
+): Promise<{ ok: boolean }> {
+  return postJson(`/api/identities/${encodeURIComponent(identityId)}/usage/refresh`, {
     rebuild,
   });
 }

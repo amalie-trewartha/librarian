@@ -247,6 +247,54 @@ export interface Recap {
   episodes?: RecapEpisode[];
 }
 
+/** One UTC day of the usage series (see headlong_web/usage.py). */
+export interface UsageDay {
+  rows: number;
+  in_msg: number;
+  out_msg: number;
+  runs: number;
+  reasoning: number;
+  calls: number;
+  in: number;
+  out: number;
+  think: number;
+  /** Where calls/tokens came from: the bin/llm ledger (every call) or the
+   * mind log's reasoning-step stamps (shellm runs only, older days). */
+  source: "ledger" | "mindlog";
+}
+
+export interface UsageModel {
+  calls: number;
+  in: number;
+  out: number;
+  think: number;
+}
+
+export interface Usage {
+  identity: { id: string; name: string };
+  available: boolean;
+  refreshing: boolean;
+  /** Bytes appended to the mind log since the cache was computed. */
+  pending_bytes: number;
+  generated?: string;
+  rows?: number;
+  skipped?: number;
+  /** The bin/llm usage ledger: lines read, lines without usable usage, and
+   * the first day it covers (null when it has no calls yet). */
+  ledger?: { rows: number; skipped: number; since: string | null };
+  daily?: [string, UsageDay][];
+  by_model?: Record<string, UsageModel>;
+  totals?: {
+    in: number;
+    out: number;
+    think: number;
+    calls: number;
+    in_msg: number;
+    out_msg: number;
+    runs: number;
+  };
+}
+
 export interface IdentityStatus {
   live: boolean;
   pid_alive: boolean;

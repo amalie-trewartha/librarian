@@ -39,6 +39,7 @@ from headlong_web import (
     thinkers,
     trajectory,
     tree,
+    usage,
 )
 
 # Direct import: the bare module name would be shadowed inside create_app
@@ -147,6 +148,10 @@ class NewIdentityBody(BaseModel):
 
 
 class RecapRefreshBody(BaseModel):
+    rebuild: bool = False
+
+
+class UsageRefreshBody(BaseModel):
     rebuild: bool = False
 
 
@@ -587,6 +592,25 @@ def create_app(
         if cache_lock is not None and cache_lock.is_dir():
             raise HTTPException(status_code=409, detail="A recap is already running")
         return control.recap_refresh(root, identity, body.rebuild)
+
+    @app.get("/api/identities/{identity_id}/usage")
+    def identity_usage(identity_id: str) -> dict:
+        """Serve the cached per-day usage series (never computes — see
+        usage.py; POST .../usage/refresh brings it up to date)."""
+        identity = _identity_or_404(root, identity_id)
+        traj_dir = _root_traj_dir_or_404(identity)
+        return usage.summary(traj_dir, identity.id, identity.name,
+                             ledger=usage.ledger_path(identity.path))
+
+    @app.post("/api/identities/{identity_id}/usage/refresh", status_code=202)
+    def identity_usage_refresh(identity_id: str, body: UsageRefreshBody) -> dict:
+        _require_controls()
+        identity = _identity_or_404(root, identity_id)
+        traj_dir = _root_traj_dir_or_404(identity)
+        if not usage.start_refresh(traj_dir, identity.name,
+                                   ledger=usage.ledger_path(identity.path), rebuild=body.rebuild):
+            raise HTTPException(status_code=409, detail="A usage refresh is already running")
+        return {"ok": True, "action": "usage-refresh", "rebuild": body.rebuild}
 
     @app.get("/api/identities/{identity_id}/thinkers")
     def identity_thinkers(identity_id: str) -> dict:
