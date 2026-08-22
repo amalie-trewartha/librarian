@@ -63,8 +63,6 @@ self-contained changes.
 
 ## Features not yet built
 
-- **Memories frontmatter**: the list endpoint returns names only; parse YAML
-  frontmatter (date/type/slug) for grouping and sorting like `mem list`.
 - **Workdir browser**: a read-only file tree of the identity's `workdir/`
   (what the agent actually made). Harbor's viewer has a file-browser pattern
   (`@pierre/trees`) that could be cribbed if wanted.

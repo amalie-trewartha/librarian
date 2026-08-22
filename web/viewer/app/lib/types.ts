@@ -492,4 +492,9 @@ export interface DispatchEvent {
 export interface MemoryInfo {
   name: string;
   mtime: number;
+  id: string | null;
+  summary: string | null;
+  type: string;
+  created: string | null;
+  slug: string;
 }

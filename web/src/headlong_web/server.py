@@ -30,6 +30,7 @@ from headlong_web import (
     liveness,
     llm_health,
     logs,
+    memories,
     openrouter,
     push,
     safety,
@@ -530,13 +531,7 @@ def create_app(
     @app.get("/api/identities/{identity_id}/memories")
     def identity_memories(identity_id: str) -> list[dict]:
         identity = _identity_or_404(root, identity_id)
-        mem_dir = identity.path / "memories"
-        if not mem_dir.is_dir():
-            return []
-        result = []
-        for path in sorted(mem_dir.glob("*.md"), reverse=True):
-            result.append({"name": path.name, "mtime": path.stat().st_mtime})
-        return result
+        return memories.list_memories(identity.path)
 
     @app.get("/api/identities/{identity_id}/memories/{name}")
     def identity_memory(identity_id: str, name: str) -> dict:
