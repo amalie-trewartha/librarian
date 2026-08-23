@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, KeyRound, Pencil, Plus, Trash2 } from "lucide-react";
+import { Download, Info, KeyRound, Pencil, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useParams } from "react-router";
 import { toast } from "sonner";
@@ -13,6 +13,11 @@ import { Checkbox } from "~/components/ui/checkbox";
 import { Input } from "~/components/ui/input";
 import { LoadingDots } from "~/components/ui/loading-dots";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "~/components/ui/tooltip";
+import {
   Table,
   TableBody,
   TableCell,
@@ -22,10 +27,12 @@ import {
 } from "~/components/ui/table";
 import {
   deleteEnvVar,
-  exportIdentityUrl,
+  exportJobDownloadUrl,
+  fetchExportJob,
   fetchIdentityEnv,
   fetchIdentityStatus,
   putEnvVar,
+  startExportJob,
 } from "~/lib/api";
 import type { EnvEntry } from "~/lib/types";
 
@@ -206,8 +213,33 @@ function AddVarForm({
   );
 }
 
+function formatBytes(n: number): string {
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function ExportSection({ identityId }: { identityId: string }) {
   const [soulOnly, setSoulOnly] = useState(false);
+  const [slim, setSlim] = useState(true);
+  const [jobId, setJobId] = useState<string | null>(null);
+
+  // The archive is built in the background; poll until it is ready. A
+  // synchronous download of a big mind log sat silent for a minute and
+  // then died at Cloudflare's 100s limit, which looked like nothing at all.
+  const job = useQuery({
+    queryKey: ["export-job", jobId],
+    queryFn: () => fetchExportJob(jobId!),
+    enabled: jobId !== null,
+    refetchInterval: (q) => (q.state.data?.status === "running" ? 1500 : false),
+  });
+  const start = useMutation({
+    mutationFn: () => startExportJob(identityId, { soulOnly, slim }),
+    onSuccess: (j) => setJobId(j.job_id),
+    onError: (e: Error) => toast.error(`Export failed to start: ${e.message}`),
+  });
+
+  const status = job.data?.status;
+  const running = start.isPending || status === "running";
   return (
     <section className="mt-8">
       <div className="mb-2 flex items-baseline gap-3">
@@ -220,21 +252,87 @@ function ExportSection({ identityId }: { identityId: string }) {
           state never leave the box.
         </span>
       </div>
-      <div className="flex items-center gap-4 rounded-lg border p-3">
-        <Button variant="outline" size="sm" asChild>
-          <a href={exportIdentityUrl(identityId, soulOnly)} download>
-            <Download className="size-3" />
-            Download export
-          </a>
-        </Button>
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Checkbox
-            checked={soulOnly}
-            onCheckedChange={(checked) => setSoulOnly(checked === true)}
-          />
-          soul only — skip trajectories (memories, thinkers, and skills; the
-          import starts a fresh mind log)
-        </label>
+      <div className="flex flex-col gap-3 rounded-lg border p-3">
+        <div className="flex flex-wrap items-center gap-4">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={running}
+            onClick={() => start.mutate()}
+          >
+            {running ? <LoadingDots /> : <Download className="size-3" />}
+            {running ? "Building" : "Build export"}
+          </Button>
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Checkbox
+              checked={slim}
+              disabled={running}
+              onCheckedChange={(checked) => setSlim(checked === true)}
+            />
+            slim
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Info className="size-3 shrink-0 cursor-help" />
+              </TooltipTrigger>
+              <TooltipContent className="max-w-sm text-xs">
+                <p className="mb-1">
+                  <b>Slim</b> (on): every step is kept, but the two fields that
+                  repeat in each step — the rendered prompt context and the
+                  shellm launch command line — are cut to a short head plus
+                  &ldquo;…[truncated N chars]&rdquo;. API keys are replaced with
+                  [REDACTED:…]. Thoughts, messages, reasoning and shell output
+                  travel whole. A 1 GB mind log becomes about 17 MB and still
+                  imports.
+                </p>
+                <p>
+                  <b>Fat</b> (off): a byte-for-byte copy of the trajectories,
+                  including any keys that leaked into them. Use it for a real
+                  backup or to replay exact prompts; roughly a third of the raw
+                  size once gzipped.
+                </p>
+              </TooltipContent>
+            </Tooltip>
+          </label>
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Checkbox
+              checked={soulOnly}
+              disabled={running}
+              onCheckedChange={(checked) => setSoulOnly(checked === true)}
+            />
+            soul only — skip trajectories (memories, thinkers, and skills; the
+            import starts a fresh mind log)
+          </label>
+        </div>
+        {job.data && (
+          <div className="flex flex-wrap items-center gap-3 text-xs">
+            {status === "running" && (
+              <span className="text-muted-foreground">
+                Building on the server… {Math.round(job.data.seconds)}s. Big
+                mind logs take a minute or two; you can leave this page and
+                come back.
+              </span>
+            )}
+            {status === "done" && (
+              <>
+                <Button size="sm" asChild>
+                  <a href={exportJobDownloadUrl(job.data)} download={job.data.filename ?? undefined}>
+                    <Download className="size-3" />
+                    Download {job.data.filename}
+                    {job.data.size !== null && ` (${formatBytes(job.data.size)})`}
+                  </a>
+                </Button>
+                <span className="text-muted-foreground">
+                  built in {Math.round(job.data.seconds)}s
+                </span>
+              </>
+            )}
+            {status === "failed" && (
+              <span className="text-destructive">
+                Export failed: {job.data.error ?? "unknown error"}
+              </span>
+            )}
+          </div>
+        )}
       </div>
     </section>
   );

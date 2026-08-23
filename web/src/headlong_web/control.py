@@ -394,12 +394,18 @@ def _export_to_tempfile(root: Path, args: list[str], env: dict[str, str]) -> Pat
     return Path(tmp)
 
 
-def identity_export(root: Path, identity: IdentityInfo, soul_only: bool = False) -> Path:
+def identity_export(
+    root: Path, identity: IdentityInfo, soul_only: bool = False, slim: bool = False
+) -> Path:
     """Export one identity (any discovered dir, via --path) to a temp .tgz.
-    Caller owns the returned file and must delete it."""
+    Caller owns the returned file and must delete it. `slim` truncates the
+    repeated shellm-run/prompt fields and redacts API keys (see
+    `identity export --slim`); a 1GB mind log comes out around 17MB."""
     args = ["--path", str(identity.path)]
     if soul_only:
         args.append("--soul-only")
+    if slim:
+        args.append("--slim")
     return _export_to_tempfile(root, args, _identities_root_env(root))
 
 

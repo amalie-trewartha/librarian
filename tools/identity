@@ -421,9 +421,9 @@ ACTIVATE
 # NUL-delimited: agent-created filenames can contain newlines (e.g. mem slugs
 # from multi-line titles), which would split into bogus names in tar -T.
 _export_file_list() {
-    local parent="$1" base="$2" soul_only="$3"
+    local parent="$1" base="$2" soul_only="$3" slim="${4:-0}"
     local prunes=( -path "$base/run" -o -path "$base/.shellm" -o -path "$base/kernel" -o -path "$base/thinkers" )
-    [[ "$soul_only" -eq 1 ]] && prunes+=( -o -path "$base/trajectories" )
+    [[ "$soul_only" -eq 1 || "$slim" -eq 1 ]] && prunes+=( -o -path "$base/trajectories" )
     (cd "$parent" && find "$base" \( "${prunes[@]}" \) -prune -o \
         \( -path "$base/.env" -o -path "$base/activate" \) -prune -o -print0)
 }
@@ -455,15 +455,58 @@ _export_manifest_entry() {
 }
 
 # Append one identity's files to the (uncompressed) archive.
+# --slim: the two step types that carry most of a long mind log are pure
+# repetition — every `shellm-run` step embeds the same launch command line
+# and every `prompt` step embeds the whole rendered context. Cut both to a
+# short head plus a "…[truncated N chars]" tail; every other step travels
+# whole. Then scrub API-key shapes. Audel's 1GB log came out at ~17MB gzipped.
+_SLIM_JQ='def cut($n): if (type == "string" and length > $n)
+    then (.[0:$n] + " …[truncated " + ((length - $n)|tostring) + " chars]") else . end;
+  if .type == "shellm-run" then .command |= cut(300)
+  elif .type == "prompt" then .content |= cut(600)
+  else . end'
+
+_slim_redact() {
+    LC_ALL=C sed -E \
+        -e 's/sk-or-v1-[A-Za-z0-9]+/[REDACTED:openrouter]/g' \
+        -e 's/sk-ant-[A-Za-z0-9._-]+/[REDACTED:anthropic]/g' \
+        -e 's/sk-proj-[A-Za-z0-9_-]+/[REDACTED:openai]/g' \
+        -e 's/xox[abpse]-[A-Za-z0-9-]+/[REDACTED:slack]/g' \
+        -e 's/lin_api_[A-Za-z0-9]+/[REDACTED:linear]/g' \
+        -e 's/AKIA[A-Z0-9]{16}/[REDACTED:aws]/g'
+}
+
+# Build a slimmed copy of $dir/trajectories under $dest (same layout).
+_export_slim_trajectories() {
+    local src="$1" dest="$2" f rel
+    [[ -d "$src" ]] || return 0
+    while IFS= read -r -d '' f; do
+        rel="${f#"$src"/}"
+        mkdir -p "$dest/$(dirname "$rel")"
+        if [[ "$f" == *.jsonl ]]; then
+            jq -c "$_SLIM_JQ" "$f" | _slim_redact > "$dest/$rel" \
+                || die "export: slimming failed on $f"
+        else
+            cp "$f" "$dest/$rel"
+        fi
+    done < <(find "$src" -type f -print0)
+}
+
 _export_append_identity() {
-    local tarfile="$1" staging="$2" dir="$3" soul_only="$4" idx="$5"
+    local tarfile="$1" staging="$2" dir="$3" soul_only="$4" idx="$5" slim="${6:-0}"
     local parent base
     parent=$(dirname "$dir")
     base=$(basename "$dir")
 
     local listfile="$staging/files.$idx"
-    _export_file_list "$parent" "$base" "$soul_only" > "$listfile"
+    _export_file_list "$parent" "$base" "$soul_only" "$slim" > "$listfile"
     tar -rf "$tarfile" --null --no-recursion -C "$parent" -T "$listfile"
+
+    if [[ "$slim" -eq 1 && "$soul_only" -eq 0 && -d "$dir/trajectories" ]]; then
+        mkdir -p "$staging/slim/$idx/$base"
+        _export_slim_trajectories "$dir/trajectories" "$staging/slim/$idx/$base/trajectories"
+        tar -rf "$tarfile" -C "$staging/slim/$idx" "$base/trajectories"
+    fi
 
     # Thinkers are shipped dereferenced: with a --symlinks install their code
     # files point into this checkout and would dangle on another host.
@@ -476,14 +519,14 @@ _export_append_identity() {
 }
 
 cmd_export() {
-    local out="" soul_only=0 all=0
+    local out="" soul_only=0 all=0 slim=0
     local names=() paths=()
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -h|--help)
                 cat <<'EOF'
-Usage: identity export [names...] [--all] [--path DIR] [-o FILE|-] [--soul-only]
+Usage: identity export [names...] [--all] [--path DIR] [-o FILE|-] [--soul-only] [--slim]
 
 Package one or more identities into a portable .tgz for `identity import`
 (same machine or another one). Excludes runtime state (run/, .shellm/),
@@ -494,6 +537,8 @@ regenerated files (kernel/, activate), and secrets (.env).
   --path DIR     Export the identity directory at DIR (repeatable)
   -o FILE        Output file (default: <name>-<timestamp>.shellm.tgz; - for stdout)
   --soul-only    Skip trajectories/ — memories, thinkers, and skills only
+  --slim         Shrink trajectories for sharing: truncate the repeated
+                 shellm-run command line and prompt context, redact API keys
 EOF
                 return 0
                 ;;
@@ -501,6 +546,7 @@ EOF
                 [[ -z "${2:-}" ]] && die "export: -o requires a file argument"
                 out="$2"; shift 2 ;;
             --soul-only) soul_only=1; shift ;;
+            --slim) slim=1; shift ;;
             --all) all=1; shift ;;
             --path)
                 [[ -z "${2:-}" ]] && die "export: --path requires a directory argument"
@@ -564,20 +610,21 @@ EOF
     trap "rm -rf '$staging'" EXIT
 
     # Manifest first, so it lands at the front of the archive
-    local entries="$staging/entries.jsonl" soul_json="false"
+    local entries="$staging/entries.jsonl" soul_json="false" slim_json="false"
     [[ "$soul_only" -eq 1 ]] && soul_json="true"
+    [[ "$slim" -eq 1 ]] && slim_json="true"
     for d in "${dirs[@]}"; do
         _export_manifest_entry "$d" >> "$entries"
     done
-    jq -s --arg ts "$(iso_timestamp)" --argjson soul "$soul_json" \
-        '{format: 1, exported_at: $ts, soul_only: $soul, identities: .}' \
+    jq -s --arg ts "$(iso_timestamp)" --argjson soul "$soul_json" --argjson slim "$slim_json" \
+        '{format: 1, exported_at: $ts, soul_only: $soul, slim: $slim, identities: .}' \
         "$entries" > "$staging/manifest.json"
 
     local tarfile="$staging/archive.tar"
     tar -cf "$tarfile" -C "$staging" manifest.json
     local idx=0
     for d in "${dirs[@]}"; do
-        _export_append_identity "$tarfile" "$staging" "$d" "$soul_only" "$idx"
+        _export_append_identity "$tarfile" "$staging" "$d" "$soul_only" "$idx" "$slim"
         idx=$((idx + 1))
     done
 

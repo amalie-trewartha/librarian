@@ -339,6 +339,37 @@ export function exportIdentityUrl(identityId: string, soulOnly = false): string 
   return `${API_BASE}/api/identities/${encodeURIComponent(identityId)}/export${suffix}`;
 }
 
+export interface ExportJob {
+  job_id: string;
+  identity_id: string;
+  status: "running" | "done" | "failed";
+  soul_only: boolean;
+  slim: boolean;
+  seconds: number;
+  size: number | null;
+  filename: string | null;
+  error: string | null;
+  download_url?: string;
+}
+
+export function startExportJob(
+  identityId: string,
+  opts: { soulOnly: boolean; slim: boolean }
+): Promise<ExportJob> {
+  return postJson(
+    `/api/identities/${encodeURIComponent(identityId)}/export-jobs`,
+    { soul_only: opts.soulOnly, slim: opts.slim }
+  );
+}
+
+export function fetchExportJob(jobId: string): Promise<ExportJob> {
+  return getJson(`/api/export-jobs/${encodeURIComponent(jobId)}`);
+}
+
+export function exportJobDownloadUrl(job: ExportJob): string {
+  return `${API_BASE}${job.download_url ?? `/api/export-jobs/${job.job_id}/download`}`;
+}
+
 export function exportAllUrl(): string {
   return `${API_BASE}/api/export`;
 }

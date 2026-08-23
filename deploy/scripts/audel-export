@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+# deploy/scripts/audel-export — shareable, redacted dump of Audel's mind log.
+#
+# Usage: deploy/scripts/audel-export [--bucket B] [--expires H] [--with-logs]
+#                                    [--with-memories] [--keep-full]
+#                                    [-o local.tgz]
+#
+# Builds a tarball on the box for a teammate who cannot reach the box:
+#   trajectory.jsonl   the root trajectory, slimmed (see below) and redacted
+#   README.txt         what was cut and how to read the file
+#   dispatcher.log     with --with-logs (last 5MB) plus monolith.log tail (20MB)
+#   memories/          with --with-memories (redacted copies)
+#
+# Slimming: two step types hold ~91% of the bytes and are pure repetition,
+# the `shellm-run` launch command line and the `prompt` rendered context.
+# Both are truncated to a short head plus "…[truncated N chars]". Every
+# other step (reasoning, shell-output, thought, message, observation ...)
+# is kept whole. --keep-full skips the truncation. Measured 2026-08-23:
+# 1.0GB -> ~100MB raw, ~17MB gzipped.
+#
+# Redaction: OpenRouter, Slack xoxb/xapp, Linear and Anthropic/OpenAI style
+# keys are replaced with a fixed marker, then the bundle is re-scanned and
+# the export fails if anything is left. Chat content from the team is NOT
+# redacted; share only with people who may read Audel's conversations.
+#
+# Transfer:
+#   --bucket B   upload from the box with a presigned PUT made from your
+#                laptop credentials (the box has no S3 rights), then print a
+#                presigned GET link to hand out. The link dies with your
+#                SSO session unless you use static credentials, so hand it
+#                out promptly or point people at the s3:// path.
+#   (no bucket)  falls back to deploy/scripts/pull over SSM, roughly 5-10KB/s,
+#                so ~30-60 min for a 17MB bundle. Fine unattended.
+#
+# --expires H   presigned GET lifetime in hours (default 12)
+# --build-only  build the bundle in /tmp on the box and stop (no transfer)
+# -o FILE       local path for the pull fallback (default ./<bundle name>)
+#
+# Read-only on the box apart from a temp dir under /tmp. Never touches the
+# mind, git, or the identity dir.
+
+export SHELLM_TF_STACK="${SHELLM_TF_STACK:-terraform-slack}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+IDENT="${SHELLM_EXPORT_IDENTITY:-audel}"
+bucket="" expires=12 with_logs=0 with_mem=0 keep_full=0 out="" build_only=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --bucket)  bucket="$2"; shift 2 ;;
+        --expires) expires="$2"; shift 2 ;;
+        --with-logs) with_logs=1; shift ;;
+        --with-memories) with_mem=1; shift ;;
+        --keep-full) keep_full=1; shift ;;
+        --build-only) build_only=1; shift ;;
+        -o) out="$2"; shift 2 ;;
+        -h|--help) sed -n '2,39p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) die "unknown flag: $1 (see --help)" ;;
+    esac
+done
+
+require_tools terraform aws jq
+require_state
+require_aws
+
+stamp=$(date -u +%Y%m%dT%H%MZ)
+name="$IDENT-mindlog-$stamp"
+remote_tgz="/tmp/$name.tgz"
+[[ -n "$out" ]] || out="./$name.tgz"
+
+put_url=""
+if [[ -n "$bucket" ]]; then
+    require_tools uv
+    info "presigning S3 PUT for s3://$bucket/$name.tgz"
+    put_url=$(uv run -q --with boto3 python - "$bucket" "$name.tgz" "$(region)" <<'PY'
+import boto3, sys
+b, k, r = sys.argv[1:]
+print(boto3.client("s3", region_name=r).generate_presigned_url(
+    "put_object", Params={"Bucket": b, "Key": k}, ExpiresIn=3600))
+PY
+    ) || die "could not presign (is the bucket in $(region) and does your role have s3:PutObject?)"
+fi
+
+# The box-side builder. Runs as root through SSM; reads the identity dir,
+# writes only under a private temp dir and the final tarball in /tmp.
+onbox="IDENT_DIR=/opt/shellm/app/.identities/$IDENT
+NAME=$name
+REMOTE_TGZ=$remote_tgz
+WITH_LOGS=$with_logs
+WITH_MEM=$with_mem
+KEEP_FULL=$keep_full
+PUT_URL='$put_url'
+$(cat <<'ONBOX'
+set -euo pipefail
+[ -d "$IDENT_DIR" ] || { echo "no identity dir on box: $IDENT_DIR" >&2; exit 1; }
+ROOT=$(ls -d "$IDENT_DIR"/trajectories/*-root | head -1)
+TRAJ="$ROOT/trajectory.jsonl"
+[ -f "$TRAJ" ] || { echo "no root trajectory under $IDENT_DIR" >&2; exit 1; }
+
+W=$(mktemp -d /tmp/audel-export.XXXXXX)
+chmod 700 "$W"
+D="$W/$NAME"
+mkdir -p "$D"
+trap 'rm -rf "$W"' EXIT
+
+redact() {
+    sed -E \
+        -e 's/sk-or-v1-[A-Za-z0-9]+/[REDACTED:openrouter]/g' \
+        -e 's/sk-ant-[A-Za-z0-9_-]+/[REDACTED:anthropic]/g' \
+        -e 's/sk-proj-[A-Za-z0-9_-]+/[REDACTED:openai]/g' \
+        -e 's/xox[abpse]-[A-Za-z0-9-]+/[REDACTED:slack]/g' \
+        -e 's/lin_api_[A-Za-z0-9]+/[REDACTED:linear]/g' \
+        -e 's/AKIA[A-Z0-9]{16}/[REDACTED:aws]/g'
+}
+leaks() {   # count of lines still matching a live-looking key shape
+    grep -cE 'sk-or-v1-[A-Za-z0-9]{8}|sk-ant-[A-Za-z0-9_-]{8}|sk-proj-[A-Za-z0-9_-]{8}|xox[abps]-[0-9]|lin_api_[A-Za-z0-9]{8}|AKIA[A-Z0-9]{16}' "$1" || true
+}
+
+if [ "$KEEP_FULL" = 1 ]; then
+    SLIM='.'
+else
+    SLIM='def cut($n): if (length > $n) then (.[0:$n] + " …[truncated " + ((length - $n)|tostring) + " chars]") else . end;
+          if .type=="shellm-run" then .command |= cut(300)
+          elif .type=="prompt" then .content |= cut(600)
+          else . end'
+fi
+echo "slimming + redacting $(wc -l < "$TRAJ") steps ($(stat -c %s "$TRAJ") bytes)"
+jq -c "$SLIM" "$TRAJ" | redact > "$D/trajectory.jsonl"
+
+if [ "$WITH_LOGS" = 1 ]; then
+    tail -c 5000000  "$IDENT_DIR/run/logs/dispatcher.log" | redact > "$D/dispatcher.log.tail" || true
+    tail -c 20000000 "$IDENT_DIR/run/logs/monolith.log"   | redact > "$D/monolith.log.tail"   || true
+fi
+if [ "$WITH_MEM" = 1 ]; then
+    mkdir -p "$D/memories"
+    for f in "$IDENT_DIR"/memories/*; do
+        [ -f "$f" ] && redact < "$f" > "$D/memories/$(basename "$f")"
+    done
+fi
+
+cat > "$D/README.txt" <<EOF
+Audel mind log export, built $(date -u +%FT%TZ) on the box.
+Identity: $(basename "$IDENT_DIR")   Root trajectory: $(basename "$ROOT")
+Steps: $(wc -l < "$D/trajectory.jsonl")   Source size: $(stat -c %s "$TRAJ") bytes
+
+trajectory.jsonl is Headlong's append-only mind log, one JSON step per
+line, oldest first. Line 1 is the trajectory header. Useful fields:
+type, ts, step_id, source, content. Step types you will see:
+  message        chat in/out (from, to; source "chat" = stamped by bin/chat)
+  thought/idle/observation/monolith-wake   the conscious loop's own steps
+  shellm-run     a bash RLM run started (command line, TRUNCATED here)
+  prompt         the rendered context sent to the model (TRUNCATED here)
+  reasoning      the model's reasoning per RLM iteration
+  shell-output   what the bash the model wrote printed
+  final          an RLM run's answer
+Truncated fields end with "…[truncated N chars]". Every other step is
+whole. API keys have been replaced with [REDACTED:<service>] markers.
+
+Quick looks:
+  jq -r 'select(.type=="message") | "\(.ts) \(.from)->\(.to): \(.content)"' trajectory.jsonl
+  jq -r 'select(.type=="thought") | "\(.ts) \(.content)"' trajectory.jsonl | less
+  jq -r '.type' trajectory.jsonl | sort | uniq -c | sort -rn
+The Headlong repo (github.com/laude-institute/headlong) has bin/view for
+a rendered read of a trajectory file.
+EOF
+
+n=0
+for f in $(find "$D" -type f); do n=$((n + $(leaks "$f"))); done
+[ "$n" = 0 ] || { echo "REFUSING: $n lines still look like live keys after redaction" >&2; exit 2; }
+
+tar -C "$W" -czf "$REMOTE_TGZ" "$NAME"
+chmod 600 "$REMOTE_TGZ"
+echo "bundle: $REMOTE_TGZ $(stat -c %s "$REMOTE_TGZ") bytes md5 $(md5sum "$REMOTE_TGZ" | cut -c1-32)"
+
+if [ -n "$PUT_URL" ]; then
+    code=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT -T "$REMOTE_TGZ" "$PUT_URL")
+    [ "$code" = 200 ] || { echo "upload failed: HTTP $code" >&2; exit 3; }
+    rm -f "$REMOTE_TGZ"
+    echo "uploaded"
+fi
+ONBOX
+)"
+
+info "building the bundle on the box (a few minutes for a 1GB log)"
+run_script_on_box "$onbox" || die "box-side build failed"
+
+if [[ "$build_only" -eq 1 ]]; then
+    echo; echo "left on the box at $remote_tgz (fetch with deploy/scripts/pull, then rm it)"
+elif [[ -n "$bucket" ]]; then
+    info "presigning a $expires h download link"
+    aws s3 presign "s3://$bucket/$name.tgz" --region "$(region)" --expires-in $((expires * 3600))
+    echo "object: s3://$bucket/$name.tgz (delete it when the teammate has it)"
+else
+    info "no --bucket: pulling $remote_tgz over SSM (slow; see --help)"
+    "$SCRIPTS_DIR/pull" "$remote_tgz" "$out"
+    run_script_on_box "rm -f '$remote_tgz'" >/dev/null || true
+    echo "saved $out"
+fi

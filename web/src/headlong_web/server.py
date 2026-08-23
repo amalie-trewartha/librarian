@@ -9,6 +9,7 @@ import signal
 import subprocess
 import tempfile
 import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -778,11 +779,121 @@ def create_app(
 
     @app.get("/api/identities/{identity_id}/export")
     def export_identity(
-        identity_id: str, soul_only: bool = Query(default=False)
+        identity_id: str,
+        soul_only: bool = Query(default=False),
+        slim: bool = Query(default=False),
     ) -> FileResponse:
         identity = _identity_or_404(root, identity_id)
-        tmp = control.identity_export(root, identity, soul_only)
+        tmp = control.identity_export(root, identity, soul_only, slim)
         return _export_download(tmp, identity.name)
+
+    # Export jobs: the synchronous GET above builds the archive before it
+    # sends a byte, which for a big mind log means a minute of silence and,
+    # behind Cloudflare, a 524 at 100s. The dash instead POSTs a job, polls
+    # its status, then downloads the finished file (streamed, fast). One job
+    # per identity at a time; starting a new one drops the previous file.
+    export_jobs: dict[str, dict] = {}
+    export_jobs_lock = threading.RLock()
+
+    def _export_job_public(job: dict) -> dict:
+        elapsed = (datetime.now(timezone.utc) - job["started"]).total_seconds()
+        out = {
+            "job_id": job["id"],
+            "identity_id": job["identity_id"],
+            "status": job["status"],
+            "soul_only": job["soul_only"],
+            "slim": job["slim"],
+            "seconds": round(elapsed, 1),
+            "size": job.get("size"),
+            "filename": job.get("filename"),
+            "error": job.get("error"),
+        }
+        if job["status"] == "done":
+            out["download_url"] = f"/api/export-jobs/{job['id']}/download"
+        return out
+
+    def _drop_export_job(job: dict) -> None:
+        path = job.get("path")
+        if path:
+            Path(path).unlink(missing_ok=True)
+
+    def _run_export_job(job: dict, identity: discovery.IdentityInfo) -> None:
+        try:
+            tmp = control.identity_export(root, identity, job["soul_only"], job["slim"])
+        except HTTPException as exc:
+            detail = exc.detail
+            msg = detail.get("message") if isinstance(detail, dict) else str(detail)
+            with export_jobs_lock:
+                job["status"], job["error"] = "failed", msg or "export failed"
+            return
+        except Exception as exc:  # noqa: BLE001 - surfaced to the poller
+            with export_jobs_lock:
+                job["status"], job["error"] = "failed", str(exc)
+            return
+        with export_jobs_lock:
+            job["path"] = str(tmp)
+            job["size"] = tmp.stat().st_size
+            job["status"] = "done"
+
+    class ExportJobRequest(BaseModel):
+        soul_only: bool = False
+        slim: bool = False
+
+    @app.post("/api/identities/{identity_id}/export-jobs", status_code=202)
+    def start_export_job(identity_id: str, body: ExportJobRequest | None = None) -> dict:
+        identity = _identity_or_404(root, identity_id)
+        body = body or ExportJobRequest()
+        with export_jobs_lock:
+            for other in export_jobs.values():
+                if other["identity_id"] == identity_id and other["status"] == "running":
+                    raise HTTPException(
+                        status_code=409, detail="An export is already building"
+                    )
+            for old_id in [
+                j["id"] for j in export_jobs.values() if j["identity_id"] == identity_id
+            ]:
+                _drop_export_job(export_jobs.pop(old_id))
+            safe = re.sub(r"[^A-Za-z0-9._-]", "-", identity.name) or "identity"
+            stamp = datetime.now(timezone.utc)
+            flavour = "-slim" if body.slim else ""
+            flavour += "-soul" if body.soul_only else ""
+            job = {
+                "id": uuid.uuid4().hex,
+                "identity_id": identity_id,
+                "status": "running",
+                "soul_only": body.soul_only,
+                "slim": body.slim,
+                "started": stamp,
+                "filename": f"{safe}{flavour}-{stamp.strftime('%Y%m%d-%H%M%S')}.shellm.tgz",
+            }
+            export_jobs[job["id"]] = job
+        threading.Thread(
+            target=_run_export_job, args=(job, identity), daemon=True
+        ).start()
+        return _export_job_public(job)
+
+    def _export_job_or_404(job_id: str) -> dict:
+        with export_jobs_lock:
+            job = export_jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="No such export job")
+        return job
+
+    @app.get("/api/export-jobs/{job_id}")
+    def export_job_status(job_id: str) -> dict:
+        with export_jobs_lock:
+            return _export_job_public(_export_job_or_404(job_id))
+
+    @app.get("/api/export-jobs/{job_id}/download")
+    def export_job_download(job_id: str) -> FileResponse:
+        job = _export_job_or_404(job_id)
+        if job["status"] != "done":
+            raise HTTPException(status_code=409, detail=f"Export is {job['status']}")
+        # The file stays until the next job for this identity, so a viewer
+        # who tabbed away can come back and click again.
+        return FileResponse(
+            job["path"], media_type="application/gzip", filename=job["filename"]
+        )
 
     @app.get("/api/export")
     def export_all_identities(soul_only: bool = Query(default=False)) -> FileResponse:

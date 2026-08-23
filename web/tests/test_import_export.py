@@ -184,3 +184,58 @@ def test_read_only_allows_export_blocks_import(ident_root: Path, stub_bin: Path)
 @pytest.fixture(autouse=True)
 def _default_stub(stub_bin: Path):
     _write_identity_stub(stub_bin)
+
+
+def test_export_slim_flag(client: TestClient, stub_bin: Path):
+    resp = client.get("/api/identities/.identities~porta/export?slim=true")
+    assert resp.status_code == 200
+    assert "--slim" in _calls(stub_bin)
+
+
+def _wait_job(client: TestClient, job_id: str) -> dict:
+    import time
+
+    for _ in range(100):
+        job = client.get(f"/api/export-jobs/{job_id}").json()
+        if job["status"] != "running":
+            return job
+        time.sleep(0.05)
+    raise AssertionError("export job never finished")
+
+
+def test_export_job_builds_then_downloads(client: TestClient, stub_bin: Path):
+    _write_identity_stub(stub_bin)
+    resp = client.post(
+        "/api/identities/.identities~porta/export-jobs", json={"slim": True}
+    )
+    assert resp.status_code == 202, resp.text
+    job = resp.json()
+    assert job["status"] == "running" and job["slim"] is True
+    assert job["filename"].startswith("porta-slim-")
+
+    done = _wait_job(client, job["job_id"])
+    assert done["status"] == "done", done
+    assert done["size"] == len(b"FAKEEXPORT")
+    assert done["download_url"] == f"/api/export-jobs/{job['job_id']}/download"
+    assert "--slim" in _calls(stub_bin)
+
+    dl = client.get(done["download_url"])
+    assert dl.status_code == 200
+    assert dl.content == b"FAKEEXPORT"
+    assert done["filename"] in dl.headers["content-disposition"]
+    # still there for a second click
+    assert client.get(done["download_url"]).status_code == 200
+
+
+def test_export_job_failure_is_reported(client: TestClient, stub_bin: Path):
+    _write_identity_stub(stub_bin, exit_code=1, stderr="export: boom")
+    job = client.post("/api/identities/.identities~porta/export-jobs").json()
+    done = _wait_job(client, job["job_id"])
+    assert done["status"] == "failed"
+    assert "boom" in done["error"]
+    assert client.get(f"/api/export-jobs/{job['job_id']}/download").status_code == 409
+
+
+def test_export_job_unknown(client: TestClient, stub_bin: Path):
+    assert client.get("/api/export-jobs/nope").status_code == 404
+    assert client.post("/api/identities/.identities~ghost/export-jobs").status_code == 404

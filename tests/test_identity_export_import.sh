@@ -188,6 +188,36 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Slim export: long shellm-run/prompt fields truncated, keys redacted,
+# every other step whole, and the archive still imports.
+# ---------------------------------------------------------------------------
+
+ALPHA_TRAJ="$ALPHA/trajectories/${ALPHA_RT:0:8}-root/trajectory.jsonl"
+long=$(printf 'x%.0s' $(seq 1 2000))
+{
+    printf '{"type":"shellm-run","command":"shellm --var OPENROUTER_API_KEY=sk-or-v1-%s %s","step_id":"s1","ts":"t1"}\n' "$(printf 'a%.0s' $(seq 1 64))" "$long"
+    printf '{"type":"prompt","content":"%s","run_id":"r","step_id":"s2","ts":"t2"}\n' "$long"
+    printf '{"type":"thought","content":"keep me whole %s","step_id":"s3","ts":"t3"}\n' "$long"
+    printf '{"type":"shell-output","content":"token xoxb-1234-5678-abcdef lin_api_%s","step_id":"s4","ts":"t4"}\n' "$(printf 'b%.0s' $(seq 1 40))"
+} >> "$ALPHA_TRAJ"
+
+SLIM="$WORK/slim.tgz"
+(cd "$ROOT_A" && identity export alpha --slim -o "$SLIM" 2>/dev/null)
+SLIM_X="$WORK/slim-x"; mkdir -p "$SLIM_X" && tar -xzf "$SLIM" -C "$SLIM_X"
+SLIM_TRAJ="$SLIM_X/alpha/trajectories/${ALPHA_RT:0:8}-root/trajectory.jsonl"
+check "slim manifest flag"        bash -c "jq -e '.slim == true' '$SLIM_X/manifest.json'"
+check "slim traj present"         test -f "$SLIM_TRAJ"
+check "slim keeps line count"     test "$(wc -l < "$SLIM_TRAJ")" -eq "$(wc -l < "$ALPHA_TRAJ")"
+check "shellm-run truncated"      bash -c "jq -r 'select(.type==\"shellm-run\").command' '$SLIM_TRAJ' | grep -q 'truncated .* chars'"
+check "prompt truncated"          bash -c "jq -r 'select(.type==\"prompt\").content' '$SLIM_TRAJ' | grep -q 'truncated .* chars'"
+check "thought kept whole"        bash -c "test \$(jq -r 'select(.type==\"thought\").content' '$SLIM_TRAJ' | wc -c) -gt 2000"
+check_not "openrouter key gone"   grep -q 'sk-or-v1-aaaa' "$SLIM_TRAJ"
+check_not "slack token gone"      grep -q 'xoxb-1234' "$SLIM_TRAJ"
+check_not "linear key gone"       grep -q 'lin_api_bbbb' "$SLIM_TRAJ"
+check "redaction markers"         bash -c "test \$(grep -o 'REDACTED:' '$SLIM_TRAJ' | wc -l) -eq 3"
+check "slim archive still imports" bash -c "cd '$ROOT_B' && identity import '$SLIM' --name slimmy >/dev/null 2>&1 && test -f '$ROOT_B/.identities/slimmy/trajectories/${ALPHA_RT:0:8}-root/trajectory.jsonl'"
+
+# ---------------------------------------------------------------------------
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
