@@ -491,7 +491,11 @@ cmd_append() {
         mv "$tmp_blob" "$blob_file"
 
         local inline_val
-        inline_val=$(printf '%s' "$stdout_val" | head -c "$STDOUT_INLINE_LIMIT")
+        # param-expansion, not printf|head -c: the latter SIGPIPEs under pipefail
+        # when the value exceeds the pipe buffer (~64KB), which made traj append
+        # exit 141 and take the shellm run down with it. See
+        # design/monolith_run_health.md B1.
+        inline_val=${stdout_val:0:$STDOUT_INLINE_LIMIT}
 
         record=$(printf '%s' "$record" | jq \
             --arg stdout "$inline_val" \
@@ -520,7 +524,7 @@ cmd_append() {
         mv "$tmp_blob" "$blob_file"
 
         local inline_val
-        inline_val=$(printf '%s' "$stderr_val" | head -c "$STDOUT_INLINE_LIMIT")
+        inline_val=${stderr_val:0:$STDOUT_INLINE_LIMIT}
 
         record=$(printf '%s' "$record" | jq \
             --arg stderr "$inline_val" \
