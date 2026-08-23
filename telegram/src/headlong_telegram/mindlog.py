@@ -84,6 +84,7 @@ def follow(
         steps, new_offset = read_new(path, offset)
         if new_offset != offset:
             offset = new_offset
+            cursor_file.parent.mkdir(parents=True, exist_ok=True)
             cursor_file.write_text(str(offset))
         yield from steps
         time.sleep(poll_interval)
