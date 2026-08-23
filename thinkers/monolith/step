@@ -16,11 +16,14 @@ set -euo pipefail
 # uncontrolled self-loop and the old in-step `sleep`. Two things drive it now:
 #   1. Reactivity — an external step (the responder's observation for a chat, or
 #      an external action/merge) fires it immediately; that is engagement.
-#   2. Spontaneity — a `monolith-wake` step posted by a detached timer this step
-#      arms on its way out (arm_wake, via an EXIT trap). The delay backs off
-#      exponentially to a cap while nothing happens, and is 0 (think again at
-#      once) while engaged or producing real work. The timer — NOT an appended
-#      step — is the liveness mechanism, so the trap must always arm.
+#   2. Spontaneity — this step requests its next wake by writing a target epoch
+#      to run/<name>.wake_at (arm_wake, via an EXIT trap); the always-alive
+#      dispatcher tick fires a `monolith-wake` step when it comes due. The delay
+#      backs off exponentially to a cap while nothing happens, and is 0 (think
+#      again at once) while engaged or producing real work. The scheduled wake —
+#      NOT an appended step — is the liveness mechanism, so the trap must always
+#      arm. (Earlier this used a per-step `setsid` timer process, which silently
+#      never ran on macOS; the dispatcher owns the clock now.)
 
 THINKER_NAME="monolith"
 SCRIPT_DIR="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
@@ -50,7 +53,7 @@ BACKOFF_HOLD="${MONOLITH_BACKOFF_HOLD:-3}"
 state_dir="$IDENTITY_DIR/run"
 mkdir -p "$state_dir"
 state_file="$state_dir/monolith_backoff_state.json"
-timer_pid_file="$state_dir/monolith_timer.pid"
+wake_at_file="$state_dir/$THINKER_NAME.wake_at"
 root_traj="${ROOT_TRAJ_ID:-$TRAJ_ID}"
 
 # delay in seconds for a backoff level.
@@ -87,29 +90,20 @@ _save_state() {
     fi
 }
 
-# arm_wake DELAY — singleton timer. Kills any prior timer, then detaches a
-# process that sleeps DELAY and appends ONE monolith-wake step — but only if the
-# dispatcher that armed it still owns the runtime (token guard closes the
-# stop/start race). No dispatcher token → don't arm.
+# arm_wake DELAY — request the next spontaneity wake DELAY seconds from now.
+# We DON'T spawn a timer process: we write the target epoch to run/<name>.wake_at
+# and the always-alive dispatcher tick (_scheduled_wake_check in bin/thinkers)
+# fires us when it comes due. This replaces the old `setsid` background timer,
+# which never ran on macOS (no setsid → the spawn failed, recorded a dead pid,
+# and posted no wake, so spontaneity silently died). No process to detach, no
+# PID reuse, no group-kill, no reap race. Only arm while a dispatcher owns the
+# runtime, so a wake_at can't linger past shutdown.
 arm_wake() {
     local delay="$1"
     [[ -f "$state_dir/dispatcher.token" ]] || return 0
-    local token
-    token=$(cat "$state_dir/dispatcher.token" 2>/dev/null) || return 0
-    [[ -n "$token" ]] || return 0
-    if [[ -f "$timer_pid_file" ]]; then
-        local _old
-        _old=$(cat "$timer_pid_file" 2>/dev/null) || _old=""
-        # Kill the whole timer group (setsid → pgid == pid) so no stale sleeper
-        # survives to post a spurious wake.
-        [[ -n "$_old" ]] && { kill -TERM -"$_old" 2>/dev/null || kill -TERM "$_old" 2>/dev/null || true; }
-    fi
-    setsid bash -c '
-        sleep "$1" || exit 0
-        [[ "$(cat "$2/dispatcher.token" 2>/dev/null)" == "$3" ]] || exit 0
-        traj append "$4" --field type=monolith-wake --field source=monolith-timer --field content=wake >/dev/null 2>&1
-    ' _ "$delay" "$state_dir" "$token" "$root_traj" &
-    echo $! > "$timer_pid_file"
+    local now
+    now=$(date +%s)
+    printf '%s' "$(( now + delay ))" > "$wake_at_file"
 }
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,13 @@
 # Monolith idle backoff — spend nothing while nobody's talking
 
 Status: implemented (thinkers/monolith/step + subscriptions.jsonl; shipped
-default cap is 300s / 5 min, overridable per-identity via MONOLITH_BACKOFF_CAP)
+default cap is 300s / 5 min, overridable per-identity via MONOLITH_BACKOFF_CAP).
+Revision: the scheduled wake is now DISPATCHER-NATIVE (Alternative 3 below), not
+a per-step timer process. The step writes its next wake epoch to
+run/<name>.wake_at and the always-alive dispatcher tick fires it when due. The
+original `setsid` background-timer implementation silently never ran on macOS
+(no setsid), so spontaneity died until the first reactive wake — the
+dispatcher-native version has no timer process, no PID reuse, no reap race.
 Authors: merged from two independent drafts (Claude's and Codex's). Where they
 differed, the choice and its rationale are noted inline.
 Extends: [monolith_thinker.md](monolith_thinker.md) (revises its "Loop liveness
