@@ -1,0 +1,269 @@
+# Monolith run health — stop wasting wakeups on bloat and silent errors
+
+Status: draft
+Relates to: [monolith_thinker.md](monolith_thinker.md), [monolith_backoff.md](monolith_backoff.md), [tiered_memory.md](tiered_memory.md)
+
+## Motivation
+
+The monolith now wakes reliably (scheduled-wake fix) and its runs execute
+(bash-3.2 `${n^^}` fix). But watching a live identity (cleo, ~19k steps on
+grok-4.6) shows most spontaneous wakeups still produce **nothing durable** — the
+run reasons, shells around, and ends as a bare `idle`. Two independent causes,
+both measured, not guessed:
+
+1. **Context bloat / thrash.** The wakeup prompt is ~66 KB (~16.5k tokens). The
+   run spends itself just reading and re-chunking its own prompt and never picks
+   a function to carry out.
+2. **Silent run death.** Runs die with `rc=141` (SIGPIPE) far more often than
+   they succeed, and the step counts an errored run as an ordinary `idle` — so
+   the failure is invisible and it drives the idle backoff as if nothing was
+   wrong.
+
+The net effect is a mind that looks alive (it wakes, it reasons) but rarely
+*advances* — and neither failure surfaces anywhere an operator would see it.
+
+## Issue A — context bloat and thrash
+
+### Evidence
+
+Components of cleo's `route_prompt`, measured directly:
+
+| component | chars | ~tokens |
+|-----------|-------|---------|
+| `system_prompt` | 15,693 | 3,900 |
+| `recent_stream` (tail 30) | 7,329 | 1,830 |
+| **`life_context` (tiered rollups)** | **39,357** | **9,840** |
+| `prompt.md` | 3,787 | 950 |
+| **total** | **~66 KB** | **~16.5k** |
+
+Two compounding problems behind that `life_context` figure:
+
+1. **The budget is a fraction of the *model* window.** `_life_context` calls
+   `recap --context --budget "${MONOLITH_CONTEXT_BUDGET:-auto}"`, and `auto` =
+   ~0.6 × the model's context window. grok-4.6's window is **500k tokens**, so
+   "auto" authorizes an enormous life section, and the rollup staircase fills a
+   big chunk of it (~10k tokens observed, and it grows with trajectory length).
+   A budget meant as "a comfortable slice of context" becomes "10k+ tokens of
+   summary every wakeup" on a huge-context model.
+
+2. **The trajectory itself is 312 MB.** `prompt` steps embed the full context,
+   and `shellm-run` steps embed the entire `route_prompt` as a command-line
+   argument — each ~64 KB. Over 19k steps that is a 312 MB `trajectory.jsonl`.
+   Consequences: every `traj cat` reads 312 MB; and inside the run the model
+   *re-fetches its own wakeup prompt* (`traj show <prompt-step> --full` → 64 KB
+   → "extract first 8000…"), doubling the bloat it is already drowning in.
+   (`_recent_stream`'s allowlist already excludes `prompt`/`shellm-run`, so these
+   don't inflate the tail — but they bloat storage, slow every traj read, and
+   are what the model keeps re-reading.)
+
+### Proposed fixes
+
+**A1 — Bound the life budget by an absolute ceiling, not a window fraction.**
+Change the monolith's default so `MONOLITH_CONTEXT_BUDGET` resolves to an
+absolute token cap (proposal: ~4,000 tokens) rather than `auto` on
+large-context models. Keep `auto` available, but define it as
+`min(fraction × window, ABSOLUTE_CEILING)` so a 500k / 1M / 2M window doesn't
+translate into a 10k+ token life section every single wakeup. The recap
+staircase is designed to fit any budget; this just picks a sane one. Net: the
+life section drops from ~10k to a few thousand tokens with no code change to
+recap — only the default the monolith passes.
+
+**A2 — Blob large fields generically (currently only `stdout`/`stderr`).**
+`traj`'s spill is *not* generic — `cmd_append` has two hardcoded blocks, one for
+`stdout` and one for `stderr` (each: `if bytes > SHELLM_STDOUT_INLINE_LIMIT` →
+write blob + record `*_ref`/`*_bytes`/`*_truncated`), and `next_blob_id` only
+matches `*.stdout`/`*.stderr`. `content` (on `prompt` steps) and `command` (on
+`shellm-run` steps) were simply never wired in, so the full ~64 KB `route_prompt`
+lands inline on every such step — that is what makes the trajectory 312 MB.
+
+Replace the two copy-pasted blocks with **one loop that spills any oversized
+*string* field**, so no fat field is ever forgotten again. Guards that make
+"generic" safe rather than reckless:
+
+- **String-only.** Only spill string-valued fields; never blob a structured
+  field (`usage` object, arrays, numbers) as a raw string.
+- **The threshold already protects structure.** `type`, `step_id`, `ts`,
+  `run_id`, `source`, the `*_ref`s — all are far under the inline limit, so a
+  pure size rule leaves them inline automatically; no denylist strictly needed
+  (a tiny keep-inline set for fields used in hot matching is optional
+  belt-and-suspenders).
+- **Generalize the read side too — this is the real work.** Today only
+  stdout/stderr *readers* resolve `*_ref`. If any field can become a ref, every
+  consumer that reads a potentially-large field must rehydrate it or silently
+  see the truncated head. Ship a single `*_ref`-resolving helper that `traj
+  show`, `recap`, `traj search`, the web `trajectory.py` reader, and the
+  responder's `reply_to`/`content` scan all call. The write side is trivial; the
+  blast radius is the readers, so the resolver is the deliverable, not the spill.
+
+Net: trajectory shrinks ~1–2 orders of magnitude, every reader parses far fewer
+bytes per line, and the giant step the model keeps re-fetching is gone. Better
+still, avoid the `command` blob entirely by not putting the prompt on the
+`shellm-run` command line at all — pass it via stdin/file so `command` stays
+short and there is nothing to spill.
+
+**A3 — Reads must not scan the whole file (finish a half-done migration).**
+Big files only hurt on *reads*, and the mind does several per wakeup. The tail
+approach the user proposed is right — and `traj tail` already implements it
+efficiently (`tail -n N <file>`, seek-from-end, O(N) not O(file)); `common.sh`
+even added `_root_traj_raw_tail` (`tail -n 5000 <file>`) after a 532 MB file
+caused a 78 s context build. The problem is the migration is unfinished, in
+three concrete steps:
+
+1. **Convert the remaining bash scanners to the tail path.** `_last_work_id`
+   (monolith/step) still does `traj cat --raw | jq | tail -1` — a **full-file
+   scan, twice per wakeup**. Point it (and any sibling scanners) at the same
+   tail fast-path `_recent_stream` already uses.
+2. **Add a filtered backward tail primitive.** "Last N *steps of type T*" is not
+   "last N lines" — machinery steps dilute the tail, which is why
+   `_recent_stream` over-reads a fixed 5000 lines (and silently under-reads if
+   machinery ever exceeds that window). Add `traj tail --types … -n N` that reads
+   **backward until it has N matches** (bounded, exact), and route
+   `_recent_stream` and the TUI's phase-1 load (`traj cat --filter | tail -20`,
+   currently O(file)) through it.
+3. **Unify on a *contract*, not a single binary.** You cannot literally share
+   one reader across bash (`traj`), Python (web), and Rust (TUI). What must be
+   shared is the on-disk *format* — JSONL + blob refs + tail/window semantics,
+   i.e. [trajectory_spec.md](trajectory_spec.md) — with an efficient reader per
+   language. Two already exist and are good: `traj tail`, and the web's
+   `trajectory.py` (byte-offset `seek`, append-aware incremental cache,
+   "O(budget+chunk), never O(file)", O(new-steps) polls). **So do *not* make the
+   web shell out to `traj`** — that would add a subprocess per request and throw
+   away its incremental cache; it is already the reference efficient reader. The
+   TUI already goes through `traj` (Rust shelling out) and just needs the better
+   filtered-tail command from step 2. The genuine gap is the bash `traj` tool +
+   the thinker scanners (steps 1–2); once those use the efficient tail, "route
+   bash consumers through traj" is satisfied without touching the good Python/
+   Rust citizens.
+
+Note A2 and A3 are complementary, not redundant: A3 bounds the *number of lines*
+a read touches; A2 bounds the *bytes per line*. `tail -n 5000` over 16 KB/line
+steps still reads ~80 MB; blobbed, ~1 MB. Every reader wants both.
+
+**A4 — Tell the model it already has its context (prompt hygiene).** The router
+prompt should state plainly that the wakeup context *is* the message it just
+received — it does not need to `traj show` or re-read anything to "get the full
+prompt." Cheap, and directly targets the observed thrash loop.
+
+## Issue B — runs die silently and are miscounted as idle
+
+### Evidence
+
+Run outcomes in cleo's monolith log (the `rc=` on "run produced no work"):
+
+| rc | count | meaning |
+|----|-------|---------|
+| 0 | 40 | clean |
+| 1 | 161 | the `${n^^}` bash-3.2 abort (now fixed) |
+| **141** | **435** | **SIGPIPE** |
+
+`141 = 128 + SIGPIPE(13)`. The run does real intermediate work (reasoning steps,
+shell commands each `Exit 0`) and then the **shellm process itself** exits 141
+before landing a durable thought/action step.
+
+### Root cause 1 — `producer | head` under `pipefail`
+
+`bin/shellm` runs under `set -euo pipefail` globally. Two pipelines pipe a
+still-producing command into `head`, which closes the pipe early → the producer
+gets `SIGPIPE` → `pipefail` propagates 141:
+
+- The streaming output reader (executed each poll while a command runs):
+  ```sh
+  tail -n +"$skip_n" "$output_file" | head -n "$new_count" | while IFS= read …
+  ```
+  `new_count` is computed from a `wc -l` snapshot, but the output file is being
+  **written concurrently** by the running command. When more lines arrive
+  between the snapshot and the read, `head` stops at `new_count` while `tail`
+  keeps reading the freshly-appended lines → SIGPIPE. Substantial streaming
+  output makes this likely — which is exactly the monolith's profile.
+- `_find_latest_traj`: `… | sort -rn | head -1 | cut …` (same class; fires on
+  traj resolution).
+
+### Root cause 2 — the step conflates "errored" with "idle"
+
+`thinkers/monolith/step` classifies a wakeup purely by *did a work-type step get
+appended?* A run that reasoned, executed commands, then **died at rc=141** looks
+identical to a run that calmly decided there was nothing to do: both append a
+fallback `idle`, both advance the backoff toward the cap, and both render as a
+plain `idle` on the timeline. The error is completely invisible, and — because
+it looks like healthy idling — it silently slows the mind down.
+
+### Proposed fixes
+
+**B1 — Make shellm's internal pipelines SIGPIPE-safe.** For the pipelines that
+feed `head`, either scope `set +o pipefail` around them, or restructure so
+`head` cannot close early (read to EOF; or bound with `sed`/awk instead of a
+concurrently-racing `tail | head`). A SIGPIPE in a best-effort *display/read*
+step must never be the exit code of the whole run. Add a regression test that
+streams a large, still-growing output through the reader and asserts rc 0.
+
+**B2 — Distinguish errored runs from idle runs in the step.** Split the current
+single "no work → idle" path:
+
+- `rc == 0` and no work step → **genuine idle**: back off as today.
+- `rc != 0` → **errored run**: append a `{type:"error", reason:"run-failed",
+  rc:N}` step (visible on the timeline and to the operator), and do **not** treat
+  it as a clean idle for backoff. Instead apply a small, capped error backoff
+  (so a persistently failing run cannot tight-loop and burn tokens, but also
+  isn't mistaken for "resting"). This reuses the stall-guard philosophy already
+  in `bin/shellm` — surface the failure, bound the spend.
+
+**B3 — Count intermediate work.** A run that appended `reasoning`/`shell-output`
+but no durable thought/action still *did* something. At minimum, record it so
+the timeline and the backoff can tell "reasoned but landed nothing" apart from
+"chose to idle." (Optional: nudge the router prompt to always conclude a
+non-idle run with a durable step — a thought summarizing what it learned — so
+real work isn't discarded when the run ends.)
+
+## Rollout & testing
+
+Order matters — B before A, so we can *see* the effect, and cheap/high-leverage
+before big refactors:
+
+1. **B1** (SIGPIPE-safe pipelines) + regression test — stops the dominant
+   failure; run count should shift from mostly-141 to mostly-0.
+2. **B2** (error vs idle split) — makes any remaining failures visible on the
+   timeline instead of masquerading as idle.
+3. **A1** (absolute budget default) — one-line default change, highest-leverage
+   bloat fix; verify the life section drops to a few thousand tokens.
+4. **A3 step 1** (convert `_last_work_id` to the tail path) — removes a full-file
+   scan per wakeup with an existing pattern; near-free.
+5. **A4 / B3** (prompt hygiene + count intermediate work) — cheap prompt/step
+   changes; verify the run stops re-fetching its own prompt and lands durable
+   steps more often.
+6. **A3 step 2** (filtered backward `traj tail --types`) — the one new primitive;
+   re-point `_recent_stream` and the TUI phase-1 load at it.
+7. **A2** (generic blob-spill + shared `*_ref` resolver) — the storage/perf fix;
+   verify a fresh identity's `trajectory.jsonl` grows ~1–2 orders of magnitude
+   slower and every reader stays fast at scale. Biggest blast radius (the read
+   path), so last.
+
+A3 step 3 (contract, not binary) is a framing that guides 1–2 and A2's resolver,
+not a separate task — and explicitly *excludes* rewriting the already-efficient
+web `trajectory.py` reader.
+
+Validate on cleo (the reproduction case): after B+A, spontaneous wakeups should
+mostly produce a durable `thought`/`action`/`observation`, `rc=141` should
+disappear, and the backoff should reflect genuine idleness rather than masked
+errors.
+
+## Non-goals / alternatives
+
+- **Not** reducing what the mind *can* remember. A1 bounds the per-wakeup
+  *budget*, not the rollup pyramid — the full tiered history remains; the
+  staircase just fits a smaller window (its entire purpose).
+- **Not** switching models. grok's huge window is fine; the bug is treating
+  "0.6 × 500k" as a reasonable per-wakeup budget.
+- Considered: trapping `SIGPIPE` globally in shellm (`trap '' PIPE`). Rejected as
+  too broad — it would also hide legitimate broken-pipe errors in executed code.
+  Scope the fix to the specific display/read pipelines (B1).
+- Considered: dropping `pipefail` in shellm. Rejected — pipefail catches real
+  errors elsewhere; the fix is the two offending pipelines, not the safety net.
+- Considered: making every consumer shell out to `traj` for one access layer.
+  Rejected for the web server: `web/.../trajectory.py` is already an efficient
+  append-aware reader (byte-offset seeks, O(new-steps) polls, O(budget) memory);
+  a subprocess-per-request wrapper around bash `traj` would be slower and throw
+  away its incremental cache. The unifying interface is the *format spec*, not a
+  single binary — see A3 step 3.
+- Considered: a byte-offset index / log segmentation for O(1) recent-step reads.
+  Deferred — the tail-path + blobbing (A2/A3) keep reads flat well past current
+  scale; a persistent index only earns its complexity at millions of steps.
