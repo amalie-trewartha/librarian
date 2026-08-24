@@ -79,6 +79,7 @@ SHELLM_DOCKER_ACCESS="${SHELLM_DOCKER_ACCESS:-none}"
 SHELLM_DOCKER_BROKER_TRANSPORT="${SHELLM_DOCKER_BROKER_TRANSPORT:-auto}"
 SHELLM_DOCKER_SOCKET="${SHELLM_DOCKER_SOCKET:-/var/run/docker.sock}"
 SHELLM_ALLOW_NESTED_DOCKER="${SHELLM_ALLOW_NESTED_DOCKER:-0}"
+SHELLM_REQUIRE_DOCKER="${SHELLM_REQUIRE_DOCKER:-0}"
 SHELLM_TEMP_DOCKER="${SHELLM_TEMP_DOCKER:-0}"
 SHELLM_INACTIVITY_TIMEOUT="${SHELLM_INACTIVITY_TIMEOUT:-30}"
 SHELLM_INACTIVITY_MAX="${SHELLM_INACTIVITY_MAX:-900}"
@@ -201,6 +202,8 @@ Environment:
   SHELLM_DOCKER_BROKER_TRANSPORT  Broker transport: auto, socket, filesystem
   SHELLM_DOCKER_SOCKET    Docker socket for socket mode (default: /var/run/docker.sock)
   SHELLM_ALLOW_NESTED_DOCKER  Set to 1 to allow shellm-in-Docker to use Docker
+  SHELLM_REQUIRE_DOCKER   Set to 1 to fail instead of falling back to the host
+                          when no Docker daemon is reachable
   SHELLM_ENV              Named env (execution environment)
   SHELLM_TEMP_DOCKER      Set to 1 to teardown Docker container on exit
   SHELLM_INACTIVITY_TIMEOUT  Seconds before killing idle execution (default: 30)
@@ -450,6 +453,10 @@ validate_docker_config() {
     case "$SHELLM_ALLOW_NESTED_DOCKER" in
         0|1) ;;
         *) die "Invalid SHELLM_ALLOW_NESTED_DOCKER: $SHELLM_ALLOW_NESTED_DOCKER (expected 0 or 1)" ;;
+    esac
+    case "$SHELLM_REQUIRE_DOCKER" in
+        0|1) ;;
+        *) die "Invalid SHELLM_REQUIRE_DOCKER: $SHELLM_REQUIRE_DOCKER (expected 0 or 1)" ;;
     esac
 }
 
@@ -1990,6 +1997,13 @@ run_loop() {
             die "--docker-access $SHELLM_DOCKER_ACCESS requested, but shellm cannot reach a Docker daemon from here"
         fi
         if [[ ! -f /.dockerenv || "$SHELLM_ALLOW_NESTED_DOCKER" == "1" ]]; then
+            # The operator was promised a sandbox (headlong-init writes
+            # SHELLM_REQUIRE_DOCKER=1 when Docker was present at install
+            # time): a dead daemon is then a hard error, never a silent
+            # fallback to running on the host.
+            if [[ "$SHELLM_REQUIRE_DOCKER" == "1" ]]; then
+                die "SHELLM_REQUIRE_DOCKER=1 is set, but no Docker daemon is reachable. Start Docker, or set SHELLM_REQUIRE_DOCKER=0 in your Headlong .env to allow unsandboxed runs."
+            fi
             progress "\033[1;33mWARNING: Docker not found — running on host. Use of Docker is recommended!\033[0m"
         fi
         ws_name="local"

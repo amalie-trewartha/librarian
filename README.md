@@ -46,8 +46,13 @@ to fetch those.
 
 Headlong is alpha research software. Use a dedicated, spend-capped key, because
 your agent runs real shell commands and thinks around the clock. With Docker
-installed the commands run in a container; without it they run directly on your
-machine as you. How much the background thinking costs depends on how quickly
+running, the installer offers to keep the whole agent in a container, or to
+install on your machine with the agent's commands sandboxed in a container
+(an unsandboxed host install exists too, behind an explicit yes, and is not
+recommended).
+Without Docker the commands would run directly on your machine as you, so the
+installer stops and asks for an explicit yes before setting that up. How much
+the background thinking costs depends on how quickly
 the agent loops and which model backs it. The rate of thinking backs off
 exponentially when nobody is talking to the agent and resets the moment a
 message arrives.  At the settings we run our agent with, it comes to $1 to $2
@@ -69,7 +74,8 @@ installed and running; `curl -fsSL https://headlong.ai/uninstall.sh | bash`
 removes it all (details in
 [docs/install.md](docs/install.md#stopping-and-uninstalling)).
 
-You can also run the same flow inside a long-lived Docker container:
+The container flow the installer offers is this, and you can also run it
+yourself:
 
 ```bash
 docker run -it --name headlong --restart unless-stopped -p 8080:8080 buildpack-deps:curl \

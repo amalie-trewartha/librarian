@@ -11,6 +11,8 @@ set -euo pipefail
 #
 # Interactive prompts read from /dev/tty, so this works under `curl | bash`.
 # With no tty everything falls back to defaults / environment:
+#   HEADLONG_UNSANDBOXED=1   accept an agent whose shell commands run directly
+#                          on this machine when Docker is not available
 #   HEADLONG_APP_DIR         path to the headlong checkout (auto-detected)
 #   HEADLONG_IDENTITY_NAME   identity name (default: ada)
 #   HEADLONG_IDENTITY_VIBE   personality, a few words
@@ -21,6 +23,10 @@ set -euo pipefail
 #   HEADLONG_NO_DASH=1       don't start the web dash
 #   HEADLONG_WEB_ARGS        extra args for headlong-web (e.g. "--host 0.0.0.0"
 #                          to reach the dash through a Docker port mapping)
+#
+# --dry-run walks the Docker sandbox gate interactively, writes nothing,
+# starts nothing, and exits. Pair with HEADLONG_FAKE_DOCKER=ok|down|missing
+# and HEADLONG_NO_TTY=1 to rehearse each path.
 #
 # Writes status.json in the state home at the end: identity, model, mind/dash
 # status ("ok" | "failed" | "skipped"), dash URL, pid file paths.
@@ -40,6 +46,7 @@ HEADLONG_OPERATOR_NAME="${HEADLONG_OPERATOR_NAME:-}"
 HEADLONG_NO_THINKERS="${HEADLONG_NO_THINKERS:-}"
 HEADLONG_NO_DASH="${HEADLONG_NO_DASH:-}"
 HEADLONG_WEB_ARGS="${HEADLONG_WEB_ARGS:-}"
+DRY_RUN=0
 mkdir -p "$HEADLONG_HOME/logs" "$HEADLONG_HOME/run"
 INIT_LOG="$HEADLONG_HOME/logs/init.log"
 
@@ -85,6 +92,8 @@ export PATH="$APP_DIR/bin:$APP_DIR/tools:$PATH"
 
 HAS_TTY=0
 if (: </dev/tty) 2>/dev/null; then HAS_TTY=1; fi
+# Tests and scripted runs force the no-tty paths even under a terminal.
+if [[ "${HEADLONG_NO_TTY:-0}" == "1" ]]; then HAS_TTY=0; fi
 
 # In a container, bind the dash on all interfaces so a published port
 # (docker run -p 8080:8080) can reach it — localhost-only is unreachable
@@ -151,6 +160,11 @@ _load_env "$HEADLONG_HOME/.env" || true
 # existing line) and export it into this process.
 _env_set() {
     local file="$1" key="$2" val="$3" tmp
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        echo "    dry-run: would set $key=$val in $file"
+        export "$key=$val"
+        return 0
+    fi
     touch "$file"
     chmod 600 "$file" 2>/dev/null || true
     if grep -q "^${key}=" "$file" 2>/dev/null; then
@@ -161,6 +175,114 @@ _env_set() {
     fi
     printf '%s=%s\n' "$key" "$val" >> "$file"
     export "$key=$val"
+}
+
+# ---------------------------------------------------------------------------
+# Sandbox: the agent writes and runs real shell commands. With a working
+# Docker daemon those commands run in a container (shellm does this on its
+# own); we also set SHELLM_REQUIRE_DOCKER=1 so a daemon that later dies is a
+# hard error instead of a silent fallback to the host. Without Docker the
+# operator must consent, by typing the word yes, before anything starts.
+# ---------------------------------------------------------------------------
+
+_docker_state() {  # -> ok | down | missing
+    # HEADLONG_FAKE_DOCKER=ok|down|missing fakes the answer so each gate
+    # path can be tried by hand (pair with HEADLONG_NO_TTY=1 as needed).
+    case "${HEADLONG_FAKE_DOCKER:-}" in
+        ok|down|missing) printf '%s' "$HEADLONG_FAKE_DOCKER"; return 0 ;;
+    esac
+    command -v docker >/dev/null 2>&1 || { printf 'missing'; return 0; }
+    if docker info >/dev/null 2>&1; then printf 'ok'; else printf 'down'; fi
+}
+
+_sandbox_on() {
+    info "Docker found. ${NAME:-Your agent}'s shell commands will run sandboxed in Docker."
+    _env_set "$HEADLONG_HOME/.env" "SHELLM_REQUIRE_DOCKER" "1"
+    _env_set "$HEADLONG_HOME/.env" "HEADLONG_UNSANDBOXED" "0"
+    # Warm the sandbox image in the background so the first thought is not
+    # stuck behind a docker pull.
+    local image="${SHELLM_DOCKER_IMAGE:-ubuntu:latest}"
+    if [[ "$DRY_RUN" -eq 0 ]] && command -v docker >/dev/null 2>&1 \
+            && ! docker image inspect "$image" >/dev/null 2>&1; then
+        nohup docker pull "$image" >>"$INIT_LOG" 2>&1 &
+    fi
+}
+
+_sandbox_off() {
+    # Remember the consent so re-runs do not ask again, and so shellm does
+    # not refuse to run.
+    _env_set "$HEADLONG_HOME/.env" "HEADLONG_UNSANDBOXED" "1"
+    _env_set "$HEADLONG_HOME/.env" "SHELLM_REQUIRE_DOCKER" "0"
+    echo "    Continuing without a sandbox. To turn it on later, install Docker, set HEADLONG_UNSANDBOXED=0 in $HEADLONG_HOME/.env, and re-run headlong-init."
+}
+
+_sandbox_gate() {
+    # A container is already the sandbox; shellm runs locally inside it.
+    [[ "$IN_CONTAINER" -eq 1 ]] && return 0
+
+    # An explicit unsandboxed choice (the installer menu, the environment, or
+    # a previous typed yes) sticks, even when Docker is available.
+    if [[ "${HEADLONG_UNSANDBOXED:-}" == "1" ]]; then
+        echo "Warning: no Docker sandbox (HEADLONG_UNSANDBOXED=1). The agent's shell commands run directly on this machine. Set HEADLONG_UNSANDBOXED=0 in $HEADLONG_HOME/.env and re-run headlong-init to turn the sandbox on." >&2
+        _env_set "$HEADLONG_HOME/.env" "HEADLONG_UNSANDBOXED" "1"
+        _env_set "$HEADLONG_HOME/.env" "SHELLM_REQUIRE_DOCKER" "0"
+        return 0
+    fi
+
+    local state
+    state=$(_docker_state)
+    if [[ "$state" == "ok" ]]; then
+        _sandbox_on
+        return 0
+    fi
+
+    if [[ "$HAS_TTY" -eq 0 ]]; then
+        die "no Docker daemon is reachable, so there is no sandbox for the agent's shell commands. Install and start Docker, or set HEADLONG_UNSANDBOXED=1 to accept the agent running directly on this machine."
+    fi
+
+    local reply
+    if [[ "$state" == "down" ]]; then
+        while :; do
+            cat >/dev/tty <<'EOF'
+
+Docker is installed here, but the daemon is not answering, so there is no
+sandbox. Start Docker (Docker Desktop, colima, or systemctl start docker),
+then press Enter to check again. `docker info` shows what is wrong.
+
+EOF
+            printf 'Press Enter to re-check, or type "yes" to DANGEROUSLY run the agent unsandboxed on this machine: ' >/dev/tty
+            IFS= read -r reply </dev/tty || die "no answer. Start Docker and re-run headlong-init."
+            if [[ "$reply" == "yes" ]]; then
+                _sandbox_off
+                return 0
+            fi
+            if [[ "$(_docker_state)" == "ok" ]]; then
+                _sandbox_on
+                return 0
+            fi
+        done
+    fi
+
+    cat >/dev/tty <<'EOF'
+
+WARNING: Docker was not found on this machine, so there is no sandbox.
+
+EVERY shell command your agent writes will run DIRECTLY ON THIS MACHINE,
+as your user, with access to your files. Headlong agents run continuously
+and unattended.
+
+The safe path is to STOP NOW, install Docker (https://docs.docker.com/get-docker/),
+and re-run this installer. With Docker present, the agent's commands run
+inside a container automatically.
+
+EOF
+    printf 'Type "yes" to DANGEROUSLY accept an unsandboxed agent on this machine (anything else stops): ' >/dev/tty
+    IFS= read -r reply </dev/tty || reply=""
+    if [[ "$reply" == "yes" ]]; then
+        _sandbox_off
+        return 0
+    fi
+    die "stopped. Install Docker and re-run, or answer yes to run without a sandbox."
 }
 
 # ---------------------------------------------------------------------------
@@ -668,11 +790,23 @@ _open_dash() {
 
 case "${1:-}" in
     -h|--help)
-        sed -n '4,24p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '4,29p' "$0" | sed 's/^# \{0,1\}//'
         exit 0
+        ;;
+    --dry-run)
+        DRY_RUN=1
+        ;;
+    "") ;;
+    *)
+        die "unknown option: $1 (try --help)"
         ;;
 esac
 
+_sandbox_gate
+if [[ "$DRY_RUN" -eq 1 ]]; then
+    info "Dry run: stopping here. Nothing was written and nothing was started."
+    exit 0
+fi
 _ensure_api_key
 _prebuild_dash
 _create_identity

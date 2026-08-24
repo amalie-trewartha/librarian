@@ -9,12 +9,28 @@ variant.
 curl -fsSL https://headlong.ai/install.sh | bash
 ```
 
-It clones the repo to `~/.headlong/app`, symlinks the tools into
-`~/.local/bin`, asks for an LLM API key, and runs a short optional
-interview: a name, a few words of personality, what they should think
-about when idle. The answers become the agent's core identity and first
-memories. Then their mind starts and the dashboard opens. Their name
-becomes a command:
+The installer first looks for Docker, because the agent writes and runs
+real shell commands and Docker is the sandbox for them.
+
+- With Docker running, it asks where the agent should live: fully inside
+  a Docker container (the default, described in the next section), on
+  your machine with the agent's shell commands still sandboxed in Docker,
+  or, not recommended and behind another typed `yes`, on your machine
+  with no sandbox at all. The unsandboxed choice sticks across re-runs;
+  set `HEADLONG_UNSANDBOXED=0` in `~/.headlong/.env` and re-run
+  `headlong-init` to turn the sandbox on.
+- With Docker installed but not running, it asks you to start Docker and
+  checks again.
+- With no Docker at all, it stops and warns you: the agent's commands
+  would run directly on your machine as your user. You must type the word
+  `yes` to continue without a sandbox.
+
+On the host path it then clones the repo to `~/.headlong/app`, symlinks
+the tools into `~/.local/bin`, asks for an LLM API key, and runs a short
+optional interview: a name, a few words of personality, what they should
+think about when idle. The answers become the agent's core identity and
+first memories. Then their mind starts and the dashboard opens. Their
+name becomes a command:
 
 ```bash
 ada                  # chat with them
@@ -40,7 +56,9 @@ less install.sh && bash install.sh --init
 ## Docker: a long-lived agent
 
 The same installer works inside a container. Nothing touches your
-machine, and the agent's shell commands run in the container too. The
+machine, and the agent's shell commands run in the container too. When
+the one-liner above finds Docker running, it offers this flow and runs
+the command below for you; pasting it yourself does the same thing. The
 installer apt-installs its own dependencies (as root in a fresh
 container) and the dashboard binds `0.0.0.0` so the published port works.
 
@@ -86,8 +104,21 @@ curl -fsSL https://headlong.ai/install.sh | bash
 ```
 
 A key must be in the environment; everything else is optional.
-`HEADLONG_NO_DASH=1` and `HEADLONG_NO_THINKERS=1` skip those parts. The
-installer writes `status.json` in the state home (`~/.headlong`) with
+`HEADLONG_NO_DASH=1` and `HEADLONG_NO_THINKERS=1` skip those parts.
+
+With no tty there is nobody to answer the sandbox question, so on a
+machine without a working Docker daemon the install stops unless
+`HEADLONG_UNSANDBOXED=1` is set. Setting it accepts that the agent's
+shell commands run directly on the machine. Inside a container it is not
+needed; the container already is the sandbox.
+
+When Docker is present, the installer writes `SHELLM_REQUIRE_DOCKER=1`
+to `~/.headlong/.env`. From then on, a Docker daemon that stops answering
+is a hard error for the agent's runs instead of a silent fall back to
+running on the host. Set it to `0` there if you want the old best-effort
+behavior.
+
+The installer writes `status.json` in the state home (`~/.headlong`) with
 the outcome:
 
 ```bash
@@ -107,7 +138,14 @@ cd headlong
 
 This copies the tools in `bin/` and `tools/` to `~/.local/bin`, the core
 skills to `~/.skills/core-skills`, the bundled thinker templates to
-`~/.headlong-thinkers`, and builds the Rust TUI if cargo is present. Use `--symlinks` to
+`~/.headlong-thinkers`, and builds the Rust TUI if cargo is present.
+
+`headlong-init --dry-run` walks the Docker sandbox question interactively
+without writing or starting anything, which is handy for seeing what the
+install will ask on a given machine. Setting
+`HEADLONG_FAKE_DOCKER=ok|down|missing` fakes the Docker probe and
+`HEADLONG_NO_TTY=1` forces the no-terminal behavior, so every path can be
+rehearsed anywhere. Use `--symlinks` to
 symlink instead (edits take effect without reinstalling), or
 `--prefix /usr/local/bin` for a different location.
 

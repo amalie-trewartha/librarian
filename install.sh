@@ -85,6 +85,112 @@ _require_deps() {
 # Fetch the repo, then re-exec the checkout's own installer with --init.
 # ---------------------------------------------------------------------------
 
+# _docker_daemon_ok — is a working Docker daemon reachable?
+# HEADLONG_FAKE_DOCKER=ok|down|missing fakes the answer so the menu can be
+# tried by hand; headlong-init honors the same variable.
+_docker_daemon_ok() {
+    case "${HEADLONG_FAKE_DOCKER:-}" in
+        ok) return 0 ;;
+        down|missing) return 1 ;;
+    esac
+    command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
+}
+
+# _offer_docker_install — with a working Docker daemon and a human at a tty,
+# offer to keep the whole agent inside a Docker container (the flow that
+# docs/install.md calls the Docker one-liner) instead of installing on the
+# host. Returns 0 to continue the host install; the container paths exit or
+# exec and never return.
+_offer_docker_install() {
+    local reply=""
+    cat >/dev/tty <<'EOF'
+Docker is installed and running. Where should your agent live?
+
+  1) Fully inside a Docker container. Nothing is installed on this
+     machine, and everything the agent does stays in the container.
+  2) On this machine. The tools go to ~/.local/bin, and the agent's
+     shell commands still run sandboxed in Docker.
+  3) DANGEROUSLY on this machine with NO sandbox (NOT RECOMMENDED).
+
+EOF
+    while :; do
+        printf 'Choice [1]: ' >/dev/tty
+        IFS= read -r reply </dev/tty || return 0
+        case "$reply" in
+            ""|1) break ;;
+            2)    return 0 ;;
+            3)
+                cat >/dev/tty <<'EOF'
+
+EVERY shell command your agent writes will run DIRECTLY ON THIS MACHINE,
+as your user, with access to your files, with no sandbox. Headlong agents
+run continuously and unattended. NOT RECOMMENDED.
+
+EOF
+                printf 'Type "yes" to DANGEROUSLY continue without a sandbox (anything else goes back): ' >/dev/tty
+                IFS= read -r reply </dev/tty || return 0
+                if [[ "$reply" == "yes" ]]; then
+                    # headlong-init's gate honors this as an explicit, sticky
+                    # choice and records it in the state .env.
+                    export HEADLONG_UNSANDBOXED=1
+                    return 0
+                fi
+                ;;
+            *)    echo 'Please answer 1, 2, or 3.' >/dev/tty ;;
+        esac
+    done
+
+    # An agent container already exists: that IS the install. Go back in
+    # instead of failing on the taken name.
+    if docker inspect --type container headlong >/dev/null 2>&1; then
+        cat <<'EOF'
+
+A container named 'headlong' already exists, so your agent lives there.
+Dropping you into it (type exit to leave; the agent keeps running).
+To update the agent, re-run the installer inside the container:
+  curl -fsSL https://headlong.ai/install.sh | bash
+EOF
+        docker start headlong >/dev/null 2>&1 || true
+        exec docker exec -it headlong bash -l </dev/tty
+    fi
+
+    # Forward a key and interview answers already in the environment, so the
+    # in-container installer does not re-ask for what the operator has set.
+    local -a fwd=()
+    local var
+    for var in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY \
+               HEADLONG_IDENTITY_NAME HEADLONG_IDENTITY_VIBE HEADLONG_IDENTITY_FOCUS \
+               HEADLONG_IDENTITY_USER HEADLONG_OPERATOR_NAME HEADLONG_REPO HEADLONG_BRANCH; do
+        if [[ -n "${!var:-}" ]]; then fwd+=(-e "$var=${!var}"); fi
+    done
+
+    echo
+    echo "==> Starting your agent in a Docker container named 'headlong'"
+    echo "    Dash: http://localhost:8080 once it is up. Get back in later with:"
+    echo "    docker exec -it headlong bash -l"
+    echo
+    local rc=0
+    docker run -it --name headlong --restart unless-stopped -p 8080:8080 \
+        ${fwd[@]+"${fwd[@]}"} buildpack-deps:curl \
+        bash -c 'curl -fsSL https://headlong.ai/install.sh | bash; exec bash' </dev/tty || rc=$?
+    if [[ "$rc" -eq 0 ]]; then
+        cat <<'EOF'
+
+You left the container shell; the agent keeps running in the background.
+  docker exec -it headlong bash -l   back into the agent's world
+  docker stop headlong               pause everything
+  docker start headlong              resume
+  docker rm -f headlong              delete the agent and its whole world
+EOF
+        exit 0
+    fi
+    echo "install.sh: the Docker run failed (exit $rc)." >&2
+    echo "If the name or port 8080 is taken, remove the half-made container with" >&2
+    echo "  docker rm -f headlong" >&2
+    echo "and re-run the installer. Answer 2 to install on this machine instead." >&2
+    exit "$rc"
+}
+
 _bootstrap_and_reexec() {
     _require_deps git curl jq
 
@@ -96,6 +202,13 @@ Headlong installer. At any time, from any shell:
 
 EOF
     local app_dir="$HEADLONG_HOME/app"
+    # Fresh install, human at a tty, working Docker daemon, not already in a
+    # container: offer to run the whole agent inside Docker. An existing
+    # checkout means a host install is already here; re-runs just update it.
+    if [[ ! -d "$app_dir/.git" && ! -f /.dockerenv && ! -f /run/.containerenv ]] \
+            && (: </dev/tty) 2>/dev/null && _docker_daemon_ok; then
+        _offer_docker_install
+    fi
     if [[ -d "$app_dir/.git" ]]; then
         echo "==> Updating existing checkout at $app_dir"
         if ! git -C "$app_dir" pull --ff-only origin "$HEADLONG_BRANCH"; then
