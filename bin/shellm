@@ -276,9 +276,12 @@ extract_reasoning() {
 _find_latest_traj() {
     local traj_dir="$1"
     local latest
-    latest=$(find "$traj_dir" -maxdepth 2 -name 'trajectory.jsonl' \
+    # pipefail OFF (subshell): `head -1` closes after one line while `sort`
+    # still has lines to write → SIGPIPE to sort, which under `set -o pipefail`
+    # would make this assignment exit 141. See design/monolith_run_health.md.
+    latest=$( set +o pipefail; find "$traj_dir" -maxdepth 2 -name 'trajectory.jsonl' \
         -exec stat -f '%m %N' {} \; 2>/dev/null \
-        | sort -rn | head -1 | cut -d' ' -f2-)
+        | sort -rn | head -1 | cut -d' ' -f2- )
     [[ -n "$latest" ]] || return 1
     head -1 "$latest" | jq -r '.step_id // empty' 2>/dev/null
 }
@@ -1771,8 +1774,13 @@ _stream_new_output() {
     if [[ "$total_lines" -gt "$lines_read" ]]; then
         local new_count=$((total_lines - lines_read))
         local skip_n=$((lines_read + 1))
-        # Use tail + head to get new lines (bash 3.2 safe)
-        tail -n +"$skip_n" "$output_file" | head -n "$new_count" | while IFS= read -r line; do
+        # Use tail + head to get new lines (bash 3.2 safe). pipefail OFF in a
+        # subshell: the output file is written CONCURRENTLY by the running
+        # command, so `head` can close after $new_count lines while `tail` is
+        # still reading freshly-appended lines → SIGPIPE to tail. Under the
+        # global `set -o pipefail` that made the whole run exit rc=141 (on macOS
+        # every streaming run died this way). See design/monolith_run_health.md.
+        ( set +o pipefail; tail -n +"$skip_n" "$output_file" | head -n "$new_count" ) | while IFS= read -r line; do
             local redacted_line
             redacted_line=$(redact_sensitive "$line")
             if [[ "$QUIET" -eq 0 ]]; then

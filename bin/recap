@@ -530,8 +530,20 @@ _ctx_model_window() {
 _ctx_resolve_R() {
     local n=$1
     if [[ "$CTX_RAW_TAIL" != "auto" ]]; then printf '%s' "$CTX_RAW_TAIL"; return; fi
-    local budget win r
-    if [[ "$CTX_BUDGET" == "auto" ]]; then win=$(_ctx_model_window); budget=$(( win * 6 / 10 )); else budget=$CTX_BUDGET; fi
+    local budget win r cap
+    if [[ "$CTX_BUDGET" == "auto" ]]; then
+        win=$(_ctx_model_window)
+        budget=$(( win * 6 / 10 ))
+        # Cap auto at an absolute ceiling. auto = 0.6 * window, but on
+        # huge-context models (grok 128k-2M, gpt 1M) that is tens of thousands
+        # of tokens, so the life section balloons and the mind burns each
+        # wakeup re-reading it. min(0.6*window, cap). See
+        # design/monolith_run_health.md A1.
+        cap="${RECAP_CONTEXT_BUDGET_MAX:-4000}"
+        (( budget > cap )) && budget=$cap
+    else
+        budget=$CTX_BUDGET
+    fi
     r=$(( (budget * 4 / 10) / 125 ))
     (( r < 20 )) && r=20
     (( r > n )) && r=n
