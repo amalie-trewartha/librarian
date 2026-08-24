@@ -18,6 +18,13 @@ to respond. You give your agent a name and a personality, and it sets its
 own interests and priorities, starts its own projects, and pings you when
 it has something to say.
 
+A Headlong agent is also built to be shared. A whole team can talk to one
+agent over Slack, Telegram, and a chat app, and every conversation lands
+in the agent's single stream of thoughts. The agent follows what different
+people are working on, connects them, and pings whoever seems most
+relevant. Sharing one agent is fun, because it behaves more like a person
+than a service.
+
 At the heart of Headlong is `shellm`, a Bash implementation of a
 [recursive language model (RLM)](https://alexzhang13.github.io/blog/2025/rlm/).
 The agent thinks by writing shell commands, running them, and reading the
@@ -35,12 +42,16 @@ curl -fsSL https://headlong.ai/install.sh | bash
 You'll need bash 3.2+, git, curl, jq, and an LLM API key (Anthropic,
 OpenAI, Gemini, or OpenRouter); the dashboard also needs
 [uv](https://docs.astral.sh/uv/) and bun or node, and the installer offers
-to fetch those. Use a dedicated, spend-capped key, because your agent runs
-real shell commands and thinks around the clock. With Docker installed
-the commands run in a container; without it they run directly on your
-machine as you. How much the background thinking
-costs depends on how quickly the agent loops and which model backs it. At
-the settings we run our agent with, it comes to $1 to $2 an hour.
+to fetch those. 
+
+Headlong is alpha research software. Use a dedicated, spend-capped key, because
+your agent runs real shell commands and thinks around the clock. With Docker
+installed the commands run in a container; without it they run directly on your
+machine as you. How much the background thinking costs depends on how quickly
+the agent loops and which model backs it. The rate of thinking backs off
+exponentially when nobody is talking to the agent and resets the moment a
+message arrives.  At the settings we run our agent with, it comes to $1 to $2
+an hour.
 
 The agent's name becomes a command:
 
@@ -70,11 +81,18 @@ in [docs/install.md](docs/install.md).
 
 ## Key ideas
 
-- **Persistent agency.** The agent runs a continuous loop that generates
-  its next thought. Messages from Slack, Telegram, or the chat app are
-  injected into the thought stream as observations, and the agent decides
-  if and when to respond. Classic turn-taking request/response mode works
-  too.
+- **Persistent agency.** Most harnesses are reactive, or wake on a
+  schedule to run a fixed checklist. A Headlong agent is never asleep and
+  there is no checklist. It keeps generating thoughts about whatever it
+  decides is interesting, even when there is no external input. Messages
+  from Slack, Telegram, or the chat app are injected into the thought
+  stream as observations, and the agent decides if and when to respond.
+  Classic turn-taking request/response mode works too.
+- **Multi-player fun.** One agent, one mind, many people. There are no
+  per-user sessions; the agent experiences all of its conversations in a
+  single timeline and decides who to reply to and when. That single
+  stream also means no hard walls between people: assume anything you
+  tell the agent is shared with everyone who talks to it.
 - **Built around Ken Thompson's philosophy.** The core tooling is a
   handful of small Bash executables (`shellm`, `traj`, `llm`, `context`,
   `mem`, `skills`, ...), each doing one thing well and composing through
@@ -99,7 +117,9 @@ in [docs/install.md](docs/install.md).
 - **Self-improvement by fork, test, merge.** An agent forks the Headlong
   codebase (and optionally its own trajectory), changes something, and
   runs. Merge the change back if it worked, or discard the agent and its
-  changes if it didn't. No rollback machinery is needed.
+  changes if it didn't. No rollback machinery is needed. The agent we run
+  at Laude works in its own fork of this repo, and we have pulled over 50
+  of its commits back into main.
 
 The full backstory and design philosophy are in
 [philosophy.md](philosophy.md).
