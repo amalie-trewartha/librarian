@@ -145,9 +145,14 @@ Usage:
   shellm [options] context...                      Inline context (quotes optional)
   shellm [options] -f FILE [-f FILE...] context... Add file context
   echo data | shellm [options] context...          Add stdin context
+  shellm [options] --prompt-file FILE              Read the prompt from FILE
 
 Options:
   -f FILE              Load context from file (can be repeated)
+  --prompt-file FILE   Read the prompt (the task text) from FILE instead of
+                       the command line. Use for big prompts: Linux caps one
+                       argv string at 128KB and a thinker's wakeup prompt can
+                       pass that.
   -v, --verbose        Verbose/debug mode
   -q, --quiet          Suppress all progress/streaming output (stderr), keep only final answer
   -h, --help           Show this help
@@ -1693,7 +1698,7 @@ generate_run_summary() {
 
     # Build combined context for LLM (cap at 20K chars)
     local max_ctx=20000
-    local combined="CLI argument: ${prompt}"
+    local combined="CLI argument: ${prompt:0:$max_ctx}"
 
     if [[ -n "$stdin_content" ]]; then
         local avail=$((max_ctx - ${#combined}))
@@ -1875,11 +1880,14 @@ run_loop() {
                 _fork_step_id=$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n' \
                     | sed -E 's/^(.{8})(.{4})(.{4})(.{4})(.{12})$/\1-\2-\3-\4-\5/')
             fi
-            _new_output=$(traj new --traj_dir "$_run_traj_dir" --slug "$prompt" \
+            _new_output=$(traj new --traj_dir "$_run_traj_dir" --slug "${prompt:0:200}" \
                 --field "parent_traj=$_SHELLM_PARENT_TRAJ_ID" \
                 --field "parent_step=$_fork_step_id")
         else
-            _new_output=$(traj new --traj_dir "$_run_traj_dir" --slug "$prompt")
+            # Slug and env name only ever use a short prefix (traj keeps 60
+            # chars, make_env_name 40); forwarding the whole prompt as an argv
+            # string hit Linux's 128KB cap for big prompts (--prompt-file).
+            _new_output=$(traj new --traj_dir "$_run_traj_dir" --slug "${prompt:0:200}")
         fi
         _run_traj_id=$(head -1 <<< "$_new_output")
         run_name=$(tail -1 <<< "$_new_output")
@@ -1994,7 +2002,7 @@ run_loop() {
             :
         elif [[ "${_new_env:-0}" -eq 1 ]]; then
             # --new-env: always create fresh
-            ws_name=$(make_env_name "$prompt")
+            ws_name=$(make_env_name "${prompt:0:200}")
         else
             # Default: try to reuse any running env
             local running
@@ -2002,7 +2010,7 @@ run_loop() {
             if [[ -n "$running" ]]; then
                 ws_name="$running"
             else
-                ws_name=$(make_env_name "$prompt")
+                ws_name=$(make_env_name "${prompt:0:200}")
             fi
         fi
         if env_resolve "$ws_name" "$env_explicit" "$workdir"; then
@@ -2676,6 +2684,7 @@ main() {
     start_activity_beacon
     local context_files=()
     local print_prompt=0
+    local _prompt_file=""
     local _SHELLM_ENV_NAME="${SHELLM_ENV:-}"
     local _new_env=0
     local _use_traj=""
@@ -2697,6 +2706,11 @@ main() {
                 local f="${2:?Usage: shellm -f FILE \"prompt\"}"
                 [[ -f "$f" ]] || die "Context file not found: $f"
                 context_files+=("$f")
+                shift 2
+                ;;
+            --prompt-file)
+                _prompt_file="${2:?--prompt-file requires a value}"
+                [[ -f "$_prompt_file" ]] || die "Prompt file not found: $_prompt_file"
                 shift 2
                 ;;
             -m|--model)
@@ -2799,6 +2813,13 @@ main() {
     done
 
     local prompt="$*"
+    if [[ -n "$_prompt_file" ]]; then
+        # The prompt never touches argv this way, so its size is bounded by
+        # memory, not by the OS (Linux MAX_ARG_STRLEN is 128KB per string:
+        # "Argument list too long", rc=126, before the run even starts).
+        [[ -z "$prompt" ]] || die "--prompt-file and an inline prompt cannot be used together"
+        prompt=$(cat "$_prompt_file") || die "Cannot read prompt file: $_prompt_file"
+    fi
 
     if [[ "$_new_env" -eq 1 && -n "$_SHELLM_ENV_NAME" ]]; then
         die "--new-env and --env cannot be used together"

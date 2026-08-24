@@ -255,6 +255,13 @@ case "$trigger_type" in
     "")            wake_reason="$wake_mode/start" ;;
     *)             wake_reason="$wake_mode/$trigger_type${trigger_source:+:$trigger_source}" ;;
 esac
+# The prompt goes to shellm as a FILE, not an argv string. Linux caps one
+# argv string at 128KB (MAX_ARG_STRLEN) and a mature identity's wakeup prompt
+# (life summary + recent stream) passes that, which made every run die with
+# "Argument list too long" (rc=126) before it started. See
+# design/monolith_run_health.md.
+prompt_file_tmp=$(mktemp "$state_dir/monolith_prompt.XXXXXX")
+printf '%s' "$route_prompt" > "$prompt_file_tmp"
 run_rc=0
 run_response=$(SHELLM_NO_BANNER=1 \
     SHELLM_TRIGGER_STEP_ID="$trigger_step_id" \
@@ -262,7 +269,8 @@ run_response=$(SHELLM_NO_BANNER=1 \
     SHELLM_RUN_ID_OUT="$run_id_file" \
     shellm --model "$THINK_MODEL" --traj "$TRAJ_ID" \
     "${shellm_flags[@]}" \
-    "$route_prompt") || run_rc=$?
+    --prompt-file "$prompt_file_tmp") || run_rc=$?
+rm -f "$prompt_file_tmp"
 
 after_work=""
 if traj exists 2>/dev/null; then
