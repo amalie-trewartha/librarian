@@ -249,7 +249,14 @@ test_queue_cap() {
     for i in $(seq 1 18); do
         append_step "{\"type\":\"action\",\"content\":\"Q$i\",\"source\":\"test\"}"
     done
-    sleep 2
+    # Wait for the cap to be hit rather than a fixed sleep: the dispatcher
+    # queues one step per feeder line, and on a slow runner (the CI macOS
+    # box) 18 arrivals take longer than 2s to land, so a fixed sleep saw a
+    # short queue and no drop.
+    i=0
+    while ! grep -q 'queue full' "$TMP/id/run/logs/dispatcher.log" 2>/dev/null && [[ "$i" -lt 200 ]]; do
+        sleep 0.1; i=$((i+1))
+    done
 
     local count
     count=$(compgen -G "$TMP/id/run/pending/slowpoke.action.*" | wc -l | tr -d ' ')
