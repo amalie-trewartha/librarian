@@ -38,7 +38,8 @@ check_not() { local label="$1"; shift; if "$@" >/dev/null 2>&1; then bad "$label
 # --- 5. tool lists agree -----------------------------------------------------
 eval "$(grep -E '^(BIN|AUX)_TOOLS=' "$REPO/install.sh")"
 INSTALL_LIST=$(printf '%s\n' "${BIN_TOOLS[@]}" "${AUX_TOOLS[@]}" headlong-tui | sort)
-UNINSTALL_LIST=$(bash -c 'source <(sed -n "/^TOOLS=(/,/)/p" "$1"); printf "%s\n" "${TOOLS[@]}" | sort' _ "$REPO/uninstall.sh")
+# eval, not `source <(...)`: empty under bash 3.2 (macOS /bin/bash).
+UNINSTALL_LIST=$(bash -c 'eval "$(sed -n "/^TOOLS=(/,/)/p" "$1")"; printf "%s\n" "${TOOLS[@]}" | sort' _ "$REPO/uninstall.sh")
 check "uninstall.sh TOOLS == install.sh BIN+AUX+headlong-tui" test "$INSTALL_LIST" = "$UNINSTALL_LIST"
 
 # --- fixture: a one-liner-shaped install ---------------------------------

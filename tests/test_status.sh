@@ -16,7 +16,9 @@ check() { local label="$1"; shift; if "$@" >/dev/null 2>&1; then ok "$label"; el
 check_not() { local label="$1"; shift; if "$@" >/dev/null 2>&1; then bad "$label"; else ok "$label"; fi; }
 
 # --- pattern parity (headlong-killall is the source of truth) ---------------
-extract() { bash -c 'source <(sed -n "/^PATTERNS=(/,/^)/p" "$1"); printf "%s\n" "${PATTERNS[@]}"' _ "$1"; }
+# eval, not `source <(...)`: bash 3.2 (macOS /bin/bash) reads an empty file
+# from a sourced process substitution and the arrays come out empty.
+extract() { bash -c 'eval "$(sed -n "/^PATTERNS=(/,/^)/p" "$1")"; printf "%s\n" "${PATTERNS[@]}"' _ "$1"; }
 K=$(extract "$REPO/tools/headlong-killall"); S=$(extract "$REPO/status.sh"); U=$(extract "$REPO/uninstall.sh")
 check "status.sh PATTERNS == headlong-killall PATTERNS"   test -n "$K" -a "$K" = "$S"
 check "uninstall.sh PATTERNS == headlong-killall PATTERNS" test -n "$K" -a "$K" = "$U"

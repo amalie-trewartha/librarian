@@ -140,7 +140,10 @@ else
     REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
     # Default PR: the sole open one, if there is exactly one.
     if [[ -z "$PR" ]]; then
-        mapfile -t open_prs < <(gh pr list --state open --json number -q '.[].number')
+        # No mapfile: bash-4 only, and macOS's /bin/bash is 3.2.
+        open_prs=()
+        while IFS= read -r _n; do [[ -n "$_n" ]] && open_prs+=("$_n"); done \
+            < <(gh pr list --state open --json number -q '.[].number')
         [[ ${#open_prs[@]} -eq 1 ]] || die "pass a PR number (${#open_prs[@]} open PRs)"
         PR="${open_prs[0]}"
     fi

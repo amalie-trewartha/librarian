@@ -11,12 +11,18 @@
 #   viewer         bun typecheck + build        web/viewer (what the box builds)
 #   tui            cargo fmt/clippy/check       tui/headlong
 #   shellcheck     shellcheck -S warning        every shell script in the tree
+#   macos          bash 3.2 lint + harness      the product scripts must run on
+#                                               macOS's stock /bin/bash (3.2):
+#                                               syntax parse, a grep for
+#                                               bash-4-only constructs, and
+#                                               tests/run-all.sh, on a macOS
+#                                               runner with bash 3.2 as `bash`
 #   install-smoke  tests/smoke_install.sh       install.sh, both modes, in a
 #                                               bare ubuntu:24.04 container
 #   gitleaks       gitleaks git (full history)  secrets; allowlist in .gitleaks.toml
 #   loc            cloc bin/ thinkers/          the harness stays under
 #                                               LOC_LIMIT code lines (the
-#                                               README's "9.8K lines" claim)
+#                                               README's "9.6K lines" claim)
 #   alert-main     Slack post                    after each push to main: red
 #                                               when a job failed, green-again
 #                                               when the previous run was red;
@@ -27,7 +33,8 @@
 # Run the same things locally: tests/run-all.sh, uv run --project web pytest
 # web/tests (and slack, telegram), bun run typecheck/build in web/viewer,
 # cargo fmt --check / clippy / check in tui/headlong, tests/smoke_install.sh,
-# gitleaks git . -c .gitleaks.toml, cloc bin/ thinkers/.
+# gitleaks git . -c .gitleaks.toml, cloc bin/ thinkers/. For the macOS gate on
+# a Mac: PATH=/bin:/usr/bin:$PATH tests/run-all.sh (so `bash` is 3.2).
 
 name: CI
 
@@ -135,6 +142,72 @@ jobs:
           files=$( { git ls-files -z | xargs -0 grep -lE '^#!.*\b(ba)?sh\b' ; git ls-files '*.sh'; } | sort -u | grep -v '\.tpl$')
           echo "$files" | wc -l | xargs echo "checking files:"
           echo "$files" | xargs shellcheck -S warning
+  macos:
+    name: macOS (bash 3.2)
+    # Headlong has to run on a stock Mac, whose /bin/bash is 3.2 (Apple never
+    # shipped a GPLv3 bash). Bash-4 expansions like ${x^^} are a fatal "bad
+    # substitution" there, which once made every shellm run on macOS exit
+    # rc=1 with no output (PR #38). Three checks, all with bash 3.2 as the
+    # `bash` that `#!/usr/bin/env bash` resolves to:
+    #   1. bash -n parses every product script.
+    #   2. A grep for the bash-4-only constructs bash -n cannot catch (they
+    #      fail at run time, only on the path that reaches them).
+    #   3. The full harness, tests/run-all.sh.
+    # Scope is the product: bin/ thinkers/ tools/ tests/ and the root
+    # scripts. deploy/ is Linux-only (systemd) or laptop operator tooling
+    # that runs under Homebrew bash, so it is left out.
+    runs-on: macos-latest
+    timeout-minutes: 20
+    env:
+      SHELLM_ENV: local
+    steps:
+      - uses: actions/checkout@v5
+      - name: Tools the harness shells out to
+        # GNU timeout/realpath (coreutils) and jq. Usually preinstalled on
+        # the macOS image; install only when missing.
+        run: |
+          brew list coreutils >/dev/null 2>&1 || brew install -q coreutils
+          brew list jq >/dev/null 2>&1 || brew install -q jq
+      - name: Make Apple's /bin/bash the `bash` on PATH
+        # The image also has Homebrew bash 5 on PATH, which would hide every
+        # 3.2 problem. A shim dir ahead of everything else makes `bash` and
+        # `/usr/bin/env bash` resolve to /bin/bash.
+        run: |
+          mkdir -p "$RUNNER_TEMP/bash32"
+          ln -sf /bin/bash "$RUNNER_TEMP/bash32/bash"
+          echo "$RUNNER_TEMP/bash32" >> "$GITHUB_PATH"
+      - name: Verify bash is 3.2
+        run: |
+          bash --version | head -1
+          bash -c 'echo "BASH_VERSION=$BASH_VERSION"; [[ "$BASH_VERSION" == 3.2.* ]]'
+          env bash -c '[[ "$BASH_VERSION" == 3.2.* ]]'
+      - name: bash -n parse under 3.2
+        run: |
+          set -euo pipefail
+          files=$( { git ls-files -z bin thinkers tools tests install.sh uninstall.sh status.sh | xargs -0 grep -lE '^#!.*\b(ba)?sh\b' ; git ls-files 'bin/*.sh' 'thinkers/*.sh' 'tools/*.sh' 'tests/*.sh'; } | sort -u)
+          echo "$files" | wc -l | xargs echo "parsing files:"
+          rc=0
+          for f in $files; do bash -n "$f" || { echo "::error file=$f::does not parse under bash 3.2"; rc=1; }; done
+          exit $rc
+      - name: Lint for bash-4-only constructs
+        # Run-time failures on 3.2 that bash -n accepts: case-changing
+        # expansions ${x^^} ${x,,}, ${x@Q}-style transforms, associative
+        # arrays (declare -A), mapfile/readarray, coproc, |&, ;;&, &>>.
+        # Comment lines are ignored. Use tr for case, a while-read loop for
+        # mapfile, and plain arrays or a lookup function for declare -A.
+        run: |
+          set -euo pipefail
+          files=$( { git ls-files -z bin thinkers tools tests install.sh uninstall.sh status.sh | xargs -0 grep -lE '^#!.*\b(ba)?sh\b' ; git ls-files 'bin/*.sh' 'thinkers/*.sh' 'tools/*.sh' 'tests/*.sh'; } | sort -u)
+          pat='\$\{[A-Za-z_0-9@*#!]+(\[[^]]*\])?(\^|,)|\$\{[A-Za-z_0-9]+(\[[^]]*\])?@[QEPAaKkULu]\}|(^|[^-a-zA-Z])(declare|local|typeset) +-[a-zA-Z]*A|\b(mapfile|readarray|coproc)\b|\|&|;;&|&>>'
+          hits=$(echo "$files" | xargs grep -nE "$pat" | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true)
+          if [[ -n "$hits" ]]; then
+            echo "$hits"
+            echo "::error::bash-4-only syntax found; macOS /bin/bash is 3.2"
+            exit 1
+          fi
+          echo "clean"
+      - name: Run tests/test_*.sh under bash 3.2
+        run: tests/run-all.sh
 
   install-smoke:
     name: install.sh smoke (ubuntu:24.04)
@@ -198,7 +271,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      LOC_LIMIT: 9900
+      LOC_LIMIT: 9750
     steps:
       - uses: actions/checkout@v5
       - name: Install cloc

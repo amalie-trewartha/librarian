@@ -609,8 +609,13 @@ _redact_tree() {
 
 # _redact_hint NAME VALUE — the replacement for VALUE: first/last 4 chars for
 # keys and tokens of 20+ chars, a plain <redacted> otherwise.
+# _upper STRING — uppercase via tr. Not ${1^^}: that is a bash-4 expansion and
+# macOS's /bin/bash is 3.2, where it is a fatal "bad substitution".
+_upper() { printf '%s' "$1" | tr '[:lower:]' '[:upper:]'; }
+
 _redact_hint() {
-    local u="${1^^}" v="$2"
+    local u v="$2"
+    u=$(_upper "$1")
     if [[ "$u" =~ (KEY|TOKEN) && ! "$u" =~ (SECRET|PASSW|CREDENTIAL) && "${#v}" -ge 20 ]]; then
         printf '<redacted %s...%s>' "${v:0:4}" "${v: -4}"
     else
@@ -619,7 +624,8 @@ _redact_hint() {
 }
 
 _is_secret_name() {  # same notion as shellm's trajectory masking
-    local u="${1^^}"
+    local u
+    u=$(_upper "$1")
     [[ "$u" =~ (KEY|TOKEN|SECRET|PASSW|CREDENTIAL) ]]
 }
 

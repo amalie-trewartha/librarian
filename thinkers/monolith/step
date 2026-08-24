@@ -54,7 +54,6 @@ state_dir="$IDENTITY_DIR/run"
 mkdir -p "$state_dir"
 state_file="$state_dir/monolith_backoff_state.json"
 wake_at_file="$state_dir/$THINKER_NAME.wake_at"
-root_traj="${ROOT_TRAJ_ID:-$TRAJ_ID}"
 
 # delay in seconds for a backoff level.
 _delay_for_level() {

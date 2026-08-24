@@ -279,8 +279,13 @@ _find_latest_traj() {
     # pipefail OFF (subshell): `head -1` closes after one line while `sort`
     # still has lines to write → SIGPIPE to sort, which under `set -o pipefail`
     # would make this assignment exit 141. See design/monolith_run_health.md.
+    # Portable mtime: `stat -f` is BSD/macOS, `stat -c` is GNU/Linux (where
+    # `-f` means file-system status and this silently found nothing, so
+    # `--resume` of the latest trajectory never worked on Linux).
+    local _mt_fmt
+    if stat -f '%m' /dev/null >/dev/null 2>&1; then _mt_fmt=(-f '%m %N'); else _mt_fmt=(-c '%Y %n'); fi
     latest=$( set +o pipefail; find "$traj_dir" -maxdepth 2 -name 'trajectory.jsonl' \
-        -exec stat -f '%m %N' {} \; 2>/dev/null \
+        -exec stat "${_mt_fmt[@]}" {} \; 2>/dev/null \
         | sort -rn | head -1 | cut -d' ' -f2- )
     [[ -n "$latest" ]] || return 1
     head -1 "$latest" | jq -r '.step_id // empty' 2>/dev/null
