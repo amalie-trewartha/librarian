@@ -1,6 +1,8 @@
 # The Shell is Back at the Center of Computing
 ## Philosophy and Introduction to Headlong
 
+Slop warning: authored by Claude with aggressive prompting by the Laude Institute team.
+
 In 1971, Ken Thompson wrote the first Unix shell. It was a command interpreter — a thin loop that read a line, found a program, ran it, and waited. That's all it did. That was enough.
 
 Over the next decade, the shell became the connective tissue of an entire philosophy of computing. Doug McIlroy articulated it most concisely: write programs that do one thing well, write programs to work together, write programs that handle text streams because that is a universal interface. These weren't arbitrary aesthetic choices. They were engineering observations about what made systems composable, debuggable, and resilient.
