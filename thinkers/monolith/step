@@ -49,6 +49,12 @@ BACKOFF_BASE="${MONOLITH_BACKOFF_BASE:-5}"
 BACKOFF_FACTOR="${MONOLITH_BACKOFF_FACTOR:-2}"
 BACKOFF_CAP="${MONOLITH_BACKOFF_CAP:-300}"
 BACKOFF_HOLD="${MONOLITH_BACKOFF_HOLD:-3}"
+# Thought-only wakes (a run whose only durable output is a thought) back off on
+# the same ladder but rest at most THOUGHT_CAP, not CAP: rumination should slow
+# down (writing "nothing changed" is not engagement) while the inner life stays
+# visibly ticking. Set equal to MONOLITH_BACKOFF_CAP to treat thoughts like
+# empty wakes. See design/monolith_backoff.md.
+THOUGHT_CAP="${MONOLITH_THOUGHT_CAP:-60}"
 
 state_dir="$IDENTITY_DIR/run"
 mkdir -p "$state_dir"
@@ -226,17 +232,35 @@ Choose ONE function for this wakeup and carry it out now."
 # the last handful of lines, well inside the tail window, so before/after stays
 # correct. -R reads each line as a raw STRING so fromjson parses it and corrupt
 # lines are skipped. See design/monolith_run_health.md A3.
-_last_work_id() {
-    _root_traj_raw_tail 2>/dev/null \
+# VISIBLE work (action/observation/merge/message: something happened outside
+# the head) resets the backoff; a THOUGHT alone advances the stream but no
+# longer counts as engagement, or writing "nothing changed" is scored like
+# doing something and the loop re-fires at full speed forever (observed on
+# Audel: back-to-back runs each concluding "listen-only").
+_probe_tail=""
+_refresh_probe() {
+    _probe_tail=$(_root_traj_raw_tail 2>/dev/null) || _probe_tail=""
+}
+_last_visible_id() {
+    printf '%s\n' "$_probe_tail" \
         | jq -Rr 'fromjson? // empty
-            | select(.type == "thought" or .type == "action" or .type == "observation"
+            | select(.type == "action" or .type == "observation"
                      or .type == "merge" or .type == "message")
             | .step_id // empty' 2>/dev/null \
         | tail -n 1
 }
-before_work=""
+_last_thought_id() {
+    printf '%s\n' "$_probe_tail" \
+        | jq -Rr 'fromjson? // empty | select(.type == "thought")
+            | .step_id // empty' 2>/dev/null \
+        | tail -n 1
+}
+before_visible=""
+before_thought=""
 if traj exists 2>/dev/null; then
-    before_work=$(_last_work_id) || before_work=""
+    _refresh_probe
+    before_visible=$(_last_visible_id) || before_visible=""
+    before_thought=$(_last_thought_id) || before_thought=""
 fi
 
 # shellm writes its run header's step_id here, so a fallback idle can carry
@@ -272,12 +296,20 @@ run_response=$(SHELLM_NO_BANNER=1 \
     --prompt-file "$prompt_file_tmp") || run_rc=$?
 rm -f "$prompt_file_tmp"
 
-after_work=""
+after_visible=""
+after_thought=""
 if traj exists 2>/dev/null; then
-    after_work=$(_last_work_id) || after_work=""
+    _refresh_probe
+    after_visible=$(_last_visible_id) || after_visible=""
+    after_thought=$(_last_thought_id) || after_thought=""
 fi
+did_visible=0
+[[ "$after_visible" != "$before_visible" ]] && did_visible=1
+did_thought=0
+[[ "$after_thought" != "$before_thought" ]] && did_thought=1
+# Any durable step (either tier) gates the fallback idle/error marker below.
 did_work=0
-[[ "$after_work" != "$before_work" ]] && did_work=1
+[[ "$did_visible" -eq 1 || "$did_thought" -eq 1 ]] && did_work=1
 
 # Classify a no-durable-work run: a FAILED run (rc != 0) is not the same as a
 # calm decision to idle. Record the failure as a visible `error` step instead of
@@ -317,7 +349,7 @@ rm -f "$run_id_file"
 # ---------------------------------------------------------------------------
 # Backoff decision — sets next_delay for the EXIT trap.
 # ---------------------------------------------------------------------------
-if [[ "$wake_mode" == "reactive" || "$did_work" -eq 1 ]]; then
+if [[ "$wake_mode" == "reactive" || "$did_visible" -eq 1 ]]; then
     # Engaged, or the run did real work → reset to no pause; think again at once.
     level=0
     ticks_at_level=0
@@ -343,6 +375,13 @@ else
         ticks_at_level=0
     fi
     next_delay=$(_delay_for_level "$level")
+    if [[ "$did_thought" -eq 1 ]]; then
+        # Thought-only: same ladder, gentler ceiling. The stream of
+        # consciousness slows to a tick, not to the full rest cap.
+        (( next_delay > THOUGHT_CAP )) && next_delay=$THOUGHT_CAP
+        printf '  thought-only wake — dwell %s/%s at level %s (next in %ss)\n' \
+            "$ticks_at_level" "$BACKOFF_HOLD" "$level" "$next_delay" >&2
+    fi
 fi
 _save_state
 

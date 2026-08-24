@@ -8,6 +8,11 @@ run/<name>.wake_at and the always-alive dispatcher tick fires it when due. The
 original `setsid` background-timer implementation silently never ran on macOS
 (no setsid), so spontaneity died until the first reactive wake — the
 dispatcher-native version has no timer process, no PID reuse, no reap race.
+Revision 2026-08-24: engagement now means REACTIVE or VISIBLE work
+(action/observation/merge/message). A thought-only run dwells and descends
+like an empty wake, resting at MONOLITH_THOUGHT_CAP (default 60s) instead of
+the full cap — writing "nothing changed" had counted as work, so a ruminating
+mind re-fired at full speed forever (observed on Audel).
 Authors: merged from two independent drafts (Claude's and Codex's). Where they
 differed, the choice and its rationale are noted inline.
 Extends: [monolith_thinker.md](monolith_thinker.md) (revises its "Loop liveness
