@@ -595,6 +595,37 @@ _start_dispatcher() {
         # busy. This replaces the old TICK ticker process: the loop now
         # wakes itself, so liveness no longer depends on a child process
         # that could die silently.
+
+        # Scheduled spontaneity wake (see design/monolith_backoff.md). A thinker
+        # asks to be re-fired at a future time by writing that epoch to
+        # run/<name>.wake_at instead of spawning its own timer process — the
+        # dispatcher is always alive on this 1s tick, so it owns the clock. When
+        # the time arrives and the thinker is active + not busy + a slot is free,
+        # fire it with a scheduled-wake step and consume the file. This replaces
+        # the monolith's old per-step `setsid` background timer, which never ran
+        # on macOS (no setsid) so spontaneity silently died. Generic over any
+        # thinker; the monolith is the only current writer.
+        _scheduled_wake_check() {
+            local _wf _wname _wat _now
+            _now=$(date +%s)
+            for _wf in "$run_dir"/*.wake_at; do
+                [[ -f "$_wf" ]] || continue
+                _wname=$(basename "$_wf" .wake_at)
+                grep -qx "$_wname" "$run_dir/active_thinkers" 2>/dev/null || { rm -f "$_wf"; continue; }
+                _wat=$(cat "$_wf" 2>/dev/null) || _wat=""
+                [[ "$_wat" =~ ^[0-9]+$ ]] || { rm -f "$_wf"; continue; }
+                (( _now < _wat )) && continue
+                # Due. Don't fire while busy or without a free slot — retry next
+                # tick (leave the file). The step re-arms wake_at on its way out.
+                _thinker_busy "$_wname" && continue
+                if [[ "$(_count_active_steps)" -ge "$THINKERS_MAX_CONCURRENT" ]]; then continue; fi
+                rm -f "$_wf"
+                printf '%s [dispatcher]   scheduled wake -> %s (due %ss ago)\n' "$(date -u +%FT%TZ)" "$_wname" "$((_now - _wat))" >&2
+                _dispatch_step "$_wname" "$(jq -nc --arg source monolith-timer \
+                    '{type:"monolith-wake", content:"wake", source:$source}')"
+            done
+        }
+
         _tick() {
             if [[ "$(cat "$run_dir/dispatcher.token" 2>/dev/null)" != "$dispatcher_token" ]]; then
                 printf '%s [dispatcher] ownership lost (newer start or stop) — exiting\n' "$(date -u +%FT%TZ)" >&2
@@ -611,6 +642,7 @@ _start_dispatcher() {
             fi
             _fire_pending
             _watchdog_check
+            _scheduled_wake_check
             _respawn_dead_feeders
         }
         _last_tick=$SECONDS
@@ -1223,17 +1255,15 @@ cmd_stop() {
         die "stop: refusing — this process would die with the $IDENTITY_NAME dispatcher it is asking to stop, leaving the mind down with nothing to restart it. To restart your own mind safely (e.g. to pick up a new thinker): sudo headlong-thinkersctl restart $IDENTITY_NAME — systemd completes the restart even after this step dies with the old dispatcher. To stop another identity: bash -c 'source <identities>/<name>/activate && thinkers stop'. To really stop your own mind, pass --self."
     fi
 
-    # Kill the monolith spontaneity timer (design/monolith_backoff.md) when
-    # stopping the monolith or all thinkers — otherwise a detached sleeper
-    # survives and posts a stale monolith-wake into whatever runs next. The
-    # timer's dispatcher-token guard makes a leaked one harmless, but reap it.
-    if [[ ${#names[@]} -eq 0 ]] || printf '%s\n' "${names[@]}" | grep -qx monolith; then
-        if [[ -f "$run_dir/monolith_timer.pid" ]]; then
-            local _mtimer
-            _mtimer=$(cat "$run_dir/monolith_timer.pid" 2>/dev/null) || _mtimer=""
-            [[ -n "$_mtimer" ]] && { kill -TERM -"$_mtimer" 2>/dev/null || _kill_tree "$_mtimer" TERM || true; }
-            rm -f "$run_dir/monolith_timer.pid"
-        fi
+    # Drop any pending scheduled-wake requests (design/monolith_backoff.md) when
+    # stopping the monolith or all thinkers, so a stale wake_at can't fire a
+    # thinker the operator just stopped. These are plain timestamp files (the
+    # dispatcher tick owns the clock now — no timer process to kill).
+    if [[ ${#names[@]} -eq 0 ]]; then
+        rm -f "$run_dir"/*.wake_at 2>/dev/null || true
+    else
+        local _wn
+        for _wn in "${names[@]}"; do rm -f "$run_dir/$_wn.wake_at" 2>/dev/null || true; done
     fi
 
     # Default is a drain stop: deactivate (no new triggers), let in-flight
