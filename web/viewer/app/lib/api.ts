@@ -343,6 +343,7 @@ export interface ExportJob {
   job_id: string;
   identity_id: string;
   status: "running" | "done" | "failed";
+  started_at: string;
   soul_only: boolean;
   slim: boolean;
   seconds: number;
@@ -360,6 +361,14 @@ export function startExportJob(
     `/api/identities/${encodeURIComponent(identityId)}/export-jobs`,
     { soul_only: opts.soulOnly, slim: opts.slim }
   );
+}
+
+export function fetchExportJobs(identityId: string): Promise<ExportJob[]> {
+  return getJson(`/api/identities/${encodeURIComponent(identityId)}/export-jobs`);
+}
+
+export function deleteExportJob(jobId: string): Promise<{ ok: boolean }> {
+  return sendJson("DELETE", `/api/export-jobs/${encodeURIComponent(jobId)}`, undefined);
 }
 
 export function fetchExportJob(jobId: string): Promise<ExportJob> {

@@ -239,3 +239,27 @@ def test_export_job_failure_is_reported(client: TestClient, stub_bin: Path):
 def test_export_job_unknown(client: TestClient, stub_bin: Path):
     assert client.get("/api/export-jobs/nope").status_code == 404
     assert client.post("/api/identities/.identities~ghost/export-jobs").status_code == 404
+
+
+def test_export_jobs_listed_kept_and_deleted(client: TestClient, stub_bin: Path):
+    _write_identity_stub(stub_bin)
+    url = "/api/identities/.identities~porta/export-jobs"
+    ids = []
+    for _ in range(6):
+        job = client.post(url, json={"slim": True}).json()
+        ids.append(job["job_id"])
+        _wait_job(client, job["job_id"])
+    listed = client.get(url).json()
+    # newest first, only the last five survive
+    assert [j["job_id"] for j in listed] == ids[1:][::-1]
+    assert client.get(f"/api/export-jobs/{ids[0]}").status_code == 404
+    assert all(j["status"] == "done" and j["started_at"] for j in listed)
+    # a finished job's clock stops
+    first = listed[0]["seconds"]
+    assert client.get(f"/api/export-jobs/{ids[-1]}").json()["seconds"] == first
+
+    assert client.delete(f"/api/export-jobs/{ids[-1]}").json() == {"ok": True, "job_id": ids[-1]}
+    assert client.get(f"/api/export-jobs/{ids[-1]}").status_code == 404
+    assert len(client.get(url).json()) == 4
+    assert client.delete("/api/export-jobs/nope").status_code == 404
+    assert client.get("/api/identities/.identities~ghost/export-jobs").status_code == 404

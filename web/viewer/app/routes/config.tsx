@@ -27,8 +27,9 @@ import {
 } from "~/components/ui/table";
 import {
   deleteEnvVar,
+  deleteExportJob,
   exportJobDownloadUrl,
-  fetchExportJob,
+  fetchExportJobs,
   fetchIdentityEnv,
   fetchIdentityStatus,
   putEnvVar,
@@ -213,33 +214,62 @@ function AddVarForm({
   );
 }
 
+function formatAgo(iso: string): string {
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+function formatWhen(iso: string): string {
+  const when = new Date(iso).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return `${when} (${formatAgo(iso)})`;
+}
+
 function formatBytes(n: number): string {
   if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function ExportSection({ identityId }: { identityId: string }) {
+  const queryClient = useQueryClient();
   const [soulOnly, setSoulOnly] = useState(false);
   const [slim, setSlim] = useState(true);
-  const [jobId, setJobId] = useState<string | null>(null);
 
-  // The archive is built in the background; poll until it is ready. A
-  // synchronous download of a big mind log sat silent for a minute and
-  // then died at Cloudflare's 100s limit, which looked like nothing at all.
-  const job = useQuery({
-    queryKey: ["export-job", jobId],
-    queryFn: () => fetchExportJob(jobId!),
-    enabled: jobId !== null,
-    refetchInterval: (q) => (q.state.data?.status === "running" ? 1500 : false),
+  // Archives are built in the background on the server, which keeps the last
+  // few per identity. Polling the list (rather than one job id held in page
+  // state) means navigating away and back, or a second person opening the
+  // page, sees the same builds and downloads. A synchronous download of a
+  // big mind log sat silent for a minute and then died at Cloudflare's 100s
+  // limit, which looked like nothing at all.
+  const jobs = useQuery({
+    queryKey: ["export-jobs", identityId],
+    queryFn: () => fetchExportJobs(identityId),
+    refetchInterval: (q) =>
+      q.state.data?.some((j) => j.status === "running") ? 1500 : false,
   });
+  const refresh = () =>
+    queryClient.invalidateQueries({ queryKey: ["export-jobs", identityId] });
   const start = useMutation({
     mutationFn: () => startExportJob(identityId, { soulOnly, slim }),
-    onSuccess: (j) => setJobId(j.job_id),
+    onSuccess: refresh,
     onError: (e: Error) => toast.error(`Export failed to start: ${e.message}`),
   });
+  const remove = useMutation({
+    mutationFn: (jobId: string) => deleteExportJob(jobId),
+    onSuccess: refresh,
+    onError: (e: Error) => toast.error(`Could not delete export: ${e.message}`),
+  });
 
-  const status = job.data?.status;
-  const running = start.isPending || status === "running";
+  const running =
+    start.isPending ||
+    (jobs.data?.some((j) => j.status === "running") ?? false);
   return (
     <section className="mt-8">
       <div className="mb-2 flex items-baseline gap-3">
@@ -260,8 +290,14 @@ function ExportSection({ identityId }: { identityId: string }) {
             disabled={running}
             onClick={() => start.mutate()}
           >
-            {running ? <LoadingDots /> : <Download className="size-3" />}
-            {running ? "Building" : "Build export"}
+            {running ? (
+              <LoadingDots text="Building" />
+            ) : (
+              <>
+                <Download className="size-3" />
+                Build export
+              </>
+            )}
           </Button>
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             <Checkbox
@@ -281,8 +317,9 @@ function ExportSection({ identityId }: { identityId: string }) {
                   shellm launch command line — are cut to a short head plus
                   &ldquo;…[truncated N chars]&rdquo;. API keys are replaced with
                   [REDACTED:…]. Thoughts, messages, reasoning and shell output
-                  travel whole. A 1 GB mind log becomes about 17 MB and still
-                  imports.
+                  travel whole, as do memories, blobs and the workdir. Roughly a
+                  tenth of the fat size (Audel: 1 GB of trajectories, 92 MB
+                  archive) and still imports.
                 </p>
                 <p>
                   <b>Fat</b> (off): a byte-for-byte copy of the trajectories,
@@ -303,35 +340,61 @@ function ExportSection({ identityId }: { identityId: string }) {
             import starts a fresh mind log)
           </label>
         </div>
-        {job.data && (
-          <div className="flex flex-wrap items-center gap-3 text-xs">
-            {status === "running" && (
-              <span className="text-muted-foreground">
-                Building on the server… {Math.round(job.data.seconds)}s. Big
-                mind logs take a minute or two; you can leave this page and
-                come back.
-              </span>
-            )}
-            {status === "done" && (
-              <>
-                <Button size="sm" asChild>
-                  <a href={exportJobDownloadUrl(job.data)} download={job.data.filename ?? undefined}>
-                    <Download className="size-3" />
-                    Download {job.data.filename}
-                    {job.data.size !== null && ` (${formatBytes(job.data.size)})`}
-                  </a>
-                </Button>
+        {running && (
+          <span className="text-xs text-muted-foreground">
+            Building on the server. Big mind logs take a minute or two; the
+            build keeps going if you leave this page, and the file will be
+            listed here when you come back.
+          </span>
+        )}
+        {jobs.data && jobs.data.length > 0 && (
+          <ul className="flex flex-col gap-1 text-xs">
+            {jobs.data.map((job) => (
+              <li
+                key={job.job_id}
+                className="flex flex-wrap items-center gap-3"
+              >
+                {job.status === "done" ? (
+                  <Button size="sm" variant="secondary" asChild>
+                    <a
+                      href={exportJobDownloadUrl(job)}
+                      download={job.filename ?? undefined}
+                    >
+                      <Download className="size-3" />
+                      {job.filename}
+                      {job.size !== null && ` (${formatBytes(job.size)})`}
+                    </a>
+                  </Button>
+                ) : (
+                  <span
+                    className={
+                      job.status === "failed" ? "text-destructive" : "font-mono"
+                    }
+                  >
+                    {job.filename}
+                  </span>
+                )}
                 <span className="text-muted-foreground">
-                  built in {Math.round(job.data.seconds)}s
+                  {job.status === "running" &&
+                    `building… ${Math.round(job.seconds)}s`}
+                  {job.status === "done" &&
+                    `${formatWhen(job.started_at)}, built in ${Math.round(job.seconds)}s`}
+                  {job.status === "failed" &&
+                    `failed: ${job.error ?? "unknown error"}`}
                 </span>
-              </>
-            )}
-            {status === "failed" && (
-              <span className="text-destructive">
-                Export failed: {job.data.error ?? "unknown error"}
-              </span>
-            )}
-          </div>
+                {job.status !== "running" && (
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    title="Delete this export from the server"
+                    onClick={() => remove.mutate(job.job_id)}
+                  >
+                    <Trash2 className="size-3" />
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
         )}
       </div>
     </section>

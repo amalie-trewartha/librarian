@@ -791,7 +791,12 @@ def create_app(
     # sends a byte, which for a big mind log means a minute of silence and,
     # behind Cloudflare, a 524 at 100s. The dash instead POSTs a job, polls
     # its status, then downloads the finished file (streamed, fast). One job
-    # per identity at a time; starting a new one drops the previous file.
+    # per identity builds at a time; the last EXPORT_JOBS_KEPT finished ones
+    # stay listed (and their files on disk) until deleted or evicted, so a
+    # viewer who navigated away finds the archive when they come back. The
+    # list lives in process memory: a web restart forgets it and leaves the
+    # files for the tmp cleaner.
+    EXPORT_JOBS_KEPT = 5
     export_jobs: dict[str, dict] = {}
     export_jobs_lock = threading.RLock()
 
@@ -803,7 +808,8 @@ def create_app(
             "status": job["status"],
             "soul_only": job["soul_only"],
             "slim": job["slim"],
-            "seconds": round(elapsed, 1),
+            "started_at": job["started"].isoformat(),
+            "seconds": round(job.get("seconds", elapsed), 1),
             "size": job.get("size"),
             "filename": job.get("filename"),
             "error": job.get("error"),
@@ -825,15 +831,26 @@ def create_app(
             msg = detail.get("message") if isinstance(detail, dict) else str(detail)
             with export_jobs_lock:
                 job["status"], job["error"] = "failed", msg or "export failed"
+                job["seconds"] = (datetime.now(timezone.utc) - job["started"]).total_seconds()
             return
         except Exception as exc:  # noqa: BLE001 - surfaced to the poller
             with export_jobs_lock:
                 job["status"], job["error"] = "failed", str(exc)
+                job["seconds"] = (datetime.now(timezone.utc) - job["started"]).total_seconds()
             return
         with export_jobs_lock:
             job["path"] = str(tmp)
             job["size"] = tmp.stat().st_size
             job["status"] = "done"
+            job["seconds"] = (datetime.now(timezone.utc) - job["started"]).total_seconds()
+
+    def _identity_export_jobs(identity_id: str) -> list[dict]:
+        # newest first; caller holds the lock
+        return sorted(
+            (j for j in export_jobs.values() if j["identity_id"] == identity_id),
+            key=lambda j: j["started"],
+            reverse=True,
+        )
 
     class ExportJobRequest(BaseModel):
         soul_only: bool = False
@@ -849,10 +866,8 @@ def create_app(
                     raise HTTPException(
                         status_code=409, detail="An export is already building"
                     )
-            for old_id in [
-                j["id"] for j in export_jobs.values() if j["identity_id"] == identity_id
-            ]:
-                _drop_export_job(export_jobs.pop(old_id))
+            for old in _identity_export_jobs(identity_id)[EXPORT_JOBS_KEPT - 1 :]:
+                _drop_export_job(export_jobs.pop(old["id"]))
             safe = re.sub(r"[^A-Za-z0-9._-]", "-", identity.name) or "identity"
             stamp = datetime.now(timezone.utc)
             flavour = "-slim" if body.slim else ""
@@ -871,6 +886,21 @@ def create_app(
             target=_run_export_job, args=(job, identity), daemon=True
         ).start()
         return _export_job_public(job)
+
+    @app.get("/api/identities/{identity_id}/export-jobs")
+    def list_export_jobs(identity_id: str) -> list[dict]:
+        _identity_or_404(root, identity_id)
+        with export_jobs_lock:
+            return [_export_job_public(j) for j in _identity_export_jobs(identity_id)]
+
+    @app.delete("/api/export-jobs/{job_id}")
+    def delete_export_job(job_id: str) -> dict:
+        with export_jobs_lock:
+            job = _export_job_or_404(job_id)
+            if job["status"] == "running":
+                raise HTTPException(status_code=409, detail="Export is still building")
+            _drop_export_job(export_jobs.pop(job_id))
+        return {"ok": True, "job_id": job_id}
 
     def _export_job_or_404(job_id: str) -> dict:
         with export_jobs_lock:
