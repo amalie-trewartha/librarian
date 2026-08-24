@@ -202,10 +202,11 @@ Headlong installer. At any time, from any shell:
 
 EOF
     local app_dir="$HEADLONG_HOME/app"
-    # Fresh install, human at a tty, working Docker daemon, not already in a
-    # container: offer to run the whole agent inside Docker. An existing
-    # checkout means a host install is already here; re-runs just update it.
-    if [[ ! -d "$app_dir/.git" && ! -f /.dockerenv && ! -f /run/.containerenv ]] \
+    # Offer the whole-agent-in-Docker menu to a human at a tty with a working
+    # daemon, outside a container, as long as no agent exists yet. A leftover
+    # checkout alone (an install aborted before an identity was created) does
+    # not count as a decision; only a completed install skips the menu.
+    if [[ ! -e "$app_dir/.identities/default" && ! -f /.dockerenv && ! -f /run/.containerenv ]] \
             && (: </dev/tty) 2>/dev/null && _docker_daemon_ok; then
         _offer_docker_install
     fi
