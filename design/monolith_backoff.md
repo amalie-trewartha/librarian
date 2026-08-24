@@ -12,7 +12,10 @@ Revision 2026-08-24: engagement now means REACTIVE or VISIBLE work
 (action/observation/merge/message). A thought-only run dwells and descends
 like an empty wake, resting at MONOLITH_THOUGHT_CAP (default 60s) instead of
 the full cap — writing "nothing changed" had counted as work, so a ruminating
-mind re-fired at full speed forever (observed on Audel).
+mind re-fired at full speed forever (observed on Audel). A share-nudge routing
+hint fires every MONOLITH_SHARE_HINT_EVERY (default 12, 0 = off) spontaneous
+wakes to keep outward initiative alive; the `share` function is its positive
+lane in prompt.md.
 Authors: merged from two independent drafts (Claude's and Codex's). Where they
 differed, the choice and its rationale are noted inline.
 Extends: [monolith_thinker.md](monolith_thinker.md) (revises its "Loop liveness

@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # test_monolith_backoff.sh — monolith backoff: visible work vs thought-only,
-# the thought cap, and the error descent.
+# the thought cap, the error descent, and the share nudge.
 #
 # Usage: tests/test_monolith_backoff.sh
 #
 # Drives thinkers/monolith/step directly against a throwaway identity with a
 # stubbed `shellm` on PATH. The stub reads $STUB_MODE and appends an
 # observation ("obs"), a thought ("thought"), nothing ("none"), or exits
-# non-zero ("fail") — and captures the --prompt-file contents. No LLM calls, no docker, no dispatcher: the step's
+# non-zero ("fail") — and captures the --prompt-file contents so the share
+# nudge can be asserted. No LLM calls, no docker, no dispatcher: the step's
 # own state file (monolith_backoff_state.json) and wake_at file are the
 # observable outputs. Small BASE/CAP/HOLD values keep the math readable:
 #   BASE=5 FACTOR=2 CAP=40 HOLD=1 THOUGHT_CAP=7
@@ -74,7 +75,7 @@ run_step() {  # $1 = trigger json
         MONOLITH_TIERED_MEMORY=0 \
         MONOLITH_BACKOFF_BASE=5 MONOLITH_BACKOFF_FACTOR=2 \
         MONOLITH_BACKOFF_CAP=40 MONOLITH_BACKOFF_HOLD=1 \
-        MONOLITH_THOUGHT_CAP=7 \
+        MONOLITH_THOUGHT_CAP=7 MONOLITH_SHARE_HINT_EVERY="${SHARE_EVERY:-0}" \
         "$STEP" >> "$WORK/step.log" 2>&1
 }
 WAKE='{"type":"monolith-wake","content":"wake","source":"monolith-timer"}'
@@ -157,6 +158,39 @@ if [[ "$(lvl)" = 1 ]] && near "$(delay)" 5 && grep -q '"type":"error"' "$TRAJ"; 
     ok "failed run: error step, immediate descent"
 else
     bad "failed run: error step, immediate descent" "level=$(lvl) delay=$(delay)"
+fi
+
+# --- 7. share nudge: every N spontaneous wakes, then counter resets ----------
+reset_state
+echo thought > "$STUB_MODE_FILE"
+SHARE_EVERY=2
+hint='shared anything outward'
+run_step "$WAKE"
+h1=$(grep -c "$hint" "$STUB_CAPTURE" 2>/dev/null || true)
+run_step "$WAKE"
+h2=$(grep -c "$hint" "$STUB_CAPTURE" 2>/dev/null || true)
+run_step "$WAKE"
+h3=$(grep -c "$hint" "$STUB_CAPTURE" 2>/dev/null || true)
+run_step "$WAKE"
+h4=$(grep -c "$hint" "$STUB_CAPTURE" 2>/dev/null || true)
+if [[ "$h1" = 0 && "$h2" = 1 && "$h3" = 0 && "$h4" = 1 ]]; then
+    ok "share nudge fires every 2nd spontaneous wake"
+else
+    bad "share nudge fires every 2nd spontaneous wake" "hints per wake: $h1,$h2,$h3,$h4"
+fi
+SHARE_EVERY=0
+run_step "$WAKE"
+if ! grep -q "$hint" "$STUB_CAPTURE" 2>/dev/null; then
+    ok "share nudge disabled with MONOLITH_SHARE_HINT_EVERY=0"
+else
+    bad "share nudge disabled with MONOLITH_SHARE_HINT_EVERY=0"
+fi
+
+# --- 8. the prompt menu offers share -----------------------------------------
+if grep -q '\*\*share\*\*' "$STUB_CAPTURE" 2>/dev/null; then
+    ok "prompt menu includes the share function"
+else
+    bad "prompt menu includes the share function"
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

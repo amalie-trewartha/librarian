@@ -55,6 +55,9 @@ BACKOFF_HOLD="${MONOLITH_BACKOFF_HOLD:-3}"
 # visibly ticking. Set equal to MONOLITH_BACKOFF_CAP to treat thoughts like
 # empty wakes. See design/monolith_backoff.md.
 THOUGHT_CAP="${MONOLITH_THOUGHT_CAP:-60}"
+# Every N spontaneous wakes, add a routing hint suggesting the `share` function
+# (outward-facing initiative). 0 disables the nudge.
+SHARE_HINT_EVERY="${MONOLITH_SHARE_HINT_EVERY:-12}"
 
 state_dir="$IDENTITY_DIR/run"
 mkdir -p "$state_dir"
@@ -77,18 +80,22 @@ _delay_for_level() {
 # Load persisted backoff state (level + dwell counter).
 level=0
 ticks_at_level=0
+wakes_since_share_hint=0
 if [[ -f "$state_file" ]]; then
     level=$(jq -r '.level // 0' "$state_file" 2>/dev/null) || level=0
     ticks_at_level=$(jq -r '.ticks_at_level // 0' "$state_file" 2>/dev/null) || ticks_at_level=0
+    wakes_since_share_hint=$(jq -r '.wakes_since_share_hint // 0' "$state_file" 2>/dev/null) || wakes_since_share_hint=0
     [[ "$level" =~ ^[0-9]+$ ]] || level=0
     [[ "$ticks_at_level" =~ ^[0-9]+$ ]] || ticks_at_level=0
+    [[ "$wakes_since_share_hint" =~ ^[0-9]+$ ]] || wakes_since_share_hint=0
 fi
 
 _save_state() {
     local tmp
     tmp=$(mktemp) || return 0
     if jq -nc --argjson l "$level" --argjson t "$ticks_at_level" \
-        '{level:$l, ticks_at_level:$t}' > "$tmp" 2>/dev/null; then
+        --argjson w "$wakes_since_share_hint" \
+        '{level:$l, ticks_at_level:$t, wakes_since_share_hint:$w}' > "$tmp" 2>/dev/null; then
         mv "$tmp" "$state_file"
     else
         rm -f "$tmp"
@@ -181,6 +188,21 @@ fi
 if [[ $(printf '%s\n' "$last_three" | jq -r '.type' 2>/dev/null | sort -u | tr '\n' ' ') == "thought " ]]; then
     hints="${hints}- The last few steps are all thoughts — the stream may be circling; consider acting, recalling, or advancing decisively.
 "
+fi
+# Share nudge: outward initiative needs a periodic prompt-side invitation, or
+# restraint rules learned from feedback ratchet the mind into pure listening
+# (observed on Audel 2026-08-21: a self-imposed "last-word-ours -> do not
+# speak" doctrine, goals.md-codified the next day). Counts SPONTANEOUS wakes;
+# reactive wakes have their own engagement. The counter resets when the hint
+# fires, not when a message is sent: an invitation every N quiet wakes, never
+# an order.
+if [[ "$SHARE_HINT_EVERY" -gt 0 && "$wake_mode" == "spontaneous" ]]; then
+    wakes_since_share_hint=$(( wakes_since_share_hint + 1 ))
+    if (( wakes_since_share_hint >= SHARE_HINT_EVERY )); then
+        wakes_since_share_hint=0
+        hints="${hints}- It has been a while since you shared anything outward. If recent work or thinking produced something a specific person would genuinely care about, consider **share**. If nothing qualifies, ignore this.
+"
+    fi
 fi
 [[ -z "$hints" ]] && hints="- (no special signals — pick what best serves the mind right now)"
 
