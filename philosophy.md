@@ -1,7 +1,7 @@
 # The Shell is Back at the Center of Computing
 ## Philosophy and Introduction to Headlong
 
-Slop warning: authored by Claude with aggressive prompting by the Laude Institute team.
+_Slop warning: authored by Claude with aggressive prompting by the Laude Institute team._
 
 In 1971, Ken Thompson wrote the first Unix shell. It was a command interpreter — a thin loop that read a line, found a program, ran it, and waited. That's all it did. That was enough.
 
