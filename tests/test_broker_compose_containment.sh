@@ -104,6 +104,24 @@ check "alias: .. climb is denied"               reject "$(bind "$WORK/alias/../w
 # object to". Against the pre-fix broker this is accepted.
 check "an unparseable model is denied"          reject 'not json at all'
 
+# --- the host paths that never pass through services[].volumes -----------
+# Each of these named a file outside the workdir and mounted it into a
+# brokered container while the bind check above was already in force.
+check "volume driver_opts.device outside is denied" reject \
+  "$(printf '{"services":{"s":{"volumes":[{"type":"volume","source":"esc","target":"/x"}]}},"volumes":{"esc":{"driver":"local","driver_opts":{"type":"none","device":"%s","o":"bind"}}}}' "$WORK/work-secret")"
+check "volume device inside the workdir is allowed" accept \
+  "$(printf '{"volumes":{"ok":{"driver":"local","driver_opts":{"type":"none","device":"%s","o":"bind"}}}}' "$SHELLM_BROKER_WORKDIR/sub")"
+check "secret file outside is denied"           reject '{"secrets":{"sec":{"file":"/etc/hostname"}}}'
+check "config file outside is denied"           reject '{"configs":{"c":{"file":"/etc/hostname"}}}'
+check "additional build context outside is denied" reject \
+  "$(printf '{"services":{"s":{"build":{"context":"%s","additional_contexts":{"extra":"/etc"}}}}}' "$SHELLM_BROKER_WORKDIR")"
+check "a non-path additional context is allowed" accept \
+  "$(printf '{"services":{"s":{"build":{"context":"%s","additional_contexts":{"img":"docker-image://alpine"}}}}}' "$SHELLM_BROKER_WORKDIR")"
+check "env_file outside is denied"              reject \
+  '{"services":{"s":{"env_file":[{"path":"/etc/hostname","required":true}]}}}'
+check "env_file inside the workdir is allowed"  accept \
+  "$(printf '{"services":{"s":{"env_file":[{"path":"%s/app.env","required":true}]}}}' "$SHELLM_BROKER_WORKDIR")"
+
 # --- the validator is live -----------------------------------------------
 check "bind on /etc is denied"                  reject "$(bind /etc)"
 check "the Docker socket is denied"             reject "$(bind /var/run/docker.sock)"

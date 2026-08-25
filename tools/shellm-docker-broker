@@ -455,9 +455,22 @@ handle_version() {
 }
 
 # The host paths a compose model names, emitted as NUL-terminated
-# "service<TAB>kind<TAB>path" records for the bash containment check below. A
-# missing or non-string source becomes an empty path so it is rejected rather
+# "name<TAB>kind<TAB>path" records for the bash containment check below. A
+# missing or non-string path becomes an empty string so it is rejected rather
 # than skipped: the old jq predicate only flagged strings, so a null passed.
+#
+# The bind sources and build contexts are not the whole surface. A named volume
+# with driver_opts.device, a secret or config with `file:`, and an extra build
+# context all name a host path too, and none of them passes through
+# .services[].volumes. Verified by execution before this was written: a volume
+# device and a secret file each mounted a host file from outside SHELLM_WORKDIR
+# into a brokered container while the bind check was already in force.
+#
+# additional_contexts values are not all paths -- `docker-image://`, `service:`
+# and git URLs share that map -- so only absolute ones are host paths to check.
+# A driver_opts.device is always checked: a device that is not an absolute path
+# (an NFS "host:/export", say) is not something this broker should hand out
+# either, and path_contained rejects it.
 # `read -d ''` returns nonzero at EOF, which set -e would treat as fatal.
 read -r -d '' PATHS_PROGRAM <<'JQ' || true
 
@@ -469,22 +482,52 @@ read -r -d '' PATHS_PROGRAM <<'JQ' || true
             def build_dockerfiles($b):
               if ($b | type) == "object" and (($b.dockerfile // "") | startswith("/")) then [$b.dockerfile]
               else [] end;
-            def emit($svc; $kind; $p):
-              "\($svc)\t\($kind)\t\(if ($p | type) == "string" then $p else "" end)\u0000";
+            def extra_contexts($b):
+              if ($b | type) == "object" and (($b.additional_contexts // null) | type) == "object"
+              then [$b.additional_contexts[] | select((type == "string") and startswith("/"))]
+              else [] end;
+            def emit($name; $kind; $p):
+              "\($name)\t\($kind)\t\(if ($p | type) == "string" then $p else "" end)\u0000";
 
+            (.services // {} | to_entries[] as $svc |
+             ($svc.value // {}) as $s |
+             (build_contexts($s.build // null)[] | emit($svc.key; "context"; .)),
+             (build_dockerfiles($s.build // null)[] | emit($svc.key; "dockerfile"; .)),
+             (extra_contexts($s.build // null)[] | emit($svc.key; "extra-context"; .)),
+             (($s.volumes // [])[] | select(.type == "bind") | emit($svc.key; "bind"; .source // ""))),
+            (.volumes // {} | to_entries[]
+             | select((.value.driver_opts // null) | type == "object")
+             | select(.value.driver_opts | has("device"))
+             | emit(.key; "volume-device"; .value.driver_opts.device)),
+            (.secrets // {} | to_entries[] | select(.value | has("file")) | emit(.key; "secret"; .value.file)),
+            (.configs // {} | to_entries[] | select(.value | has("file")) | emit(.key; "config"; .value.file))
+JQ
+
+# env_file is the one host path `docker compose config` destroys before the
+# validator sees it: the default render reads each file and inlines the values
+# into `environment`, leaving env_file null, so the paths are simply not in the
+# model (checked against compose 2.40.3; --no-env-resolution does not preserve
+# them either). --no-interpolate does keep them, with relative paths already
+# resolved against the project directory, so they come from a second render of
+# the same model. The cost is that an env_file spelled with an unexpanded
+# ${VAR} stays literal there and is rejected as non-absolute, which is the safe
+# direction.
+read -r -d '' ENV_FILE_PROGRAM <<'JQ' || true
+
+            def emit($name; $kind; $p):
+              "\($name)\t\($kind)\t\(if ($p | type) == "string" then $p else "" end)\u0000";
             .services // {} | to_entries[] as $svc |
-            ($svc.value // {}) as $s |
-            (build_contexts($s.build // null)[] | emit($svc.key; "context"; .)),
-            (build_dockerfiles($s.build // null)[] | emit($svc.key; "dockerfile"; .)),
-            (($s.volumes // [])[] | select(.type == "bind") | emit($svc.key; "bind"; .source // ""))
+            (($svc.value.env_file // []) | if type == "array" then . else [.] end)[]
+            | emit($svc.key; "env-file"; (if type == "object" then (.path // "") else . end))
 JQ
 
 compose_validate_model() {
     local request="$1"
     local cwd="$2"
     shift 2
-    local config err rc
+    local config config_raw err rc
     config=$(mktemp)
+    config_raw=$(mktemp)
     err=$(mktemp)
     rc=0
     (
@@ -494,9 +537,21 @@ compose_validate_model() {
     ) >"$config" 2>"$err" || rc=$?
     if [[ "$rc" -ne 0 ]]; then
         cat "$err" >&2
-        rm -f "$config" "$err"
+        rm -f "$config" "$config_raw" "$err"
         return "$rc"
     fi
+    # Second render, uninterpolated, purely to recover the env_file paths the
+    # first one consumes. Its failure is a rejection rather than a shrug:
+    # without it the env_file surface goes unchecked.
+    (
+        cd "$cwd" || exit 1
+        apply_request_env "$request"
+        docker compose "$@" config --format json --no-interpolate
+    ) >"$config_raw" 2>/dev/null || {
+        rm -f "$config" "$config_raw" "$err"
+        printf 'compose model could not be inspected for env files\n' >&2
+        return 65
+    }
 
     local message
     message=$(jq -r '
@@ -535,8 +590,9 @@ compose_validate_model() {
         # substitution, not a pipe) so the verdict survives it.
         local paths svc kind candidate
         paths=$(mktemp)
-        if ! jq -j "$PATHS_PROGRAM" "$config" > "$paths" 2>/dev/null; then
-            rm -f "$paths" "$config" "$err"
+        if ! jq -j "$PATHS_PROGRAM" "$config" > "$paths" 2>/dev/null \
+           || ! jq -j "$ENV_FILE_PROGRAM" "$config_raw" >> "$paths" 2>/dev/null; then
+            rm -f "$paths" "$config" "$config_raw" "$err"
             printf 'compose model could not be inspected for host paths\n' >&2
             return 65
         fi
@@ -545,6 +601,11 @@ compose_validate_model() {
             case "$kind" in
                 context) message="service $svc builds from a context outside SHELLM_WORKDIR" ;;
                 dockerfile) message="service $svc uses a Dockerfile outside SHELLM_WORKDIR" ;;
+                extra-context) message="service $svc uses an additional build context outside SHELLM_WORKDIR" ;;
+                env-file) message="service $svc reads an env file outside SHELLM_WORKDIR" ;;
+                volume-device) message="volume $svc mounts a host path outside SHELLM_WORKDIR" ;;
+                secret) message="secret $svc reads a file outside SHELLM_WORKDIR" ;;
+                config) message="config $svc reads a file outside SHELLM_WORKDIR" ;;
                 *) message="service $svc bind-mounts a host path outside SHELLM_WORKDIR" ;;
             esac
             break
@@ -552,7 +613,7 @@ compose_validate_model() {
         rm -f "$paths"
     fi
 
-    rm -f "$config" "$err"
+    rm -f "$config" "$config_raw" "$err"
     [[ -z "$message" ]] || { printf '%s\n' "$message" >&2; return 65; }
     return 0
 }
@@ -745,25 +806,26 @@ handle_compose() {
             ;;
     esac
 
-    if [[ "$subcommand" != "config" ]]; then
-        local validation_out validation_err validation_rc
-        validation_out=$(mktemp)
-        validation_err=$(mktemp)
-        set +e
-        if [[ "${#global_args[@]}" -gt 0 ]]; then
-            compose_validate_model "$request" "$cwd" "${global_args[@]}" >"$validation_out" 2>"$validation_err"
-        else
-            compose_validate_model "$request" "$cwd" >"$validation_out" 2>"$validation_err"
-        fi
-        validation_rc=$?
-        set -e
-        if [[ "$validation_rc" -ne 0 ]]; then
-            json_response "$validation_rc" "$validation_out" "$validation_err"
-            rm -f "$validation_out" "$validation_err"
-            return
-        fi
-        rm -f "$validation_out" "$validation_err"
+    # `config` is validated like every other subcommand. It renders the model
+    # back to the caller and compose inlines the contents of every env_file
+    # into that render, so exempting it hands out host files verbatim.
+    local validation_out validation_err validation_rc
+    validation_out=$(mktemp)
+    validation_err=$(mktemp)
+    set +e
+    if [[ "${#global_args[@]}" -gt 0 ]]; then
+        compose_validate_model "$request" "$cwd" "${global_args[@]}" >"$validation_out" 2>"$validation_err"
+    else
+        compose_validate_model "$request" "$cwd" >"$validation_out" 2>"$validation_err"
     fi
+    validation_rc=$?
+    set -e
+    if [[ "$validation_rc" -ne 0 ]]; then
+        json_response "$validation_rc" "$validation_out" "$validation_err"
+        rm -f "$validation_out" "$validation_err"
+        return
+    fi
+    rm -f "$validation_out" "$validation_err"
 
     log_msg "compose project_dir=$project_dir subcommand=$subcommand argc=${#args[@]}"
     local -a cmd=(docker compose)
