@@ -113,6 +113,42 @@ symlink_allow_root() {
     printf '%s\n' "$1"
 }
 
+# Resolve a host path for containment without requiring it to exist: compose
+# marks missing bind sources create_host_path, so demanding existence would
+# reject work the sandbox is allowed to do. `realpath -m` would do this in one
+# call but is GNU-only, and this broker runs on macOS too, so walk up to the
+# deepest existing ancestor, resolve THAT (which is what follows symlinks),
+# and re-attach the tail. Callers reject `..` before calling, so the tail
+# cannot climb back out.
+resolve_for_containment() {
+    local path="$1"
+    local tail="" base resolved
+    while [[ ! -e "$path" && "$path" == */?* ]]; do
+        base="${path##*/}"
+        [[ -n "$base" ]] && tail="$base${tail:+/$tail}"
+        path="${path%/*}"
+        [[ -n "$path" ]] || path=/
+    done
+    resolved=$(realpath "$path" 2>/dev/null) || return 1
+    [[ -n "$tail" ]] && resolved="${resolved%/}/$tail"
+    printf '%s\n' "$resolved"
+}
+
+# One host path from a compose model, checked the way every other path in this
+# file is checked. Lexical containment is not enough here: `docker compose
+# config` leaves `..` in an ABSOLUTE bind source unnormalized (verified against
+# compose 2.40.3), and it never resolves symlinks, so a purely textual prefix
+# test blesses a string the daemon then resolves somewhere else entirely.
+path_contained() {
+    local path="$1"
+    local root="$2"
+    [[ "$path" == /* ]] || return 1
+    case "/$path/" in */../*) return 1 ;; esac
+    local resolved
+    resolved=$(resolve_for_containment "$path") || return 1
+    path_under "$resolved" "$root"
+}
+
 symlink_mounts() {
     local workdir="$1"
     # The agent has write access to its own workdir, so every symlink in there
@@ -418,6 +454,31 @@ handle_version() {
     run_capture "${cmd[@]}"
 }
 
+# The host paths a compose model names, emitted as NUL-terminated
+# "service<TAB>kind<TAB>path" records for the bash containment check below. A
+# missing or non-string source becomes an empty path so it is rejected rather
+# than skipped: the old jq predicate only flagged strings, so a null passed.
+# `read -d ''` returns nonzero at EOF, which set -e would treat as fatal.
+read -r -d '' PATHS_PROGRAM <<'JQ' || true
+
+            def build_contexts($b):
+              if $b == null then []
+              elif ($b | type) == "string" then [$b]
+              elif ($b | type) == "object" then [$b.context // ""]
+              else [] end;
+            def build_dockerfiles($b):
+              if ($b | type) == "object" and (($b.dockerfile // "") | startswith("/")) then [$b.dockerfile]
+              else [] end;
+            def emit($svc; $kind; $p):
+              "\($svc)\t\($kind)\t\(if ($p | type) == "string" then $p else "" end)\u0000";
+
+            .services // {} | to_entries[] as $svc |
+            ($svc.value // {}) as $s |
+            (build_contexts($s.build // null)[] | emit($svc.key; "context"; .)),
+            (build_dockerfiles($s.build // null)[] | emit($svc.key; "dockerfile"; .)),
+            (($s.volumes // [])[] | select(.type == "bind") | emit($svc.key; "bind"; .source // ""))
+JQ
+
 compose_validate_model() {
     local request="$1"
     local cwd="$2"
@@ -437,30 +498,8 @@ compose_validate_model() {
         return "$rc"
     fi
 
-    local request_workdir workdir_alias message
-    request_workdir=$(printf '%s' "$request" | jq -r '.workdir // empty')
-    workdir_alias=""
-    if [[ -n "$request_workdir" ]] && [[ "$(realpath "$request_workdir" 2>/dev/null || true)" == "$SHELLM_BROKER_WORKDIR" ]]; then
-        workdir_alias="$request_workdir"
-    fi
-
-    message=$(jq -r --arg workdir "$SHELLM_BROKER_WORKDIR" --arg workdir_alias "$workdir_alias" '
-        def under_allowed_root($p):
-          ($p | startswith($workdir)) or
-          (($workdir_alias | length) > 0 and ($p | startswith($workdir_alias)));
-        def bad_path($p):
-          ($p | type == "string") and
-          ($p == "/var/run/docker.sock" or ($p | startswith("/var/run/docker.sock/")) or
-           (under_allowed_root($p) | not));
-        def build_contexts($b):
-          if $b == null then []
-          elif ($b | type) == "string" then [$b]
-          elif ($b | type) == "object" then [$b.context // empty]
-          else [] end;
-        def build_dockerfiles($b):
-          if ($b | type) == "object" and (($b.dockerfile // "") | startswith("/")) then [$b.dockerfile]
-          else [] end;
-
+    local message
+    message=$(jq -r '
         .services // {} | to_entries[] as $svc |
         ($svc.value // {}) as $s |
         if ($s.privileged == true) then
@@ -469,10 +508,6 @@ compose_validate_model() {
           "service \($svc.key) requests cap_add"
         elif (($s.devices // []) | length) > 0 then
           "service \($svc.key) requests devices"
-        elif (build_contexts($s.build // null) | map(select(bad_path(.))) | length) > 0 then
-          "service \($svc.key) builds from a context outside SHELLM_WORKDIR"
-        elif (build_dockerfiles($s.build // null) | map(select(bad_path(.))) | length) > 0 then
-          "service \($svc.key) uses a Dockerfile outside SHELLM_WORKDIR"
         elif (($s.security_opt // []) | map(tostring) | any(. == "seccomp=unconfined" or . == "apparmor=unconfined")) then
           "service \($svc.key) disables container security policy"
         elif (($s.network_mode // "") | tostring) == "host" then
@@ -483,14 +518,40 @@ compose_validate_model() {
           "service \($svc.key) requests host ipc namespace"
         elif (($s.cgroup // "") | tostring) == "host" then
           "service \($svc.key) requests host cgroup namespace"
-        elif (($s.volumes // []) | map(select(.type == "bind") | select(bad_path(.source))) | length) > 0 then
-          "service \($svc.key) bind-mounts a host path outside SHELLM_WORKDIR"
         elif (($s.volumes // []) | map(select((.source // "") == "/var/run/docker.sock" or (.target // "") == "/var/run/docker.sock")) | length) > 0 then
           "service \($svc.key) tries to mount the Docker socket"
         else
           empty
         end
     ' "$config" | head -1)
+
+    # Every host path the model names, one NUL-terminated "service<TAB>kind<TAB>path"
+    # record each, checked in bash against the resolved workdir. A missing or
+    # non-string source is emitted as an empty path so it is rejected rather than
+    # skipped: the old jq predicate only flagged strings, so a null source passed.
+    if [[ -z "$message" ]]; then
+        # Collect first and check jq's status: a failure here must not read as
+        # "no paths to object to". The loop below runs in this shell (process
+        # substitution, not a pipe) so the verdict survives it.
+        local paths svc kind candidate
+        paths=$(mktemp)
+        if ! jq -j "$PATHS_PROGRAM" "$config" > "$paths" 2>/dev/null; then
+            rm -f "$paths" "$config" "$err"
+            printf 'compose model could not be inspected for host paths\n' >&2
+            return 65
+        fi
+        while IFS=$'\t' read -r -d '' svc kind candidate; do
+            path_contained "$candidate" "$SHELLM_BROKER_WORKDIR" && continue
+            case "$kind" in
+                context) message="service $svc builds from a context outside SHELLM_WORKDIR" ;;
+                dockerfile) message="service $svc uses a Dockerfile outside SHELLM_WORKDIR" ;;
+                *) message="service $svc bind-mounts a host path outside SHELLM_WORKDIR" ;;
+            esac
+            break
+        done < "$paths"
+        rm -f "$paths"
+    fi
+
     rm -f "$config" "$err"
     [[ -z "$message" ]] || { printf '%s\n' "$message" >&2; return 65; }
     return 0
