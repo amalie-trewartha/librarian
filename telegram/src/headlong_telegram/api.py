@@ -30,9 +30,24 @@ class Bot:
 
     def _call(self, method: str, **params: Any) -> Any:
         response = self._client.post(f"{self._base}/{method}", json=params)
-        payload = response.json()
+        # Anything that is not a well-formed Telegram envelope has to leave here
+        # as ApiError. The poll loop retries on (ApiError, httpx.HTTPError) and
+        # dies on everything else, so a 502 HTML page from an edge would
+        # otherwise raise JSONDecodeError straight through it. The response text
+        # is truncated and the URL left out because the URL carries the token.
+        try:
+            payload = response.json()
+        except ValueError:
+            raise ApiError(
+                f"{method}: non-JSON response (HTTP {response.status_code}): "
+                f"{response.text[:200]}"
+            ) from None
+        if not isinstance(payload, dict):
+            raise ApiError(f"{method}: unexpected response shape {type(payload).__name__}")
         if not payload.get("ok"):
             raise ApiError(f"{method}: {payload.get('description', response.text)}")
+        if "result" not in payload:
+            raise ApiError(f"{method}: ok response carried no result")
         return payload["result"]
 
     def get_me(self) -> dict[str, Any]:
