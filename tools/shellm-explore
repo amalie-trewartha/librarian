@@ -570,11 +570,14 @@ Please provide a detailed report explaining:
 
     local system_prompt="You are an analyst examining shellm run trees. A shellm run tree represents a hierarchy of LLM-powered bash execution sessions, where parent runs spawn child sub-runs to break down tasks. Provide clear, insightful analysis."
 
-    local msg_json
-    msg_json=$(jq -n --arg p "$user_prompt" '[{"role":"user","content":$p}]')
-
+    # The prompt carries every run's context in the tree, so it cannot travel
+    # through argv: Linux caps one argument at 128 KiB and macOS caps total
+    # argv at 1 MiB, and `jq --arg p` / `llm -M` both died with "Argument list
+    # too long" on a deep tree. llm reads the prompt from stdin, which also
+    # makes the jq call that built the message array unnecessary.
     local text
-    text=$(llm -m "$REPORT_MODEL" -t 4096 -s "$system_prompt" -M "$msg_json") \
+    text=$(printf '%s' "$user_prompt" \
+        | llm -m "$REPORT_MODEL" -t 4096 -s "$system_prompt") \
         || die "API request failed"
 
     if [[ -z "$text" ]]; then
