@@ -52,6 +52,16 @@ export HEADLONG_TELEGRAM_IDENTITY=audel  # default (legacy SHELLM_TELEGRAM_IDENT
 tools/headlong-telegram-bridge [ROOT]   # ROOT = serve root, default repo root
 ```
 
+The launcher loads `<checkout>/.env` and then `$HEADLONG_HOME/.env` (default
+`~/.headlong/.env`), the same two files `persona` and `llm` read, so the token
+can live in an env file instead of the calling shell. Anything already exported
+wins.
+
+That is for local dev only. On a box the bridge runs from its systemd unit,
+which does not use this launcher and reads the root-owned
+`/etc/shellm/telegram.env` instead — the bot token stays out of the agent's
+own environment, as described above.
+
 The identity must exist (`identity new audel`) with a running dispatcher
 (`thinkers start monolith responder`), and headlong-web must be serving the same root
 (default `http://127.0.0.1:8080`, override with `HEADLONG_WEB_URL`; legacy `SHELLM_WEB_URL` still honored).

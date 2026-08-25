@@ -30,6 +30,12 @@ export HEADLONG_SLACK_IDENTITY=audel  # default (legacy SHELLM_SLACK_IDENTITY st
 tools/headlong-slack-bridge [ROOT]      # ROOT = serve root, default repo root
 ```
 
+The launcher loads `<checkout>/.env` and then `$HEADLONG_HOME/.env` (default
+`~/.headlong/.env`), the same two files `persona` and `llm` read, so the
+tokens can live in an env file instead of the calling shell. Anything already
+exported wins, which is what keeps systemd's `EnvironmentFile` and `slack run`
+in charge where they are used.
+
 The identity must exist (`identity new audel`) with a running dispatcher
 (`thinkers start monolith responder`), and headlong-web must be serving the same root
 (default `http://127.0.0.1:8080`, override with `HEADLONG_WEB_URL`; legacy `SHELLM_WEB_URL` still honored).

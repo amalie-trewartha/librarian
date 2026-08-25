@@ -27,6 +27,26 @@ if [[ ! -d "$ROOT_DIR/telegram" ]]; then
     fi
 fi
 
+# Headlong's env files, loaded the way tools/persona and bin/llm load them:
+# what is already exported wins, so systemd's EnvironmentFile and `slack run`
+# still take precedence. Without this the bridge is the only entry point that
+# cannot see the checkout's .env, and a token that lives there reads as absent.
+_load_env() {
+    local envfile="$1"
+    [[ -f "$envfile" ]] || return 1
+    local key val
+    while IFS= read -r key; do
+        [[ -n "$key" ]] || continue
+        [[ -n "${!key+x}" ]] && continue
+        # shellcheck disable=SC1090  # sourcing the user's own env file
+        val=$(set -a; . "$envfile" 2>/dev/null; printf '%s' "${!key}") || continue
+        export "$key=$val"
+    done < <(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*=.*/\2/p' "$envfile")
+    return 0
+}
+_load_env "$ROOT_DIR/.env" || true
+_load_env "${HEADLONG_HOME:-${SHELLM_HOME:-$HOME/.headlong}}/.env" || true
+
 command -v uv >/dev/null 2>&1 || { echo "headlong-telegram-bridge: uv is required (https://docs.astral.sh/uv/)" >&2; exit 1; }
 
 # First arg is ROOT if it isn't a flag; all remaining args pass through.
