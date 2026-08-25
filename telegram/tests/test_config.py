@@ -27,6 +27,19 @@ def test_falls_back_to_the_default_symlink(tmp_path):
     assert config.load(tmp_path).identity == "ada"
 
 
+def test_follows_only_the_immediate_link(tmp_path):
+    """An identity dir may itself be a symlink; the default's own target is
+    the name `identity default` recorded, and the one persona reports."""
+    elsewhere = tmp_path / "elsewhere" / "current"
+    elsewhere.mkdir(parents=True)
+    (elsewhere / "info.txt").write_text("an identity\n")
+    identities = tmp_path / ".identities"
+    identities.mkdir()
+    (identities / "ada").symlink_to(elsewhere)
+    (identities / "default").symlink_to("ada")
+
+    assert config.load(tmp_path).identity == "ada"
+
 def test_env_var_wins_over_the_default_symlink(tmp_path, monkeypatch):
     _identity(tmp_path, "ada")
     _identity(tmp_path, "bo")

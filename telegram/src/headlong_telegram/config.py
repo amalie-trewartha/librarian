@@ -31,11 +31,16 @@ class Config:
 
 
 def _default_identity(serve_root: Path) -> str:
-    """The identity the `default` symlink points at, as `persona` resolves it."""
+    """The identity the `default` symlink points at, as `persona` resolves it.
+
+    The immediate link target, not the end of the chain: an identity dir may
+    itself be a symlink elsewhere, and its name here is the one `identity
+    default` recorded.
+    """
     for base in (".identities", "identities"):
         link = serve_root / base / "default"
         if link.is_symlink():
-            return link.resolve().name
+            return link.readlink().name
     raise SystemExit(
         "headlong-telegram-bridge: no identity given and no default set "
         f"under {serve_root} (looked for .identities/default and "
