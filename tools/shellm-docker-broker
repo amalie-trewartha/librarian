@@ -585,6 +585,13 @@ compose_validate_model() {
     # non-string source is emitted as an empty path so it is rejected rather than
     # skipped: the old jq predicate only flagged strings, so a null source passed.
     if [[ -z "$message" ]]; then
+        # Resolve the root as well as the candidates. start_broker realpaths the
+        # workdir before exporting it, but a check whose whole job is to distrust
+        # a spelling must not depend on its caller having done that: where /tmp
+        # or /var is itself a symlink (macOS), an unresolved root makes every
+        # path inside the workdir compare as outside it.
+        local root
+        root=$(realpath "$SHELLM_BROKER_WORKDIR" 2>/dev/null) || root="$SHELLM_BROKER_WORKDIR"
         # Collect first and check jq's status: a failure here must not read as
         # "no paths to object to". The loop below runs in this shell (process
         # substitution, not a pipe) so the verdict survives it.
@@ -597,7 +604,7 @@ compose_validate_model() {
             return 65
         fi
         while IFS=$'\t' read -r -d '' svc kind candidate; do
-            path_contained "$candidate" "$SHELLM_BROKER_WORKDIR" && continue
+            path_contained "$candidate" "$root" && continue
             case "$kind" in
                 context) message="service $svc builds from a context outside SHELLM_WORKDIR" ;;
                 dockerfile) message="service $svc uses a Dockerfile outside SHELLM_WORKDIR" ;;

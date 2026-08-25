@@ -122,6 +122,22 @@ check "env_file outside is denied"              reject \
 check "env_file inside the workdir is allowed"  accept \
   "$(printf '{"services":{"s":{"env_file":[{"path":"%s/app.env","required":true}]}}}' "$SHELLM_BROKER_WORKDIR")"
 
+# The workdir's own spelling can be a symlink too: macOS hands mktemp a path
+# under /var, which is a symlink to /private/var, and CI caught this when every
+# accept case turned into a rejection there. Same rule as the paths: resolve it.
+symlink_root_case() {
+    local out rc
+    printf '%s' "$(bind "$WORK/alias/sub")" > "$CFG"
+    out=$(SHELLM_BROKER_WORKDIR="$WORK/alias" compose_validate_model '{}' "$WORK/alias" up 2>&1)
+    rc=$?
+    if [[ "$rc" -eq 0 ]]; then
+        ok "workdir spelled through a symlink still accepts what is inside it"
+    else
+        bad "workdir spelled through a symlink still accepts what is inside it" "rc=$rc${out:+ ($out)}"
+    fi
+}
+symlink_root_case
+
 # --- the validator is live -----------------------------------------------
 check "bind on /etc is denied"                  reject "$(bind /etc)"
 check "the Docker socket is denied"             reject "$(bind /var/run/docker.sock)"
