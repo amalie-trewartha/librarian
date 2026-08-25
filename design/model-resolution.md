@@ -15,7 +15,10 @@ environment variables that feed that decision come from. Two layers:
 There is no hard provider dependency anywhere: `bin/llm` picks the
 provider from the model name (`claude-*` → Anthropic, `vendor/model` →
 OpenRouter, `gpt-*`/`o*` → OpenAI, `gemini-*` → Gemini) and each provider
-needs only its own `<PROVIDER>_API_KEY`. Hardcoded `claude-*` names below
+needs only its own `<PROVIDER>_API_KEY`. A model name that implies no
+provider — a local OpenAI-compatible alias, say — is reached by setting
+`LLM_PROVIDER` or passing `--provider`; an env value that contradicts a
+name the harness *can* classify is still honored, but says so on stderr. Hardcoded `claude-*` names below
 are last-resort defaults, reached only when nothing is configured.
 
 ## The knobs
@@ -27,6 +30,7 @@ are last-resort defaults, reached only when nothing is configured.
 | `THINK_MODEL` | Per-thinker override (also settable per identity via `info.txt think_model=`) |
 | `SHELLM_SUMMARY_MODEL` | Run-summary override; beats `SHELLM_FAST_MODEL` |
 | `LLM_MODEL` | `bin/llm`'s own knob; equivalent to `-m` |
+| `LLM_PROVIDER` | `bin/llm`'s provider override; equivalent to `--provider`. Needed when the model name implies no provider. A value that disagrees with what the name implies is honored, but warns on stderr |
 
 ## Resolution chains
 

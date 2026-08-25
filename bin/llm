@@ -202,6 +202,10 @@ Environment:
                            opencode-go/* bills the Go subscription, opencode/*
                            bills Zen. Keys: `opencode auth login`
   LLM_API_URL              Override provider API URL
+  LLM_PROVIDER             Provider to use when the model name implies none
+                           (same names as --provider); --provider takes
+                           precedence, and a value that disagrees with the
+                           name warns on stderr
   LLM_RETRIES              Retries for transient API failures (default: 2;
                            0 disables). Never retries after partial output.
   LLM_RETRY_BACKOFF        Backoff base seconds between retries (default: 1)
