@@ -78,29 +78,7 @@ if [[ -n "$trigger_step_id" ]]; then
     # a retry is safer than a dropped message.
     claim_cutoff=$(date -u -v-"${CLAIM_TTL}"S +%Y-%m-%dT%H:%M:%S 2>/dev/null \
         || date -u -d "${CLAIM_TTL} seconds ago" +%Y-%m-%dT%H:%M:%S 2>/dev/null) || claim_cutoff=""
-    already=$(traj cat "${ROOT_TRAJ_ID:-$TRAJ_ID}" --raw 2>/dev/null \
-        | jq -Rrn --arg me "$IDENTITY_NAME" --arg them "$msg_from" --arg t "$trigger_step_id" \
-              --arg cutoff "$claim_cutoff" '
-            [inputs | fromjson? // empty] as $steps
-            | ([$steps | to_entries[] | select(.value.step_id == $t)] | last) as $in
-            | [$steps[] | select(.type == "message" and .from == $me
-                                 and (.reply_to // "") == $t)]
-              + [$steps[] | select(.type == "observation"
-                                   and (.trigger_step // "") == $t
-                                   and ((.decision // "") == "replied"
-                                        or (.decision // "") == "no-reply"))]
-              + [$steps[] | select(.type == "reply_claim"
-                                   and (.trigger_step // "") == $t
-                                   and $cutoff != ""
-                                   and (.ts // "") > $cutoff)]
-              + (if $in == null then []
-                 else [$steps[($in.key + 1):][]
-                       | select(.type == "message" and .from == $me and .to == $them
-                                and ((.reply_to // "") == "" or (.reply_to // "") == $t))]
-                 end)
-            | if length == 0 then empty
-              else (.[0].step_id // "handled") end' 2>/dev/null \
-        | head -n 1) || already=""
+    already=$(_responder_already_handled "$trigger_step_id" "$msg_from" "$claim_cutoff") || already=""
     if [[ -n "$already" ]]; then
         printf '  already handled step %s (reply/decision/live claim) — skipping\n' "$trigger_step_id" >&2
         exit 0
