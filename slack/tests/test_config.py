@@ -28,8 +28,14 @@ def test_falls_back_to_the_default_symlink(tmp_path):
 
 
 def test_follows_only_the_immediate_link(tmp_path):
-    """An identity dir may itself be a symlink; the default's own target is
-    the name `identity default` recorded, and the one persona reports."""
+    """The default's own target is the name `identity default` recorded, and
+    the one persona reports — `resolve()` would walk past it to the end of the
+    chain and return a name no one configured.
+
+    The chained identity here is the fixture that tells the two apart, not an
+    endorsement: a symlinked identity dir is invisible to the web scan, so its
+    messages 404 however the name was chosen (#66).
+    """
     elsewhere = tmp_path / "elsewhere" / "current"
     elsewhere.mkdir(parents=True)
     (elsewhere / "info.txt").write_text("an identity\n")
