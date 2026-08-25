@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from headlong_telegram import inbound as inbound_mod
+from headlong_telegram.api import Bot
 from headlong_telegram.allowlist import Allowlist
 from headlong_telegram.config import Config
 from headlong_telegram.inbound import Inbound
@@ -164,3 +165,44 @@ def test_same_text_new_msg_id_is_delivered(bridge):
     ib._handle(_dm_with_msg_id(7, "ok", msg_id=503))
     ib._handle(_dm_with_msg_id(7, "ok", msg_id=504))
     assert len(posts) == 2
+
+
+def test_poll_loop_survives_a_malformed_api_response(tmp_path, monkeypatch):
+    """A non-JSON reply must reach the loop's retry branch, not end the loop.
+
+    Driven through a real Bot rather than FakeBot: the failure lives in how
+    Bot._call surfaces the error, which a fake bot cannot reproduce.
+    """
+    identity_dir = tmp_path / ".identities" / "audel"
+    identity_dir.mkdir(parents=True)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    cfg = Config(
+        serve_root=tmp_path,
+        identity="audel",
+        identity_dir=identity_dir,
+        bot_token="t",
+        admin_id=ADMIN,
+        web_url="http://web.test",
+        state_dir=state_dir,
+    )
+
+    bot = Bot("t")
+    bot._client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(502, text="<html>502 Bad Gateway</html>")
+        )
+    )
+
+    slept = []
+    monkeypatch.setattr(inbound_mod.time, "sleep", lambda s: slept.append(s))
+
+    ib = Inbound(cfg, bot, Allowlist(state_dir / "allowlist.json"))
+    calls = {"n": 0}
+
+    def should_stop():
+        calls["n"] += 1
+        return calls["n"] > 1  # one failing poll, then stop
+
+    ib.run(should_stop)  # must return, not raise
+    assert slept == [5]
