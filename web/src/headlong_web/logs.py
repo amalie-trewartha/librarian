@@ -41,13 +41,46 @@ def tail_log(log_path: Path, tail_bytes: int) -> dict[str, Any]:
     }
 
 
+def _tail_lines(log_path: Path, max_lines: int, chunk_bytes: int = 1 << 16) -> list[str]:
+    """The newest max_lines non-blank lines, read backward from the end.
+
+    dispatcher.log is never rotated and the endpoint above this is polled every
+    couple of seconds, so the whole-file read this replaces cost 31s and ~1GB of
+    allocation on a 190MB log to return the same 2000 events. tail_log solves
+    the same problem for raw log tails; this one counts lines rather than bytes,
+    because the caller's cap is in events.
+    """
+    with log_path.open("rb") as fh:
+        fh.seek(0, 2)
+        pos = fh.tell()
+        data = b""
+        while pos > 0:
+            step = min(chunk_bytes, pos)
+            pos -= step
+            fh.seek(pos)
+            data = fh.read(step) + data
+            # Only whole lines count, so ignore anything before the first
+            # newline while more of the file remains.
+            complete = data.split(b"\n", 1)[-1] if pos > 0 else data
+            if sum(1 for line in complete.splitlines() if line.strip()) >= max_lines:
+                break
+    text = data.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    if pos > 0 and lines:
+        lines = lines[1:]  # drop the (likely partial) first line
+    return [line for line in lines if line.strip()][-max_lines:]
+
+
 def parse_dispatch_log(identity_dir: Path, max_events: int = 2000) -> list[dict[str, Any]]:
-    """Parse dispatcher.log into structured events (newest last)."""
+    """Parse dispatcher.log into structured events (newest last).
+
+    Only the tail is read: max_events bounds the work, not just the answer.
+    """
     log_path = identity_dir / "run" / "logs" / "dispatcher.log"
     if not log_path.is_file():
         return []
     events: list[dict[str, Any]] = []
-    for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in _tail_lines(log_path, max_events):
         stripped = line.strip()
         if not stripped:
             continue
