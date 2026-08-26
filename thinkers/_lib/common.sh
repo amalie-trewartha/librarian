@@ -176,7 +176,16 @@ _RESPONDER_TRIGGER_MISSING=$'\x01trigger-not-in-window'
 # monolith's work probe off traj cat, and the cost is the same: 7.4s over a
 # 308MB trajectory against 0.08s for the tail.
 _responder_already_handled() {
-    local trigger="$1" them="$2" cutoff="$3" out
+    local trigger="$1" them="$2" cutoff="$3" out tf
+    tf=$(traj path "${ROOT_TRAJ_ID:-$TRAJ_ID}" 2>/dev/null) || tf=""
+    if [[ -z "$tf" || ! -f "$tf" ]]; then
+        # No bounded read available: _root_traj_raw_tail would itself degrade
+        # to a full traj cat, and a trigger missing from that stream would
+        # trigger a second one. One full scan, not two.
+        traj cat "${ROOT_TRAJ_ID:-$TRAJ_ID}" --raw 2>/dev/null \
+            | _responder_scan "$trigger" "$them" "$cutoff"
+        return
+    fi
     out=$(_root_traj_raw_tail | _responder_scan "$trigger" "$them" "$cutoff" --require-trigger)
     if [[ "$out" == "$_RESPONDER_TRIGGER_MISSING" ]]; then
         traj cat "${ROOT_TRAJ_ID:-$TRAJ_ID}" --raw 2>/dev/null \

@@ -37,9 +37,6 @@ TRIGGER=trig-1
 FRESH=$(date -u +%Y-%m-%dT%H:%M:%S)
 STALE=2000-01-01T00:00:00
 
-# step <type> <json-fields...> — one trajectory line
-step() { printf '%s\n' "$1"; }
-
 # build <file> <filler-lines> <extra-json-lines...> — a trajectory whose
 # trigger sits after <filler-lines> junk steps.
 build() {
@@ -65,13 +62,19 @@ verdict() {
         export RESPONDER_TRAJ_FILE="$d/trajs/aaaaaaaa-t/trajectory.jsonl"
         # shellcheck disable=SC1090  # the library under test
         source "$REPO/thinkers/_lib/common.sh"
-        _responder_already_handled "$TRIGGER" "$THEM" "$(date -u -d '180 seconds ago' +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -v-180S +%Y-%m-%dT%H:%M:%S)"
+        _responder_already_handled "$TRIGGER" "$THEM" "$(date -u -v-180S +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -d '180 seconds ago' +%Y-%m-%dT%H:%M:%S)"
     )
 }
 
+# check <name> <want> <got> — <want> is the exact step id expected (or
+# "unhandled" for empty). Any non-empty comparison would let the sentinel
+# escape _responder_already_handled and read as handled, which would skip
+# every reply while the suite stayed green.
 check() {
     local name="$1" want="$2" got="$3"
-    if [[ "$want" == handled && -n "$got" ]] || [[ "$want" == unhandled && -z "$got" ]]; then
+    if [[ "$got" == *$'\x01'* ]]; then
+        bad "$name" "sentinel leaked: '$got'"
+    elif [[ "$want" == unhandled && -z "$got" ]] || [[ "$want" != unhandled && "$got" == "$want" ]]; then
         ok "$name"
     else
         bad "$name" "wanted $want, got '${got:-<empty>}'"
@@ -80,19 +83,19 @@ check() {
 
 # --- the six verdicts, which the bounded read must preserve ---------------
 build "$WORK/a.jsonl" 3 "{\"step_id\":\"r1\",\"type\":\"message\",\"from\":\"$ME\",\"to\":\"$THEM\",\"reply_to\":\"$TRIGGER\",\"content\":\"hi\"}"
-check "a stamped reply counts as handled"        handled   "$(verdict "$WORK/a.jsonl")"
+check "a stamped reply counts as handled"        r1        "$(verdict "$WORK/a.jsonl")"
 
 build "$WORK/b.jsonl" 3 "{\"step_id\":\"o1\",\"type\":\"observation\",\"trigger_step\":\"$TRIGGER\",\"decision\":\"no-reply\"}"
-check "a no-reply decision sticks"               handled   "$(verdict "$WORK/b.jsonl")"
+check "a no-reply decision sticks"               o1        "$(verdict "$WORK/b.jsonl")"
 
 build "$WORK/c.jsonl" 3 "{\"step_id\":\"c1\",\"type\":\"reply_claim\",\"trigger_step\":\"$TRIGGER\",\"ts\":\"$FRESH\"}"
-check "a fresh claim counts as handled"          handled   "$(verdict "$WORK/c.jsonl")"
+check "a fresh claim counts as handled"          c1        "$(verdict "$WORK/c.jsonl")"
 
 build "$WORK/d.jsonl" 3 "{\"step_id\":\"c2\",\"type\":\"reply_claim\",\"trigger_step\":\"$TRIGGER\",\"ts\":\"$STALE\"}"
 check "a stale claim does NOT count"             unhandled "$(verdict "$WORK/d.jsonl")"
 
 build "$WORK/e.jsonl" 3 "{\"step_id\":\"m1\",\"type\":\"message\",\"from\":\"$ME\",\"to\":\"$THEM\",\"content\":\"unstamped answer\"}"
-check "an unstamped later message counts"        handled   "$(verdict "$WORK/e.jsonl")"
+check "an unstamped later message counts"        m1        "$(verdict "$WORK/e.jsonl")"
 
 build "$WORK/f.jsonl" 3
 check "nothing about the trigger is unhandled"   unhandled "$(verdict "$WORK/f.jsonl")"
@@ -112,7 +115,8 @@ cat > "$WORK/shim/traj" <<SHIM
 #!/usr/bin/env bash
 printf '%s\n' "\$1" >> "$WORK/traj-calls"
 case "\$1" in
-    path) printf '%s\n' "\$RESPONDER_TRAJ_FILE" ;;
+    path) if [ -n "\${RESPONDER_SHIM_NO_PATH:-}" ]; then exit 1
+          else printf '%s\n' "\$RESPONDER_TRAJ_FILE"; fi ;;
     cat)  cat -- "\$RESPONDER_TRAJ_FILE" ;;
 esac
 SHIM
@@ -123,7 +127,7 @@ chmod +x "$WORK/shim/traj"
 build "$WORK/h.jsonl" 20 "{\"step_id\":\"r1\",\"type\":\"message\",\"from\":\"$ME\",\"to\":\"$THEM\",\"reply_to\":\"$TRIGGER\",\"content\":\"hi\"}"
 : > "$WORK/traj-calls"
 got=$(PATH="$WORK/shim:$PATH" verdict "$WORK/h.jsonl" 50)
-check "handled is still found inside the window" handled "$got"
+check "handled is still found inside the window" r1 "$got"
 if grep -qx cat "$WORK/traj-calls"; then
     bad "no full scan when the trigger is in the window" "traj cat was called"
 else
@@ -139,11 +143,23 @@ for i in $(seq 1 100); do
 done
 : > "$WORK/traj-calls"
 got=$(PATH="$WORK/shim:$PATH" verdict "$WORK/i.jsonl" 50)
-check "an old handled trigger is still found"    handled "$got"
+check "an old handled trigger is still found"    r1 "$got"
 if grep -qx cat "$WORK/traj-calls"; then
     ok "the full scan runs when the trigger is out of the window"
 else
     bad "the full scan runs when the trigger is out of the window" "traj cat was never called"
+fi
+
+# No resolvable file at all: the check must degrade to exactly ONE full scan,
+# not a --require-trigger scan whose sentinel buys a second identical one.
+: > "$WORK/traj-calls"
+got=$(RESPONDER_SHIM_NO_PATH=1 PATH="$WORK/shim:$PATH" verdict "$WORK/a.jsonl")
+check "degraded path still finds the verdict"    r1 "$got"
+cats=$(grep -cx cat "$WORK/traj-calls" || true)
+if [[ "$cats" == 1 ]]; then
+    ok "the degraded path runs exactly one full scan"
+else
+    bad "the degraded path runs exactly one full scan" "traj cat ran $cats times"
 fi
 
 echo
