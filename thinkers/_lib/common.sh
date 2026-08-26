@@ -50,6 +50,13 @@ _require_env() {
     # late to influence the -m flag), so the keys must be filled in here.
     _load_env_defaults "$IDENTITY_DIR/.env" || true
     _load_env_defaults ".env" || true
+    # The framework state home, where headlong-init writes the API key and
+    # SHELLM_MODEL. Resolved without SHELLM_HOME on purpose, unlike bin/llm and
+    # bin/shellm: both launchers export SHELLM_HOME as <identity>/.shellm
+    # (bin/thinkers, web control.py), so honouring it here would read the
+    # identity directory and never the file holding the key. ~/.shellm stays
+    # after it for a pre-rename install.
+    _load_env_defaults "${HEADLONG_HOME:-$HOME/.headlong}/.env" || true
     _load_env_defaults "$HOME/.shellm/.env" || true
 
     mkdir -p "$MEM_DIR" "$SKILLS_DIR" "$SKILLS_KERNEL_DIR" "$TRAJ_DIR"
