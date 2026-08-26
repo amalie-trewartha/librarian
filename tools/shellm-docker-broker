@@ -147,10 +147,21 @@ resolve_for_containment() {
 # config` leaves `..` in an ABSOLUTE bind source unnormalized (verified against
 # compose 2.40.3), and it never resolves symlinks, so a purely textual prefix
 # test blesses a string the daemon then resolves somewhere else entirely.
+#
+# A relative candidate (compose leaves a cache_to dest relative where it
+# resolves every other path field) is taken against `base`, the project
+# directory, which safe_cwd has already confined to the workdir; with no base
+# it is rejected. The `..` test runs after the join, so a relative climb is
+# refused the same way an absolute one is.
 path_contained() {
     local path="$1"
     local root="$2"
-    [[ "$path" == /* ]] || return 1
+    local base="${3:-}"
+    [[ -n "$path" ]] || return 1   # an empty candidate must not join to base
+    if [[ "$path" != /* ]]; then
+        [[ -n "$base" ]] || return 1
+        path="$base/$path"
+    fi
     case "/$path/" in */../*) return 1 ;; esac
     local resolved
     resolved=$(resolve_for_containment "$path") || return 1
@@ -491,8 +502,10 @@ handle_version() {
 #   - build.env_file: not in the 2.40.3 schema; compose rejects the model.
 #
 # A value is skipped only when it cannot be a host path. additional_contexts
-# shares its map with `docker-image://`, `service:`, `oci-layout://` and git or
-# http(s)/ssh URLs, and those are the only values passed over: everything else,
+# shares its map with `docker-image://`, `service:` and git or http(s)/ssh
+# URLs, and those are the only values passed over. An `oci-layout://` context
+# is NOT one of them: it names a local OCI layout directory on the host, so
+# the scheme is stripped and the remainder checked. Everything else,
 # absolute or not, goes to path_contained to accept or reject. Compose 2.40.3
 # resolves a relative additional context against the project directory before
 # this sees it, but a filter that drops what it does not recognise is the wrong
@@ -512,19 +525,21 @@ read -r -d '' PATHS_PROGRAM <<'JQ' || true
               if ($b | type) == "object" and (($b.dockerfile // "") | startswith("/")) then [$b.dockerfile]
               else [] end;
             def non_path($v):
-              ["docker-image://", "oci-layout://", "service:", "git://",
+              ["docker-image://", "service:", "git://",
                "http://", "https://", "ssh://"] | any(. as $p | $v | startswith($p));
             def extra_contexts($b):
               if ($b | type) == "object" and (($b.additional_contexts // null) | type) == "object"
               then [$b.additional_contexts[]
                     | if type == "string" then . else "" end
-                    | select(non_path(.) | not)]
+                    | select(non_path(.) | not)
+                    | sub("^oci-layout://"; "")]
               else [] end;
             def ssh_keys($b):
               if ($b | type) != "object" then []
               else [(($b.ssh // []) | if type == "object" then [.[]] else . end)[]
                     | if type != "string" then ""
                       elif index("=") then sub("^[^=]*="; "")
+                      elif startswith("/") then .
                       else empty end
                     | select(. != "")]
               end;
@@ -569,9 +584,16 @@ JQ
 # path fields null, so they are simply not in the model (checked against compose
 # 2.40.3; --no-env-resolution does not preserve them either). --no-interpolate
 # does keep them, with relative paths already resolved against the project
-# directory, so they come from a second render of the same model. The cost is
-# that a path spelled with an unexpanded ${VAR} stays literal there and is
-# rejected as non-absolute, which is the safe direction.
+# directory, so they come from a second render of the same model. A path
+# spelled with an unexpanded ${VAR} stays literal here while the default
+# render interpolates it and reads the real target, so
+# compose_containment_message rejects any variable in these records outright —
+# an absolute spelling like /workdir/${FILE} would otherwise resolve as
+# contained and then be read from anywhere at all.
+#
+# Re-verified against compose 5.2.0: --no-interpolate does not schema-reject a
+# legitimate ${VAR} in a typed field (mem_limit, deploy.replicas), and env_file
+# paths still survive this render, resolved absolute.
 read -r -d '' RAW_PATHS_PROGRAM <<'JQ' || true
 
             def emit($name; $kind; $p):
@@ -587,20 +609,40 @@ JQ
 # can carry the contents of a host file: point env_file at any file on the host
 # and an unterminated quote comes back as `unterminated quoted value "<the
 # value>"` (compose 2.40.3, verified). The requester is not trusted with that,
-# so the reason is logged host-side and the caller gets a fixed message.
+# so the caller gets a fixed message — and the log gets only a withheld notice
+# by default, because the same words would otherwise persist on disk. An
+# operator debugging a render sets HEADLONG_BROKER_LOG_COMPOSE_STDERR=1 to log
+# the raw text.
 compose_render_failed() {
     local err="$1" message="$2"
-    log_msg "compose render failed: $(tr '\n' ' ' < "$err" | cut -c1-500)"
+    if [[ -n "${HEADLONG_BROKER_LOG_COMPOSE_STDERR:-}" ]]; then
+        log_msg "compose render failed: $(tr '\n' ' ' < "$err" | cut -c1-500)"
+    else
+        log_msg "compose render failed ($(wc -c < "$err" | tr -d ' ') bytes of compose stderr withheld; set HEADLONG_BROKER_LOG_COMPOSE_STDERR=1 to log it)"
+    fi
     printf '%s\n' "$message" >&2
 }
 
 # The first path in `paths` that is not inside `root`, as the message to reject
-# the request with. Prints nothing when every path is contained.
+# the request with. Prints nothing when every path is contained. Relative
+# candidates resolve against `base`, the project directory.
 compose_containment_message() {
-    local paths="$1" root="$2"
+    local paths="$1" root="$2" base="$3"
     local svc kind candidate
     while IFS=$'\t' read -r -d '' svc kind candidate; do
-        path_contained "$candidate" "$root" && continue
+        # The uninterpolated render keeps ${VAR} literal. An absolute prefix
+        # under the workdir with a variable tail passes containment here and is
+        # then interpolated to anywhere at all before the file is read, because
+        # the path field is gone from the render that reads it.
+        case "$kind" in
+            env-file|label-file)
+                case "$candidate" in
+                    *'$'*)
+                        printf 'service %s names a %s path with an uninterpolated variable\n' "$svc" "$kind"
+                        return 0 ;;
+                esac ;;
+        esac
+        path_contained "$candidate" "$root" "$base" && continue
         case "$kind" in
             context) printf 'service %s builds from a context outside SHELLM_WORKDIR\n' "$svc" ;;
             dockerfile) printf 'service %s uses a Dockerfile outside SHELLM_WORKDIR\n' "$svc" ;;
@@ -635,6 +677,14 @@ compose_validate_model() {
     # /var is itself a symlink (macOS), an unresolved root makes every path
     # inside the workdir compare as outside it.
     root=$(realpath "$SHELLM_BROKER_WORKDIR" 2>/dev/null) || root="$SHELLM_BROKER_WORKDIR"
+    # This function is now the single containment gate, and path_under with an
+    # empty root contains every absolute path. An unconfigured workdir must
+    # fail loudly, not silently pass everything.
+    if [[ -z "$root" || "$root" == / ]]; then
+        rm -f "$config" "$config_raw" "$paths" "$err"
+        printf 'broker workdir is not configured\n' >&2
+        return 65
+    fi
 
     # The uninterpolated render runs FIRST because it is the only one that still
     # names the env_file and label_file paths, and the render below READS those
@@ -657,7 +707,7 @@ compose_validate_model() {
         printf 'compose model could not be inspected for host paths\n' >&2
         return 65
     fi
-    message=$(compose_containment_message "$paths" "$root")
+    message=$(compose_containment_message "$paths" "$root" "$cwd")
     if [[ -n "$message" ]]; then
         rm -f "$config" "$config_raw" "$paths" "$err"
         printf '%s\n' "$message" >&2
@@ -712,7 +762,7 @@ compose_validate_model() {
             printf 'compose model could not be inspected for host paths\n' >&2
             return 65
         fi
-        message=$(compose_containment_message "$paths" "$root")
+        message=$(compose_containment_message "$paths" "$root" "$cwd")
     fi
 
     rm -f "$config" "$config_raw" "$paths" "$err"
@@ -1142,4 +1192,7 @@ main() {
     esac
 }
 
-main "$@"
+# Guarded so the tests can source this file for its functions.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

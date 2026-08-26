@@ -49,9 +49,8 @@ ln -s "$WORK/work-secret" "$SHELLM_BROKER_WORKDIR/escape"   # symlink out, from 
 ln -s "$SHELLM_BROKER_WORKDIR" "$WORK/alias"                # another spelling of the workdir
 ln -s "$WORK/never-created" "$SHELLM_BROKER_WORKDIR/dangle"  # points out, target absent
 
-# Source the broker for its functions: drop the trailing `main "$@"`, which
-# would otherwise print usage and exit.
-sed '$ d' "$REPO/tools/shellm-docker-broker" > "$WORK/broker.lib"
+# The broker's entry point is guarded by a BASH_SOURCE test, so sourcing it
+# yields its functions without running main.
 
 # `docker compose ... config --format json` returns whatever the case wrote.
 # The validator renders the model TWICE and the two renders do not carry the
@@ -89,15 +88,16 @@ export CFG="$WORK/cfg.json"
 export CFG_RAW="$WORK/cfg_raw.json"
 export CALLS="$WORK/calls"
 
-# shellcheck disable=SC1090  # generated copy of the broker under test
-source "$WORK/broker.lib"
+# shellcheck disable=SC1090  # the broker under test
+source "$REPO/tools/shellm-docker-broker"
 set +e   # the broker sets -e; validation returning 65 is an expected outcome
 
 # check <name> accept|reject <compose-config-json> [request-json]
 #
-# A rejection has to be the containment verdict, not any nonzero exit: rc 65
-# with the "outside SHELLM_WORKDIR" message. Asserting only "nonzero" would let
-# a case pass because jq errored or the model failed to parse.
+# A rejection has to be the validator's verdict, not any nonzero exit, so rc
+# is pinned to 65 — rc 65 also covers the non-containment rejections
+# (privileged, an unparseable model, a failed render), which is why the cases
+# that are ABOUT the containment message assert on LAST_OUT as well.
 #
 # The uninterpolated render defaults to an empty model, because the fields it
 # alone carries are absent from the default one. A case about those fields sets
@@ -131,6 +131,10 @@ context() { printf '{"services":{"s":{"build":{"context":"%s"}}}}' "$1"; }
 check "bind inside the workdir is allowed"      accept "$(bind "$SHELLM_BROKER_WORKDIR/sub")"
 check "bind on the workdir itself is allowed"   accept "$(bind "$SHELLM_BROKER_WORKDIR")"
 check "bind on a sibling prefix path is denied" reject "$(bind "$WORK/work-secret")"
+case "$LAST_OUT" in
+    *"outside SHELLM_WORKDIR"*) ok "and the denial names the boundary" ;;
+    *) bad "and the denial names the boundary" "got: $LAST_OUT" ;;
+esac
 check "build context on a sibling is denied"    reject "$(context "$WORK/work-secret")"
 
 check "bind climbing out with .. is denied"      reject "$(bind "$SHELLM_BROKER_WORKDIR/../work-secret")"
@@ -175,12 +179,27 @@ RAW='{"services":{"s":{"label_file":["/etc/hostname"]}}}'
 check "label_file outside is denied"            reject '{"services":{"s":{}}}'
 RAW="$(printf '{"services":{"s":{"label_file":["%s/app.labels"]}}}' "$SHELLM_BROKER_WORKDIR")"
 check "label_file inside the workdir is allowed" accept '{"services":{"s":{}}}'
+# An absolute env_file with an uninterpolated ${VAR} tail resolves as
+# contained here, then the default render interpolates it to anywhere at all
+# and reads the target — the path field is gone from that render, so this
+# check is the only gate. It must lose before the default render runs.
+RAW="$(printf '{"services":{"s":{"env_file":[{"path":"%s/${FILE}","required":true}]}}}' "$SHELLM_BROKER_WORKDIR")"
+check "env_file with an uninterpolated variable is denied" reject '{"services":{"s":{}}}'
+if grep -q default "$CALLS"; then
+    bad "the variable path is never read: the default render is skipped" "calls: $(tr '\n' ' ' < "$CALLS")"
+else
+    ok "the variable path is never read: the default render is skipped"
+fi
 
 # --- the surfaces that survive the default render ------------------------
 check "a relative additional context is denied" reject \
   "$(printf '{"services":{"s":{"build":{"context":"%s","additional_contexts":{"extra":"../work-secret"}}}}}' "$SHELLM_BROKER_WORKDIR")"
-check "an oci-layout additional context is allowed" accept \
-  "$(printf '{"services":{"s":{"build":{"context":"%s","additional_contexts":{"l":"oci-layout:///x"}}}}}' "$SHELLM_BROKER_WORKDIR")"
+# oci-layout:// names a local OCI layout directory on the host, so it is a
+# path with a scheme in front, not a non-path like docker-image://.
+check "an oci-layout context outside is denied" reject \
+  "$(printf '{"services":{"s":{"build":{"context":"%s","additional_contexts":{"l":"oci-layout://%s"}}}}}' "$SHELLM_BROKER_WORKDIR" "$WORK/work-secret")"
+check "an oci-layout context inside the workdir is allowed" accept \
+  "$(printf '{"services":{"s":{"build":{"context":"%s","additional_contexts":{"l":"oci-layout://%s/layout"}}}}}' "$SHELLM_BROKER_WORKDIR" "$SHELLM_BROKER_WORKDIR")"
 check "a local build cache source outside is denied" reject \
   "$(printf '{"services":{"s":{"build":{"context":"%s","cache_from":["type=local,src=/etc"]}}}}' "$SHELLM_BROKER_WORKDIR")"
 check "a local build cache dest outside is denied" reject \
@@ -188,17 +207,24 @@ check "a local build cache dest outside is denied" reject \
 check "a build cache inside the workdir is allowed" accept \
   "$(printf '{"services":{"s":{"build":{"context":"%s","cache_from":["type=local,src=%s/cache"]}}}}' "$SHELLM_BROKER_WORKDIR" "$SHELLM_BROKER_WORKDIR")"
 # Compose leaves a cache_to dest relative where it resolves every other path
-# field to absolute, so a dest inside the workdir is rejected for being
-# non-absolute. Fail-closed, but it is a false rejection, not a clean pass, and
-# it is pinned here so it is a known cost rather than a surprise.
-check "a relative cache dest is denied too"     reject \
+# field to absolute, so a relative candidate resolves against the project
+# directory (itself confined to the workdir) and gets the same check; a
+# relative climb out is refused by the `..` test after the join.
+check "a relative cache dest inside is allowed" accept \
   "$(printf '{"services":{"s":{"build":{"context":"%s","cache_to":["type=local,dest=./cacheout"]}}}}' "$SHELLM_BROKER_WORKDIR")"
+check "a relative cache dest climbing out is denied" reject \
+  "$(printf '{"services":{"s":{"build":{"context":"%s","cache_to":["type=local,dest=../work-secret"]}}}}' "$SHELLM_BROKER_WORKDIR")"
 check "a registry build cache is allowed"       accept \
   "$(printf '{"services":{"s":{"build":{"context":"%s","cache_from":["type=registry,ref=example.com/img:cache","alpine:latest"]}}}}' "$SHELLM_BROKER_WORKDIR")"
 check "an ssh key outside is denied"            reject \
   "$(printf '{"services":{"s":{"build":{"context":"%s","ssh":["key=/root/.ssh/id_rsa"]}}}}' "$SHELLM_BROKER_WORKDIR")"
 check "the default ssh agent is allowed"        accept \
   "$(printf '{"services":{"s":{"build":{"context":"%s","ssh":["default"]}}}}' "$SHELLM_BROKER_WORKDIR")"
+# compose 2.40.3 normalizes build.ssh to id=source strings, but the map form
+# is in the schema, and a bare absolute value in it names a host file; the
+# extraction must not drop it for lacking an `=`.
+check "a map-form ssh key outside is denied"    reject \
+  "$(printf '{"services":{"s":{"build":{"context":"%s","ssh":{"mykey":"/root/.ssh/id_rsa"}}}}}' "$SHELLM_BROKER_WORKDIR")"
 check "a develop.watch path outside is denied"  reject \
   "$(printf '{"services":{"s":{"develop":{"watch":[{"action":"sync","path":"%s","target":"/app"}]}}}}' "$WORK/work-secret")"
 check "a develop.watch path inside is allowed"  accept \
@@ -225,6 +251,23 @@ symlink_root_case() {
     fi
 }
 symlink_root_case
+
+# With no workdir at all the resolved root is empty, and path_under against an
+# empty root contains every absolute path. This function is the single gate,
+# so misconfiguration has to fail loudly, not accept everything.
+degenerate_root_case() {
+    local out rc
+    printf '%s' "$(bind /etc)" > "$CFG"
+    printf '{}' > "$CFG_RAW"
+    out=$(SHELLM_BROKER_WORKDIR='' compose_validate_model '{}' "$WORK/work" up 2>&1)
+    rc=$?
+    if [[ "$rc" -eq 65 ]]; then
+        ok "an empty workdir rejects instead of containing everything"
+    else
+        bad "an empty workdir rejects instead of containing everything" "rc=$rc${out:+ ($out)}"
+    fi
+}
+degenerate_root_case
 
 # --- what the two renders owe the caller ---------------------------------
 # Either render failing is a rejection, not a shrug: a model the validator
@@ -285,24 +328,40 @@ else
     bad "the requester gets the rejection, not an empty success" "response: $response"
 fi
 
-# The reason a render failure is safe to swallow is that it is kept host-side.
-# If the log does not get it, the information is not redacted, it is gone.
+# compose's words can carry host file contents, and the broker log is a file
+# on disk, so by default the log gets a withheld notice, not the text. The
+# operator opts into the raw stderr with HEADLONG_BROKER_LOG_COMPOSE_STDERR.
 : > "$SHELLM_BROKER_LOG"
 : > "$CALLS"
 printf '{}' > "$CFG_RAW"
 export CFG_RC=1
 export CFG_ERR="failed to read /etc/shadow: line 2: unterminated quoted value \"$CANARY\""
 response=$(handle_compose "$compose_request")
-unset CFG_RC CFG_ERR
 got_err=$(printf '%s' "$response" | jq -r '.stderr')
 case "$got_err" in
     *"$CANARY"*) bad "compose's words do not reach the requester" "leaked: $got_err" ;;
     *)           ok  "compose's words do not reach the requester" ;;
 esac
 if grep -q "$CANARY" "$SHELLM_BROKER_LOG"; then
-    ok "and the operator can still read them in the broker log"
+    bad "the broker log withholds compose's words by default" "log: $(cat "$SHELLM_BROKER_LOG")"
 else
-    bad "and the operator can still read them in the broker log" "log: $(cat "$SHELLM_BROKER_LOG")"
+    ok "the broker log withholds compose's words by default"
+fi
+if grep -q "withheld" "$SHELLM_BROKER_LOG"; then
+    ok "and says so, instead of logging nothing"
+else
+    bad "and says so, instead of logging nothing" "log: $(cat "$SHELLM_BROKER_LOG")"
+fi
+
+: > "$SHELLM_BROKER_LOG"
+: > "$CALLS"
+export HEADLONG_BROKER_LOG_COMPOSE_STDERR=1
+response=$(handle_compose "$compose_request")
+unset HEADLONG_BROKER_LOG_COMPOSE_STDERR CFG_RC CFG_ERR
+if grep -q "$CANARY" "$SHELLM_BROKER_LOG"; then
+    ok "the opt-in puts the raw stderr in the broker log"
+else
+    bad "the opt-in puts the raw stderr in the broker log" "log: $(cat "$SHELLM_BROKER_LOG")"
 fi
 
 echo
