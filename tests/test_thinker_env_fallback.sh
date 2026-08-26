@@ -24,14 +24,18 @@ fail=0
 ok()  { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 bad() { fail=$((fail+1)); printf 'FAIL %s%s\n' "$1" "${2:+ — $2}"; }
 
-# probe <name> <expected-key-value> [env-assignment ...] -- runs _require_env in
-# a fresh HOME laid out by the caller's setup function.
+# probe <name> <expected-key-value> <setup-fn> -- runs _require_env in a fresh
+# HOME laid out by <setup-fn>. The subshell clears the env vars under test so
+# an ambient key or HEADLONG_HOME on the developer's machine cannot make a case
+# pass or fail for the wrong reason (and cannot print a real key on failure).
 probe() {
-    local name="$1" want="$2" setup="$3" ; shift 3
+    local name="$1" want="$2" setup="$3"
     local out
     out=$(
         H=$(mktemp -d)
+        trap 'rm -rf "$H"' EXIT
         export HOME="$H"
+        unset OPENROUTER_API_KEY HEADLONG_HOME SHELLM_HOME
         mkdir -p "$H/id/memories" "$H/id/skills" "$H/id/kernel" "$H/id/trajectories" "$H/wd"
         printf 'name=probe\n' > "$H/id/info.txt"
         "$setup" "$H"
@@ -41,7 +45,6 @@ probe() {
         source "$REPO/thinkers/_lib/common.sh"
         _require_env >/dev/null 2>&1
         printf '%s' "${OPENROUTER_API_KEY:-<unset>}"
-        rm -rf "$H"
     )
     if [[ "$out" == "$want" ]]; then
         ok "$name"
@@ -54,7 +57,9 @@ probe() {
 setup_headlong() { mkdir -p "$1/.headlong"; printf 'OPENROUTER_API_KEY=from-headlong\n' > "$1/.headlong/.env"; }
 setup_legacy()   { mkdir -p "$1/.shellm";   printf 'OPENROUTER_API_KEY=from-legacy\n'   > "$1/.shellm/.env"; }
 setup_both()     { setup_headlong "$1"; setup_legacy "$1"; }
-setup_identity() { printf 'OPENROUTER_API_KEY=from-identity\n' > "$1/id/.env"; }
+# Also write the state-home and legacy files, so "identity wins over both"
+# proves precedence rather than merely that the identity file is read.
+setup_identity() { setup_both "$1"; printf 'OPENROUTER_API_KEY=from-identity\n' > "$1/id/.env"; }
 setup_none()     { :; }
 
 probe "state home .env is read"                 from-headlong setup_headlong
@@ -65,7 +70,8 @@ probe "no env file leaves the key unset"        '<unset>'     setup_none
 
 # HEADLONG_HOME points the lookup somewhere else entirely.
 out=$(
-    H=$(mktemp -d); export HOME="$H"
+    H=$(mktemp -d); trap 'rm -rf "$H"' EXIT; export HOME="$H"
+    unset OPENROUTER_API_KEY SHELLM_HOME
     mkdir -p "$H/id" "$H/elsewhere" "$H/.headlong" "$H/wd"
     printf 'name=probe\n' > "$H/id/info.txt"
     printf 'OPENROUTER_API_KEY=from-default\n' > "$H/.headlong/.env"
@@ -77,14 +83,14 @@ out=$(
     source "$REPO/thinkers/_lib/common.sh"
     _require_env >/dev/null 2>&1
     printf '%s' "${OPENROUTER_API_KEY:-<unset>}"
-    rm -rf "$H"
 )
 [[ "$out" == from-override ]] && ok "HEADLONG_HOME overrides the default state home" \
     || bad "HEADLONG_HOME overrides the default state home" "got $out"
 
 # The dispatcher's own environment must always beat a file.
 out=$(
-    H=$(mktemp -d); export HOME="$H"
+    H=$(mktemp -d); trap 'rm -rf "$H"' EXIT; export HOME="$H"
+    unset HEADLONG_HOME SHELLM_HOME
     mkdir -p "$H/id" "$H/.headlong" "$H/wd"
     printf 'name=probe\n' > "$H/id/info.txt"
     printf 'OPENROUTER_API_KEY=from-file\n' > "$H/.headlong/.env"
@@ -95,7 +101,6 @@ out=$(
     source "$REPO/thinkers/_lib/common.sh"
     _require_env >/dev/null 2>&1
     printf '%s' "$OPENROUTER_API_KEY"
-    rm -rf "$H"
 )
 [[ "$out" == from-environment ]] && ok "an already-set value wins over the file" \
     || bad "an already-set value wins over the file" "got $out"
@@ -103,7 +108,8 @@ out=$(
 # The key has to reach the nested shellm as a bare --var NAME, or the model
 # still runs without it inside Docker.
 out=$(
-    H=$(mktemp -d); export HOME="$H"
+    H=$(mktemp -d); trap 'rm -rf "$H"' EXIT; export HOME="$H"
+    unset OPENROUTER_API_KEY HEADLONG_HOME SHELLM_HOME
     mkdir -p "$H/id/memories" "$H/id/skills" "$H/id/kernel" "$H/id/trajectories" "$H/.headlong" "$H/wd"
     printf 'name=probe\n' > "$H/id/info.txt"
     printf 'OPENROUTER_API_KEY=from-headlong\n' > "$H/.headlong/.env"
@@ -113,7 +119,6 @@ out=$(
     source "$REPO/thinkers/_lib/common.sh"
     _require_env >/dev/null 2>&1
     _build_shellm_flags "$IDENTITY_DIR" 2>/dev/null | tr '\n' ' '
-    rm -rf "$H"
 )
 case "$out" in
     *"--var OPENROUTER_API_KEY "*) ok "the key is forwarded to the nested shellm" ;;
