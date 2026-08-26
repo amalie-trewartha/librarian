@@ -102,7 +102,7 @@ def _run_seconds(pids: list[int]) -> float | None:
 
 
 def _live_step_pids(run_dir: Path) -> list[int]:
-    """Live pids from run/step_pids ("pid name" lines, append-only)."""
+    """Live pids from run/step_pids ("pid name" lines; the dispatcher prunes completed steps)."""
     pids = []
     try:
         lines = (run_dir / "step_pids").read_text().splitlines()
