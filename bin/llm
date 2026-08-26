@@ -35,7 +35,7 @@ _llm_load_env "$_llm_home/.env" || true
 
 LLM_MODEL="${LLM_MODEL:-}"
 LLM_SYSTEM=""
-LLM_MAX_TOKENS=""
+LLM_MAX_TOKENS="${LLM_MAX_TOKENS:-}"
 LLM_MESSAGES=""
 LLM_STREAM=1
 LLM_PROVIDER="${LLM_PROVIDER:-}"

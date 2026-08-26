@@ -313,8 +313,59 @@ _default_model_for() {
     esac
 }
 
-_first_key_var() {  # first provider var that is set (llm's priority order)
-    local var
+_key_var_unambiguous() {  # the ONLY provider var a key's prefix can belong to
+    # Deliberately stricter than _key_var_for: a bare sk- key is OpenAI *or*
+    # OpenCode (see _prompt_key, which has to ask), so it is not evidence of
+    # anything and must never move a key. Only these three prefixes settle it.
+    case "$1" in
+        sk-ant-*) echo ANTHROPIC_API_KEY ;;
+        sk-or-*)  echo OPENROUTER_API_KEY ;;
+        AIza*)    echo GEMINI_API_KEY ;;
+        *)        echo "" ;;
+    esac
+}
+
+_reconcile_key_vars() {
+    # A key exported into the wrong provider variable -- an sk-or- OpenRouter
+    # key sitting in OPENAI_API_KEY, say -- otherwise picks that variable's
+    # default model (gpt-5.5), which detect_provider maps to openai, so the
+    # handshake goes to api.openai.com and comes back "Incorrect API key
+    # provided". The prefix is better evidence of the provider than whichever
+    # variable the key was exported to, so honor the prefix and say so.
+    #
+    # Must run in the parent shell: the export has to outlive the call, so
+    # never invoke this inside $(...).
+    local var want
+    for var in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY OPENCODE_API_KEY; do
+        [[ -n "${!var:-}" ]] || continue
+        want=$(_key_var_unambiguous "${!var}")
+        [[ -n "$want" && "$want" != "$var" ]] || continue
+        if [[ -n "${!want:-}" ]]; then
+            # The right variable is already set; leave both alone and let the
+            # priority order below pick the consistent one.
+            [[ "${!want}" != "${!var}" ]] && printf \
+                'headlong-init: warning: %s holds a %s key; %s is also set, using that one.\n' \
+                "$var" "$want" "$want" >&2
+            continue
+        fi
+        printf 'headlong-init: warning: %s holds a key whose prefix belongs to %s; using it as %s.\n' \
+            "$var" "$want" "$want" >&2
+        export "$want=${!var}"
+    done
+}
+
+_first_key_var() {  # the provider var to use (llm's priority order)
+    local var want
+    # Prefer a variable its own key's prefix does not contradict, so a
+    # misplaced key cannot shadow a correctly-placed one.
+    for var in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY OPENCODE_API_KEY; do
+        [[ -n "${!var:-}" ]] || continue
+        want=$(_key_var_unambiguous "${!var}")
+        [[ -z "$want" || "$want" == "$var" ]] && { echo "$var"; return 0; }
+    done
+    # Every key present contradicts its variable and _reconcile_key_vars could
+    # not place one (it never runs inside $(...)); fall back to the old
+    # first-set-wins so behavior is unchanged rather than absent.
     for var in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY OPENCODE_API_KEY; do
         [[ -n "${!var:-}" ]] && { echo "$var"; return 0; }
     done
@@ -380,6 +431,7 @@ _prompt_key() {
 }
 
 _ensure_api_key() {
+    _reconcile_key_vars
     if ! _have_key && [[ "$HAS_TTY" -eq 0 ]]; then
         die "no API key found. Set ANTHROPIC_API_KEY (or OPENAI/GEMINI/OPENROUTER/OPENCODE_API_KEY), or put it in $HEADLONG_HOME/.env"
     fi

@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# tests/test_key_var_resolution.sh — provider selection when a key sits in the
+# wrong variable, and LLM_MAX_TOKENS coming from the environment.
+#
+# Usage: tests/test_key_var_resolution.sh
+#
+# Why: the provider is chosen from whichever *_API_KEY variable is set first,
+# and the model default follows from that. A key exported into the wrong
+# variable (an sk-or- OpenRouter key in OPENAI_API_KEY) therefore picked
+# gpt-5.5, which detect_provider routes to api.openai.com, and the run died
+# with a confusing "Incorrect API key provided". The prefix now wins, except
+# where it is genuinely ambiguous (a bare sk- key is OpenAI or OpenCode).
+# No network and no real daemon are touched; curl, docker and llm are stubs.
+# Key fixtures below carry only the prefix that matters and are deliberately
+# shaped so they cannot match a real provider pattern (GitHub push protection
+# rejects fixtures that look like the genuine article).
+
+set -uo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(dirname "$HERE")"
+
+WORK=$(mktemp -d)
+trap 'cd /; rm -rf "$WORK"' EXIT
+pass=0; fail=0
+ok()  { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
+bad() { fail=$((fail+1)); printf 'FAIL %s%s\n' "$1" "${2:+ — $2}"; }
+check()     { local l="$1"; shift; if "$@" >/dev/null 2>&1; then ok "$l"; else bad "$l"; fi; }
+check_not() { local l="$1"; shift; if "$@" >/dev/null 2>&1; then bad "$l"; else ok "$l"; fi; }
+
+STUB="$WORK/stub"; mkdir -p "$STUB"
+# docker: daemon up, everything else succeeds so no image is pulled.
+printf '#!/usr/bin/env bash\ncase "${1:-}" in info) exit 0 ;; *) exit 0 ;; esac\n' > "$STUB/docker"
+# llm: always fails, so init stops right after writing SHELLM_MODEL. Without a
+# tty that is a single fast failure, which is all these assertions need.
+printf '#!/usr/bin/env bash\nexit 1\n' > "$STUB/llm"
+chmod +x "$STUB/docker" "$STUB/llm"
+
+APP="$WORK/app"; mkdir -p "$APP/bin" "$APP/tools"
+: > "$APP/bin/shellm"
+
+# run_init <home> [VAR=VAL ...] — headlong-init with no tty, no inherited keys.
+run_init() {
+    local home="$1"; shift
+    mkdir -p "$home"
+    env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u GEMINI_API_KEY -u OPENROUTER_API_KEY \
+        -u OPENCODE_API_KEY -u SHELLM_MODEL -u HEADLONG_UNSANDBOXED \
+        HOME="$home" HEADLONG_HOME="$home/.headlong" HEADLONG_APP_DIR="$APP" \
+        HEADLONG_NO_TTY=1 HEADLONG_UNSANDBOXED=1 PATH="$STUB:$PATH" "$@" \
+        bash "$REPO/tools/headlong-init" </dev/null > "$WORK/out" 2>&1
+}
+model_of() { grep '^SHELLM_MODEL=' "$1/.headlong/.env" | tail -1; }
+
+# --- the reported case: OpenRouter key exported as OPENAI_API_KEY ------------
+run_init "$WORK/h1" OPENAI_API_KEY=sk-or-v1-EXAMPLE-NOT-A-REAL-KEY
+check "misplaced sk-or- key: model follows the key, not the variable" \
+    grep -qx 'SHELLM_MODEL=anthropic/claude-sonnet-4.5' "$WORK/h1/.headlong/.env"
+check "misplaced sk-or- key: says which variable it should be in" \
+    grep -q 'OPENROUTER_API_KEY' "$WORK/out"
+check_not "misplaced sk-or- key: never defaults to an OpenAI model" \
+    grep -q 'SHELLM_MODEL=gpt-' "$WORK/h1/.headlong/.env"
+
+# --- a correctly placed OpenAI key is untouched ------------------------------
+run_init "$WORK/h2" OPENAI_API_KEY=sk-proj-EXAMPLE-NOT-A-REAL-KEY
+check "consistent OpenAI key: keeps the OpenAI default" \
+    grep -qx 'SHELLM_MODEL=gpt-5.5' "$WORK/h2/.headlong/.env"
+check_not "consistent OpenAI key: warns about nothing" \
+    grep -qi 'prefix belongs to' "$WORK/out"
+
+# --- a bare sk- key is OpenAI *or* OpenCode: ambiguous, so never moved -------
+run_init "$WORK/h3" OPENCODE_API_KEY=sk-EXAMPLE-NOT-A-REAL-KEY
+check "bare sk- in OPENCODE_API_KEY: left where it is" \
+    grep -qx 'SHELLM_MODEL=opencode-go/deepseek-v4-flash' "$WORK/h3/.headlong/.env"
+check_not "bare sk- in OPENCODE_API_KEY: not remapped to OpenAI" \
+    grep -qi 'prefix belongs to' "$WORK/out"
+
+# --- misplaced key alongside a correctly placed one: the right one wins ------
+run_init "$WORK/h4" \
+    OPENAI_API_KEY=sk-or-v1-EXAMPLE-MISPLACED-KEY \
+    OPENROUTER_API_KEY=sk-or-v1-EXAMPLE-CORRECT-KEY
+check "both set: picks the consistent variable" \
+    grep -qx 'SHELLM_MODEL=anthropic/claude-sonnet-4.5' "$WORK/h4/.headlong/.env"
+
+# --- an Anthropic key in the wrong slot is corrected too ---------------------
+run_init "$WORK/h5" OPENAI_API_KEY=sk-ant-api03-EXAMPLE-NOT-A-REAL-KEY
+check "misplaced sk-ant- key: model follows the key" \
+    grep -qx 'SHELLM_MODEL=claude-sonnet-4-5-20250929' "$WORK/h5/.headlong/.env"
+
+# --- bin/llm honors LLM_MAX_TOKENS from the environment ----------------------
+# curl stub records the request body; llm builds it with jq before sending.
+CURL_STUB="$WORK/curlstub"; mkdir -p "$CURL_STUB"
+cat > "$CURL_STUB/curl" <<'EOF'
+#!/usr/bin/env bash
+body=""
+prev=""
+for a in "$@"; do
+    case "$prev" in -d|--data|--data-binary|--data-raw) body="$a" ;; esac
+    prev="$a"
+done
+case "$body" in
+    "@-"|"") body="$(cat)" ;;
+    @*)      body="$(cat "${body#@}")" ;;
+esac
+printf '%s' "$body" > "$PAYLOAD_OUT"
+printf 'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}\n\n'
+printf 'data: {"type":"message_stop"}\n\n'
+EOF
+chmod +x "$CURL_STUB/curl"
+
+export PAYLOAD_OUT="$WORK/payload.json"
+env -u SHELLM_MODEL -u HEADLONG_HOME PATH="$CURL_STUB:$PATH" \
+    HOME="$WORK/h6" ANTHROPIC_API_KEY=sk-ant-test LLM_MAX_TOKENS=4242 \
+    bash "$REPO/bin/llm" -m claude-sonnet-4-5-20250929 hi >/dev/null 2>&1
+check "bin/llm: LLM_MAX_TOKENS from the environment reaches the request" \
+    grep -q '"max_tokens":[[:space:]]*4242' "$PAYLOAD_OUT"
+
+printf '\n%d passed, %d failed\n' "$pass" "$fail"
+[[ "$fail" -eq 0 ]]
