@@ -60,6 +60,23 @@ case "$out" in *"$APP/thinkers/monolith"*) ok "app-checkout symlink still mounte
 case "$out" in *"$SECRETS"*) bad "symlink to an unlisted dir refused" "$out" ;;
                 *) ok "symlink to an unlisted dir refused" ;; esac
 
+# --- the checkout root itself must not escape to its parent -----------------
+# The mount is the target's parent dir, so a symlink AT the checkout root
+# would mount dirname(checkout) — the checkout's parent — unless the parent,
+# not the target, is what gets checked.
+rm -f "$WD/stolen"
+ln -sf "$APP" "$WD/whole_checkout"
+out=$(symlink_mounts "$WD")
+# A mount line is "<dir>:<dir>:ro"; the parent is followed by ':' only when
+# the mount dir is exactly the parent (a legit "$APP/..." mount is followed
+# by '/'), so this substring is precise.
+PARENT=$(dirname "$APP")
+case "$out" in
+    *"$PARENT:"*) bad "symlink to the checkout root does not mount its parent" "$out" ;;
+    *)            ok "symlink to the checkout root does not mount its parent" ;;
+esac
+rm -f "$WD/whole_checkout"
+
 # --- opting a directory in makes it reachable, and only it ------------------
 export HEADLONG_SANDBOX_RO_DIRS="$PROJ"
 ln -sf "$PROJ/main.c" "$WD/proj"
@@ -95,6 +112,25 @@ LONE="$WORK/lone"; mkdir -p "$LONE"; ln -sf "$SECRETS/id_ed25519" "$LONE/x"
 out=$(symlink_mounts "$LONE")
 case "$out" in *"$SECRETS"*) bad "no-checkout workdir denies outside targets" "$out" ;;
                 *) ok "no-checkout workdir denies outside targets" ;; esac
+
+# --- the docker argv must guard the mount arrays against set -u -------------
+# The broker runs `set -u`; on bash 3.2 an unguarded "${empty[@]}" aborts with
+# "unbound variable", and in the default config (no allowlist, no followed
+# symlinks) both mount arrays are empty. The argv must expand them with the
+# ${arr[@]+"${arr[@]}"} guard. Assert the source uses it and not the bare form.
+for arr in symlink_vols ro_vols; do
+    if grep -q "\${$arr\[@\]+\"\${$arr\[@\]}\"}" "$BROKER"; then
+        ok "$arr expanded with the empty-array guard"
+    else
+        bad "$arr expanded with the empty-array guard" "bare expansion aborts under set -u on bash 3.2"
+    fi
+done
+# And the guarded idiom actually survives set -u on this platform's bash.
+if /bin/bash -c 'set -euo pipefail; a=(); c=(x ${a[@]+"${a[@]}"} y); printf "%s\n" "${c[@]}"' >/dev/null 2>&1; then
+    ok "empty-array guard survives set -u on /bin/bash"
+else
+    bad "empty-array guard survives set -u on /bin/bash"
+fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

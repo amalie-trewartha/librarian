@@ -138,23 +138,29 @@ symlink_mounts() {
         [[ -n "$line" ]] && mount_dirs+=("$line")
     done < <(
         while IFS= read -r -d '' link; do
-            local target
+            local target mount_dir
             target=$(readlink -f "$link" 2>/dev/null) || continue
             path_under "$target" "$workdir" && continue
             [[ -e "$target" ]] || continue
+            # The sandbox mounts the target's PARENT directory, so containment
+            # must be checked on that parent, not on the target itself. A
+            # symlink to the checkout root passes a target-only check yet
+            # mounts dirname(checkout) — the checkout's parent, often $HOME —
+            # re-opening the very escape this function is meant to close.
+            mount_dir=$(dirname "$target")
             allowed=0
-            path_under "$target" "$allow_root" && allowed=1
+            path_under "$mount_dir" "$allow_root" && allowed=1
             if [[ "$allowed" -eq 0 ]]; then
                 while IFS= read -r ro_dir; do
                     [[ -n "$ro_dir" ]] || continue
-                    path_under "$target" "$ro_dir" && { allowed=1; break; }
+                    path_under "$mount_dir" "$ro_dir" && { allowed=1; break; }
                 done < <(sandbox_ro_dirs)
             fi
             if [[ "$allowed" -eq 0 ]]; then
-                log_msg "symlink refused (outside $allow_root and the read-only allowlist): $link -> $target"
+                log_msg "symlink refused (mount dir $mount_dir outside $allow_root and the read-only allowlist): $link -> $target"
                 continue
             fi
-            dirname "$target"
+            printf '%s\n' "$mount_dir"
         done < <(find "$workdir" -type l -print0 2>/dev/null) \
         | sort -u
     )
@@ -312,8 +318,8 @@ handle_run() {
         --memory "$memory"
         --pids-limit "$pids"
         -v "$workdir:$workdir"
-        "${symlink_vols[@]}"
-        "${ro_vols[@]}"
+        ${symlink_vols[@]+"${symlink_vols[@]}"}
+        ${ro_vols[@]+"${ro_vols[@]}"}
         -w "$cwd"
         -e "SHELLM_WORKDIR=$workdir"
         "$image"
