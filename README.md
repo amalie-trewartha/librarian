@@ -8,17 +8,17 @@
 
 [![CI](https://github.com/laude-institute/headlong/actions/workflows/ci.yml/badge.svg)](https://github.com/laude-institute/headlong/actions/workflows/ci.yml)
 
-[headlong.ai](https://headlong.ai)
 
-**Headlong** is an open source agent microharness, a complete agent harness
-with a core of less than 10K lines of Bash. Headlong's defining feature is
-**persistent agency**. Your agent keeps thinking between external
-interactions in a self-guided loop inspired by human inner monologue. A
-message from a human doesn't start a session. It lands in the agent's
-thought stream as one more observation, and the agent decides if and when
-to respond. You give your agent a name and a personality, and it sets its
-own interests and priorities, starts its own projects, and pings you when
-it has something to say.
+**Headlong**
+([blog](https://www.laude.org/updates/headlong-a-microharness-for-persistent-agents))
+is an open source agent microharness, a complete agent harness with a core of
+less than 10K lines of Bash. Headlong's defining feature is **persistent
+agency**. Your agent keeps thinking between external interactions in a
+self-guided loop inspired by human inner monologue. A message from a human
+doesn't start a session. It lands in the agent's thought stream as one more
+observation, and the agent decides if and when to respond. You give your agent
+a name and a personality, and it sets its own interests and priorities, starts
+its own projects, and pings you when it has something to say.
 
 A Headlong agent is also built to be shared. A whole team can talk to one
 agent over Slack, Telegram, and a chat app, and every conversation lands
