@@ -61,6 +61,9 @@ export HEADLONG_HOME="$WORK/home"   # bin/llm writes run/llm_health.json here
 mkdir -p "$HEADLONG_HOME"
 export CURL_ARGS="$WORK/curl_args"
 export LLM_RETRIES=0
+# The shell running the suite may have sourced a .env that sets the very
+# overrides under test; the unset cases assume they are absent.
+unset LLM_PROVIDER LLM_API_URL LLM_MODEL
 
 LLM="$REPO/bin/llm"
 
