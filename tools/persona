@@ -203,7 +203,11 @@ cmd_start() {
     if _dispatcher_pid >/dev/null; then
         echo "$NAME's mind is already running."
     else
-        thinkers start monolith
+        # Keep this set in step with headlong-init: the responder is what
+        # answers the human. Starting only the monolith leaves every message
+        # waiting on its long reasoning loop, so a stop/start cycle silently
+        # destroys interactive latency until the next headlong-init.
+        thinkers start monolith responder
         echo "$NAME is thinking again."
     fi
     local url
