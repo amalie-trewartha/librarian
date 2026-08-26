@@ -18,6 +18,10 @@ def _tokens(monkeypatch):
     monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
     monkeypatch.delenv("HEADLONG_SLACK_IDENTITY", raising=False)
     monkeypatch.delenv("SHELLM_SLACK_IDENTITY", raising=False)
+    # config.load mkdirs the state dir, so an ambient override would make
+    # these tests write outside tmp_path.
+    monkeypatch.delenv("HEADLONG_SLACK_STATE_DIR", raising=False)
+    monkeypatch.delenv("SHELLM_SLACK_STATE_DIR", raising=False)
 
 
 def test_falls_back_to_the_default_symlink(tmp_path):
@@ -61,3 +65,16 @@ def test_no_var_and_no_default_names_the_variable(tmp_path):
     with pytest.raises(SystemExit) as exc:
         config.load(tmp_path)
     assert "HEADLONG_SLACK_IDENTITY" in str(exc.value)
+
+
+def test_a_dangling_default_link_names_the_link(tmp_path):
+    """A broken default must not surface as "identity not found ... identity
+    new <name>" — that advice creates a second identity instead of fixing the
+    link."""
+    (tmp_path / ".identities").mkdir()
+    (tmp_path / ".identities" / "default").symlink_to("ghost")
+
+    with pytest.raises(SystemExit) as exc:
+        config.load(tmp_path)
+    assert "default identity link" in str(exc.value)
+    assert "ghost" in str(exc.value)

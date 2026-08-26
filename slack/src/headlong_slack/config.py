@@ -39,7 +39,17 @@ def _default_identity(serve_root: Path) -> str:
     for base in (".identities", "identities"):
         link = serve_root / base / "default"
         if link.is_symlink():
-            return link.readlink().name
+            name = link.readlink().name
+            # A dangling default is its own error: passing the name on would
+            # surface as "identity not found ... identity new <name>", advice
+            # that creates a second identity instead of fixing the link.
+            if not (serve_root / base / name).is_dir():
+                raise SystemExit(
+                    f"headlong-slack-bridge: the default identity link {link} "
+                    f"points at '{name}', which is not an identity under "
+                    f"{serve_root / base}. Repoint it with: identity default <name>"
+                )
+            return name
     raise SystemExit(
         "headlong-slack-bridge: no identity given and no default set "
         f"under {serve_root} (looked for .identities/default and "
