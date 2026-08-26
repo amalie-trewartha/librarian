@@ -424,6 +424,13 @@ _start_dispatcher() {
 
         # Track thinker step PIDs as "name:pid" pairs (space-separated, bash 3.2 compat)
         _step_entries=""
+        # A new dispatcher starts a fresh ledger, deliberately: the on-disk
+        # prune below rewrites step_pids from _step_entries alone, so a dead
+        # dispatcher's leftover lines would be dropped on the first prune
+        # anyway — silently. Truncating here makes that explicit. Orphaned
+        # steps from a prior dispatcher are outside this generation's drain;
+        # every step_pids reader filters for live PIDs itself.
+        : > "$run_dir/step_pids"
 
         # Liveness watchdog. The perpetual loop is a chain of triggers, and a
         # single broken link kills the mind: a step that crashes before
@@ -467,16 +474,26 @@ _start_dispatcher() {
             _wd_last="${_new}${_new:+ }${_tname}:${SECONDS}"
         }
 
-        # Reap finished step children and prune both the in-memory and on-disk
-        # process lists. `kill -0` alone is insufficient on Linux: an exited,
-        # unreaped child remains visible as a zombie and still passes that
-        # check, which can leave its thinker permanently "busy".
+        # Prune finished step children from the in-memory and on-disk process
+        # lists. The stall this guards against: these prunes used to run
+        # inside command substitution, so the `_step_entries="$_new"` below
+        # happened in a subshell and was discarded — the ledger grew one dead
+        # PID per dispatched step, and once the kernel recycled a stale PID
+        # onto a live same-user process, `kill -0` passed and the thinker
+        # looked busy forever (the watchdog refreshes its quiet timer on
+        # busy, so it never rescued). Pruning in the dispatcher shell bounds
+        # the PID-reuse window to about one tick.
         _step_alive() {
-            local _pid="$1" _state=""
+            local _pid="$1" _line=""
             kill -0 "$_pid" 2>/dev/null || return 1
-            if [[ -r "/proc/$_pid/status" ]]; then
-                _state=$(awk '/^State:/{print $2}' "/proc/$_pid/status" 2>/dev/null) || _state=""
-                [[ "$_state" == "Z" ]] && return 1
+            # Belt-and-braces only: bash reaps its own background children on
+            # SIGCHLD, so a persistent Z-state child of this dispatcher is
+            # not expected. Builtin read — this runs on the ~1s tick path,
+            # where a fork per tracked PID adds up.
+            if [[ -r "/proc/$_pid/stat" ]]; then
+                read -r _line < "/proc/$_pid/stat" 2>/dev/null || _line=""
+                _line="${_line##*') '}"   # skip pid and (comm); comm may hold ') '
+                [[ "${_line%% *}" == "Z" ]] && return 1
             fi
             return 0
         }
@@ -488,9 +505,10 @@ _start_dispatcher() {
                 if _step_alive "$_pid"; then
                     _new="${_new}${_new:+ }${_entry}"
                 else
-                    # A zombie is already exited, so wait returns immediately
-                    # and removes it from the process table. Ignore 127 when a
-                    # platform's shell has already reaped the async child.
+                    # bash has normally reaped the child already; this wait
+                    # just clears bash's own job-table entry and returns
+                    # immediately. Ignore failure when there is nothing left
+                    # to wait for.
                     wait "$_pid" 2>/dev/null || true
                     _changed=1
                 fi

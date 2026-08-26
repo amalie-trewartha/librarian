@@ -190,19 +190,28 @@ test_busy_defers() {
 }
 
 # ---------------------------------------------------------------------------
-# Test 4: a completed asynchronous step is reaped before the next scheduled
-# wake. On Linux, an unreaped child is a zombie that still passes `kill -0`;
-# treating that PID as live leaves the thinker permanently busy.
+# Test 4: a completed asynchronous step is pruned from the ledger. The stall
+# this pins: pruning used to run inside command substitution, so the pruned
+# ledger was discarded with the subshell — _step_entries grew one dead PID
+# per dispatched step, and a kernel-recycled stale PID then passed `kill -0`
+# and left its thinker busy forever. The on-disk prune below is the
+# observable half of the in-shell prune.
 # ---------------------------------------------------------------------------
 test_finished_step_reaped() {
     local old_pid
     setup_identity
     start_thinkers
 
-    printf '0' > "$TMP/id/nap"
+    # A nonzero nap keeps the step alive past wait_for_record, so step_pids
+    # still holds its entry when read (with 0 it can already be pruned,
+    # leaving old_pid empty and the assertion below vacuous).
+    printf '2' > "$TMP/id/nap"
     append_step '{"type":"action","content":"A","source":"test"}'
     wait_for_record 1
     old_pid=$(awk 'NR == 1 {print $1}' "$RUN/step_pids")
+    if [[ -z "$old_pid" ]]; then
+        bad "captured prior step pid" "step_pids: $(cat "$RUN/step_pids" 2>/dev/null | tr '\n' ' ')"
+    fi
 
     printf '%s' "$(( $(now) - 1 ))" > "$RUN/napper.wake_at"
     wait_for_record 2 8
