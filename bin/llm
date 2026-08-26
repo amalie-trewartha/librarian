@@ -39,6 +39,10 @@ LLM_MAX_TOKENS=""
 LLM_MESSAGES=""
 LLM_STREAM=1
 LLM_PROVIDER="${LLM_PROVIDER:-}"
+# Remember whether the provider came from the environment (or a .env layer
+# above): honored as authoritative, like LLM_API_URL, but never silently —
+# see the mismatch warning after provider resolution.
+_llm_provider_env="$LLM_PROVIDER"
 LLM_THINKING=0
 LLM_THINKING_LEVEL=""
 LLM_EFFORT=""
@@ -308,6 +312,18 @@ if [[ -z "$LLM_PROVIDER" ]]; then
     LLM_PROVIDER=$(detect_provider "$LLM_MODEL")
 fi
 
+# An environment-supplied provider reroutes every call in the process tree,
+# so it must never do it silently: when it disagrees with what the model
+# name implies, say so on stderr. (detect_provider dies on names it cannot
+# classify — the local-endpoint case the env override exists for — so the
+# probe runs in a subshell and an unclassifiable name stays quiet.)
+if [[ -n "$_llm_provider_env" && "$LLM_PROVIDER" == "$_llm_provider_env" ]]; then
+    _llm_detected=$(detect_provider "$LLM_MODEL" 2>/dev/null) || _llm_detected=""
+    if [[ -n "$_llm_detected" && "$_llm_detected" != "$LLM_PROVIDER" ]]; then
+        echo "llm: warning: LLM_PROVIDER=$LLM_PROVIDER overrides detected provider '$_llm_detected' for model '$LLM_MODEL'" >&2
+    fi
+fi
+
 # OpenCode routing prefixes hide the real catalog id from the API side;
 # strip once, up front, so the payload builders AND get_model_max_tokens see
 # the actual model name and its caps.
@@ -542,6 +558,9 @@ build_payload_opencode-go() { build_payload_openai; }
 #     shellm always passes --thinking, so dropping it here is what makes
 #     shellm usable on Zen at all; thinking happens invisibly server-side.
 build_payload_opencode() {
+    if [[ "$LLM_THINKING" -eq 1 || -n "$LLM_EFFORT" ]]; then
+        echo "llm: note: OpenCode Zen rejects the thinking/effort betas; dropping them (thinking happens server-side)" >&2
+    fi
     LLM_THINKING=0; LLM_EFFORT=""; build_payload_anthropic
 }
 
@@ -1047,7 +1066,8 @@ else
     fi
 
     case "$LLM_PROVIDER" in
-        anthropic) _u=$(jq -r '[(.usage.input_tokens // ""), (.usage.output_tokens // ""), ""] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
+        # opencode (Zen) speaks the Anthropic wire protocol, usage shape included.
+        anthropic|opencode) _u=$(jq -r '[(.usage.input_tokens // ""), (.usage.output_tokens // ""), ""] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
         gemini)    _u=$(jq -r '[(.usageMetadata.promptTokenCount // ""), (.usageMetadata.candidatesTokenCount // ""), (.usageMetadata.thoughtsTokenCount // "")] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
         *)         _u=$(jq -r '[(.usage.prompt_tokens // ""), (.usage.completion_tokens // ""), (.usage.completion_tokens_details.reasoning_tokens // "")] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
     esac
