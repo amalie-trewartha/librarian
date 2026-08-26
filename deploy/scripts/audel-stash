@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# deploy/scripts/audel-stash — move Audel's uncommitted box work aside for a
+# deploy and bring it back afterward.
+#
+# Usage:
+#   deploy/scripts/audel-stash save      run before deploy/scripts/update
+#   deploy/scripts/audel-stash restore   run after the deploy
+#   deploy/scripts/audel-stash status    show held stashes and the dirty tree
+#
+# The box tree is often dirty with Audel's uncommitted work, and when a
+# dirty file overlaps an incoming commit the ff-only pull in update.sh
+# fails. `save` backs the tracked diff up to a dated patch under
+# /opt/shellm/backups/, then stashes tracked changes under an
+# "audel-stash" marker message. `restore` re-applies only a stash carrying
+# that marker, so a clean save (which stashes nothing) can never pop a
+# stash it did not create. Both are safe to run unconditionally around
+# every deploy: save on a clean tree and restore with no marked stash are
+# no-op successes.
+#
+# Untracked files are left alone on purpose — they never block the pull
+# unless an incoming commit adds the same path, and the box keeps large
+# permanent untracked dirs (artifacts/, notes/, improve/). `save` checks
+# for that path collision and fails with the list instead of stashing.
+#
+# On a restore conflict the stash and the patch are kept, the tree is put
+# back to clean, and the script exits nonzero: Audel's work is never
+# dropped, it just waits for a hand merge.
+
+set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+BOX_REPO=/opt/shellm/app
+BACKUP_DIR=/opt/shellm/backups
+MARKER=audel-stash
+
+usage() { sed -n '3,9p' "${BASH_SOURCE[0]}"; exit 1; }
+
+section() { awk -v s="=== $1 ===" '$0==s{f=1;next} /^=== /{f=0} f' <<<"$2"; }
+
+cmd_save() {
+    require_tools jq git
+    require_state; require_aws
+    local ts out
+    ts=$(date -u +%Y%m%dT%H%M%SZ)
+    info "checking the box tree..."
+    out=$(run_script_on_box "
+        g() { sudo -u shellm git -C $BOX_REPO \"\$@\"; }
+        g fetch --quiet origin || echo '=== NOFETCH ==='
+        echo '=== COLLIDE ==='
+        comm -12 <(g diff --name-only HEAD origin/main | sort) \
+                 <(g ls-files --others --exclude-standard | sort)
+        if g diff --quiet HEAD; then
+            echo '=== CLEAN ==='
+        else
+            echo '=== DIRTY ==='
+            g diff HEAD --stat | tail -20
+            sudo mkdir -p $BACKUP_DIR
+            g diff HEAD | sudo tee $BACKUP_DIR/audel-uncommitted-$ts.patch >/dev/null
+            g stash push -m '$MARKER $ts' >/dev/null
+            echo '=== STASHED ==='
+        fi
+    ") || die "save failed — box unchanged"
+    local collide
+    collide=$(section COLLIDE "$out")
+    grep -q '=== NOFETCH ===' <<<"$out" \
+        && info "warning: box could not fetch origin — untracked collision check ran against a stale origin/main"
+    if [[ -n "$collide" ]]; then
+        echo "$out"
+        die "untracked box files collide with incoming commits — move them aside by hand: $collide"
+    fi
+    if grep -q '=== CLEAN ===' <<<"$out"; then
+        info "box tree clean — nothing stashed"
+        return 0
+    fi
+    grep -q '=== STASHED ===' <<<"$out" || die "save failed — see output above"
+    info "stashed as '$MARKER $ts'; patch backup: $BACKUP_DIR/audel-uncommitted-$ts.patch"
+    section DIRTY "$out" | sed 's/^/  /'
+}
+
+cmd_restore() {
+    require_tools jq git
+    require_state; require_aws
+    info "restoring stashed box work..."
+    local out
+    out=$(run_script_on_box "
+        g() { sudo -u shellm git -C $BOX_REPO \"\$@\"; }
+        ref=\$(g stash list | grep -m1 '$MARKER' | cut -d: -f1)
+        [ -z \"\$ref\" ] && { echo '=== NONE ==='; exit 0; }
+        if ! g diff --quiet HEAD; then
+            echo '=== DIRTY ==='
+            g status --short | head -20
+            exit 1
+        fi
+        if g stash apply \"\$ref\" >/dev/null 2>&1; then
+            g stash drop \"\$ref\" >/dev/null
+            echo '=== RESTORED ==='
+            g status --short | head -20
+            g stash list | grep -c '$MARKER' || true
+        else
+            g reset --hard HEAD >/dev/null
+            echo '=== CONFLICT ==='
+            g stash list | grep -m1 '$MARKER'
+            exit 1
+        fi
+    ") || {
+        if grep -q '=== DIRTY ===' <<<"${out:-}"; then
+            echo "${out:-}"
+            die "box tree is dirty — restore would tangle with it; restore by hand"
+        fi
+        if grep -q '=== CONFLICT ===' <<<"${out:-}"; then
+            echo "${out:-}"
+            die "stash does not apply on the new base — stash and patch backup kept, tree reset to clean; merge by hand (patches in $BACKUP_DIR)"
+        fi
+        die "restore failed — see output above"
+    }
+    if grep -q '=== NONE ===' <<<"$out"; then
+        info "no $MARKER stash on the box — nothing to restore"
+        return 0
+    fi
+    info "restored — box tree now carries Audel's work again:"
+    section RESTORED "$out" | sed 's/^/  /'
+    local remaining
+    remaining=$(tail -1 <<<"$out")
+    [[ "$remaining" =~ ^[1-9] ]] \
+        && info "warning: $remaining older $MARKER stash(es) still held — restore again or inspect"
+    info "if the restored work includes bridge code, restart that bridge so the process matches the tree"
+}
+
+cmd_status() {
+    require_tools jq git
+    require_state; require_aws
+    run_script_on_box "
+        g() { sudo -u shellm git -C $BOX_REPO \"\$@\"; }
+        echo '--- stashes ---'
+        g stash list | grep '$MARKER' || echo '(none held by audel-stash)'
+        echo '--- tree ---'
+        g status --short | head -20
+        echo '--- patch backups ---'
+        ls -t $BACKUP_DIR/audel-uncommitted-*.patch 2>/dev/null | head -5 || true
+    "
+}
+
+case "${1:-}" in
+    save)    cmd_save ;;
+    restore) cmd_restore ;;
+    status)  cmd_status ;;
+    *)       usage ;;
+esac
