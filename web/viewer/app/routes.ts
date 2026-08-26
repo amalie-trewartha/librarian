@@ -7,6 +7,7 @@ export default [
   route("i/:identityId", "routes/timeline.tsx"),
   route("i/:identityId/recap", "routes/recap.tsx"),
   route("i/:identityId/mindlog", "routes/identity.tsx"),
+  route("i/:identityId/mindlog2", "routes/mindlog2.tsx"),
   route("i/:identityId/t/:trajId", "routes/sub-traj.tsx"),
   route("i/:identityId/thinkers", "routes/thinkers.tsx"),
   route("i/:identityId/health", "routes/health.tsx"),

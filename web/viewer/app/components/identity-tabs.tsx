@@ -7,6 +7,7 @@ const TABS = [
   { key: "timeline", label: "Timeline", path: "" },
   { key: "recap", label: "Recap", path: "/recap" },
   { key: "mindlog", label: "Mind log", path: "/mindlog" },
+  { key: "mindlog2", label: "Mind log v2", path: "/mindlog2" },
   { key: "thinkers", label: "Thinkers", path: "/thinkers" },
   { key: "health", label: "Health", path: "/health" },
   { key: "usage", label: "Usage", path: "/usage" },
