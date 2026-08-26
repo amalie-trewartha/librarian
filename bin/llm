@@ -38,7 +38,7 @@ LLM_SYSTEM=""
 LLM_MAX_TOKENS=""
 LLM_MESSAGES=""
 LLM_STREAM=1
-LLM_PROVIDER=""
+LLM_PROVIDER="${LLM_PROVIDER:-}"
 LLM_THINKING=0
 LLM_THINKING_LEVEL=""
 LLM_EFFORT=""
@@ -146,7 +146,7 @@ Options:
   -t, --max-tokens N       Max output tokens. Default: model-specific cap
   -M, --messages JSON      Messages array JSON, e.g. [{"role":"user","content":"hi"}]
   --no-stream              Disable streaming (streaming is on by default)
-  --provider NAME          Provider: anthropic, openai, gemini, or openrouter
+  --provider NAME          Provider: anthropic, openai, gemini, openrouter, opencode, or opencode-go
   --thinking [LEVEL]       Enable thinking (Anthropic: adaptive; Gemini: minimal/low/medium/high)
   --effort LEVEL           Thinking effort/provider output effort
   --raw                    Print raw non-streaming API response JSON
@@ -158,6 +158,8 @@ Models:
   OpenAI:     gpt-5.5, gpt-5, gpt-4o, o1, o3, o4
   Gemini:     gemini-3.5-flash, gemini-2.0-flash, gemini-*
   OpenRouter: z-ai/glm-5.2, meta-llama/*, ... (any vendor/model name)
+  OpenCode:   opencode-go/* (Go subscription, OpenAI wire format)
+              opencode/*  (Zen pay-per-token, Anthropic wire format)
 
 Thinking & effort:
   These flags control how much reasoning the model does before answering.
@@ -192,6 +194,9 @@ Environment:
   OPENAI_API_KEY           Required for OpenAI models
   GEMINI_API_KEY           Required for Gemini models
   OPENROUTER_API_KEY       Required for OpenRouter models
+  OPENCODE_API_KEY         Required for OpenCode models — both plans use it;
+                           opencode-go/* bills the Go subscription, opencode/*
+                           bills Zen. Keys: `opencode auth login`
   LLM_API_URL              Override provider API URL
   LLM_RETRIES              Retries for transient API failures (default: 2;
                            0 disables). Never retries after partial output.
@@ -265,8 +270,13 @@ if [[ -z "$LLM_MODEL" ]]; then
         LLM_MODEL="gemini-3.5-flash"
     elif [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
         LLM_MODEL="anthropic/claude-sonnet-4.5"
+    elif [[ -n "${OPENCODE_API_KEY:-}" ]]; then
+        # OPENCODE_API_KEY covers both OpenCode plans and can't disambiguate
+        # them, so default to the flat-rate subscription; Zen models are one
+        # `-m opencode/<model>` away.
+        LLM_MODEL="opencode-go/deepseek-v4-flash"
     else
-        die "No model specified and no API key found. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or OPENROUTER_API_KEY, or pass -m MODEL."
+        die "No model specified and no API key found. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, or OPENCODE_API_KEY, or pass -m MODEL."
     fi
 fi
 
@@ -280,6 +290,13 @@ detect_provider() {
         claude-*)                        echo "anthropic" ;;
         gpt-*|o1*|o3*|o4*|chatgpt-*) echo "openai" ;;
         gemini-*)                        echo "gemini" ;;
+        # OpenCode: two plans behind one env var. Explicit prefixes win
+        # before vendor-looking names underneath (claude-*/gpt-*/glm-* would
+        # otherwise be detected as native providers and hit wrong endpoints).
+        #   opencode-go/<model> -> Go subscription (openai wire format)
+        #   opencode/<model>    -> Zen pay-per-token (anthropic wire format)
+        opencode-go/*)                   echo "opencode-go" ;;
+        opencode/*)                      echo "opencode" ;;
         # Vendor-prefixed names (z-ai/glm-5.2, meta-llama/..., etc.) are
         # OpenRouter's model-naming convention.
         */*)                             echo "openrouter" ;;
@@ -291,10 +308,26 @@ if [[ -z "$LLM_PROVIDER" ]]; then
     LLM_PROVIDER=$(detect_provider "$LLM_MODEL")
 fi
 
+# OpenCode routing prefixes hide the real catalog id from the API side;
+# strip once, up front, so the payload builders AND get_model_max_tokens see
+# the actual model name and its caps.
+case "$LLM_PROVIDER" in opencode) LLM_MODEL="${LLM_MODEL#opencode/}" ;; opencode-go) LLM_MODEL="${LLM_MODEL#opencode-go/}" ;; esac
+
 # Per-model max output token caps (synchronous APIs, no beta headers).
 # Used as the default when -t/--max-tokens is not given.
 get_model_max_tokens() {
     local model="$1"
+    # OpenCode Go catalog — frontier-class models with large outputs; the
+    # generic tiers starve agentic shellm steps. Scoped to the provider so
+    # identically-named models reached through other providers (OpenRouter's
+    # qwen/*, grok/*, ...) keep their tiers.
+    if [[ "${LLM_PROVIDER:-}" == "opencode-go" ]]; then
+        case "$model" in
+            glm-*|kimi-*|qwen*|minimax-*|deepseek-*|grok-*|longcat-*|mimo-*|hy3*|muse-*|ox-alpha-*) echo 32768 ;;
+            *) echo 16384 ;;
+        esac
+        return
+    fi
     case "$model" in
         # Anthropic — Claude 4.x family (caps verified via API 400 probing)
         claude-opus-4-7*|claude-opus-4-6*|claude-opus-4-5*|claude-opus-4-1*|claude-opus-4-0*) echo 128000 ;;
@@ -496,6 +529,22 @@ build_payload_gemini() {
 # OpenRouter is OpenAI-compatible (chat/completions wire format)
 build_payload_openrouter() { build_payload_openai; }
 
+# OpenCode Go is OpenAI-compatible (@ai-sdk/openai-compatible upstream);
+# its opencode-go/ prefix was already stripped above.
+build_payload_opencode-go() { build_payload_openai; }
+
+# OpenCode Zen speaks the Anthropic wire protocol (/v1/messages with
+# x-api-key), so the anthropic payload applies unchanged. Two deltas:
+#   - The opencode/ routing prefix was already stripped from LLM_MODEL above.
+#   - Zen's gateway rejects the adaptive-thinking beta ("adaptive thinking is
+#     not supported on this model") for every model tried, and effort's
+#     output_config rides the same beta family — drop both rather than fail.
+#     shellm always passes --thinking, so dropping it here is what makes
+#     shellm usable on Zen at all; thinking happens invisibly server-side.
+build_payload_opencode() {
+    LLM_THINKING=0; LLM_EFFORT=""; build_payload_anthropic
+}
+
 # ---------------------------------------------------------------------------
 # URL and headers per provider
 # ---------------------------------------------------------------------------
@@ -520,6 +569,19 @@ get_url_headers() {
             url="${LLM_API_URL:-https://openrouter.ai/api/v1/chat/completions}"
             headers=(-H "Content-Type: application/json"
                      -H "Authorization: Bearer $OPENROUTER_API_KEY")
+            ;;
+        opencode)
+            [[ -z "${OPENCODE_API_KEY:-}" ]] && die "OPENCODE_API_KEY is not set"
+            url="${LLM_API_URL:-https://opencode.ai/zen/v1/messages}"
+            headers=(-H "content-type: application/json"
+                     -H "x-api-key: $OPENCODE_API_KEY"
+                     -H "anthropic-version: 2023-06-01")
+            ;;
+        opencode-go)
+            [[ -z "${OPENCODE_API_KEY:-}" ]] && die "OPENCODE_API_KEY is not set"
+            url="${LLM_API_URL:-https://opencode.ai/zen/go/v1/chat/completions}"
+            headers=(-H "Content-Type: application/json"
+                     -H "Authorization: Bearer $OPENCODE_API_KEY")
             ;;
         gemini)
             [[ -z "${GEMINI_API_KEY:-}" ]] && die "GEMINI_API_KEY is not set"
@@ -554,6 +616,11 @@ extract_text_gemini() {
 # OpenRouter is OpenAI-compatible
 extract_text_openrouter() { extract_text_openai; }
 
+# OpenCode: Go is OpenAI-compatible, Zen speaks the Anthropic protocol;
+# same response shapes as their respective bases throughout.
+extract_text_opencode-go() { extract_text_openai; }
+extract_text_opencode() { extract_text_anthropic; }
+
 # ---------------------------------------------------------------------------
 # Response failure checks (non-streaming)
 # ---------------------------------------------------------------------------
@@ -583,6 +650,9 @@ check_response_gemini() {
 
 check_response_openrouter() { check_response_openai; }
 
+check_response_opencode-go() { check_response_openai; }
+check_response_opencode() { check_response_anthropic; }
+
 # Truncation is its own silent failure mode: a 200 whose finish reason says
 # the output hit max_tokens looks complete to a caller reading stdout, and on
 # reasoning models the budget includes the (invisible) thinking tokens, so the
@@ -603,6 +673,9 @@ check_truncated_gemini() {
 }
 
 check_truncated_openrouter() { check_truncated_openai; }
+
+check_truncated_opencode-go() { check_truncated_openai; }
+check_truncated_opencode() { check_truncated_anthropic; }
 
 # Shared by the non-streaming path and the streaming handlers (stderr passes
 # straight through the handler subshell, so this works from either).
@@ -820,6 +893,10 @@ stream_gemini() {
 
 # OpenRouter is OpenAI-compatible (SSE chat/completions chunks)
 stream_openrouter() { stream_openai; }
+
+# OpenCode: same SSE shapes as their wire-format bases.
+stream_opencode-go() { stream_openai; }
+stream_opencode() { stream_anthropic; }
 
 # ---------------------------------------------------------------------------
 # Main execution
