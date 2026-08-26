@@ -76,8 +76,60 @@ path_under() {
     [[ "$path" == "$root" || "$path" == "$root"/* ]]
 }
 
+# sandbox_ro_dirs - directories the operator has chosen to expose to the
+# sandbox read-only, newline-separated. Configured as a colon-separated list
+# in HEADLONG_SANDBOX_RO_DIRS, either in the environment or in the state
+# .env. These are mounted :ro into every run AND accepted as symlink targets.
+# Everything else outside the app checkout stays refused, so the agent cannot
+# widen its own view by planting a symlink.
+sandbox_ro_dirs() {
+    local raw="${HEADLONG_SANDBOX_RO_DIRS:-}" home_env
+    if [[ -z "$raw" ]]; then
+        home_env="${HEADLONG_HOME:-$HOME/.headlong}/.env"
+        [[ -r "$home_env" ]] && raw=$(sed -n 's/^HEADLONG_SANDBOX_RO_DIRS=//p' "$home_env" | tail -1)
+    fi
+    raw="${raw%\"}"; raw="${raw#\"}"
+    [[ -z "$raw" ]] && return 0
+    local d
+    # `|| [[ -n "$d" ]]` so a list with no trailing newline still yields its
+    # last entry -- read returns non-zero at EOF even when it read a value.
+    while IFS= read -r d || [[ -n "$d" ]]; do
+        [[ -n "$d" && -d "$d" ]] || continue
+        readlink -f "$d" 2>/dev/null || printf '%s\n' "$d"
+    done < <(printf '%s' "$raw" | tr ':' '\n') | sort -u
+}
+
+# symlink_allow_root WORKDIR - the only tree whose symlink targets may be
+# mounted: the app checkout (the directory holding .identities), which is
+# where every symlink Headlong itself creates points - thinkers, skills and
+# kernel entries. Falls back to the workdir, i.e. allow nothing outside it,
+# when no checkout can be identified.
+symlink_allow_root() {
+    local p="$1"
+    while [[ "$p" != "/" && "$p" != "." && -n "$p" ]]; do
+        [[ -d "$p/.identities" ]] && { printf '%s\n' "$p"; return 0; }
+        p=$(dirname "$p")
+    done
+    printf '%s\n' "$1"
+}
+
 symlink_mounts() {
     local workdir="$1"
+    # The agent has write access to its own workdir, so every symlink in there
+    # is a path IT may have chosen - and this function mounts the target's
+    # *parent directory*. Following an arbitrary target therefore hands the
+    # sandbox whole host directories: `ln -s ~/.ssh/id_ed25519 x` would mount
+    # ~/.ssh, `ln -s ~/.headlong/.env x` the state home. Confine targets to the
+    # app checkout, which is where all of Headlong's own symlinks point.
+    local allow_root allowed ro_dir
+    allow_root=$(symlink_allow_root "$workdir")
+    # Targets arrive canonicalized (readlink -f), so the root must be too, or
+    # a symlink anywhere in the install path -- /var -> /private/var on macOS,
+    # say -- makes every legitimate target look like it is outside the tree.
+    allow_root=$(readlink -f "$allow_root" 2>/dev/null || printf '%s' "$allow_root")
+    # Same reasoning for the workdir: uncanonicalized, a symlinked install path
+    # makes targets already inside the workdir look external and re-mounts it.
+    workdir=$(readlink -f "$workdir" 2>/dev/null || printf '%s' "$workdir")
 
     # bash 3.2 lacks associative arrays, so dedupe via sort -u.
     local -a mount_dirs=()
@@ -90,6 +142,18 @@ symlink_mounts() {
             target=$(readlink -f "$link" 2>/dev/null) || continue
             path_under "$target" "$workdir" && continue
             [[ -e "$target" ]] || continue
+            allowed=0
+            path_under "$target" "$allow_root" && allowed=1
+            if [[ "$allowed" -eq 0 ]]; then
+                while IFS= read -r ro_dir; do
+                    [[ -n "$ro_dir" ]] || continue
+                    path_under "$target" "$ro_dir" && { allowed=1; break; }
+                done < <(sandbox_ro_dirs)
+            fi
+            if [[ "$allowed" -eq 0 ]]; then
+                log_msg "symlink refused (outside $allow_root and the read-only allowlist): $link -> $target"
+                continue
+            fi
             dirname "$target"
         done < <(find "$workdir" -type l -print0 2>/dev/null) \
         | sort -u
@@ -231,6 +295,14 @@ handle_run() {
         [[ -n "$line" ]] && symlink_vols+=("$line")
     done < <(symlink_mounts "$workdir")
 
+    local -a ro_vols=()
+    local ro_dir
+    while IFS= read -r ro_dir; do
+        [[ -n "$ro_dir" ]] || continue
+        path_under "$ro_dir" "$workdir" && continue
+        ro_vols+=(-v "$ro_dir:$ro_dir:ro")
+    done < <(sandbox_ro_dirs)
+
     local -a cmd=(
         docker run --rm
         --label "shellm.broker=1"
@@ -241,6 +313,7 @@ handle_run() {
         --pids-limit "$pids"
         -v "$workdir:$workdir"
         "${symlink_vols[@]}"
+        "${ro_vols[@]}"
         -w "$cwd"
         -e "SHELLM_WORKDIR=$workdir"
         "$image"
