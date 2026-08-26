@@ -41,7 +41,12 @@ def tail_log(log_path: Path, tail_bytes: int) -> dict[str, Any]:
     }
 
 
-def _tail_lines(log_path: Path, max_lines: int, chunk_bytes: int = 1 << 16) -> list[str]:
+def _tail_lines(
+    log_path: Path,
+    max_lines: int,
+    chunk_bytes: int = 1 << 16,
+    max_bytes: int = 8 << 20,
+) -> list[str]:
     """The newest max_lines non-blank lines, read backward from the end.
 
     dispatcher.log is never rotated and the endpoint above this is polled every
@@ -49,22 +54,56 @@ def _tail_lines(log_path: Path, max_lines: int, chunk_bytes: int = 1 << 16) -> l
     allocation on a 190MB log to return the same 2000 events. tail_log solves
     the same problem for raw log tails; this one counts lines rather than bytes,
     because the caller's cap is in events.
+
+    max_bytes is the hard ceiling on the read: a log whose tail never reaches
+    max_lines non-blank lines (a few enormous lines, say) must not be scanned
+    end to end at poll cadence. Past it, whatever whole lines are in hand are
+    the answer.
+
+    The stop condition counts complete lines only, kept as a running count per
+    chunk: the fragment before the accumulated data's first newline is judged
+    once more of the file arrives (or the loop reaches the file's start), never
+    counted early — an early count would be dropped by the partial-line trim
+    below and could return fewer lines than the file holds.
     """
+    if max_lines <= 0:
+        return []
+    parts: list[bytes] = []  # chunks as read, i.e. reversed file order
     with log_path.open("rb") as fh:
         fh.seek(0, 2)
         pos = fh.tell()
-        data = b""
+        count = 0
+        total = 0
+        frag_nonblank = False  # the pending fragment: the data's first line so far
+        at_eof_chunk = True
         while pos > 0:
             step = min(chunk_bytes, pos)
             pos -= step
             fh.seek(pos)
-            data = fh.read(step) + data
-            # Only whole lines count, so ignore anything before the first
-            # newline while more of the file remains.
-            complete = data.split(b"\n", 1)[-1] if pos > 0 else data
-            if sum(1 for line in complete.splitlines() if line.strip()) >= max_lines:
+            chunk = fh.read(step)
+            parts.append(chunk)
+            total += step
+            segs = chunk.split(b"\n")
+            if at_eof_chunk:
+                # The chunk holding the file's end: everything after its first
+                # newline is complete lines (the file's own last line included,
+                # trailing newline or not).
+                count += sum(1 for s in segs[1:] if s.strip())
+                frag_nonblank = bool(segs[0].strip())
+                at_eof_chunk = False
+            elif len(segs) == 1:
+                # No newline: the chunk only extends the pending fragment.
+                frag_nonblank = frag_nonblank or bool(segs[0].strip())
+            else:
+                # The last segment completes the pending fragment; the middle
+                # segments are whole lines of their own.
+                if frag_nonblank or segs[-1].strip():
+                    count += 1
+                count += sum(1 for s in segs[1:-1] if s.strip())
+                frag_nonblank = bool(segs[0].strip())
+            if count >= max_lines or total >= max_bytes:
                 break
-    text = data.decode("utf-8", errors="replace")
+    text = b"".join(reversed(parts)).decode("utf-8", errors="replace")
     lines = text.splitlines()
     if pos > 0 and lines:
         lines = lines[1:]  # drop the (likely partial) first line

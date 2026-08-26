@@ -8,9 +8,8 @@ these tests pin both halves, the events returned AND the fact that the head of
 the file is never touched.
 """
 
+import tracemalloc
 from pathlib import Path
-
-import pytest
 
 from headlong_web import logs
 
@@ -88,7 +87,6 @@ def test_does_not_read_the_whole_file(tmp_path: Path, monkeypatch) -> None:
 
 def test_reads_a_bounded_amount(tmp_path: Path) -> None:
     """Peak allocation tracks the cap, not the file."""
-    tracemalloc = pytest.importorskip("tracemalloc")
     lines = [OTHER.format(i % 60) for i in range(200000)]
     _write_log(tmp_path, lines)
     file_bytes = (tmp_path / "run" / "logs" / "dispatcher.log").stat().st_size
@@ -125,3 +123,51 @@ def test_a_line_longer_than_the_chunk(tmp_path: Path) -> None:
     )
     events = logs.parse_dispatch_log(tmp_path, max_events=2)
     assert [e["kind"] for e in events] == ["step", "dispatch"]
+
+
+# The cases below drive _tail_lines directly with a tiny chunk_bytes: at the
+# default 64KB every fixture above fits in the first chunk, so none of them
+# makes a KEPT line straddle a chunk boundary or the loop run more than once.
+
+
+def test_kept_multibyte_lines_straddle_chunk_boundaries(tmp_path: Path) -> None:
+    """Chunks must be joined before the one decode; a per-chunk decode
+    corrupts the kept lines this builds.
+
+    63-byte lines against 64-byte chunks: each boundary lands one byte earlier
+    in its line than the last, so the boundaries inside the kept tail sweep
+    through the 3-byte characters and several cut one mid-sequence."""
+    log_path = tmp_path / "t.log"
+    wide = "中文テスト"  # 3 bytes per char
+    lines = [f"{wide * 4}{i:02d}" for i in range(50)]  # 60 + 2 + newline = 63
+    log_path.write_text("\n".join(lines) + "\n")
+    got = logs._tail_lines(log_path, 10, chunk_bytes=64)
+    assert got == lines[-10:]
+    assert all("�" not in line for line in got)
+
+
+def test_max_one_line_longer_than_the_chunk(tmp_path: Path) -> None:
+    """The newest line must come back even when it is longer than a chunk and
+    the cap is 1 — counting the partial fragment early returned [] here."""
+    log_path = tmp_path / "t.log"
+    log_path.write_bytes(b"A" * 100 + b"\n" + b"x" * 5000)
+    assert logs._tail_lines(log_path, 1, chunk_bytes=128) == ["x" * 5000]
+    log_path.write_bytes(b"A" * 100 + b"\n" + b"x" * 5000 + b"\n")
+    assert logs._tail_lines(log_path, 1, chunk_bytes=128) == ["x" * 5000]
+
+
+def test_a_degenerate_cap_returns_nothing(tmp_path: Path) -> None:
+    log_path = tmp_path / "t.log"
+    log_path.write_text("line\n")
+    assert logs._tail_lines(log_path, 0) == []
+
+
+def test_huge_lines_hit_the_byte_ceiling(tmp_path: Path) -> None:
+    """A tail that never reaches the cap in non-blank lines (a run of enormous
+    lines) must stop at max_bytes with the whole lines in hand, not scan the
+    file end to end at poll cadence."""
+    log_path = tmp_path / "t.log"
+    lines = ["y" * 5000 for _ in range(100)] + [STEP.format(1)]
+    log_path.write_text("\n".join(lines) + "\n")
+    got = logs._tail_lines(log_path, 2000, chunk_bytes=512, max_bytes=4096)
+    assert got == [STEP.format(1)]
