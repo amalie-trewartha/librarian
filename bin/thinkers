@@ -467,27 +467,60 @@ _start_dispatcher() {
             _wd_last="${_new}${_new:+ }${_tname}:${SECONDS}"
         }
 
-        # Reap finished entries; print count of still-active ones
-        _count_active_steps() {
-            local _count=0 _entry
-            local _new=""
+        # Reap finished step children and prune both the in-memory and on-disk
+        # process lists. `kill -0` alone is insufficient on Linux: an exited,
+        # unreaped child remains visible as a zombie and still passes that
+        # check, which can leave its thinker permanently "busy".
+        _step_alive() {
+            local _pid="$1" _state=""
+            kill -0 "$_pid" 2>/dev/null || return 1
+            if [[ -r "/proc/$_pid/status" ]]; then
+                _state=$(awk '/^State:/{print $2}' "/proc/$_pid/status" 2>/dev/null) || _state=""
+                [[ "$_state" == "Z" ]] && return 1
+            fi
+            return 0
+        }
+
+        _prune_finished_steps() {
+            local _entry _pid _new="" _changed=0
             for _entry in $_step_entries; do
-                local _pid="${_entry#*:}"
-                if kill -0 "$_pid" 2>/dev/null; then
-                    _count=$((_count + 1))
+                _pid="${_entry#*:}"
+                if _step_alive "$_pid"; then
                     _new="${_new}${_new:+ }${_entry}"
+                else
+                    # A zombie is already exited, so wait returns immediately
+                    # and removes it from the process table. Ignore 127 when a
+                    # platform's shell has already reaped the async child.
+                    wait "$_pid" 2>/dev/null || true
+                    _changed=1
                 fi
             done
             _step_entries="$_new"
-            printf '%d' "$_count"
+            if [[ "$_changed" -eq 1 ]]; then
+                : > "$run_dir/step_pids.tmp"
+                for _entry in $_step_entries; do
+                    printf '%s %s\n' "${_entry#*:}" "${_entry%%:*}" >> "$run_dir/step_pids.tmp"
+                done
+                mv "$run_dir/step_pids.tmp" "$run_dir/step_pids"
+            fi
+        }
+
+        _count_active_steps() {
+            _prune_finished_steps
+            _active_step_count=0
+            local _entry
+            for _entry in $_step_entries; do
+                _active_step_count=$((_active_step_count + 1))
+            done
         }
 
         # Check if a thinker already has a running step
         _thinker_busy() {
             local _check_name="$1" _entry
+            _prune_finished_steps
             for _entry in $_step_entries; do
-                local _ename="${_entry%%:*}" _epid="${_entry#*:}"
-                if [[ "$_ename" == "$_check_name" ]] && kill -0 "$_epid" 2>/dev/null; then
+                local _ename="${_entry%%:*}"
+                if [[ "$_ename" == "$_check_name" ]]; then
                     return 0
                 fi
             done
@@ -541,7 +574,8 @@ _start_dispatcher() {
                     continue
                 fi
                 if (( SECONDS - _last >= _csecs )); then
-                    if [[ "$(_count_active_steps)" -ge "$THINKERS_MAX_CONCURRENT" ]]; then continue; fi
+                    _count_active_steps
+                    if [[ "$_active_step_count" -ge "$THINKERS_MAX_CONCURRENT" ]]; then continue; fi
                     printf '%s [dispatcher]   watchdog -> %s (quiet %ss)\n' "$(date -u +%FT%TZ)" "$_cname" "$((SECONDS - _last))" >&2
                     _dispatch_step "$_cname" "$(jq -nc --arg source "$_cname" \
                         '{type:"idle", content:"idle", source:$source, synthetic:"watchdog"}')"
@@ -579,7 +613,8 @@ _start_dispatcher() {
                 # Still busy: leave the flag for a later tick
                 if _thinker_busy "$_pname"; then continue; fi
                 # At global cap: defer to a later tick
-                _pactive=$(_count_active_steps)
+                _count_active_steps
+                _pactive=$_active_step_count
                 if [[ "$_pactive" -ge "$THINKERS_MAX_CONCURRENT" ]]; then return 0; fi
                 _pjson=$(cat "$_pfile")
                 rm -f "$_pfile"
@@ -618,7 +653,8 @@ _start_dispatcher() {
                 # Due. Don't fire while busy or without a free slot — retry next
                 # tick (leave the file). The step re-arms wake_at on its way out.
                 _thinker_busy "$_wname" && continue
-                if [[ "$(_count_active_steps)" -ge "$THINKERS_MAX_CONCURRENT" ]]; then continue; fi
+                _count_active_steps
+                if [[ "$_active_step_count" -ge "$THINKERS_MAX_CONCURRENT" ]]; then continue; fi
                 rm -f "$_wf"
                 printf '%s [dispatcher]   scheduled wake -> %s (due %ss ago)\n' "$(date -u +%FT%TZ)" "$_wname" "$((_now - _wat))" >&2
                 _dispatch_step "$_wname" "$(jq -nc --arg source monolith-timer \
@@ -829,7 +865,8 @@ _start_dispatcher() {
 
                 # Global concurrency limit
                 while true; do
-                    _active=$(_count_active_steps)
+                    _count_active_steps
+                    _active=$_active_step_count
                     if [[ "$_active" -lt "$THINKERS_MAX_CONCURRENT" ]]; then
                         break
                     fi
