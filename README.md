@@ -9,8 +9,7 @@
 [![CI](https://github.com/laude-institute/headlong/actions/workflows/ci.yml/badge.svg)](https://github.com/laude-institute/headlong/actions/workflows/ci.yml)
 
 
-**Headlong**
-([blog](https://www.laude.org/updates/headlong-a-microharness-for-persistent-agents))
+[**Headlong**](https://www.laude.org/updates/headlong-a-microharness-for-persistent-agents)
 is an open source agent microharness, a complete agent harness with a core of
 less than 10K lines of Bash. Headlong's defining feature is **persistent
 agency**. Your agent keeps thinking between external interactions in a
