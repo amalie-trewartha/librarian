@@ -8,8 +8,9 @@ set -euo pipefail
 #
 # ROOT defaults to the headlong repo (parent of this script's directory).
 # Requires uv. Configuration via env: TELEGRAM_BOT_TOKEN, TELEGRAM_ADMIN_ID,
-# HEADLONG_TELEGRAM_IDENTITY (default audel), HEADLONG_WEB_URL (SHELLM_* names
-# still honored as fallbacks).
+# HEADLONG_TELEGRAM_IDENTITY (defaults to the identity the `default`
+# link points at), HEADLONG_WEB_URL (SHELLM_* names still honored as
+# fallbacks).
 #
 # Note: the production systemd unit does NOT use this script — it execs the
 # project venv directly so the bridge can run as its own user (uv would try

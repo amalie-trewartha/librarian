@@ -29,6 +29,25 @@ class Config:
         return str(rel).replace("/", "~")
 
 
+def _default_identity(serve_root: Path) -> str:
+    """The identity the `default` symlink points at, as `persona` resolves it.
+
+    The immediate link target, not the end of the chain: an identity dir may
+    itself be a symlink elsewhere, and its name here is the one `identity
+    default` recorded.
+    """
+    for base in (".identities", "identities"):
+        link = serve_root / base / "default"
+        if link.is_symlink():
+            return link.readlink().name
+    raise SystemExit(
+        "headlong-slack-bridge: no identity given and no default set "
+        f"under {serve_root} (looked for .identities/default and "
+        "identities/default). Set HEADLONG_SLACK_IDENTITY, or point the "
+        "default at one with: identity default <name>"
+    )
+
+
 def _find_identity_dir(serve_root: Path, name: str) -> Path:
     for base in (".identities", "identities"):
         candidate = serve_root / base / name
@@ -55,7 +74,7 @@ def load(serve_root: Path) -> Config:
     identity = (
         os.environ.get("HEADLONG_SLACK_IDENTITY")
         or os.environ.get("SHELLM_SLACK_IDENTITY")
-        or "audel"
+        or _default_identity(serve_root)
     )
     identity_dir = _find_identity_dir(serve_root, identity)
     state_dir = Path(

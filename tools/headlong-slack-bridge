@@ -8,8 +8,9 @@ set -euo pipefail
 #
 # ROOT defaults to the headlong repo (parent of this script's directory).
 # Requires uv. Configuration via env: SLACK_BOT_TOKEN, SLACK_APP_TOKEN,
-# HEADLONG_SLACK_IDENTITY (default audel), HEADLONG_WEB_URL (SHELLM_* names
-# still honored as fallbacks).
+# HEADLONG_SLACK_IDENTITY (defaults to the identity the `default`
+# link points at), HEADLONG_WEB_URL (SHELLM_* names still honored as
+# fallbacks).
 
 # Resolve through symlinks (install.sh --symlinks puts this on PATH), then
 # fall back to the checkout recorded by install.sh / headlong-init.
