@@ -6,8 +6,8 @@
 # starts. A value passed as `-e VAR=value` is an argument of the docker client,
 # so it is readable from `ps` by any other local user for as long as that
 # process lives; tests/test_var_secrets.sh already pins the same rule for the
-# shellm path, and bin/thinkers already forwards keys by bare name for the same
-# reason. Keys therefore go by NAME, which requires them to be exported, and
+# shellm path, and thinkers/_lib/common.sh already forwards keys by bare name
+# for the same reason. Keys therefore go by NAME, which requires them to be exported, and
 # the non-secret answers stay inline because two of them (HEADLONG_REPO,
 # HEADLONG_BRANCH) are assigned by install.sh without export and a bare name
 # would silently forward nothing.
@@ -40,10 +40,11 @@ args=$(
     HEADLONG_BRANCH=experiment
     # shellcheck disable=SC1090  # generated copy of the installer under test
     source "$WORK/install.lib"
-    _docker_forward_args
-    printf '\n'
+    # Flatten the NUL delimiters here: command substitution drops NUL bytes,
+    # so the records must become space-separated before capture.
+    _docker_forward_args | tr '\0' ' '
 )
-flat=" $(printf '%s' "$args" | tr '\n' ' ') "   # padded so a match at either end still has a boundary
+flat=" $args "   # padded so a match at either end still has a boundary
 
 case "$flat" in
     *"$SECRET"*) bad "no API key value on the docker command line" "found $SECRET in: $flat" ;;
@@ -79,7 +80,12 @@ exported=$(
     OPENROUTER_API_KEY="$SECRET"        # set, NOT exported
     # shellcheck disable=SC1090  # generated copy of the installer under test
     source "$WORK/install.lib"
-    _docker_forward_args >/dev/null
+    # The caller's exact collection pattern from _offer_docker_install: a
+    # redirected call plus a NUL read loop. Process substitution here would
+    # confine the export to a child and forward an empty value.
+    _docker_forward_args > "$WORK/fwd"
+    # shellcheck disable=SC2034  # the records are drained, not inspected
+    while IFS= read -r -d '' line; do :; done < "$WORK/fwd"
     export -p | grep -c '^declare -x OPENROUTER_API_KEY=' || true
 )
 [[ "$exported" -ge 1 ]] && ok "the key is exported, so the bare name carries a value" \
@@ -93,7 +99,7 @@ none=$(
     unset HEADLONG_IDENTITY_USER HEADLONG_OPERATOR_NAME
     # shellcheck disable=SC1090  # generated copy of the installer under test
     source "$WORK/install.lib"
-    _docker_forward_args | tr '\n' ' '
+    _docker_forward_args | tr '\0' ' '
 )
 case "$none" in
     *API_KEY*) bad "no key is forwarded when none is set" "got: $none" ;;
