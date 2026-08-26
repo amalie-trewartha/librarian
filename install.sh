@@ -96,6 +96,34 @@ _docker_daemon_ok() {
     command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
 }
 
+# The `docker run` arguments that carry the operator's environment into the
+# container, NUL-delimited for the caller to read into an array: the interview
+# answers are free text, so a value may contain a newline.
+#
+# Keys go by NAME. `-e VAR=value` puts the value in the docker client's argv,
+# where `ps` shows it to every other user on the machine for as long as the
+# client runs; thinkers/_lib/common.sh forwards keys the same way for the same
+# reason, and tests/test_var_secrets.sh pins the rule for shellm. Docker reads a name-only
+# `-e VAR` from its own environment, so the name must be exported, which is why
+# the answers below do NOT use it: install.sh assigns HEADLONG_REPO and
+# HEADLONG_BRANCH itself without exporting them, so a bare name would forward
+# nothing and the container would clone the default repo instead of the
+# operator's. They are not secrets, so inline is fine.
+_docker_forward_args() {
+    local var
+    for var in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY \
+               OPENCODE_API_KEY; do
+        if [[ -n "${!var:-}" ]]; then
+            export "${var?}"
+            printf '%s\0%s\0' "-e" "$var"
+        fi
+    done
+    for var in HEADLONG_IDENTITY_NAME HEADLONG_IDENTITY_VIBE HEADLONG_IDENTITY_FOCUS \
+               HEADLONG_IDENTITY_USER HEADLONG_OPERATOR_NAME HEADLONG_REPO HEADLONG_BRANCH; do
+        if [[ -n "${!var:-}" ]]; then printf '%s\0%s\0' "-e" "$var=${!var}"; fi
+    done
+}
+
 # _offer_docker_install — with a working Docker daemon and a human at a tty,
 # offer to keep the whole agent inside a Docker container (the flow that
 # docs/install.md calls the Docker one-liner) instead of installing on the
@@ -156,13 +184,17 @@ EOF
 
     # Forward a key and interview answers already in the environment, so the
     # in-container installer does not re-ask for what the operator has set.
+    # A redirected function call, not process substitution: the helper's
+    # exports must land in THIS shell, because docker fills a bare `-e VAR`
+    # from the client's own environment.
     local -a fwd=()
-    local var
-    for var in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY \
-               HEADLONG_IDENTITY_NAME HEADLONG_IDENTITY_VIBE HEADLONG_IDENTITY_FOCUS \
-               HEADLONG_IDENTITY_USER HEADLONG_OPERATOR_NAME HEADLONG_REPO HEADLONG_BRANCH; do
-        if [[ -n "${!var:-}" ]]; then fwd+=(-e "$var=${!var}"); fi
-    done
+    local line fwd_tmp
+    fwd_tmp=$(mktemp)
+    _docker_forward_args > "$fwd_tmp"
+    while IFS= read -r -d '' line; do
+        fwd+=("$line")
+    done < "$fwd_tmp"
+    rm -f "$fwd_tmp"
 
     echo
     echo "==> Starting your agent in a Docker container named 'headlong'"

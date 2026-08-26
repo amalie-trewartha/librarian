@@ -48,7 +48,9 @@ The admin (you) is approved automatically on first start.
 export TELEGRAM_BOT_TOKEN=...       # from @BotFather
 export TELEGRAM_ADMIN_ID=...        # your numeric user id; message the bot
                                     # once and read it from the bridge log
-export HEADLONG_TELEGRAM_IDENTITY=audel  # default (legacy SHELLM_TELEGRAM_IDENTITY still honored)
+export HEADLONG_TELEGRAM_IDENTITY=ada  # optional; defaults to the `default`
+                                       # identity link (legacy
+                                       # SHELLM_TELEGRAM_IDENTITY still honored)
 tools/headlong-telegram-bridge [ROOT]   # ROOT = serve root, default repo root
 ```
 
@@ -62,7 +64,7 @@ which does not use this launcher and reads the root-owned
 `/etc/shellm/telegram.env` instead — the bot token stays out of the agent's
 own environment, as described above.
 
-The identity must exist (`identity new audel`) with a running dispatcher
+The identity must exist (`identity new <name>`) with a running dispatcher
 (`thinkers start monolith responder`), and headlong-web must be serving the same root
 (default `http://127.0.0.1:8080`, override with `HEADLONG_WEB_URL`; legacy `SHELLM_WEB_URL` still honored).
 

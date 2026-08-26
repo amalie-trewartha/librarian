@@ -26,7 +26,9 @@ format.
 ```bash
 export SLACK_BOT_TOKEN=xoxb-...     # see "Slack app lifecycle" below
 export SLACK_APP_TOKEN=xapp-...
-export HEADLONG_SLACK_IDENTITY=audel  # default (legacy SHELLM_SLACK_IDENTITY still honored)
+export HEADLONG_SLACK_IDENTITY=ada    # optional; defaults to the `default`
+                                      # identity link (legacy SHELLM_SLACK_IDENTITY
+                                      # still honored)
 tools/headlong-slack-bridge [ROOT]      # ROOT = serve root, default repo root
 ```
 
@@ -36,7 +38,7 @@ tokens can live in an env file instead of the calling shell. Anything already
 exported wins, which is what keeps systemd's `EnvironmentFile` and `slack run`
 in charge where they are used.
 
-The identity must exist (`identity new audel`) with a running dispatcher
+The identity must exist (`identity new <name>`) with a running dispatcher
 (`thinkers start monolith responder`), and headlong-web must be serving the same root
 (default `http://127.0.0.1:8080`, override with `HEADLONG_WEB_URL`; legacy `SHELLM_WEB_URL` still honored).
 

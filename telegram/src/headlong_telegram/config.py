@@ -30,6 +30,35 @@ class Config:
         return str(rel).replace("/", "~")
 
 
+def _default_identity(serve_root: Path) -> str:
+    """The identity the `default` symlink points at, as `persona` resolves it.
+
+    The immediate link target, not the end of the chain: an identity dir may
+    itself be a symlink elsewhere, and its name here is the one `identity
+    default` recorded.
+    """
+    for base in (".identities", "identities"):
+        link = serve_root / base / "default"
+        if link.is_symlink():
+            name = link.readlink().name
+            # A dangling default is its own error: passing the name on would
+            # surface as "identity not found ... identity new <name>", advice
+            # that creates a second identity instead of fixing the link.
+            if not (serve_root / base / name).is_dir():
+                raise SystemExit(
+                    f"headlong-telegram-bridge: the default identity link {link} "
+                    f"points at '{name}', which is not an identity under "
+                    f"{serve_root / base}. Repoint it with: identity default <name>"
+                )
+            return name
+    raise SystemExit(
+        "headlong-telegram-bridge: no identity given and no default set "
+        f"under {serve_root} (looked for .identities/default and "
+        "identities/default). Set HEADLONG_TELEGRAM_IDENTITY, or point the "
+        "default at one with: identity default <name>"
+    )
+
+
 def _find_identity_dir(serve_root: Path, name: str) -> Path:
     for base in (".identities", "identities"):
         candidate = serve_root / base / name
@@ -57,7 +86,7 @@ def load(serve_root: Path) -> Config:
     identity = (
         os.environ.get("HEADLONG_TELEGRAM_IDENTITY")
         or os.environ.get("SHELLM_TELEGRAM_IDENTITY")
-        or "audel"
+        or _default_identity(serve_root)
     )
     identity_dir = _find_identity_dir(serve_root, identity)
     state_dir = Path(

@@ -424,6 +424,13 @@ _start_dispatcher() {
 
         # Track thinker step PIDs as "name:pid" pairs (space-separated, bash 3.2 compat)
         _step_entries=""
+        # A new dispatcher starts a fresh ledger, deliberately: the on-disk
+        # prune below rewrites step_pids from _step_entries alone, so a dead
+        # dispatcher's leftover lines would be dropped on the first prune
+        # anyway — silently. Truncating here makes that explicit. Orphaned
+        # steps from a prior dispatcher are outside this generation's drain;
+        # every step_pids reader filters for live PIDs itself.
+        : > "$run_dir/step_pids"
 
         # Liveness watchdog. The perpetual loop is a chain of triggers, and a
         # single broken link kills the mind: a step that crashes before
@@ -467,27 +474,71 @@ _start_dispatcher() {
             _wd_last="${_new}${_new:+ }${_tname}:${SECONDS}"
         }
 
-        # Reap finished entries; print count of still-active ones
-        _count_active_steps() {
-            local _count=0 _entry
-            local _new=""
+        # Prune finished step children from the in-memory and on-disk process
+        # lists. The stall this guards against: these prunes used to run
+        # inside command substitution, so the `_step_entries="$_new"` below
+        # happened in a subshell and was discarded — the ledger grew one dead
+        # PID per dispatched step, and once the kernel recycled a stale PID
+        # onto a live same-user process, `kill -0` passed and the thinker
+        # looked busy forever (the watchdog refreshes its quiet timer on
+        # busy, so it never rescued). Pruning in the dispatcher shell bounds
+        # the PID-reuse window to about one tick.
+        _step_alive() {
+            local _pid="$1" _line=""
+            kill -0 "$_pid" 2>/dev/null || return 1
+            # Belt-and-braces only: bash reaps its own background children on
+            # SIGCHLD, so a persistent Z-state child of this dispatcher is
+            # not expected. Builtin read — this runs on the ~1s tick path,
+            # where a fork per tracked PID adds up.
+            if [[ -r "/proc/$_pid/stat" ]]; then
+                read -r _line < "/proc/$_pid/stat" 2>/dev/null || _line=""
+                _line="${_line##*') '}"   # skip pid and (comm); comm may hold ') '
+                [[ "${_line%% *}" == "Z" ]] && return 1
+            fi
+            return 0
+        }
+
+        _prune_finished_steps() {
+            local _entry _pid _new="" _changed=0
             for _entry in $_step_entries; do
-                local _pid="${_entry#*:}"
-                if kill -0 "$_pid" 2>/dev/null; then
-                    _count=$((_count + 1))
+                _pid="${_entry#*:}"
+                if _step_alive "$_pid"; then
                     _new="${_new}${_new:+ }${_entry}"
+                else
+                    # bash has normally reaped the child already; this wait
+                    # just clears bash's own job-table entry and returns
+                    # immediately. Ignore failure when there is nothing left
+                    # to wait for.
+                    wait "$_pid" 2>/dev/null || true
+                    _changed=1
                 fi
             done
             _step_entries="$_new"
-            printf '%d' "$_count"
+            if [[ "$_changed" -eq 1 ]]; then
+                : > "$run_dir/step_pids.tmp"
+                for _entry in $_step_entries; do
+                    printf '%s %s\n' "${_entry#*:}" "${_entry%%:*}" >> "$run_dir/step_pids.tmp"
+                done
+                mv "$run_dir/step_pids.tmp" "$run_dir/step_pids"
+            fi
+        }
+
+        _count_active_steps() {
+            _prune_finished_steps
+            _active_step_count=0
+            local _entry
+            for _entry in $_step_entries; do
+                _active_step_count=$((_active_step_count + 1))
+            done
         }
 
         # Check if a thinker already has a running step
         _thinker_busy() {
             local _check_name="$1" _entry
+            _prune_finished_steps
             for _entry in $_step_entries; do
-                local _ename="${_entry%%:*}" _epid="${_entry#*:}"
-                if [[ "$_ename" == "$_check_name" ]] && kill -0 "$_epid" 2>/dev/null; then
+                local _ename="${_entry%%:*}"
+                if [[ "$_ename" == "$_check_name" ]]; then
                     return 0
                 fi
             done
@@ -541,7 +592,8 @@ _start_dispatcher() {
                     continue
                 fi
                 if (( SECONDS - _last >= _csecs )); then
-                    if [[ "$(_count_active_steps)" -ge "$THINKERS_MAX_CONCURRENT" ]]; then continue; fi
+                    _count_active_steps
+                    if [[ "$_active_step_count" -ge "$THINKERS_MAX_CONCURRENT" ]]; then continue; fi
                     printf '%s [dispatcher]   watchdog -> %s (quiet %ss)\n' "$(date -u +%FT%TZ)" "$_cname" "$((SECONDS - _last))" >&2
                     _dispatch_step "$_cname" "$(jq -nc --arg source "$_cname" \
                         '{type:"idle", content:"idle", source:$source, synthetic:"watchdog"}')"
@@ -579,7 +631,8 @@ _start_dispatcher() {
                 # Still busy: leave the flag for a later tick
                 if _thinker_busy "$_pname"; then continue; fi
                 # At global cap: defer to a later tick
-                _pactive=$(_count_active_steps)
+                _count_active_steps
+                _pactive=$_active_step_count
                 if [[ "$_pactive" -ge "$THINKERS_MAX_CONCURRENT" ]]; then return 0; fi
                 _pjson=$(cat "$_pfile")
                 rm -f "$_pfile"
@@ -618,7 +671,8 @@ _start_dispatcher() {
                 # Due. Don't fire while busy or without a free slot — retry next
                 # tick (leave the file). The step re-arms wake_at on its way out.
                 _thinker_busy "$_wname" && continue
-                if [[ "$(_count_active_steps)" -ge "$THINKERS_MAX_CONCURRENT" ]]; then continue; fi
+                _count_active_steps
+                if [[ "$_active_step_count" -ge "$THINKERS_MAX_CONCURRENT" ]]; then continue; fi
                 rm -f "$_wf"
                 printf '%s [dispatcher]   scheduled wake -> %s (due %ss ago)\n' "$(date -u +%FT%TZ)" "$_wname" "$((_now - _wat))" >&2
                 _dispatch_step "$_wname" "$(jq -nc --arg source monolith-timer \
@@ -829,7 +883,8 @@ _start_dispatcher() {
 
                 # Global concurrency limit
                 while true; do
-                    _active=$(_count_active_steps)
+                    _count_active_steps
+                    _active=$_active_step_count
                     if [[ "$_active" -lt "$THINKERS_MAX_CONCURRENT" ]]; then
                         break
                     fi

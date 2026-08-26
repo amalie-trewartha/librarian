@@ -190,7 +190,47 @@ test_busy_defers() {
 }
 
 # ---------------------------------------------------------------------------
-# Test 4: garbage content and wake_at for a thinker that is not active are
+# Test 4: a completed asynchronous step is pruned from the ledger. The stall
+# this pins: pruning used to run inside command substitution, so the pruned
+# ledger was discarded with the subshell — _step_entries grew one dead PID
+# per dispatched step, and a kernel-recycled stale PID then passed `kill -0`
+# and left its thinker busy forever. The on-disk prune below is the
+# observable half of the in-shell prune.
+# ---------------------------------------------------------------------------
+test_finished_step_reaped() {
+    local old_pid
+    setup_identity
+    start_thinkers
+
+    # A nonzero nap keeps the step alive past wait_for_record, so step_pids
+    # still holds its entry when read (with 0 it can already be pruned,
+    # leaving old_pid empty and the assertion below vacuous).
+    printf '2' > "$TMP/id/nap"
+    append_step '{"type":"action","content":"A","source":"test"}'
+    wait_for_record 1
+    old_pid=$(awk 'NR == 1 {print $1}' "$RUN/step_pids")
+    if [[ -z "$old_pid" ]]; then
+        bad "captured prior step pid" "step_pids: $(cat "$RUN/step_pids" 2>/dev/null | tr '\n' ' ')"
+    fi
+
+    printf '%s' "$(( $(now) - 1 ))" > "$RUN/napper.wake_at"
+    wait_for_record 2 8
+    if [[ "$(record_count)" -eq 2 ]] && tail -1 "$TMP/id/record" | grep -q '"monolith-wake"'; then
+        ok "scheduled wake fires after prior child exits"
+    else
+        bad "scheduled wake fires after prior child exits" "record: $(cat "$TMP/id/record" 2>/dev/null | tr '\n' ' ')"
+    fi
+    if ! grep -q "^$old_pid " "$RUN/step_pids" 2>/dev/null; then
+        ok "completed thinker step removed from process list"
+    else
+        bad "completed thinker step removed from process list" "step_pids: $(cat "$RUN/step_pids" 2>/dev/null | tr '\n' ' ')"
+    fi
+
+    stop_thinkers
+}
+
+# ---------------------------------------------------------------------------
+# Test 5: garbage content and wake_at for a thinker that is not active are
 # dropped without firing.
 # ---------------------------------------------------------------------------
 test_bad_files_dropped() {
@@ -217,7 +257,7 @@ test_bad_files_dropped() {
 }
 
 # ---------------------------------------------------------------------------
-# Test 5: `thinkers stop` drops a pending wake_at so it cannot fire a thinker
+# Test 6: `thinkers stop` drops a pending wake_at so it cannot fire a thinker
 # the operator just stopped.
 # ---------------------------------------------------------------------------
 test_stop_clears_wake_at() {
@@ -239,6 +279,7 @@ printf 'test_thinkers_wake_at: using tmp dir %s\n' "$TMP"
 test_due_wake_fires_once
 test_future_wake_waits
 test_busy_defers
+test_finished_step_reaped
 test_bad_files_dropped
 test_stop_clears_wake_at
 

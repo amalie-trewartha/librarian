@@ -1,9 +1,10 @@
 """Per-identity thinker status, mirroring `bin/thinkers` cmd_status.
 
 All state is derived from files under <identity>/run/ plus os.kill(pid, 0)
-liveness probes — the same sources the CLI reads. Note: step_pids is
-append-only and pids can be recycled by the OS, so a recycled pid may
-briefly misreport a thinker as active; this matches `thinkers status`.
+liveness probes — the same sources the CLI reads. Note: the dispatcher
+prunes completed steps out of step_pids within about a tick, so a
+recycled pid can misreport a thinker as active only in that window; this
+matches `thinkers status`.
 """
 
 import json

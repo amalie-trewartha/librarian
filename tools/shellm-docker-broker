@@ -76,8 +76,115 @@ path_under() {
     [[ "$path" == "$root" || "$path" == "$root"/* ]]
 }
 
+# sandbox_ro_dirs - directories the operator has chosen to expose to the
+# sandbox read-only, newline-separated. Configured as a colon-separated list
+# in HEADLONG_SANDBOX_RO_DIRS, either in the environment or in the state
+# .env. These are mounted :ro into every run AND accepted as symlink targets.
+# Everything else outside the app checkout stays refused, so the agent cannot
+# widen its own view by planting a symlink.
+sandbox_ro_dirs() {
+    local raw="${HEADLONG_SANDBOX_RO_DIRS:-}" home_env
+    if [[ -z "$raw" ]]; then
+        home_env="${HEADLONG_HOME:-$HOME/.headlong}/.env"
+        [[ -r "$home_env" ]] && raw=$(sed -n 's/^HEADLONG_SANDBOX_RO_DIRS=//p' "$home_env" | tail -1)
+    fi
+    raw="${raw%\"}"; raw="${raw#\"}"
+    [[ -z "$raw" ]] && return 0
+    local d
+    # `|| [[ -n "$d" ]]` so a list with no trailing newline still yields its
+    # last entry -- read returns non-zero at EOF even when it read a value.
+    while IFS= read -r d || [[ -n "$d" ]]; do
+        [[ -n "$d" && -d "$d" ]] || continue
+        readlink -f "$d" 2>/dev/null || printf '%s\n' "$d"
+    done < <(printf '%s' "$raw" | tr ':' '\n') | sort -u
+}
+
+# symlink_allow_root WORKDIR - the only tree whose symlink targets may be
+# mounted: the app checkout (the directory holding .identities), which is
+# where every symlink Headlong itself creates points - thinkers, skills and
+# kernel entries. Falls back to the workdir, i.e. allow nothing outside it,
+# when no checkout can be identified.
+symlink_allow_root() {
+    local p="$1"
+    while [[ "$p" != "/" && "$p" != "." && -n "$p" ]]; do
+        [[ -d "$p/.identities" ]] && { printf '%s\n' "$p"; return 0; }
+        p=$(dirname "$p")
+    done
+    printf '%s\n' "$1"
+}
+
+# Resolve a host path for containment without requiring it to exist: compose
+# marks missing bind sources create_host_path, so demanding existence would
+# reject work the sandbox is allowed to do. `realpath -m` would do this in one
+# call but is GNU-only, and this broker runs on macOS too, so walk up to the
+# deepest existing ancestor, resolve THAT (which is what follows symlinks),
+# and re-attach the tail. Callers reject `..` before calling, so the tail
+# cannot climb back out.
+#
+# The walk stops at a symlink as well as at anything that exists, because `-e`
+# is false for a DANGLING one. Without the `-L` test a dangling link reads as a
+# missing component: the walk strips it, resolves the parent it sits in, and
+# re-attaches the name, so the link is judged at its own location while the
+# daemon would follow it to the target. Stopping here hands the link to
+# realpath, which fails on a dangling target, and a path that cannot be
+# resolved is rejected.
+resolve_for_containment() {
+    local path="$1"
+    local tail="" base resolved
+    while [[ ! -e "$path" && ! -L "$path" && "$path" == */?* ]]; do
+        base="${path##*/}"
+        [[ -n "$base" ]] && tail="$base${tail:+/$tail}"
+        path="${path%/*}"
+        [[ -n "$path" ]] || path=/
+    done
+    resolved=$(realpath "$path" 2>/dev/null) || return 1
+    [[ -n "$tail" ]] && resolved="${resolved%/}/$tail"
+    printf '%s\n' "$resolved"
+}
+
+# One host path from a compose model, checked the way every other path in this
+# file is checked. Lexical containment is not enough here: `docker compose
+# config` leaves `..` in an ABSOLUTE bind source unnormalized (verified against
+# compose 2.40.3), and it never resolves symlinks, so a purely textual prefix
+# test blesses a string the daemon then resolves somewhere else entirely.
+#
+# A relative candidate (compose leaves a cache_to dest relative where it
+# resolves every other path field) is taken against `base`, the project
+# directory, which safe_cwd has already confined to the workdir; with no base
+# it is rejected. The `..` test runs after the join, so a relative climb is
+# refused the same way an absolute one is.
+path_contained() {
+    local path="$1"
+    local root="$2"
+    local base="${3:-}"
+    [[ -n "$path" ]] || return 1   # an empty candidate must not join to base
+    if [[ "$path" != /* ]]; then
+        [[ -n "$base" ]] || return 1
+        path="$base/$path"
+    fi
+    case "/$path/" in */../*) return 1 ;; esac
+    local resolved
+    resolved=$(resolve_for_containment "$path") || return 1
+    path_under "$resolved" "$root"
+}
+
 symlink_mounts() {
     local workdir="$1"
+    # The agent has write access to its own workdir, so every symlink in there
+    # is a path IT may have chosen - and this function mounts the target's
+    # *parent directory*. Following an arbitrary target therefore hands the
+    # sandbox whole host directories: `ln -s ~/.ssh/id_ed25519 x` would mount
+    # ~/.ssh, `ln -s ~/.headlong/.env x` the state home. Confine targets to the
+    # app checkout, which is where all of Headlong's own symlinks point.
+    local allow_root allowed ro_dir
+    allow_root=$(symlink_allow_root "$workdir")
+    # Targets arrive canonicalized (readlink -f), so the root must be too, or
+    # a symlink anywhere in the install path -- /var -> /private/var on macOS,
+    # say -- makes every legitimate target look like it is outside the tree.
+    allow_root=$(readlink -f "$allow_root" 2>/dev/null || printf '%s' "$allow_root")
+    # Same reasoning for the workdir: uncanonicalized, a symlinked install path
+    # makes targets already inside the workdir look external and re-mounts it.
+    workdir=$(readlink -f "$workdir" 2>/dev/null || printf '%s' "$workdir")
 
     # bash 3.2 lacks associative arrays, so dedupe via sort -u.
     local -a mount_dirs=()
@@ -86,11 +193,29 @@ symlink_mounts() {
         [[ -n "$line" ]] && mount_dirs+=("$line")
     done < <(
         while IFS= read -r -d '' link; do
-            local target
+            local target mount_dir
             target=$(readlink -f "$link" 2>/dev/null) || continue
             path_under "$target" "$workdir" && continue
             [[ -e "$target" ]] || continue
-            dirname "$target"
+            # The sandbox mounts the target's PARENT directory, so containment
+            # must be checked on that parent, not on the target itself. A
+            # symlink to the checkout root passes a target-only check yet
+            # mounts dirname(checkout) — the checkout's parent, often $HOME —
+            # re-opening the very escape this function is meant to close.
+            mount_dir=$(dirname "$target")
+            allowed=0
+            path_under "$mount_dir" "$allow_root" && allowed=1
+            if [[ "$allowed" -eq 0 ]]; then
+                while IFS= read -r ro_dir; do
+                    [[ -n "$ro_dir" ]] || continue
+                    path_under "$mount_dir" "$ro_dir" && { allowed=1; break; }
+                done < <(sandbox_ro_dirs)
+            fi
+            if [[ "$allowed" -eq 0 ]]; then
+                log_msg "symlink refused (mount dir $mount_dir outside $allow_root and the read-only allowlist): $link -> $target"
+                continue
+            fi
+            printf '%s\n' "$mount_dir"
         done < <(find "$workdir" -type l -print0 2>/dev/null) \
         | sort -u
     )
@@ -231,6 +356,14 @@ handle_run() {
         [[ -n "$line" ]] && symlink_vols+=("$line")
     done < <(symlink_mounts "$workdir")
 
+    local -a ro_vols=()
+    local ro_dir
+    while IFS= read -r ro_dir; do
+        [[ -n "$ro_dir" ]] || continue
+        path_under "$ro_dir" "$workdir" && continue
+        ro_vols+=(-v "$ro_dir:$ro_dir:ro")
+    done < <(sandbox_ro_dirs)
+
     local -a cmd=(
         docker run --rm
         --label "shellm.broker=1"
@@ -240,7 +373,8 @@ handle_run() {
         --memory "$memory"
         --pids-limit "$pids"
         -v "$workdir:$workdir"
-        "${symlink_vols[@]}"
+        ${symlink_vols[@]+"${symlink_vols[@]}"}
+        ${ro_vols[@]+"${ro_vols[@]}"}
         -w "$cwd"
         -e "SHELLM_WORKDIR=$workdir"
         "$image"
@@ -339,13 +473,247 @@ handle_version() {
     run_capture "${cmd[@]}"
 }
 
+# The host paths a compose model names, emitted as NUL-terminated
+# "name<TAB>kind<TAB>path" records for the bash containment check below. A
+# missing or non-string path becomes an empty string so it is rejected rather
+# than skipped: the old jq predicate only flagged strings, so a null passed.
+#
+# The bind sources and build contexts are not the whole surface. A named volume
+# with driver_opts.device, a secret or config with `file:`, an extra build
+# context, a build ssh key, a local build cache, and a develop.watch path all
+# name a host path too, and none of them passes through .services[].volumes.
+# Verified by execution before this was written: a volume device and a secret
+# file each mounted a host file from outside SHELLM_WORKDIR into a brokered
+# container while the bind check was already in force, and compose 2.40.3
+# renders a develop.watch path and a `type=local,src=` cache entry pointing
+# anywhere on the host.
+#
+# What this program does NOT cover, and why:
+#   - env_file and label_file: the default render consumes both, so their paths
+#     survive only in the uninterpolated render. RAW_PATHS_PROGRAM below reads
+#     them from there, and compose_validate_model checks them before the render
+#     that would read the files.
+#   - extends.file and top-level include: compose merges them away, so no path
+#     reaches either render. What they pull in becomes ordinary services, whose
+#     paths this program then checks (an extends.file naming /etc as a bind
+#     source is rejected as a bind). The residual is that compose reads the
+#     named YAML while rendering, which is why a render failure no longer
+#     relays compose's stderr to the caller.
+#   - build.env_file: not in the 2.40.3 schema; compose rejects the model.
+#
+# A value is skipped only when it cannot be a host path. additional_contexts
+# shares its map with `docker-image://`, `service:` and git or http(s)/ssh
+# URLs, and those are the only values passed over. An `oci-layout://` context
+# is NOT one of them: it names a local OCI layout directory on the host, so
+# the scheme is stripped and the remainder checked. Everything else,
+# absolute or not, goes to path_contained to accept or reject. Compose 2.40.3
+# resolves a relative additional context against the project directory before
+# this sees it, but a filter that drops what it does not recognise is the wrong
+# default in a gate, so the recognising is done on the non-paths instead. Same
+# reason a driver_opts.device is always checked: a device that is not an
+# absolute path (an NFS "host:/export", say) is not something this broker
+# should hand out either, and path_contained rejects it.
+# `read -d ''` returns nonzero at EOF, which set -e would treat as fatal.
+read -r -d '' PATHS_PROGRAM <<'JQ' || true
+
+            def build_contexts($b):
+              if $b == null then []
+              elif ($b | type) == "string" then [$b]
+              elif ($b | type) == "object" then [$b.context // ""]
+              else [] end;
+            def build_dockerfiles($b):
+              if ($b | type) == "object" and (($b.dockerfile // "") | startswith("/")) then [$b.dockerfile]
+              else [] end;
+            def non_path($v):
+              ["docker-image://", "service:", "git://",
+               "http://", "https://", "ssh://"] | any(. as $p | $v | startswith($p));
+            def extra_contexts($b):
+              if ($b | type) == "object" and (($b.additional_contexts // null) | type) == "object"
+              then [$b.additional_contexts[]
+                    | if type == "string" then . else "" end
+                    | select(non_path(.) | not)
+                    | sub("^oci-layout://"; "")]
+              else [] end;
+            def ssh_keys($b):
+              if ($b | type) != "object" then []
+              else [(($b.ssh // []) | if type == "object" then [.[]] else . end)[]
+                    | if type != "string" then ""
+                      elif index("=") then sub("^[^=]*="; "")
+                      elif startswith("/") then .
+                      else empty end
+                    | select(. != "")]
+              end;
+            def cache_paths($b; $field):
+              if ($b | type) != "object" then []
+              else [(($b[$field] // []) | if type == "array" then . else [.] end)[]
+                    | if type != "string" then ""
+                      else (split(",")[]
+                            | select(startswith("src=") or startswith("dest="))
+                            | sub("^[^=]*="; ""))
+                      end]
+              end;
+            def watch_paths($s):
+              [((($s.develop // {}) | if type == "object" then (.watch // []) else [] end)
+                | if type == "array" then . else [] end)[]
+               | if type == "object" then (.path // "") else "" end
+               | if type == "string" then . else "" end];
+            def emit($name; $kind; $p):
+              "\($name)\t\($kind)\t\(if ($p | type) == "string" then $p else "" end)\u0000";
+
+            (.services // {} | to_entries[] as $svc |
+             ($svc.value // {}) as $s |
+             (build_contexts($s.build // null)[] | emit($svc.key; "context"; .)),
+             (build_dockerfiles($s.build // null)[] | emit($svc.key; "dockerfile"; .)),
+             (extra_contexts($s.build // null)[] | emit($svc.key; "extra-context"; .)),
+             (ssh_keys($s.build // null)[] | emit($svc.key; "ssh-key"; .)),
+             (cache_paths($s.build // null; "cache_from")[] | emit($svc.key; "cache"; .)),
+             (cache_paths($s.build // null; "cache_to")[] | emit($svc.key; "cache"; .)),
+             (watch_paths($s)[] | emit($svc.key; "watch"; .)),
+             (($s.volumes // [])[] | select(.type == "bind") | emit($svc.key; "bind"; .source // ""))),
+            (.volumes // {} | to_entries[]
+             | select((.value.driver_opts // null) | type == "object")
+             | select(.value.driver_opts | has("device"))
+             | emit(.key; "volume-device"; .value.driver_opts.device)),
+            (.secrets // {} | to_entries[] | select(.value | has("file")) | emit(.key; "secret"; .value.file)),
+            (.configs // {} | to_entries[] | select(.value | has("file")) | emit(.key; "config"; .value.file))
+JQ
+
+# env_file and label_file are the host paths `docker compose config` destroys
+# before the validator sees them: the default render reads each file and inlines
+# what it finds (values into `environment`, labels into `labels`), leaving the
+# path fields null, so they are simply not in the model (checked against compose
+# 2.40.3; --no-env-resolution does not preserve them either). --no-interpolate
+# does keep them, with relative paths already resolved against the project
+# directory, so they come from a second render of the same model. A path
+# spelled with an unexpanded ${VAR} stays literal here while the default
+# render interpolates it and reads the real target, so
+# compose_containment_message rejects any variable in these records outright —
+# an absolute spelling like /workdir/${FILE} would otherwise resolve as
+# contained and then be read from anywhere at all.
+#
+# Re-verified against compose 5.2.0: --no-interpolate does not schema-reject a
+# legitimate ${VAR} in a typed field (mem_limit, deploy.replicas), and env_file
+# paths still survive this render, resolved absolute.
+read -r -d '' RAW_PATHS_PROGRAM <<'JQ' || true
+
+            def emit($name; $kind; $p):
+              "\($name)\t\($kind)\t\(if ($p | type) == "string" then $p else "" end)\u0000";
+            .services // {} | to_entries[] as $svc |
+            ((($svc.value.env_file // []) | if type == "array" then . else [.] end)[]
+             | emit($svc.key; "env-file"; (if type == "object" then (.path // "") else . end))),
+            ((($svc.value.label_file // []) | if type == "array" then . else [.] end)[]
+             | emit($svc.key; "label-file"; .))
+JQ
+
+# A compose render that fails says why in compose's own words, and those words
+# can carry the contents of a host file: point env_file at any file on the host
+# and an unterminated quote comes back as `unterminated quoted value "<the
+# value>"` (compose 2.40.3, verified). The requester is not trusted with that,
+# so the caller gets a fixed message — and the log gets only a withheld notice
+# by default, because the same words would otherwise persist on disk. An
+# operator debugging a render sets HEADLONG_BROKER_LOG_COMPOSE_STDERR=1 to log
+# the raw text.
+compose_render_failed() {
+    local err="$1" message="$2"
+    if [[ -n "${HEADLONG_BROKER_LOG_COMPOSE_STDERR:-}" ]]; then
+        log_msg "compose render failed: $(tr '\n' ' ' < "$err" | cut -c1-500)"
+    else
+        log_msg "compose render failed ($(wc -c < "$err" | tr -d ' ') bytes of compose stderr withheld; set HEADLONG_BROKER_LOG_COMPOSE_STDERR=1 to log it)"
+    fi
+    printf '%s\n' "$message" >&2
+}
+
+# The first path in `paths` that is not inside `root`, as the message to reject
+# the request with. Prints nothing when every path is contained. Relative
+# candidates resolve against `base`, the project directory.
+compose_containment_message() {
+    local paths="$1" root="$2" base="$3"
+    local svc kind candidate
+    while IFS=$'\t' read -r -d '' svc kind candidate; do
+        # The uninterpolated render keeps ${VAR} literal. An absolute prefix
+        # under the workdir with a variable tail passes containment here and is
+        # then interpolated to anywhere at all before the file is read, because
+        # the path field is gone from the render that reads it.
+        case "$kind" in
+            env-file|label-file)
+                case "$candidate" in
+                    *'$'*)
+                        printf 'service %s names a %s path with an uninterpolated variable\n' "$svc" "$kind"
+                        return 0 ;;
+                esac ;;
+        esac
+        path_contained "$candidate" "$root" "$base" && continue
+        case "$kind" in
+            context) printf 'service %s builds from a context outside SHELLM_WORKDIR\n' "$svc" ;;
+            dockerfile) printf 'service %s uses a Dockerfile outside SHELLM_WORKDIR\n' "$svc" ;;
+            extra-context) printf 'service %s uses an additional build context outside SHELLM_WORKDIR\n' "$svc" ;;
+            ssh-key) printf 'service %s builds with an ssh key outside SHELLM_WORKDIR\n' "$svc" ;;
+            cache) printf 'service %s uses a build cache outside SHELLM_WORKDIR\n' "$svc" ;;
+            watch) printf 'service %s watches a path outside SHELLM_WORKDIR\n' "$svc" ;;
+            env-file) printf 'service %s reads an env file outside SHELLM_WORKDIR\n' "$svc" ;;
+            label-file) printf 'service %s reads a label file outside SHELLM_WORKDIR\n' "$svc" ;;
+            volume-device) printf 'volume %s mounts a host path outside SHELLM_WORKDIR\n' "$svc" ;;
+            secret) printf 'secret %s reads a file outside SHELLM_WORKDIR\n' "$svc" ;;
+            config) printf 'config %s reads a file outside SHELLM_WORKDIR\n' "$svc" ;;
+            *) printf 'service %s bind-mounts a host path outside SHELLM_WORKDIR\n' "$svc" ;;
+        esac
+        return 0
+    done < "$paths"
+}
+
 compose_validate_model() {
     local request="$1"
     local cwd="$2"
     shift 2
-    local config err rc
+    local config config_raw paths err rc message root
     config=$(mktemp)
+    config_raw=$(mktemp)
+    paths=$(mktemp)
     err=$(mktemp)
+
+    # Resolve the root as well as the candidates. start_broker realpaths the
+    # workdir before exporting it, but a check whose whole job is to distrust a
+    # spelling must not depend on its caller having done that: where /tmp or
+    # /var is itself a symlink (macOS), an unresolved root makes every path
+    # inside the workdir compare as outside it.
+    root=$(realpath "$SHELLM_BROKER_WORKDIR" 2>/dev/null) || root="$SHELLM_BROKER_WORKDIR"
+    # This function is now the single containment gate, and path_under with an
+    # empty root contains every absolute path. An unconfigured workdir must
+    # fail loudly, not silently pass everything.
+    if [[ -z "$root" || "$root" == / ]]; then
+        rm -f "$config" "$config_raw" "$paths" "$err"
+        printf 'broker workdir is not configured\n' >&2
+        return 65
+    fi
+
+    # The uninterpolated render runs FIRST because it is the only one that still
+    # names the env_file and label_file paths, and the render below READS those
+    # files. Checking them afterwards would be checking a file compose has
+    # already opened and quoted back in its errors. Its failure is a rejection
+    # rather than a shrug: without it that surface goes unchecked.
+    rc=0
+    (
+        cd "$cwd" || exit 1
+        apply_request_env "$request"
+        docker compose "$@" config --format json --no-interpolate
+    ) >"$config_raw" 2>"$err" || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        compose_render_failed "$err" "compose model could not be inspected for the files it reads"
+        rm -f "$config" "$config_raw" "$paths" "$err"
+        return 65
+    fi
+    if ! jq -j "$RAW_PATHS_PROGRAM" "$config_raw" > "$paths" 2>/dev/null; then
+        rm -f "$config" "$config_raw" "$paths" "$err"
+        printf 'compose model could not be inspected for host paths\n' >&2
+        return 65
+    fi
+    message=$(compose_containment_message "$paths" "$root" "$cwd")
+    if [[ -n "$message" ]]; then
+        rm -f "$config" "$config_raw" "$paths" "$err"
+        printf '%s\n' "$message" >&2
+        return 65
+    fi
+
     rc=0
     (
         cd "$cwd" || exit 1
@@ -353,35 +721,12 @@ compose_validate_model() {
         docker compose "$@" config --format json
     ) >"$config" 2>"$err" || rc=$?
     if [[ "$rc" -ne 0 ]]; then
-        cat "$err" >&2
-        rm -f "$config" "$err"
-        return "$rc"
+        compose_render_failed "$err" "compose model could not be rendered"
+        rm -f "$config" "$config_raw" "$paths" "$err"
+        return 65
     fi
 
-    local request_workdir workdir_alias message
-    request_workdir=$(printf '%s' "$request" | jq -r '.workdir // empty')
-    workdir_alias=""
-    if [[ -n "$request_workdir" ]] && [[ "$(realpath "$request_workdir" 2>/dev/null || true)" == "$SHELLM_BROKER_WORKDIR" ]]; then
-        workdir_alias="$request_workdir"
-    fi
-
-    message=$(jq -r --arg workdir "$SHELLM_BROKER_WORKDIR" --arg workdir_alias "$workdir_alias" '
-        def under_allowed_root($p):
-          ($p | startswith($workdir)) or
-          (($workdir_alias | length) > 0 and ($p | startswith($workdir_alias)));
-        def bad_path($p):
-          ($p | type == "string") and
-          ($p == "/var/run/docker.sock" or ($p | startswith("/var/run/docker.sock/")) or
-           (under_allowed_root($p) | not));
-        def build_contexts($b):
-          if $b == null then []
-          elif ($b | type) == "string" then [$b]
-          elif ($b | type) == "object" then [$b.context // empty]
-          else [] end;
-        def build_dockerfiles($b):
-          if ($b | type) == "object" and (($b.dockerfile // "") | startswith("/")) then [$b.dockerfile]
-          else [] end;
-
+    message=$(jq -r '
         .services // {} | to_entries[] as $svc |
         ($svc.value // {}) as $s |
         if ($s.privileged == true) then
@@ -390,10 +735,6 @@ compose_validate_model() {
           "service \($svc.key) requests cap_add"
         elif (($s.devices // []) | length) > 0 then
           "service \($svc.key) requests devices"
-        elif (build_contexts($s.build // null) | map(select(bad_path(.))) | length) > 0 then
-          "service \($svc.key) builds from a context outside SHELLM_WORKDIR"
-        elif (build_dockerfiles($s.build // null) | map(select(bad_path(.))) | length) > 0 then
-          "service \($svc.key) uses a Dockerfile outside SHELLM_WORKDIR"
         elif (($s.security_opt // []) | map(tostring) | any(. == "seccomp=unconfined" or . == "apparmor=unconfined")) then
           "service \($svc.key) disables container security policy"
         elif (($s.network_mode // "") | tostring) == "host" then
@@ -404,15 +745,27 @@ compose_validate_model() {
           "service \($svc.key) requests host ipc namespace"
         elif (($s.cgroup // "") | tostring) == "host" then
           "service \($svc.key) requests host cgroup namespace"
-        elif (($s.volumes // []) | map(select(.type == "bind") | select(bad_path(.source))) | length) > 0 then
-          "service \($svc.key) bind-mounts a host path outside SHELLM_WORKDIR"
         elif (($s.volumes // []) | map(select((.source // "") == "/var/run/docker.sock" or (.target // "") == "/var/run/docker.sock")) | length) > 0 then
           "service \($svc.key) tries to mount the Docker socket"
         else
           empty
         end
     ' "$config" | head -1)
-    rm -f "$config" "$err"
+
+    # The host paths the rendered model names, one NUL-terminated
+    # "service<TAB>kind<TAB>path" record each, checked in bash against the
+    # resolved workdir. Collect first and check jq's status: a failure here must
+    # not read as "no paths to object to".
+    if [[ -z "$message" ]]; then
+        if ! jq -j "$PATHS_PROGRAM" "$config" > "$paths" 2>/dev/null; then
+            rm -f "$config" "$config_raw" "$paths" "$err"
+            printf 'compose model could not be inspected for host paths\n' >&2
+            return 65
+        fi
+        message=$(compose_containment_message "$paths" "$root" "$cwd")
+    fi
+
+    rm -f "$config" "$config_raw" "$paths" "$err"
     [[ -z "$message" ]] || { printf '%s\n' "$message" >&2; return 65; }
     return 0
 }
@@ -605,25 +958,26 @@ handle_compose() {
             ;;
     esac
 
-    if [[ "$subcommand" != "config" ]]; then
-        local validation_out validation_err validation_rc
-        validation_out=$(mktemp)
-        validation_err=$(mktemp)
-        set +e
-        if [[ "${#global_args[@]}" -gt 0 ]]; then
-            compose_validate_model "$request" "$cwd" "${global_args[@]}" >"$validation_out" 2>"$validation_err"
-        else
-            compose_validate_model "$request" "$cwd" >"$validation_out" 2>"$validation_err"
-        fi
-        validation_rc=$?
-        set -e
-        if [[ "$validation_rc" -ne 0 ]]; then
-            json_response "$validation_rc" "$validation_out" "$validation_err"
-            rm -f "$validation_out" "$validation_err"
-            return
-        fi
-        rm -f "$validation_out" "$validation_err"
+    # `config` is validated like every other subcommand. It renders the model
+    # back to the caller and compose inlines the contents of every env_file
+    # into that render, so exempting it hands out host files verbatim.
+    local validation_out validation_err validation_rc
+    validation_out=$(mktemp)
+    validation_err=$(mktemp)
+    set +e
+    if [[ "${#global_args[@]}" -gt 0 ]]; then
+        compose_validate_model "$request" "$cwd" "${global_args[@]}" >"$validation_out" 2>"$validation_err"
+    else
+        compose_validate_model "$request" "$cwd" >"$validation_out" 2>"$validation_err"
     fi
+    validation_rc=$?
+    set -e
+    if [[ "$validation_rc" -ne 0 ]]; then
+        json_response "$validation_rc" "$validation_out" "$validation_err"
+        rm -f "$validation_out" "$validation_err"
+        return
+    fi
+    rm -f "$validation_out" "$validation_err"
 
     log_msg "compose project_dir=$project_dir subcommand=$subcommand argc=${#args[@]}"
     local -a cmd=(docker compose)
@@ -838,4 +1192,7 @@ main() {
     esac
 }
 
-main "$@"
+# Guarded so the tests can source this file for its functions.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

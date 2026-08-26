@@ -290,7 +290,7 @@ EOF
 # ---------------------------------------------------------------------------
 
 _have_key() {
-    [[ -n "${ANTHROPIC_API_KEY:-}${OPENAI_API_KEY:-}${GEMINI_API_KEY:-}${OPENROUTER_API_KEY:-}" ]]
+    [[ -n "${ANTHROPIC_API_KEY:-}${OPENAI_API_KEY:-}${GEMINI_API_KEY:-}${OPENROUTER_API_KEY:-}${OPENCODE_API_KEY:-}" ]]
 }
 
 _key_var_for() {  # guess the provider env var from the key's prefix
@@ -309,12 +309,13 @@ _default_model_for() {
         OPENAI_API_KEY)     echo "gpt-5.5" ;;
         GEMINI_API_KEY)     echo "gemini-3.5-flash" ;;
         OPENROUTER_API_KEY) echo "anthropic/claude-sonnet-4.5" ;;
+        OPENCODE_API_KEY)   echo "opencode-go/deepseek-v4-flash" ;;
     esac
 }
 
 _first_key_var() {  # first provider var that is set (llm's priority order)
     local var
-    for var in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY; do
+    for var in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY OPENCODE_API_KEY; do
         [[ -n "${!var:-}" ]] && { echo "$var"; return 0; }
     done
     return 1
@@ -350,13 +351,25 @@ _prompt_key() {
         fi
     done
     var=$(_key_var_for "$key")
-    if [[ -z "$var" ]]; then
+    if [[ "$key" == sk-* && "$key" != sk-ant-* && "$key" != sk-or-* ]]; then
+        # OpenAI and OpenCode keys share the bare sk- prefix, and a wrong
+        # guess sends the handshake to api.openai.com where it fails
+        # confusingly. Ask rather than guess; OpenAI stays the default so
+        # the common case is just Enter.
         local which
-        which=$(ask "Which provider is that key for? (1) Anthropic (2) OpenAI (3) Gemini (4) OpenRouter" "1")
+        which=$(ask "Is that an OpenAI or an OpenCode key? (1) OpenAI (2) OpenCode" "1")
+        case "$which" in
+            2) var=OPENCODE_API_KEY ;;
+            *) var=OPENAI_API_KEY ;;
+        esac
+    elif [[ -z "$var" ]]; then
+        local which
+        which=$(ask "Which provider is that key for? (1) Anthropic (2) OpenAI (3) Gemini (4) OpenRouter (5) OpenCode" "1")
         case "$which" in
             2) var=OPENAI_API_KEY ;;
             3) var=GEMINI_API_KEY ;;
             4) var=OPENROUTER_API_KEY ;;
+            5) var=OPENCODE_API_KEY ;;
             *) var=ANTHROPIC_API_KEY ;;
         esac
     fi
@@ -368,12 +381,12 @@ _prompt_key() {
 
 _ensure_api_key() {
     if ! _have_key && [[ "$HAS_TTY" -eq 0 ]]; then
-        die "no API key found. Set ANTHROPIC_API_KEY (or OPENAI/GEMINI/OPENROUTER_API_KEY), or put it in $HEADLONG_HOME/.env"
+        die "no API key found. Set ANTHROPIC_API_KEY (or OPENAI/GEMINI/OPENROUTER/OPENCODE_API_KEY), or put it in $HEADLONG_HOME/.env"
     fi
     if ! _have_key; then
         cat >/dev/tty <<'EOF'
 
-Headlong needs an LLM API key (Anthropic, OpenAI, Gemini, or OpenRouter).
+Headlong needs an LLM API key (Anthropic, OpenAI, Gemini, OpenRouter, or OpenCode).
 Paste just the key itself; headlong-init figures out the provider from it.
 
   * Use a DEDICATED, SPEND-CAPPED key. The agent you're about to create

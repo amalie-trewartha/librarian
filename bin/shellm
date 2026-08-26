@@ -52,6 +52,10 @@ if [[ -z "${SHELLM_MODEL:-}" ]]; then
         SHELLM_MODEL="gemini-3.5-flash"
     elif [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
         SHELLM_MODEL="anthropic/claude-sonnet-4.5"
+    elif [[ -n "${OPENCODE_API_KEY:-}" ]]; then
+        # One env var covers both OpenCode plans; default to the Go
+        # subscription (flat-rate). Zen models: SHELLM_MODEL=opencode/<model>.
+        SHELLM_MODEL="opencode-go/deepseek-v4-flash"
     else
         SHELLM_MODEL="claude-opus-4-7"
     fi

@@ -50,6 +50,13 @@ _require_env() {
     # late to influence the -m flag), so the keys must be filled in here.
     _load_env_defaults "$IDENTITY_DIR/.env" || true
     _load_env_defaults ".env" || true
+    # The framework state home, where headlong-init writes the API key and
+    # SHELLM_MODEL. Resolved without SHELLM_HOME on purpose, unlike bin/llm and
+    # bin/shellm: both launchers export SHELLM_HOME as <identity>/.shellm
+    # (bin/thinkers, web control.py), so honouring it here would read the
+    # identity directory and never the file holding the key. ~/.shellm stays
+    # after it for a pre-rename install.
+    _load_env_defaults "${HEADLONG_HOME:-$HOME/.headlong}/.env" || true
     _load_env_defaults "$HOME/.shellm/.env" || true
 
     mkdir -p "$MEM_DIR" "$SKILLS_DIR" "$SKILLS_KERNEL_DIR" "$TRAJ_DIR"
@@ -154,6 +161,79 @@ _root_traj_raw_tail() {
     else
         traj cat "${ROOT_TRAJ_ID:-$TRAJ_ID}" --raw 2>/dev/null
     fi
+}
+
+# Sentinel for "the trigger step was not in the stream", distinct from both a
+# verdict and an empty answer.
+_RESPONDER_TRIGGER_MISSING=$'\x01trigger-not-in-window'
+
+# Has this inbound message already been handled? Echoes the step id that says
+# so (or "handled"), empty when nothing has. Three layers keyed on the trigger
+# step, plus any later message from us to the same person; see the header in
+# thinkers/responder/step for why a STALE claim deliberately does not count.
+#
+# Lives here rather than in the step script so it can be tested: the step runs
+# top to bottom and cannot be sourced.
+# Reads the tail first (_root_traj_raw_tail), and only falls back to the full
+# `traj cat` when the trigger step is not in that window. Every record this
+# looks for can only be appended AFTER the trigger, so a window holding the
+# trigger holds the whole answer; a window that misses it could report an
+# already-answered message as unanswered and reply twice, which is the one case
+# worth paying the full scan for. Same argument fe2acd2 used moving the
+# monolith's work probe off traj cat, and the cost is the same: 7.4s over a
+# 308MB trajectory against 0.08s for the tail.
+_responder_already_handled() {
+    local trigger="$1" them="$2" cutoff="$3" out tf
+    tf=$(traj path "${ROOT_TRAJ_ID:-$TRAJ_ID}" 2>/dev/null) || tf=""
+    if [[ -z "$tf" || ! -f "$tf" ]]; then
+        # No bounded read available: _root_traj_raw_tail would itself degrade
+        # to a full traj cat, and a trigger missing from that stream would
+        # trigger a second one. One full scan, not two.
+        traj cat "${ROOT_TRAJ_ID:-$TRAJ_ID}" --raw 2>/dev/null \
+            | _responder_scan "$trigger" "$them" "$cutoff"
+        return
+    fi
+    out=$(_root_traj_raw_tail | _responder_scan "$trigger" "$them" "$cutoff" --require-trigger)
+    if [[ "$out" == "$_RESPONDER_TRIGGER_MISSING" ]]; then
+        traj cat "${ROOT_TRAJ_ID:-$TRAJ_ID}" --raw 2>/dev/null \
+            | _responder_scan "$trigger" "$them" "$cutoff"
+    else
+        printf '%s' "$out"
+    fi
+}
+
+
+# The scan itself, over whatever stream it is given. With --require-trigger it
+# emits the sentinel instead of a verdict when the trigger step is absent, so
+# the caller can tell "nothing has handled this" from "I could not see far
+# enough to know".
+_responder_scan() {
+    local require_trigger=0
+    [[ "${4:-}" == "--require-trigger" ]] && require_trigger=1
+    jq -Rrn --arg me "$IDENTITY_NAME" --arg them "$2" --arg t "$1" --arg cutoff "$3" \
+           --arg missing "$_RESPONDER_TRIGGER_MISSING" --argjson require "$require_trigger" '
+        [inputs | fromjson? // empty] as $steps
+        | ([$steps | to_entries[] | select(.value.step_id == $t)] | last) as $in
+        | if $require == 1 and $in == null then $missing else
+        [$steps[] | select(.type == "message" and .from == $me
+                             and (.reply_to // "") == $t)]
+          + [$steps[] | select(.type == "observation"
+                               and (.trigger_step // "") == $t
+                               and ((.decision // "") == "replied"
+                                    or (.decision // "") == "no-reply"))]
+          + [$steps[] | select(.type == "reply_claim"
+                               and (.trigger_step // "") == $t
+                               and $cutoff != ""
+                               and (.ts // "") > $cutoff)]
+          + (if $in == null then []
+             else [$steps[($in.key + 1):][]
+                   | select(.type == "message" and .from == $me and .to == $them
+                            and ((.reply_to // "") == "" or (.reply_to // "") == $t))]
+             end)
+        | if length == 0 then empty
+          else (.[0].step_id // "handled") end
+          end' 2>/dev/null \
+        | head -n 1
 }
 
 # Build a compact recent-stream context for thinker prompts: meaningful step
