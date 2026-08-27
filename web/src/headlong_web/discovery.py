@@ -59,27 +59,40 @@ def identity_id_for(rel: str) -> str:
 
 
 def scan_identities(root: Path) -> list[IdentityInfo]:
-    """Walk root for identity dirs (info.txt with root_trajectory)."""
+    """Walk root for identity dirs (info.txt with root_trajectory).
+
+    A symlinked directory is considered as an identity candidate itself —
+    state kept on another volume, `.identities/ada -> /mnt/headlong/current` —
+    but the walk never recurses THROUGH a symlink, so a link out to a large
+    tree cannot drag the scan across the host. The identity keeps the link's
+    own id (the id the bridges construct); a link that resolves to an
+    identity found as a real directory (`.identities/default -> audel`) is an
+    alias, not a second identity, and is skipped.
+    """
     found: list[IdentityInfo] = []
+    link_candidates: list[Path] = []
+
+    def add_identity(directory: Path, fields: dict[str, str]) -> None:
+        rel = directory.relative_to(root).as_posix()
+        group = str(Path(rel).parent) if rel != "." else "."
+        found.append(
+            IdentityInfo(
+                id=identity_id_for(rel),
+                name=fields.get("name", directory.name),
+                path=directory,
+                path_rel=rel,
+                created=fields.get("created"),
+                root_trajectory=fields.get("root_trajectory"),
+                group=group,
+            )
+        )
 
     def walk(directory: Path, depth: int) -> None:
         info_txt = directory / "info.txt"
         if info_txt.is_file():
             fields = _parse_info_txt(info_txt)
             if "root_trajectory" in fields:
-                rel = directory.relative_to(root).as_posix()
-                group = str(Path(rel).parent) if rel != "." else "."
-                found.append(
-                    IdentityInfo(
-                        id=identity_id_for(rel),
-                        name=fields.get("name", directory.name),
-                        path=directory,
-                        path_rel=rel,
-                        created=fields.get("created"),
-                        root_trajectory=fields.get("root_trajectory"),
-                        group=group,
-                    )
-                )
+                add_identity(directory, fields)
                 return  # identity dirs don't nest
         if depth >= MAX_DEPTH:
             return
@@ -88,18 +101,64 @@ def scan_identities(root: Path) -> list[IdentityInfo]:
         except OSError:
             return
         for child in children:
-            if child.is_dir() and not child.is_symlink() and child.name not in PRUNE_DIRS:
+            if not child.is_dir() or child.name in PRUNE_DIRS:
+                continue
+            if child.is_symlink():
+                link_candidates.append(child)
+            else:
                 walk(child, depth + 1)
 
     walk(root, 0)
+
+    seen: set[Path] = set()
+    for identity in found:
+        try:
+            seen.add(identity.path.resolve())
+        except OSError:
+            pass
+    for link in sorted(link_candidates):
+        try:
+            target = link.resolve(strict=True)
+        except OSError:
+            continue  # dangling or unresolvable
+        if target in seen:
+            continue  # alias of an identity already found (e.g. `default`)
+        fields = _parse_info_txt(link / "info.txt")
+        if "root_trajectory" not in fields:
+            continue
+        seen.add(target)
+        add_identity(link, fields)
     return found
 
 
 def resolve_identity(root: Path, identity_id: str) -> IdentityInfo:
-    """Resolve an identity id strictly via a fresh scan (never as a raw path)."""
-    for identity in scan_identities(root):
+    """Resolve an identity id strictly via a fresh scan (never as a raw path).
+
+    An id that names a symlink to a scanned identity resolves to that
+    identity: the scan deduplicates aliases (`.identities/default -> audel`,
+    or a link whose target lives elsewhere under the root), but the bridges
+    construct their id from the link they were configured with, and that
+    spelling has to keep working. The alias is only ever compared against
+    identities the scan itself produced, never served as a raw path.
+    """
+    identities = scan_identities(root)
+    for identity in identities:
         if identity.id == identity_id:
             return identity
+    rel = identity_id.replace("~", "/")
+    if ".." not in Path(rel).parts:
+        candidate = root / rel
+        if candidate.is_symlink():
+            try:
+                target = candidate.resolve(strict=True)
+            except OSError:
+                raise KeyError(identity_id) from None
+            for identity in identities:
+                try:
+                    if identity.path.resolve() == target:
+                        return identity
+                except OSError:
+                    continue
     raise KeyError(identity_id)
 
 
