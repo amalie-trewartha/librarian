@@ -78,6 +78,12 @@ if [[ -n "$SHELLM_API_URL" ]]; then
 fi
 SHELLM_MAX_TOKENS="${SHELLM_MAX_TOKENS:-}"
 SHELLM_EFFORT="${SHELLM_EFFORT:-high}"
+# Whether the image was chosen for this run (environment here, --docker-image
+# below) rather than defaulted. A resume inherits the trajectory's image only
+# when it was not, so resuming never silently overrides what the caller asked
+# for, and never silently defaults away from what the run actually used.
+_SHELLM_DOCKER_IMAGE_EXPLICIT=0
+[[ -n "${SHELLM_DOCKER_IMAGE:-}" ]] && _SHELLM_DOCKER_IMAGE_EXPLICIT=1
 SHELLM_DOCKER_IMAGE="${SHELLM_DOCKER_IMAGE:-ubuntu:latest}"
 SHELLM_DOCKER_ACCESS="${SHELLM_DOCKER_ACCESS:-none}"
 SHELLM_DOCKER_BROKER_TRANSPORT="${SHELLM_DOCKER_BROKER_TRANSPORT:-auto}"
@@ -772,6 +778,16 @@ env_metadata_matches() {
         local stored_tool_mounts_version
         stored_tool_mounts_version=$(docker_metadata_value "$env_name" tool_mounts_version)
         [[ "$stored_tool_mounts_version" == "$_SHELLM_TOOL_MOUNTS_VERSION" ]] || return 1
+        # The image is part of an env's identity, not just provenance. Without
+        # this, a second run asking for a different --docker-image reuses the
+        # container built from the first one: the flag reads as accepted, the
+        # run happens on the old image, and the run record names the image that
+        # was asked for rather than the one that served it. An env from before
+        # the image was recorded has nothing to compare, and reusing it stays
+        # allowed rather than forcing everyone's running envs to be rebuilt.
+        local stored_image
+        stored_image=$(docker_metadata_value "$env_name" image)
+        [[ -z "$stored_image" || "$stored_image" == "$SHELLM_DOCKER_IMAGE" ]] || return 1
     fi
 
     # Compare --var directory mounts
@@ -805,6 +821,15 @@ env_metadata_mismatch_message() {
         if [[ "$stored_tool_mounts_version" != "$_SHELLM_TOOL_MOUNTS_VERSION" ]]; then
             printf 'Env %s was created before current shellm tool mounts. Use a different --env or remove %s/%s so shellm can recreate it with llm, shellm-explore, and sibling tools mounted.' \
                 "$env_name" "$SHELLM_ENVS_DIR" "$env_name"
+            return
+        fi
+    fi
+    if [[ "$stored_type" == "docker" ]]; then
+        local stored_image
+        stored_image=$(docker_metadata_value "$env_name" image)
+        if [[ -n "$stored_image" && "$stored_image" != "$SHELLM_DOCKER_IMAGE" ]]; then
+            printf 'Env %s was created from image %s, but this run requested %s. Use --new-env, a different --env, or remove %s/%s so shellm can recreate it from the requested image.' \
+                "$env_name" "$stored_image" "$SHELLM_DOCKER_IMAGE" "$SHELLM_ENVS_DIR" "$env_name"
             return
         fi
     fi
@@ -1261,6 +1286,29 @@ docker_container_can_reach_path() {
     return 1
 }
 
+# The image a resumed run should use. A run that used a custom image records it
+# in its trajectory; resuming without saying anything would otherwise ask for
+# the default, fail the image check, and build a second container beside the
+# one being resumed. An image the caller did choose always wins, so an explicit
+# --docker-image that disagrees still fails rather than being quietly replaced.
+_resume_docker_image() {   # _resume_docker_image EXPLICIT CHOSEN RECORDED
+    if [[ "$1" -eq 0 && -n "$3" ]]; then printf '%s' "$3"; else printf '%s' "$2"; fi
+}
+
+# Say why a running env was passed over when the reason is the image. Without
+# this, pointing SHELLM_DOCKER_IMAGE somewhere new leaves the old container
+# running and silently creates a second one beside it, with nothing on screen
+# connecting the two. Only reached when the image actually differs, so the
+# docker inspect is not on the common path.
+_env_note_image_skip() {   # _env_note_image_skip NAME ENV_DIR
+    local stored cid
+    stored=$(docker_metadata_value "$1" image)
+    [[ -n "$stored" && "$stored" != "$SHELLM_DOCKER_IMAGE" ]] || return 0
+    cid=$(cat "$2/container_id" 2>/dev/null) || return 0
+    [[ "$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null)" == "running" ]] || return 0
+    progress "Skipping running env $1: built from $stored, this run wants $SHELLM_DOCKER_IMAGE"
+}
+
 env_find_running() {
     local want_workdir="${1:-}"
     [[ -d "$SHELLM_ENVS_DIR" ]] || return 1
@@ -1268,7 +1316,10 @@ env_find_running() {
     for d in "$SHELLM_ENVS_DIR"/*/; do
         [[ -d "$d" ]] || continue
         name=$(basename "$d")
-        env_metadata_matches "$name" || continue
+        if ! env_metadata_matches "$name"; then
+            _env_note_image_skip "$name" "$d"
+            continue
+        fi
         [[ -f "$d/container_id" ]] || continue
         local cid
         cid=$(cat "$d/container_id" 2>/dev/null) || continue
@@ -2003,11 +2054,14 @@ run_loop() {
         _orig_meta=$(traj tail -n 50 --raw --traj_dir "$_run_traj_dir" "$_use_traj" \
             | jq -cR 'fromjson? | select(.type=="shellm-run")' 2>/dev/null | tail -1) || true
         if [[ -n "$_orig_meta" ]]; then
-            local _orig_workdir _orig_env
+            local _orig_workdir _orig_env _orig_image
             _orig_workdir=$(printf '%s' "$_orig_meta" | jq -r '.workdir // empty')
             _orig_env=$(printf '%s' "$_orig_meta" | jq -r '.env.name // empty')
+            _orig_image=$(printf '%s' "$_orig_meta" | jq -r '.env.docker_image // empty')
             [[ -z "$_SHELLM_WORKDIR_USER" && -n "$_orig_workdir" ]] && _SHELLM_WORKDIR_USER="$_orig_workdir"
             [[ -z "$_SHELLM_ENV_NAME" && -n "$_orig_env" ]] && _SHELLM_ENV_NAME="$_orig_env"
+            SHELLM_DOCKER_IMAGE=$(_resume_docker_image \
+                "$_SHELLM_DOCKER_IMAGE_EXPLICIT" "$SHELLM_DOCKER_IMAGE" "$_orig_image")
         fi
 
         # Resolve run_name from trajectory dir
@@ -2948,6 +3002,7 @@ main() {
                 ;;
             --docker-image)
                 SHELLM_DOCKER_IMAGE="${2:?--docker-image requires a value}"
+                _SHELLM_DOCKER_IMAGE_EXPLICIT=1
                 shift 2
                 ;;
             --docker-access)
