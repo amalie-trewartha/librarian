@@ -278,6 +278,20 @@ llm -m claude-opus-4-7 -M '[{"role":"user","content":"hi"},{"role":"assistant","
 | `gemini-*` | Gemini (`GEMINI_API_KEY`) |
 | `vendor/model` (any slash) | OpenRouter (`OPENROUTER_API_KEY`) |
 
+Any OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, a proxy) works
+through the `openai-compatible` provider, with no API key required. It is
+never auto-detected, so name it and give it a URL:
+
+```bash
+LLM_PROVIDER=openai-compatible \
+LLM_API_URL=http://localhost:11434/v1/chat/completions \
+llm -m qwen3:8b "hello"
+```
+
+Set `LLM_API_KEY` if the endpoint wants a bearer token. The policy for
+which providers live in core is in
+[design/providers.md](../design/providers.md).
+
 **Output contract:** stdout = text response, stderr = thinking tokens (Anthropic only), exit 0 = success. This makes it composable with pipes and subshells.
 
 ## mem and skills

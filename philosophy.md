@@ -205,7 +205,7 @@ or `./install.sh` from a checkout. The core needs nothing but bash, curl, jq, an
 
 Here's how I think about whether an agent architecture is on the right track. I call it the Thompson test, after Ken:
 
-1. **Can you understand every component in an afternoon?** Each of these tools is a single bash script. The whole core — the executables the mind runs plus the thinkers — is under 10K lines, and shellm, the largest, is under 3K. You can read every line of code that comprises the entire agent.
+1. **Can you understand every component in an afternoon?** Each of these tools is a single bash script. The whole core — the executables the mind runs plus the thinkers — is about 10K lines, and shellm, the largest, is under 3K. You can read every line of code that comprises the entire agent.
 
 2. **Can you compose the pieces in ways the author didn't anticipate?** mem is just a CLI that manages files. You can pipe its output into anything. Skills are markdown files — editable, greppable, version-controllable. shellm can call itself. None of these composition patterns were "designed in" — they fall out of the Unix interface naturally.
 
