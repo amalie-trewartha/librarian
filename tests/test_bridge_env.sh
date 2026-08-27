@@ -83,6 +83,24 @@ for bridge in slack telegram; do
         && ok "$script: checkout .env wins over state home" \
         || bad "$script: checkout .env wins over state home" "$out"
 
+    # Sourcing the .env must not let a command's stdout ride into a value...
+    printf 'echo loading\n%s=xoxb-clean\n' "$token_var" > "$WORK/app/.env"
+    rm -f "$HEADLONG_HOME/.env"
+    out=$(run "$script")
+    [[ "$out" == *"BOT=xoxb-clean"* ]] \
+        && ok "$script: a command's stdout stays out of the value" \
+        || bad "$script: a command's stdout stays out of the value" "$out"
+
+    # ...and a file the shell cannot parse must say so on stderr, instead of
+    # silently loading nothing while the operator hunts a "missing" token.
+    printf '%s="unterminated\n' "$token_var" > "$WORK/app/.env"
+    err=$(env -u SLACK_BOT_TOKEN -u TELEGRAM_BOT_TOKEN \
+        -u HEADLONG_SLACK_IDENTITY -u HEADLONG_TELEGRAM_IDENTITY \
+        "$WORK/app/tools/$script" 2>&1 >/dev/null)
+    [[ "$err" == *"could not read"* ]] \
+        && ok "$script: a malformed .env warns instead of staying silent" \
+        || bad "$script: a malformed .env warns instead of staying silent" "$err"
+
     rm -f "$WORK/app/.env" "$HEADLONG_HOME/.env"
     out=$(run "$script")
     [[ "$out" == *"BOT=unset"* ]] \

@@ -43,7 +43,7 @@ _load_env() {
         [[ -n "$key" ]] || continue
         [[ -n "${!key+x}" ]] && continue
         # shellcheck disable=SC1090  # sourcing the user's own env file
-        val=$(set -a; . "$envfile" 2>/dev/null; printf '%s' "${!key}") || continue
+        val=$(set -a; . "$envfile" >/dev/null 2>&1; printf '%s' "${!key}") || { printf '%s: warning: could not read %s; ignoring it\n' "${0##*/}" "$envfile" >&2; return 0; }
         export "$key=$val"
     done < <(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*=.*/\2/p' "$envfile")
     return 0

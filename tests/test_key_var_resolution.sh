@@ -134,5 +134,19 @@ env -u SHELLM_MODEL -u HEADLONG_HOME -u LLM_PROVIDER -u LLM_API_URL -u LLM_MODEL
 check "bin/llm: LLM_MAX_TOKENS from the environment reaches the request" \
     grep -q '"max_tokens":[[:space:]]*4242' "$PAYLOAD_OUT"
 
+# A command in a loaded .env must not leak its stdout into values: pre-fix,
+# the echo's output rode into LLM_MAX_TOKENS ("POLLUTION\n1234") and the
+# request fell back to the model default instead of 1234.
+printf 'echo POLLUTION\nLLM_MAX_TOKENS=1234\n' > "$WORK/.env"
+env -u SHELLM_MODEL -u HEADLONG_HOME -u LLM_PROVIDER -u LLM_API_URL -u LLM_MODEL \
+    -u OPENAI_API_KEY -u GEMINI_API_KEY -u OPENROUTER_API_KEY -u OPENCODE_API_KEY \
+    -u LLM_MAX_TOKENS \
+    PATH="$CURL_STUB:$PATH" LLM_RETRIES=0 \
+    HOME="$WORK/h6" ANTHROPIC_API_KEY=sk-ant-test \
+    bash "$REPO/bin/llm" -m claude-sonnet-4-5-20250929 hi >/dev/null 2>&1
+check "bin/llm: .env stdout stays out of the values it loads" \
+    grep -q '"max_tokens":[[:space:]]*1234' "$PAYLOAD_OUT"
+rm -f "$WORK/.env"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
