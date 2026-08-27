@@ -74,6 +74,15 @@ for bridge in slack telegram; do
         && ok "$script: environment wins over .env" \
         || bad "$script: environment wins over .env" "$out"
 
+    # The same key in both files: the checkout wins, the order every other
+    # _load_env copy uses (bin/llm, tools/persona, bin/shellm, common.sh).
+    printf '%s=from-app-env\n' "$token_var" > "$WORK/app/.env"
+    printf '%s=from-home-env\n' "$token_var" > "$HEADLONG_HOME/.env"
+    out=$(run "$script")
+    [[ "$out" == *"BOT=from-app-env"* ]] \
+        && ok "$script: checkout .env wins over state home" \
+        || bad "$script: checkout .env wins over state home" "$out"
+
     rm -f "$WORK/app/.env" "$HEADLONG_HOME/.env"
     out=$(run "$script")
     [[ "$out" == *"BOT=unset"* ]] \

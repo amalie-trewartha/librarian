@@ -29,9 +29,12 @@ if [[ ! -d "$ROOT_DIR/telegram" ]]; then
 fi
 
 # Headlong's env files, loaded the way tools/persona and bin/llm load them:
-# what is already exported wins, so systemd's EnvironmentFile and `slack run`
-# still take precedence. Without this the bridge is the only entry point that
-# cannot see the checkout's .env, and a token that lives there reads as absent.
+# what is already exported wins, so the production unit's root-owned
+# /etc/shellm/telegram.env (which does not use this launcher at all) stays
+# authoritative where it exists. Without this the bridge is the only entry
+# point that cannot see the checkout's .env, and a token that lives there
+# reads as absent. Loading sources the checkout's .env, so this launcher is
+# for local dev, not for the token-holding service user.
 _load_env() {
     local envfile="$1"
     [[ -f "$envfile" ]] || return 1
