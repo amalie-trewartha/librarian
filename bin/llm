@@ -206,6 +206,7 @@ Environment:
                            (same names as --provider); --provider takes
                            precedence, and a value that disagrees with the
                            name warns on stderr
+  LLM_MAX_TOKENS           Override the per-model default output cap (same as -t)
   LLM_RETRIES              Retries for transient API failures (default: 2;
                            0 disables). Never retries after partial output.
   LLM_RETRY_BACKOFF        Backoff base seconds between retries (default: 1)
@@ -385,7 +386,9 @@ get_model_max_tokens() {
     esac
 }
 
-if [[ -z "$LLM_MAX_TOKENS" ]]; then
+if [[ ! "$LLM_MAX_TOKENS" =~ ^[0-9]+$ ]]; then
+    # Non-numeric would reach jq --argjson as invalid JSON; warn and fall back.
+    [[ -n "$LLM_MAX_TOKENS" ]] && echo "llm: warning: ignoring non-numeric LLM_MAX_TOKENS='$LLM_MAX_TOKENS'" >&2
     LLM_MAX_TOKENS=$(get_model_max_tokens "$LLM_MODEL")
 fi
 

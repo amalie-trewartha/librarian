@@ -48,8 +48,6 @@ run_init() {
         HEADLONG_NO_TTY=1 HEADLONG_UNSANDBOXED=1 PATH="$STUB:$PATH" "$@" \
         bash "$REPO/tools/headlong-init" </dev/null > "$WORK/out" 2>&1
 }
-model_of() { grep '^SHELLM_MODEL=' "$1/.headlong/.env" | tail -1; }
-
 # --- the reported case: OpenRouter key exported as OPENAI_API_KEY ------------
 run_init "$WORK/h1" OPENAI_API_KEY=sk-or-v1-EXAMPLE-NOT-A-REAL-KEY
 check "misplaced sk-or- key: model follows the key, not the variable" \
@@ -58,6 +56,12 @@ check "misplaced sk-or- key: says which variable it should be in" \
     grep -q 'OPENROUTER_API_KEY' "$WORK/out"
 check_not "misplaced sk-or- key: never defaults to an OpenAI model" \
     grep -q 'SHELLM_MODEL=gpt-' "$WORK/h1/.headlong/.env"
+# The correction must outlive this process: a later persona or llm run in a
+# fresh shell reads the .env, not the reconciler's exports.
+check "misplaced sk-or- key: persisted under the right variable, once" \
+    [ "$(grep -c '^OPENROUTER_API_KEY=' "$WORK/h1/.headlong/.env")" = 1 ]
+check "misplaced sk-or- key: the state env stays private (mode 600)" \
+    [ "$(stat -f %Lp "$WORK/h1/.headlong/.env" 2>/dev/null || stat -c %a "$WORK/h1/.headlong/.env")" = 600 ]
 
 # --- a correctly placed OpenAI key is untouched ------------------------------
 run_init "$WORK/h2" OPENAI_API_KEY=sk-proj-EXAMPLE-NOT-A-REAL-KEY
@@ -85,6 +89,16 @@ run_init "$WORK/h5" OPENAI_API_KEY=sk-ant-api03-EXAMPLE-NOT-A-REAL-KEY
 check "misplaced sk-ant- key: model follows the key" \
     grep -qx 'SHELLM_MODEL=claude-sonnet-4-5-20250929' "$WORK/h5/.headlong/.env"
 
+# --- a stale SHELLM_MODEL pinned from the misfiled variable heals ------------
+# An earlier init derived gpt-5.5 from the key sitting in OPENAI_API_KEY;
+# reconciling the key must re-pin the model, or every later run keeps routing
+# to the wrong provider.
+mkdir -p "$WORK/h7/.headlong"
+printf 'SHELLM_MODEL=gpt-5.5\n' > "$WORK/h7/.headlong/.env"
+run_init "$WORK/h7" OPENAI_API_KEY=sk-or-v1-EXAMPLE-NOT-A-REAL-KEY
+check "stale model from the misfiled variable: re-pinned to the key's provider" \
+    grep -qx 'SHELLM_MODEL=anthropic/claude-sonnet-4.5' "$WORK/h7/.headlong/.env"
+
 # --- bin/llm honors LLM_MAX_TOKENS from the environment ----------------------
 # curl stub records the request body; llm builds it with jq before sending.
 CURL_STUB="$WORK/curlstub"; mkdir -p "$CURL_STUB"
@@ -101,13 +115,20 @@ case "$body" in
     @*)      body="$(cat "${body#@}")" ;;
 esac
 printf '%s' "$body" > "$PAYLOAD_OUT"
+printf 'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n'
 printf 'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}\n\n'
 printf 'data: {"type":"message_stop"}\n\n'
 EOF
 chmod +x "$CURL_STUB/curl"
 
+# cd first: bin/llm loads ./.env from the cwd, so running from a checkout
+# with a real .env would leak its keys into the assertion. The env -u list
+# covers every var that steers provider or model resolution.
 export PAYLOAD_OUT="$WORK/payload.json"
-env -u SHELLM_MODEL -u HEADLONG_HOME PATH="$CURL_STUB:$PATH" \
+cd "$WORK" || exit 1
+env -u SHELLM_MODEL -u HEADLONG_HOME -u LLM_PROVIDER -u LLM_API_URL -u LLM_MODEL \
+    -u OPENAI_API_KEY -u GEMINI_API_KEY -u OPENROUTER_API_KEY -u OPENCODE_API_KEY \
+    PATH="$CURL_STUB:$PATH" LLM_RETRIES=0 \
     HOME="$WORK/h6" ANTHROPIC_API_KEY=sk-ant-test LLM_MAX_TOKENS=4242 \
     bash "$REPO/bin/llm" -m claude-sonnet-4-5-20250929 hi >/dev/null 2>&1
 check "bin/llm: LLM_MAX_TOKENS from the environment reaches the request" \

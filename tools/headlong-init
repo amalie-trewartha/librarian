@@ -350,7 +350,16 @@ _reconcile_key_vars() {
         fi
         printf 'headlong-init: warning: %s holds a key whose prefix belongs to %s; using it as %s.\n' \
             "$var" "$want" "$want" >&2
-        export "$want=${!var}"
+        # Persist, not just export: later processes (tools/persona, bin/llm
+        # from a fresh shell) must see the same key the model default was
+        # derived from. _env_set also exports it here. Reconciliation runs
+        # only past the --dry-run exit, so the dry-run echo cannot print a key.
+        _env_set "$HEADLONG_HOME/.env" "$want" "${!var}"
+        # A SHELLM_MODEL pinned earlier from the misfiled variable's default
+        # would keep routing to the wrong provider; follow the key.
+        if [[ "${SHELLM_MODEL:-}" == "$(_default_model_for "$var")" ]]; then
+            _env_set "$HEADLONG_HOME/.env" "SHELLM_MODEL" "$(_default_model_for "$want")"
+        fi
     done
 }
 
