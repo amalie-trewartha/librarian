@@ -61,7 +61,7 @@ check_not "misplaced sk-or- key: never defaults to an OpenAI model" \
 check "misplaced sk-or- key: persisted under the right variable, once" \
     [ "$(grep -c '^OPENROUTER_API_KEY=' "$WORK/h1/.headlong/.env")" = 1 ]
 check "misplaced sk-or- key: the state env stays private (mode 600)" \
-    [ "$(stat -f %Lp "$WORK/h1/.headlong/.env" 2>/dev/null || stat -c %a "$WORK/h1/.headlong/.env")" = 600 ]
+    [ "$(stat -c %a "$WORK/h1/.headlong/.env" 2>/dev/null || stat -f %Lp "$WORK/h1/.headlong/.env")" = 600 ]
 
 # --- a correctly placed OpenAI key is untouched ------------------------------
 run_init "$WORK/h2" OPENAI_API_KEY=sk-proj-EXAMPLE-NOT-A-REAL-KEY
