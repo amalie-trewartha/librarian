@@ -574,10 +574,11 @@ Please provide a detailed report explaining:
     # through argv: Linux caps one argument at 128 KiB and macOS caps total
     # argv at 1 MiB, and `jq --arg p` / `llm -M` both died with "Argument list
     # too long" on a deep tree. llm reads the prompt from stdin, which also
-    # makes the jq call that built the message array unnecessary.
+    # makes the jq call that built the message array unnecessary. A here-string
+    # rather than a pipeline, so an llm exit can never turn into a SIGPIPE on
+    # the writer under pipefail; the trailing newline it adds is harmless.
     local text
-    text=$(printf '%s' "$user_prompt" \
-        | llm -m "$REPORT_MODEL" -t 4096 -s "$system_prompt") \
+    text=$(llm -m "$REPORT_MODEL" -t 4096 -s "$system_prompt" <<<"$user_prompt") \
         || die "API request failed"
 
     if [[ -z "$text" ]]; then

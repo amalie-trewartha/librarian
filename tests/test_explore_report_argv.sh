@@ -32,20 +32,29 @@ mkdir -p "$WORK/bin" "$WORK/traj/abc12345-run"
 big=$(head -c 204800 /dev/zero | tr '\0' 'x')
 {
     printf '{"type":"shellm-run","step_id":"s1","command":"shellm %s"}\n' "$big"
-    printf '{"type":"run-summary","tldr":"a run with a large inline prompt"}\n'
+    printf '{"type":"run-summary","tldr":"a run with a large inline prompt MARKER-abc12345"}\n'
 } > "$WORK/traj/abc12345-run/trajectory.jsonl"
 
+# The stub records argv and stdin verbatim as well as their sizes: byte counts
+# alone would stay green with the system prompt dropped or the prompt cut off.
 cat > "$WORK/bin/llm" <<'STUB'
 #!/usr/bin/env bash
+printf '%s\n' "$@" > "${LLM_ARGV_FILE:?}"
 argv_bytes=0
 for a in "$@"; do argv_bytes=$((argv_bytes + ${#a})); done
 if [[ -t 0 ]]; then stdin_bytes=0; else s=$(cat); stdin_bytes=${#s}; fi
+printf '%s' "${s:-}" > "${LLM_STDIN_FILE:?}"
 printf 'argv=%d stdin=%d\n' "$argv_bytes" "$stdin_bytes" >&2
 printf 'a report\n'
 STUB
 chmod +x "$WORK/bin/llm"
 
-PATH="$WORK/bin:$PATH" TRAJ_DIR="$WORK/traj" \
+# env -u: the tool resolves SHELLM_TRAJ_DIR before TRAJ_DIR, and SHELLM_HOME /
+# HEADLONG_HOME / SHELLM_MODEL all steer it — any of them inherited from the
+# calling shell would fail this test for the wrong reason.
+env -u SHELLM_TRAJ_DIR -u SHELLM_HOME -u HEADLONG_HOME -u SHELLM_MODEL \
+    PATH="$WORK/bin:$PATH" TRAJ_DIR="$WORK/traj" \
+    LLM_ARGV_FILE="$WORK/argv.txt" LLM_STDIN_FILE="$WORK/stdin.txt" \
     bash "$REPO/tools/shellm-explore" abc12345 --report \
     > "$WORK/out" 2> "$WORK/err"
 rc=$?
@@ -69,6 +78,18 @@ stdin_bytes=${seen##*stdin=}
 grep -q 'a report' "$WORK/out" \
     && ok "the report is printed" \
     || bad "the report is printed" "$(tail -1 "$WORK/out")"
+
+# Content, not just shape: the flags survive and the prompt arrives whole
+# enough to carry the fixture's own words.
+grep -qx -- '-s' "$WORK/argv.txt" 2>/dev/null \
+    && ok "the system prompt flag is passed" \
+    || bad "the system prompt flag is passed" "argv: $(tr '\n' ' ' < "$WORK/argv.txt" 2>/dev/null | cut -c1-120)"
+grep -qx -- '-m' "$WORK/argv.txt" 2>/dev/null \
+    && ok "the model flag is passed" \
+    || bad "the model flag is passed" "argv: $(tr '\n' ' ' < "$WORK/argv.txt" 2>/dev/null | cut -c1-120)"
+grep -q 'MARKER-abc12345' "$WORK/stdin.txt" 2>/dev/null \
+    && ok "the run summary reaches llm inside the stdin prompt" \
+    || bad "the run summary reaches llm inside the stdin prompt" "marker missing from stdin capture"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
