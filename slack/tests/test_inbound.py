@@ -1,6 +1,6 @@
 """Inbound reaction filter: only our messages (and DMs) land in the mind log."""
 
-from headlong_slack.inbound import reaction_to_inbound
+from headlong_slack.inbound import reaction_text, reaction_to_inbound
 
 BOT = "U_BOT"
 
@@ -67,3 +67,15 @@ def test_bot_id_dropped():
 def test_plus_one_name_preserved():
     got = reaction_to_inbound(_event(reaction="+1"), bot_user_id=BOT)
     assert got[3] == "+1"
+
+
+def test_reaction_text_same_item_is_just_emoji():
+    assert reaction_text("thumbsup", "111.222", "111.222") == ":thumbsup:"
+    assert reaction_text("+1", "111.222", None) == ":+1:"
+
+
+def test_reaction_text_nested_item_keeps_line():
+    assert (
+        reaction_text("thumbsup", "111.333", "111.222")
+        == ":thumbsup: (on 111.333)"
+    )

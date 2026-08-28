@@ -30,6 +30,19 @@ DELIVERY_ERROR_TEXT = (
 )
 
 
+def reaction_text(reaction: str, item_ts: str, thread_ts: str | None) -> str:
+    """Body for a reaction inbound.
+
+    Routing uses the parent thread so a reply lands in the right Slack
+    thread. When the reacted-to message is a reply inside that thread,
+    keep `item_ts` in the body so the mind log still names the line.
+    """
+    body = f":{reaction}:"
+    if thread_ts and item_ts != thread_ts:
+        body = f"{body} (on {item_ts})"
+    return body
+
+
 @dataclass
 class InboundMessage:
     from_name: str
@@ -240,15 +253,20 @@ class Inbound:
 
     def _deliver(self, msg: InboundMessage) -> None:
         if msg.resolve_parent and msg.thread_ts:
-            parent = self._item_thread_ts(msg.channel, msg.thread_ts)
-            thread_ts = parent or msg.thread_ts
-            if thread_ts != msg.thread_ts:
+            item_ts = msg.thread_ts
+            parent = self._item_thread_ts(msg.channel, item_ts)
+            thread_ts = parent or item_ts
+            # Body starts as ":emoji:". Nested replies keep item_ts in the
+            # body so the mind log names the line, not just the thread.
+            reaction = msg.text[1:-1] if msg.text.startswith(":") and msg.text.endswith(":") else msg.text
+            text = reaction_text(reaction, item_ts, thread_ts)
+            if thread_ts != item_ts or text != msg.text:
                 msg = InboundMessage(
                     naming.encode(msg.user, msg.channel, thread_ts),
                     msg.user,
                     msg.channel,
                     thread_ts,
-                    msg.text,
+                    text,
                     resolve_parent=False,
                 )
             self.threads.touch(msg.channel, msg.thread_ts)
