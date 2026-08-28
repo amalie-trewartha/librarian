@@ -294,20 +294,19 @@ which providers live in core is in
 
 Under shellm, set `SHELLM_API_URL` instead of `LLM_API_URL` — shellm
 clears any inherited `LLM_API_URL` and re-exports it only from
-`SHELLM_API_URL`, so the bare recipe above fails on every reasoning
-step:
+`SHELLM_API_URL` — and name the model, or shellm falls back to its
+default Claude model and sends that to your endpoint:
 
 ```bash
 LLM_PROVIDER=openai-compatible \
 SHELLM_API_URL=http://localhost:11434/v1/chat/completions \
+SHELLM_MODEL=qwen3:8b \
 shellm "what os is this?"
 ```
 
-One more caveat: generated code running in the sandbox receives the URL
-but not `LLM_PROVIDER` or `LLM_API_KEY`, so `llm` calls *inside*
-generated code fall back to auto-detection and fail without a provider
-key. If the generated code itself needs the endpoint, forward them
-explicitly with `--var LLM_PROVIDER --var LLM_API_KEY`.
+`LLM_PROVIDER` and `LLM_API_KEY` are forwarded into the sandbox and to
+nested shellm runs the same way the vendor keys are, so `llm` calls
+inside generated code reach the endpoint too.
 
 **Output contract:** stdout = text response, stderr = thinking tokens (Anthropic only), exit 0 = success. This makes it composable with pipes and subshells.
 

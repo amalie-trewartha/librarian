@@ -2336,6 +2336,11 @@ exit \$__shellm_rc
             SHELLM_ENV="$(if [[ "${_SHELLM_DOCKER_MODE:-0}" -eq 1 && "$SHELLM_ALLOW_NESTED_DOCKER" != "1" ]]; then echo "local"; else echo "${_SHELLM_ACTIVE_ENV:-}"; fi)"
             _SHELLM_PARENT_CONTAINER="${_SHELLM_CONTAINER:-}"
             ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+            # The generic openai-compatible provider is configured entirely by
+            # env (never auto-detected), so llm calls inside generated code
+            # need these two like they need the vendor keys above/below.
+            LLM_PROVIDER="${LLM_PROVIDER:-}"
+            LLM_API_KEY="${LLM_API_KEY:-}"
             SHELLM_MODEL="$SHELLM_MODEL"
             SHELLM_MAX_TOKENS="$SHELLM_MAX_TOKENS"
             SHELLM_MAX_ITERATIONS="$SHELLM_MAX_ITERATIONS"

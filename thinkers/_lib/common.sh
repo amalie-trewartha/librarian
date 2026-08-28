@@ -345,7 +345,11 @@ _build_shellm_flags() {
     # Keys go by NAME (bare `--var NAME`): shellm reads the value from its
     # environment, so it never shows up in `ps` or the recorded command line.
     [[ -n "${SHELLM_MODEL:-}" ]] && printf '%s\n' "--var" "SHELLM_MODEL=$SHELLM_MODEL"
-    for _ak in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY; do
+    # The generic openai-compatible provider is env-configured and never
+    # auto-detected, so nested calls need the provider name (routing, not a
+    # secret) and its key (bare name, like the vendor keys below).
+    [[ -n "${LLM_PROVIDER:-}" ]] && printf '%s\n' "--var" "LLM_PROVIDER=$LLM_PROVIDER"
+    for _ak in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY LLM_API_KEY; do
         if [[ -n "${!_ak:-}" ]]; then
             export "${_ak?}"
             printf '%s\n' "--var" "$_ak"

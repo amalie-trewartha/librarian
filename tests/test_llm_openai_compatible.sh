@@ -20,7 +20,8 @@
 #     provider (a proxy serving gpt-5 must not silently drop to 16384)
 #   - a typo'd provider name dies with "Unknown provider", not bash's
 #     exit-127 "command not found"
-#   - LLM_API_URL on a keyed provider warns on stderr (openai-compatible
+#   - LLM_API_URL on a keyed provider warns on stderr, naming only the
+#     host — never credentials the URL may carry (openai-compatible
 #     itself is exempt: the URL there is required configuration)
 
 set -uo pipefail
@@ -210,10 +211,23 @@ fi
 reset
 LLM_PROVIDER=openai LLM_API_URL="$URL" OPENAI_API_KEY="sekrit" \
     "$LLM" -m gpt-4o "say ok" >/dev/null 2>"$WORK/stderr"
-if grep -q 'LLM_API_URL=.*overrides the default openai endpoint' "$WORK/stderr"; then
+if grep -q 'LLM_API_URL overrides the default openai endpoint (requests go to 127.0.0.1:9)' "$WORK/stderr"; then
     ok "LLM_API_URL on a keyed provider warns on stderr"
 else
     bad "LLM_API_URL on a keyed provider warns on stderr" "$(head -1 "$WORK/stderr")"
+fi
+
+# The warning names the host only: credentials a URL can carry (userinfo,
+# query tokens) must not reach stderr.
+reset
+LLM_PROVIDER=openai LLM_API_URL="http://user:hunter2@127.0.0.1:9/v1?token=topsecret" \
+    OPENAI_API_KEY="sekrit" \
+    "$LLM" -m gpt-4o "say ok" >/dev/null 2>"$WORK/stderr"
+if grep -q 'requests go to 127.0.0.1:9' "$WORK/stderr" \
+   && ! grep -q 'hunter2\|topsecret' "$WORK/stderr"; then
+    ok "URL credentials stay out of the warning"
+else
+    bad "URL credentials stay out of the warning" "$(grep -m1 'LLM_API_URL' "$WORK/stderr")"
 fi
 
 reset

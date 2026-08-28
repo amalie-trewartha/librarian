@@ -344,9 +344,15 @@ fi
 # LLM_API_URL reroutes a provider's requests — credentials included — to an
 # arbitrary host, so like the provider override above it must never do it
 # silently. openai-compatible is exempt: it has no default endpoint, so the
-# URL there is configuration, not an override.
+# URL there is configuration, not an override. Warn with the host only: a
+# URL can itself carry credentials (user:pass@, ?token=...) that must not
+# reach stderr or whatever captures it.
 if [[ -n "${LLM_API_URL:-}" && "$LLM_PROVIDER" != "openai-compatible" ]]; then
-    echo "llm: warning: LLM_API_URL=$LLM_API_URL overrides the default $LLM_PROVIDER endpoint" >&2
+    _llm_url_host="${LLM_API_URL#*://}"
+    _llm_url_host="${_llm_url_host%%/*}"
+    _llm_url_host="${_llm_url_host%%\?*}"
+    _llm_url_host="${_llm_url_host##*@}"
+    echo "llm: warning: LLM_API_URL overrides the default $LLM_PROVIDER endpoint (requests go to $_llm_url_host)" >&2
 fi
 
 # OpenCode routing prefixes hide the real catalog id from the API side;
