@@ -153,7 +153,8 @@ Options:
   -M, --messages JSON      Messages array JSON, e.g. [{"role":"user","content":"hi"}]
   --no-stream              Disable streaming (streaming is on by default)
   --provider NAME          Provider: anthropic, openai, gemini, openrouter,
-                           opencode, opencode-go, or openai-compatible
+                           opencode, opencode-go, openai-compatible, or
+                           adapter (needs LLM_ADAPTER)
   --thinking [LEVEL]       Enable thinking (Anthropic: adaptive; Gemini: minimal/low/medium/high)
   --effort LEVEL           Thinking effort/provider output effort
   --raw                    Print raw non-streaming API response JSON
@@ -1004,7 +1005,8 @@ if [[ -z "$LLM_USAGE_FILE" ]]; then
     _llm_usage_own=1
 fi
 _llm_cleanup() {
-    rm -f "$payload_file"
+    rm -f "$payload_file" "$payload_file.system" \
+          "$payload_file.done" "$payload_file.deadline"
     if [[ "$_llm_usage_own" -eq 1 ]]; then rm -f "$LLM_USAGE_FILE"; fi
     return 0
 }
@@ -1025,7 +1027,10 @@ if [[ "$LLM_PROVIDER" == "adapter" ]]; then
     fi
     [[ "$LLM_STREAM" -eq 0 ]] && _adapter_args+=(--no-stream)
     if [[ -n "$LLM_SYSTEM" ]]; then
-        printf '%s' "$LLM_SYSTEM" > "$payload_file.system"
+        # 0600 like the mktemp'd payload file: the prompt is private, and a
+        # plain redirect under the default umask would land world-readable
+        # in /tmp. Removed by the EXIT cleanup with the rest.
+        ( umask 077; printf '%s' "$LLM_SYSTEM" > "$payload_file.system" )
         _adapter_args+=(--system-prompt-file "$payload_file.system")
     fi
     # Messages travel by file + stdin redirect, not argv (size caps) and
@@ -1037,29 +1042,52 @@ if [[ "$LLM_PROVIDER" == "adapter" ]]; then
     if [[ "$LLM_MAX_TIME" =~ ^[0-9]+$ && "$LLM_MAX_TIME" -gt 0 ]]; then
         "$LLM_ADAPTER" "${_adapter_args[@]}" < "$payload_file" &
         _adapter_pid=$!
-        # The watcher detaches from stdio: it would otherwise hold the
-        # caller's stdout pipe open (a $(...) caller blocks on it) for the
-        # full deadline even after the adapter finishes.
-        ( sleep "$LLM_MAX_TIME"; kill "$_adapter_pid" 2>/dev/null ) >/dev/null 2>&1 </dev/null &
+        # Deadline watcher. It polls a done-marker once a second instead of
+        # sleeping the whole deadline, so it exits within ~1s of the adapter
+        # finishing and never leaves an orphaned long sleep (a background
+        # subshell gets no process group of its own here, so the sleep
+        # could not be killed with it). It detaches from stdio so it cannot
+        # hold a $(...) caller's stdout pipe open. On expiry it writes the
+        # deadline marker — the authoritative "this run timed out" signal,
+        # regardless of how the adapter exits — then escalates TERM, 5s
+        # grace, KILL, so an adapter that ignores TERM still dies.
+        (
+            _t=0
+            while [[ ! -e "$payload_file.done" && "$_t" -lt "$LLM_MAX_TIME" ]]; do
+                sleep 1; _t=$((_t+1))
+            done
+            if [[ ! -e "$payload_file.done" ]]; then
+                : > "$payload_file.deadline"
+                kill "$_adapter_pid" 2>/dev/null
+                _g=0
+                while [[ "$_g" -lt 5 ]] && kill -0 "$_adapter_pid" 2>/dev/null; do
+                    sleep 1; _g=$((_g+1))
+                done
+                kill -9 "$_adapter_pid" 2>/dev/null
+            fi
+        ) >/dev/null 2>&1 </dev/null &
         _adapter_watch=$!
         wait "$_adapter_pid" || _adapter_rc=$?
-        # Kill the watcher's process group so its sleep dies with it (a bare
-        # kill orphans the sleep, which lingers until the deadline).
-        { kill -- -"$_adapter_watch" || kill "$_adapter_watch"; } 2>/dev/null || true
+        : > "$payload_file.done"
         wait "$_adapter_watch" 2>/dev/null || true
     else
         "$LLM_ADAPTER" "${_adapter_args[@]}" < "$payload_file" || _adapter_rc=$?
     fi
-    rm -f "$payload_file.system"
+    if [[ -e "$payload_file.deadline" ]]; then
+        # Deadline expiry is a failure even when the adapter, tapped on the
+        # shoulder by TERM, manages to exit 0 — recording ok would make the
+        # health marker lie about a call that produced no usable answer.
+        _adapter_msg="adapter killed after ${LLM_MAX_TIME}s (LLM_MAX_TIME deadline)"
+        _llm_note error "" "$_adapter_msg"
+        die "Adapter failed ($_adapter_msg): $LLM_ADAPTER"
+    fi
     if [[ "$_adapter_rc" -eq 0 ]]; then
         _llm_note ok
         _llm_ledger_append
         exit 0
     fi
-    _adapter_msg="adapter exited $_adapter_rc"
-    [[ "$_adapter_rc" -eq 143 ]] && _adapter_msg="adapter killed after ${LLM_MAX_TIME}s (LLM_MAX_TIME deadline)"
-    _llm_note error "" "$_adapter_msg"
-    die "Adapter failed ($_adapter_msg): $LLM_ADAPTER"
+    _llm_note error "" "adapter exited $_adapter_rc"
+    die "Adapter failed (adapter exited $_adapter_rc): $LLM_ADAPTER"
 fi
 
 # A typo'd provider name would otherwise surface as bash's exit-127

@@ -14,6 +14,9 @@
 #   - -s reaches the adapter via --system-prompt-file
 #   - --no-stream, --effort, and --thinking LEVEL are forwarded
 #   - LLM_USAGE_FILE reaches the adapter and its usage lands in the ledger
+#   - the system-prompt tempfile is mode 0600 (private prompt in /tmp)
+#   - LLM_MAX_TIME is a hard deadline: TERM, 5s grace, then KILL — and a
+#     deadline expiry fails the call even if the adapter exits 0 on TERM
 #   - missing LLM_ADAPTER dies loudly; a non-executable path dies loudly
 #   - a nonzero adapter exit fails the call with the adapter's exit code
 #     reported, and the health marker records the error
@@ -42,7 +45,10 @@ printf '%s\n' "$@" >> "$ADAPTER_ARGS"
 cat > "$ADAPTER_STDIN"
 prev=""
 for a in "$@"; do
-    [[ "$prev" == "--system-prompt-file" ]] && cat "$a" > "$ADAPTER_SYS"
+    if [[ "$prev" == "--system-prompt-file" ]]; then
+        cat "$a" > "$ADAPTER_SYS"
+        { stat -c %a "$a" 2>/dev/null || stat -f %Lp "$a"; } > "$ADAPTER_SYS_MODE"
+    fi
     prev="$a"
 done
 if [[ -n "${ADAPTER_USAGE:-}" && -n "${LLM_USAGE_FILE:-}" ]]; then
@@ -61,6 +67,7 @@ mkdir -p "$HEADLONG_HOME"
 export ADAPTER_ARGS="$WORK/adapter_args"
 export ADAPTER_STDIN="$WORK/adapter_stdin"
 export ADAPTER_SYS="$WORK/adapter_sys"
+export ADAPTER_SYS_MODE="$WORK/adapter_sys_mode"
 export LLM_RETRIES=0
 unset ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY \
       OPENCODE_API_KEY LLM_API_KEY LLM_PROVIDER LLM_API_URL LLM_MODEL \
@@ -123,6 +130,11 @@ if [[ "$(cat "$ADAPTER_SYS")" == "be brief" ]]; then
 else
     bad "-s reaches the adapter via --system-prompt-file" "$(cat "$ADAPTER_SYS")"
 fi
+if [[ "$(cat "$ADAPTER_SYS_MODE")" == "600" ]]; then
+    ok "system prompt tempfile is mode 0600"
+else
+    bad "system prompt tempfile is mode 0600" "mode=$(cat "$ADAPTER_SYS_MODE")"
+fi
 if grep -qx -- "--no-stream" "$ADAPTER_ARGS"; then
     ok "--no-stream is forwarded"
 else
@@ -177,6 +189,56 @@ if [[ "$rc" -ne 0 ]] && grep -q 'not executable' "$WORK/stderr"; then
     ok "non-executable LLM_ADAPTER dies loudly"
 else
     bad "non-executable LLM_ADAPTER dies loudly" "rc=$rc"
+fi
+
+# ---------------------------------------------------------------------------
+# The LLM_MAX_TIME deadline is hard
+# ---------------------------------------------------------------------------
+
+# An adapter that traps TERM and exits 0 must still be reported as a
+# deadline failure — a post-deadline exit 0 recording ok would make the
+# health marker lie about a call that produced no answer.
+cat > "$WORK/adapter-trap-term" <<'EOF'
+#!/usr/bin/env bash
+trap 'kill "$spid" 2>/dev/null; exit 0' TERM
+sleep 30 & spid=$!
+wait "$spid"
+EOF
+chmod +x "$WORK/adapter-trap-term"
+
+reset
+LLM_PROVIDER=adapter LLM_ADAPTER="$WORK/adapter-trap-term" LLM_MAX_TIME=1 \
+    "$LLM" -m qwen3:8b "say ok" >/dev/null 2>"$WORK/stderr"
+rc=$?
+if [[ "$rc" -ne 0 ]] && grep -q 'LLM_MAX_TIME deadline' "$WORK/stderr"; then
+    ok "deadline expiry fails the call even when the adapter exits 0 on TERM"
+else
+    bad "deadline expiry fails the call even when the adapter exits 0 on TERM" "rc=$rc: $(head -1 "$WORK/stderr")"
+fi
+if jq -e '.ok == false' "$HEADLONG_HOME/run/llm_health.json" >/dev/null 2>&1; then
+    ok "deadline failure is recorded in the health marker"
+else
+    bad "deadline failure is recorded in the health marker" "$(cat "$HEADLONG_HOME/run/llm_health.json" 2>/dev/null)"
+fi
+
+# An adapter that ignores TERM entirely is KILLed after the grace period.
+cat > "$WORK/adapter-ignore-term" <<'EOF'
+#!/usr/bin/env bash
+trap '' TERM
+sleep 30
+EOF
+chmod +x "$WORK/adapter-ignore-term"
+
+reset
+_t0=$(date +%s)
+LLM_PROVIDER=adapter LLM_ADAPTER="$WORK/adapter-ignore-term" LLM_MAX_TIME=1 \
+    "$LLM" -m qwen3:8b "say ok" >/dev/null 2>"$WORK/stderr"
+rc=$?
+_elapsed=$(( $(date +%s) - _t0 ))
+if [[ "$rc" -ne 0 && "$_elapsed" -lt 15 ]] && grep -q 'LLM_MAX_TIME deadline' "$WORK/stderr"; then
+    ok "a TERM-ignoring adapter is KILLed within the grace period"
+else
+    bad "a TERM-ignoring adapter is KILLed within the grace period" "rc=$rc elapsed=${_elapsed}s: $(head -1 "$WORK/stderr")"
 fi
 
 # ---------------------------------------------------------------------------

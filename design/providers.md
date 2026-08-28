@@ -117,9 +117,11 @@ The contract, implemented by the invoker in `bin/llm` (pinned by
   `out_tok`, `think_tok` as integers. `bin/llm` stamps the ledger from
   it. An adapter that cannot count tokens writes nothing.
 - `bin/llm` wraps the adapter in its own wall-clock deadline
-  (`LLM_MAX_TIME`), kills it on expiry, and reports that as an error.
-  The adapter does not need its own outer timeout, but it should pass
-  reasonable deadlines to whatever it calls.
+  (`LLM_MAX_TIME`): on expiry it sends TERM, waits a 5s grace, then
+  KILLs, and reports the call as an error — even if the adapter
+  manages to exit 0 on the way down. The adapter does not need its own
+  outer timeout, but it should pass reasonable deadlines to whatever
+  it calls.
 - Retries: the invoker runs the adapter once; a nonzero exit fails the
   call, with the exit code reported and the health marker updated. An
   adapter that wants retries does its own, under the deadline above.
@@ -133,6 +135,11 @@ The contract, implemented by the invoker in `bin/llm` (pinned by
   which means the operator mounts it at the same path. A missing or
   non-executable adapter fails with a clear message before anything
   runs.
+
+An adapter is trusted local code. `bin/llm` runs it with the caller's
+full environment, provider keys included — there is no isolation
+between an adapter and the process that invokes it. Point
+`LLM_ADAPTER` only at code you trust as much as `bin/llm` itself.
 
 Language, dependencies, packaging, and auth storage are the adapter's
 business. An adapter that needs `python3`, an npm package, or a
