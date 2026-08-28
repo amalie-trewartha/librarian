@@ -765,6 +765,48 @@ env_metadata_mismatch_message() {
         "$env_name" "$stored_access" "$SHELLM_DOCKER_ACCESS"
 }
 
+# Collapse an absolute path lexically: drop empty and `.` segments, pop one
+# level per `..`, and emit no trailing slash. Purely textual, and deliberately
+# not realpath: these paths are compared as CONTAINER paths, and docker
+# normalizes `..` the same way in both -w and a mount destination (`-w /a/../b`
+# lands on /a/b). Resolving symlinks here would judge the host source instead,
+# so a workdir symlinked into the runs dir but mounted at its own link path
+# would read as covered by a mount that does not contain it.
+#
+# No forks and no word splitting: bin/shellm also runs on macOS bash 3.2, and
+# splitting on IFS=/ would glob a segment containing `*`.
+_norm_path() {
+    local rest="$1" out="" seg
+    while [[ -n "$rest" ]]; do
+        seg="${rest%%/*}"
+        if [[ "$seg" == "$rest" ]]; then rest=""; else rest="${rest#*/}"; fi
+        case "$seg" in
+            ""|.) ;;
+            ..)   out="${out%/*}" ;;
+            *)    out="$out/$seg" ;;
+        esac
+    done
+    printf '%s\n' "${out:-/}"
+}
+
+# True when `path` is already covered by an existing bind mount rooted at
+# `root`. Both are container-side paths: these decide whether docker_setup
+# still needs a -v for a directory, and inside the container a path is
+# reachable only if it sits under a mount destination.
+#
+# Normalize before comparing, and require a path boundary. A bare prefix test
+# reads a sibling as a child (`/x/workdirs` "covering" `/x/workdirs-scratch`),
+# which cost the sibling its -v while docker still made the -w directory, so
+# the run continued against an empty directory with no error anywhere.
+_path_covered() {
+    local path root
+    path=$(_norm_path "$1")
+    root=$(_norm_path "$2")
+    # ${root%/} so a root of "/" yields the pattern /* rather than //*, which
+    # matches nothing and would leave every path uncovered by the filesystem root.
+    [[ "$path" == "$root" || "$path" == "${root%/}"/* ]]
+}
+
 docker_setup_die() {
     local message="$1"
     if [[ -n "${_SHELLM_CONTAINER:-}" ]]; then
@@ -831,7 +873,7 @@ docker_setup() {
     done
 
     # Make custom workdirs visible when they live outside the state home.
-    if [[ "$workspace" != "$runs_mount"* ]]; then
+    if ! _path_covered "$workspace" "$runs_mount"; then
         extra_mounts+=(-v "$workspace:$workspace")
         seen_dirs+=("$workspace")
     fi
@@ -842,7 +884,7 @@ docker_setup() {
         _id_abs=$(cd "$IDENTITY_DIR" && pwd)
         local _id_covered=0
         for d in "${seen_dirs[@]}"; do
-            [[ "$_id_abs" == "$d" || "$_id_abs" == "$d"/* ]] && { _id_covered=1; break; }
+            _path_covered "$_id_abs" "$d" && { _id_covered=1; break; }
         done
         if [[ "$_id_covered" -eq 0 ]]; then
             extra_mounts+=(-v "$_id_abs:$_id_abs")
@@ -856,10 +898,10 @@ docker_setup() {
         abs_path=$(realpath "$f")
         abs_dir=$(dirname "$abs_path")
         # Skip if under workspace or an already mounted parent.
-        [[ "$abs_dir" == "$workspace"* ]] && continue
+        _path_covered "$abs_dir" "$workspace" && continue
         local already=0
         for d in "${seen_dirs[@]+"${seen_dirs[@]}"}"; do
-            [[ "$abs_dir" == "$d"* ]] && { already=1; break; }
+            _path_covered "$abs_dir" "$d" && { already=1; break; }
         done
         [[ "$already" -eq 1 ]] && continue
         seen_dirs+=("$abs_dir")
@@ -874,7 +916,7 @@ docker_setup() {
         abs_dir=$(cd "$_val" && pwd) || continue
         local already=0
         for d in "${seen_dirs[@]+"${seen_dirs[@]}"}"; do
-            [[ "$abs_dir" == "$d"* ]] && { already=1; break; }
+            _path_covered "$abs_dir" "$d" && { already=1; break; }
         done
         [[ "$already" -eq 1 ]] && continue
         seen_dirs+=("$abs_dir")
@@ -904,7 +946,7 @@ docker_setup() {
             # Skip if already under a mounted dir
             local _covered=0
             for _sd in "${seen_dirs[@]}"; do
-                [[ "$_tdir" == "$_sd" || "$_tdir" == "$_sd"/* ]] && { _covered=1; break; }
+                _path_covered "$_tdir" "$_sd" && { _covered=1; break; }
             done
             [[ "$_covered" -eq 1 ]] && continue
             # Skip if already collected
@@ -1135,7 +1177,7 @@ docker_container_can_reach_path() {
     local cid="$1" path="$2" dest
     while IFS= read -r dest; do
         [[ -n "$dest" ]] || continue
-        [[ "$path" == "$dest" || "$path" == "$dest"/* ]] && return 0
+        _path_covered "$path" "$dest" && return 0
     done < <(docker inspect -f '{{range .Mounts}}{{.Destination}}{{"\n"}}{{end}}' "$cid" 2>/dev/null)
     return 1
 }
