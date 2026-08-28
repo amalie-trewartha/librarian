@@ -85,9 +85,11 @@ The allowlist gates both directions. Replies addressed to unapproved
 users are dropped, so an injected agent cannot use the bridge to carry
 data out to an arbitrary chat.
 
-Scope limits. The bridge is DM only and text only. It leaves any group
-it is added to, because the allowlist cannot control who is in a group,
-and it drops media, so nothing gets downloaded onto the box.
+Scope limits. The bridge is DM only. It leaves any group it is added
+to, because the allowlist cannot control who is in a group. Inbound
+media is dropped, so nothing gets downloaded onto the box. Outbound
+file steps (`chat send-file`) are uploaded as Telegram documents or
+photos; that is agent-to-user, not a download path.
 
 How it connects. The bridge long polls the Telegram API outbound. The
 bot token lives in `/etc/shellm/telegram.env`, which is root owned with

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+JPEG_MAGIC = b"\xff\xd8\xff"
 CAPTION_MAX = 1024  # Telegram media-caption limit
 
 
@@ -28,6 +29,13 @@ def _content(step: dict[str, Any]) -> bytes | str | None:
     if content is None or content == "":
         return None
     return content
+
+
+def _as_photo(content: bytes | str | None) -> bool:
+    if not isinstance(content, (bytes, bytearray)):
+        return False
+    raw = bytes(content)
+    return raw.startswith(PNG_MAGIC) or raw.startswith(JPEG_MAGIC)
 
 
 def file_payload(step: dict[str, Any]) -> dict[str, Any] | None:
@@ -54,12 +62,9 @@ def file_payload(step: dict[str, Any]) -> dict[str, Any] | None:
     else:
         caption_out = str(caption)[:CAPTION_MAX]
 
-    raw = content if isinstance(content, (bytes, bytearray)) else None
-    as_photo = bool(raw and bytes(raw).startswith(PNG_MAGIC))
-
     return {
         "filename": filename,
         "content": content,
         "caption": caption_out,
-        "as_photo": as_photo,
+        "as_photo": _as_photo(content),
     }

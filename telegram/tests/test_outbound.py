@@ -209,3 +209,37 @@ def test_group_chat_is_dropped(tmp_path, monkeypatch):
 
     outbound.run(_cfg(tmp_path), FakeBot(), ApproveAll(), threading.Event())
     assert sent == []
+
+def test_jpeg_uses_send_photo(tmp_path, monkeypatch):
+    jpeg = b"\xff\xd8\xff" + b"rest"
+    steps = [
+        {"type": "message", "from": "audel", "to": "telegram-1-1",
+         "source": "chat",
+         "filename": "shot.jpg",
+         "content_b64": base64.b64encode(jpeg).decode("ascii"),
+         "step_id": "jpg1"},
+    ]
+    monkeypatch.setattr(outbound.mindlog, "find_trajectory", lambda d: tmp_path / "t.jsonl")
+    monkeypatch.setattr(outbound.mindlog, "follow", lambda *a, **k: iter(steps))
+
+    sent = []
+    photos = []
+
+    class FakeBot:
+        def send_message(self, chat, text, html=False):
+            sent.append(text)
+
+        def send_photo(self, chat, content, filename, caption=None):
+            photos.append((filename, content, caption))
+
+        def send_document(self, chat, content, filename, caption=None):
+            raise AssertionError("jpeg should use send_photo")
+
+    class ApproveAll:
+        def is_approved(self, user):
+            return True
+
+    outbound.run(_cfg(tmp_path), FakeBot(), ApproveAll(), threading.Event())
+    assert photos == [("shot.jpg", jpeg, None)]
+    assert sent == []
+

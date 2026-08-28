@@ -100,51 +100,6 @@ def run(cfg: Config, bot: Bot, allowlist: Allowlist, stop_event: threading.Event
             except (ApiError, httpx.HTTPError):
                 log.exception("file send failed for %s", to)
             continue
-        payload = file_payload(step)
-        if payload is not None:
-            # File steps travel in content_b64 with empty content — do not
-            # treat them as blank text. Never fall back to sendMessage.
-            name = payload["filename"]
-            data = payload["content"]
-            caption = payload.get("caption")
-            try:
-                if payload.get("as_photo") and hasattr(bot, "send_photo"):
-                    try:
-                        bot.send_photo(conv.chat, data, name, caption=caption)
-                    except ApiError:
-                        if not hasattr(bot, "send_document"):
-                            raise
-                        bot.send_document(conv.chat, data, name, caption=caption)
-                elif hasattr(bot, "send_document"):
-                    bot.send_document(conv.chat, data, name, caption=caption)
-                else:
-                    log.error("bot cannot send files for %s", to)
-            except (ApiError, httpx.HTTPError):
-                log.exception("file send failed for %s", to)
-            continue
-        payload = file_payload(step)
-        if payload is not None:
-            # File steps must not fall back to posting raw source as text.
-            # Binary files live in content_b64 and have empty `content`, so
-            # this runs before the empty-text skip.
-            name = payload["filename"]
-            data = payload["content"]
-            caption = payload.get("caption")
-            try:
-                if payload.get("as_photo") and hasattr(bot, "send_photo"):
-                    try:
-                        bot.send_photo(conv.chat, data, name, caption=caption)
-                    except ApiError:
-                        if not hasattr(bot, "send_document"):
-                            raise
-                        bot.send_document(conv.chat, data, name, caption=caption)
-                elif hasattr(bot, "send_document"):
-                    bot.send_document(conv.chat, data, name, caption=caption)
-                else:
-                    log.error("bot cannot send files for %s", to)
-            except (ApiError, httpx.HTTPError):
-                log.exception("file send failed for %s", to)
-            continue
         text = strip_leaked_command(str(step.get("content") or "")).strip()
         if not text:
             continue

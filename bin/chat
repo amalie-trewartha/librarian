@@ -215,21 +215,16 @@ cmd_send_file() {
     local filename
     filename=$(basename "$filepath")
     # Binary-safe: JSON cannot hold raw bytes, so stamp standard base64.
-    local content_b64
-    content_b64=$(python3 -c 'import base64,sys; print(base64.b64encode(open(sys.argv[1],"rb").read()).decode("ascii"))' "$filepath") \
-        || die "failed to base64-encode $filepath"
-
-    python3 -c 'import json,sys
-filename, content_b64, frm, to = sys.argv[1:5]
-print(json.dumps({
-    "type": "message",
-    "filename": filename,
-    "content_b64": content_b64,
-    "from": frm,
-    "to": to,
-    "source": "chat",
-}, separators=(",", ":")))
-' "$filename" "$content_b64" "$from" "$to" | _chat_append
+    # Read the encoding via jq --rawfile so the bytes never sit on argv
+    # (same class of leak as API keys on curl command lines).
+    base64 -w 0 < "$filepath" | tr -d '\n' | jq -nc \
+        --arg filename "$filename" \
+        --arg from "$from" \
+        --arg to "$to" \
+        --rawfile content_b64 /dev/stdin \
+        '{type:"message", filename:$filename, content_b64:$content_b64, from:$from, to:$to, source:"chat"}' \
+        | _chat_append \
+        || die "failed to encode/append $filepath"
 
     printf 'File sent: %s\n' "$filename" >&2
 }

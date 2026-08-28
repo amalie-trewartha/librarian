@@ -46,3 +46,27 @@ def test_caption_is_truncated():
     })
     assert payload is not None
     assert payload["caption"] == "c" * CAPTION_MAX
+
+def test_file_alias_is_accepted():
+    payload = file_payload({"file": "note.txt", "content": "hi"})
+    assert payload is not None
+    assert payload["filename"] == "note.txt"
+    assert payload["as_photo"] is False
+
+
+def test_jpeg_uses_photo():
+    import base64
+    jpeg = b"\xff\xd8\xff" + b"rest"
+    payload = file_payload({
+        "filename": "shot.jpg",
+        "content_b64": base64.b64encode(jpeg).decode("ascii"),
+    })
+    assert payload is not None
+    assert payload["content"] == jpeg
+    assert payload["as_photo"] is True
+
+
+def test_text_content_is_never_a_photo():
+    payload = file_payload({"filename": "fig.png", "content": "not-bytes"})
+    assert payload is not None
+    assert payload["as_photo"] is False
