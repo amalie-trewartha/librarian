@@ -170,6 +170,9 @@ Models:
   Compatible: any model name, via --provider openai-compatible and
               LLM_API_URL (Ollama, vLLM, LM Studio, proxies; never
               auto-detected)
+  Adapter:    any model name, via --provider adapter and LLM_ADAPTER
+              (an external executable handles the completion; see
+              design/providers.md for the contract)
 
 Thinking & effort:
   These flags control how much reasoning the model does before answering.
@@ -212,6 +215,8 @@ Environment:
   LLM_API_KEY              Optional key for openai-compatible, sent as
                            Authorization: Bearer when set (local servers
                            like Ollama need none)
+  LLM_ADAPTER              Path to an adapter executable; required with
+                           --provider adapter (contract: design/providers.md)
   LLM_PROVIDER             Provider to use when the model name implies none
                            (same names as --provider); --provider takes
                            precedence, and a value that disagrees with the
@@ -343,11 +348,12 @@ fi
 
 # LLM_API_URL reroutes a provider's requests — credentials included — to an
 # arbitrary host, so like the provider override above it must never do it
-# silently. openai-compatible is exempt: it has no default endpoint, so the
-# URL there is configuration, not an override. Warn with the host only: a
-# URL can itself carry credentials (user:pass@, ?token=...) that must not
-# reach stderr or whatever captures it.
-if [[ -n "${LLM_API_URL:-}" && "$LLM_PROVIDER" != "openai-compatible" ]]; then
+# silently. openai-compatible is exempt (it has no default endpoint, so the
+# URL there is configuration, not an override), and so is adapter (it
+# ignores LLM_API_URL entirely). Warn with the host only: a URL can itself
+# carry credentials (user:pass@, ?token=...) that must not reach stderr or
+# whatever captures it.
+if [[ -n "${LLM_API_URL:-}" && "$LLM_PROVIDER" != "openai-compatible" && "$LLM_PROVIDER" != "adapter" ]]; then
     _llm_url_host="${LLM_API_URL#*://}"
     _llm_url_host="${_llm_url_host%%/*}"
     _llm_url_host="${_llm_url_host%%\?*}"
@@ -410,14 +416,13 @@ get_model_max_tokens() {
         */*) echo 16384 ;;
         *)
             # Conservative fallback for unknown models. openai-compatible
-            # endpoints serve arbitrary names the table cannot know, and
-            # 4096 starves agentic steps there; names the table does know
-            # (a proxy serving gpt-5, ...) keep their real caps above.
-            if [[ "${LLM_PROVIDER:-}" == "openai-compatible" ]]; then
-                echo 16384
-            else
-                echo 4096
-            fi
+            # endpoints and adapters serve arbitrary names the table cannot
+            # know, and 4096 starves agentic steps there; names the table
+            # does know (a proxy serving gpt-5, ...) keep their real caps.
+            case "${LLM_PROVIDER:-}" in
+                openai-compatible|adapter) echo 16384 ;;
+                *) echo 4096 ;;
+            esac
             ;;
     esac
 }
@@ -1004,6 +1009,59 @@ _llm_cleanup() {
     return 0
 }
 trap '_llm_cleanup' EXIT
+
+# Adapter seam (design/providers.md): LLM_PROVIDER=adapter hands the whole
+# completion to the executable named by LLM_ADAPTER instead of the curl
+# path. The adapter carries its own dependencies and auth; bin/llm keeps
+# the wall-clock deadline, the health marker, and the usage ledger.
+if [[ "$LLM_PROVIDER" == "adapter" ]]; then
+    [[ -n "${LLM_ADAPTER:-}" ]] || die "LLM_ADAPTER is not set (LLM_PROVIDER=adapter runs the executable at that path; see design/providers.md)"
+    [[ -x "$LLM_ADAPTER" ]] || die "LLM_ADAPTER is not executable: $LLM_ADAPTER"
+    _adapter_args=(--model "$LLM_MODEL" --max-tokens "$LLM_MAX_TOKENS")
+    [[ -n "$LLM_EFFORT" ]] && _adapter_args+=(--effort "$LLM_EFFORT")
+    if [[ "$LLM_THINKING" -eq 1 ]]; then
+        _adapter_args+=(--thinking)
+        [[ -n "$LLM_THINKING_LEVEL" ]] && _adapter_args+=("$LLM_THINKING_LEVEL")
+    fi
+    [[ "$LLM_STREAM" -eq 0 ]] && _adapter_args+=(--no-stream)
+    if [[ -n "$LLM_SYSTEM" ]]; then
+        printf '%s' "$LLM_SYSTEM" > "$payload_file.system"
+        _adapter_args+=(--system-prompt-file "$payload_file.system")
+    fi
+    # Messages travel by file + stdin redirect, not argv (size caps) and
+    # not a pipe (the adapter must be a direct child so the deadline can
+    # kill it). The payload tempfile and its cleanup are reused.
+    printf '%s' "$LLM_MESSAGES" > "$payload_file"
+    export LLM_USAGE_FILE
+    _adapter_rc=0
+    if [[ "$LLM_MAX_TIME" =~ ^[0-9]+$ && "$LLM_MAX_TIME" -gt 0 ]]; then
+        "$LLM_ADAPTER" "${_adapter_args[@]}" < "$payload_file" &
+        _adapter_pid=$!
+        # The watcher detaches from stdio: it would otherwise hold the
+        # caller's stdout pipe open (a $(...) caller blocks on it) for the
+        # full deadline even after the adapter finishes.
+        ( sleep "$LLM_MAX_TIME"; kill "$_adapter_pid" 2>/dev/null ) >/dev/null 2>&1 </dev/null &
+        _adapter_watch=$!
+        wait "$_adapter_pid" || _adapter_rc=$?
+        # Kill the watcher's process group so its sleep dies with it (a bare
+        # kill orphans the sleep, which lingers until the deadline).
+        { kill -- -"$_adapter_watch" || kill "$_adapter_watch"; } 2>/dev/null || true
+        wait "$_adapter_watch" 2>/dev/null || true
+    else
+        "$LLM_ADAPTER" "${_adapter_args[@]}" < "$payload_file" || _adapter_rc=$?
+    fi
+    rm -f "$payload_file.system"
+    if [[ "$_adapter_rc" -eq 0 ]]; then
+        _llm_note ok
+        _llm_ledger_append
+        exit 0
+    fi
+    _adapter_msg="adapter exited $_adapter_rc"
+    [[ "$_adapter_rc" -eq 143 ]] && _adapter_msg="adapter killed after ${LLM_MAX_TIME}s (LLM_MAX_TIME deadline)"
+    _llm_note error "" "$_adapter_msg"
+    die "Adapter failed ($_adapter_msg): $LLM_ADAPTER"
+fi
+
 # A typo'd provider name would otherwise surface as bash's exit-127
 # "build_payload_...: command not found" instead of an error naming the
 # problem, because payload build runs before get_url_headers' own check.

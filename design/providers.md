@@ -1,8 +1,8 @@
 # Providers
 
 Status: DECIDED 2026-08-27 — the policy below governs provider additions.
-The `openai-compatible` provider is shipped; the adapter seam is
-specified here but not yet implemented.
+The `openai-compatible` provider and the adapter seam are both
+implemented in `bin/llm`.
 
 Headlong keeps getting asked to support more model providers (PR #46,
 issues #65 and #71). Each one is easy on its own, but core grows with
@@ -19,14 +19,18 @@ it, and what the boundary between them is.
    reads OpenRouter's catalog and credit endpoints for display, which
    is not a completion path.
 
-2. Core supports providers that speak plain HTTP and JSON. Most of them
-   are covered by the generic `openai-compatible` provider, which is
-   configured with a URL, a model name, and an optional key. After
-   that, supporting a new compatible provider (Ollama, vLLM, LM Studio,
-   Together, a corporate proxy) is a documentation entry, not code. A
-   provider with a genuinely different wire format (the way Gemini has
-   one) can still be added to core, but that is a maintainer decision,
-   and the bar is high because the generic provider covers so much.
+2. Core supports a provider when its wire protocol can be implemented
+   and tested with a small bash, curl, and jq path — no other runtime,
+   no SDK, no auth beyond a header. ("Plain HTTP and JSON" alone is
+   too broad a test; nearly every provider meets it.) Most qualifying
+   providers are covered by the generic `openai-compatible` provider,
+   which is configured with a URL, a model name, and an optional key.
+   After that, supporting a new compatible provider (Ollama, vLLM, LM
+   Studio, Together, a corporate proxy) is a documentation entry, not
+   code. A provider with a genuinely different wire format (the way
+   Gemini has one) can still be added to core, but that is a maintainer
+   decision, and the bar is high because the generic provider covers so
+   much.
 
 3. A provider that needs a subprocess, another language, an SDK, or
    auth that is not a key in a header lives outside core, behind the
@@ -57,6 +61,23 @@ llm -m qwen3:8b "hello"
 | `LLM_API_URL` | The chat-completions endpoint. Required, no default |
 | `LLM_API_KEY` | Optional. When set, sent as `Authorization: Bearer` |
 
+What "compatible" means here, concretely: a chat-completions endpoint
+that accepts `model`, `messages`, and `max_tokens`; non-streaming
+responses carrying the text at `choices[0].message.content`; streaming
+as SSE `data:` lines with deltas at `choices[0].delta.content`, ended
+by `data: [DONE]`; and errors as non-2xx responses with a JSON body.
+That subset is what the code exercises and the tests pin. An endpoint
+that diverges from it is best effort — it may well work, but the
+divergence is not a core bug to absorb.
+
+`LLM_PROVIDER` is process-wide by design (decided 2026-08-26:
+environment overrides are authoritative, never pattern-guessed around),
+so selecting `openai-compatible` routes every completion in the
+deployment — the main model, the responder, recap, memory search —
+through the one endpoint. A mixed setup (a hosted main model plus a
+cheap local one) needs an endpoint that proxies both models, or
+per-call environment in the caller; there is no per-model routing.
+
 Everything else in `bin/llm` applies unchanged: streaming, retries,
 network guards, truncation warnings, the usage ledger, and the health
 marker. Unknown model names get a 16384 default output cap under this
@@ -70,15 +91,16 @@ A local inference server running on the host is reached at
 ## The adapter contract
 
 An adapter is one executable that turns a completion request into
-provider output. `bin/llm` will run it in place of curl when the
-operator configures it:
+provider output. `bin/llm` runs it in place of curl when the operator
+configures it:
 
 ```bash
 LLM_PROVIDER=adapter
 LLM_ADAPTER=/path/to/executable
 ```
 
-The contract, which the invoker in `bin/llm` will implement:
+The contract, implemented by the invoker in `bin/llm` (pinned by
+`tests/test_llm_adapter.sh`):
 
 - `bin/llm` runs `$LLM_ADAPTER` with these flags: `--model NAME`,
   `--max-tokens N`, and, when set, `--effort LEVEL`, `--thinking
@@ -98,16 +120,19 @@ The contract, which the invoker in `bin/llm` will implement:
   (`LLM_MAX_TIME`), kills it on expiry, and reports that as an error.
   The adapter does not need its own outer timeout, but it should pass
   reasonable deadlines to whatever it calls.
-- Retries stay in `bin/llm` and follow the existing rule: a nonzero
-  exit before any stdout bytes is retryable, and nothing is retried
-  after output has been emitted.
+- Retries: the invoker runs the adapter once; a nonzero exit fails the
+  call, with the exit code reported and the health marker updated. An
+  adapter that wants retries does its own, under the deadline above.
+  (The curl path's rule — retry only when nothing was emitted — can
+  extend to adapters later if a real need shows up.)
 - The health marker (`llm_health.json`) is written by `bin/llm` from
   the exit status, never by the adapter, and `ok` is only recorded
   after the adapter exits 0.
-- Sandbox: the adapter path is resolved through symlinks the way
-  `bin/shellm` resolves its own location, and it must exist inside the
-  container for sandboxed callers, which means the operator mounts it.
-  A missing adapter fails with a clear message before anything runs.
+- Sandbox: `LLM_ADAPTER` is used as given, and it must name an
+  executable that exists inside the container for sandboxed callers,
+  which means the operator mounts it at the same path. A missing or
+  non-executable adapter fails with a clear message before anything
+  runs.
 
 Language, dependencies, packaging, and auth storage are the adapter's
 business. An adapter that needs `python3`, an npm package, or a

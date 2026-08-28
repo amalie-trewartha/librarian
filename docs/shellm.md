@@ -310,6 +310,12 @@ shellm "what os is this?"
 nested shellm runs the same way the vendor keys are, so `llm` calls
 inside generated code reach the endpoint too.
 
+A provider that can't speak this protocol (an SDK, a vendor CLI,
+signed requests) runs outside core as an adapter: set
+`LLM_PROVIDER=adapter` and `LLM_ADAPTER=/path/to/executable`, and
+`llm` runs that executable in place of curl. The adapter contract is
+in [design/providers.md](../design/providers.md).
+
 **Output contract:** stdout = text response, stderr = thinking tokens (Anthropic only), exit 0 = success. This makes it composable with pipes and subshells.
 
 ## mem and skills
