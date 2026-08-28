@@ -10,7 +10,8 @@
 #   - the provider works with NO API key of any kind set (the point of it:
 #     Ollama and friends need no key, and no dummy key masquerade either)
 #   - no Authorization header is sent when LLM_API_KEY is unset
-#   - LLM_API_KEY, when set, is sent as a Bearer token
+#   - LLM_API_KEY, when set, is sent as a Bearer token through a curl config
+#     file with mode 0600, never on curl's argv (issue #80)
 #   - LLM_API_URL is required: without it the call dies loudly
 #   - SHELLM_API_URL works as the fallback URL (direct llm callers in a
 #     shellm deployment: thinkers, mem, recap)
@@ -41,9 +42,10 @@ bad() { fail=$((fail+1)); printf 'FAIL %s%s\n' "$1" "${2:+ — $2}"; }
 
 # --- curl stub ---------------------------------------------------------------
 # Records every argument in $CURL_ARGS and copies the -d @file payload to
-# $CURL_PAYLOAD (the real payload tempfile is gone by the time the test can
-# look), then answers with one SSE chunk plus [DONE], or a JSON body on the
-# non-streaming (-o) path.
+# $CURL_PAYLOAD and any -K config files to $CURL_HEADERS (the real tempfiles are
+# gone by the time the test can look; the config file's mode lands in
+# $CURL_HEADERS_MODE), then answers with one SSE chunk plus [DONE], or a JSON
+# body on the non-streaming (-o) path.
 mkdir -p "$WORK/bin"
 cat > "$WORK/bin/curl" <<'EOF'
 #!/usr/bin/env bash
@@ -53,6 +55,10 @@ prev=""
 for a in "$@"; do
     [[ "$prev" == "-o" ]] && out_file="$a"
     [[ "$prev" == "-d" && "$a" == @* ]] && cat "${a#@}" > "$CURL_PAYLOAD"
+    if [[ "$prev" == "-K" ]]; then
+        cat "$a" >> "$CURL_HEADERS"
+        { stat -c %a "$a" 2>/dev/null || stat -f %Lp "$a"; } >> "$CURL_HEADERS_MODE"
+    fi
     prev="$a"
 done
 if [[ -n "$out_file" ]]; then
@@ -70,6 +76,8 @@ export HEADLONG_HOME="$WORK/home"   # bin/llm writes run/llm_health.json here
 mkdir -p "$HEADLONG_HOME"
 export CURL_ARGS="$WORK/curl_args"
 export CURL_PAYLOAD="$WORK/curl_payload"
+export CURL_HEADERS="$WORK/curl_headers"
+export CURL_HEADERS_MODE="$WORK/curl_headers_mode"
 export LLM_RETRIES=0
 # Keyless operation is the point of this provider: every key must be absent,
 # along with any .env-sourced overrides the suite's shell may carry. cd to
@@ -82,7 +90,7 @@ cd "$WORK" || exit 1
 LLM="$REPO/bin/llm"
 URL="http://127.0.0.1:9/v1/chat/completions"
 
-reset() { : > "$CURL_ARGS"; : > "$CURL_PAYLOAD"; }
+reset() { : > "$CURL_ARGS"; : > "$CURL_PAYLOAD"; : > "$CURL_HEADERS"; : > "$CURL_HEADERS_MODE"; }
 
 # ---------------------------------------------------------------------------
 # Works with no API key of any kind
@@ -102,8 +110,8 @@ if grep -q '127.0.0.1:9' "$CURL_ARGS"; then
 else
     bad "request went to LLM_API_URL"
 fi
-if grep -qi 'authorization' "$CURL_ARGS"; then
-    bad "no Authorization header without LLM_API_KEY" "$(grep -im1 authorization "$CURL_ARGS")"
+if grep -qi 'authorization' "$CURL_ARGS" "$CURL_HEADERS"; then
+    bad "no Authorization header without LLM_API_KEY" "$(grep -ihm1 authorization "$CURL_ARGS" "$CURL_HEADERS")"
 else
     ok "no Authorization header without LLM_API_KEY"
 fi
@@ -120,10 +128,40 @@ fi
 reset
 LLM_PROVIDER=openai-compatible LLM_API_URL="$URL" LLM_API_KEY="sekrit" \
     "$LLM" -m qwen3:8b "say ok" >/dev/null 2>"$WORK/stderr"
-if grep -q 'Authorization: Bearer sekrit' "$CURL_ARGS"; then
+if grep -q 'Authorization: Bearer sekrit' "$CURL_HEADERS"; then
     ok "LLM_API_KEY is sent as Authorization: Bearer"
 else
     bad "LLM_API_KEY is sent as Authorization: Bearer" "$(head -1 "$WORK/stderr")"
+fi
+# The whole point of the config file: the key must never ride curl's argv,
+# where any same-host process can read it via ps (issue #80).
+if grep -q 'sekrit' "$CURL_ARGS"; then
+    bad "LLM_API_KEY stays off curl's argv" "$(grep -m1 sekrit "$CURL_ARGS")"
+else
+    ok "LLM_API_KEY stays off curl's argv"
+fi
+if grep -qx '600' "$CURL_HEADERS_MODE"; then
+    ok "auth config file is mode 600"
+else
+    bad "auth config file is mode 600" "mode: $(cat "$CURL_HEADERS_MODE")"
+fi
+
+# Quotes, backslashes, and newlines have meaning in a curl config file. They
+# must stay inside the header value instead of becoming another config option.
+reset
+odd_key=$'sek"rit\\part\nurl = "https://wrong.example"'
+LLM_PROVIDER=openai-compatible LLM_API_URL="$URL" LLM_API_KEY="$odd_key" \
+    "$LLM" -m qwen3:8b "say ok" >/dev/null 2>"$WORK/stderr"
+if [[ "$(wc -l < "$CURL_HEADERS" | tr -d ' ')" -eq 1 ]] \
+   && grep -Fq 'header = "Authorization: Bearer sek\"rit\\part\nurl = \"https://wrong.example\""' "$CURL_HEADERS"; then
+    ok "auth config escapes quoted values"
+else
+    bad "auth config escapes quoted values" "$(head -1 "$CURL_HEADERS")"
+fi
+if grep -Fq "$odd_key" "$CURL_ARGS"; then
+    bad "escaped LLM_API_KEY stays off curl's argv" "key found in argv"
+else
+    ok "escaped LLM_API_KEY stays off curl's argv"
 fi
 
 # ---------------------------------------------------------------------------
@@ -231,6 +269,12 @@ if grep -q 'LLM_API_URL overrides the default openai endpoint (requests go to 12
     ok "LLM_API_URL on a keyed provider warns on stderr"
 else
     bad "LLM_API_URL on a keyed provider warns on stderr" "$(head -1 "$WORK/stderr")"
+fi
+# Keyed vendor providers use the same config file as openai-compatible.
+if grep -q 'Authorization: Bearer sekrit' "$CURL_HEADERS" && ! grep -q 'sekrit' "$CURL_ARGS"; then
+    ok "keyed provider (openai) sends its key via the config file, not argv"
+else
+    bad "keyed provider (openai) sends its key via the config file, not argv" "$(grep -m1 sekrit "$CURL_ARGS")"
 fi
 
 # The warning names the host only: credentials a URL can carry (userinfo,
