@@ -214,15 +214,22 @@ cmd_send_file() {
 
     local filename
     filename=$(basename "$filepath")
-    local content
-    content=$(cat "$filepath")
+    # Binary-safe: JSON cannot hold raw bytes, so stamp standard base64.
+    local content_b64
+    content_b64=$(python3 -c 'import base64,sys; print(base64.b64encode(open(sys.argv[1],"rb").read()).decode("ascii"))' "$filepath") \
+        || die "failed to base64-encode $filepath"
 
-    printf '{"type":"message","filename":%s,"content":%s,"from":%s,"to":%s,"source":"chat"}' \
-        "$(printf '%s' "$filename" | jq -Rsa .)" \
-        "$(printf '%s' "$content" | jq -Rsa .)" \
-        "$(printf '%s' "$from" | jq -Rsa .)" \
-        "$(printf '%s' "$to" | jq -Rsa .)" \
-        | _chat_append
+    python3 -c 'import json,sys
+filename, content_b64, frm, to = sys.argv[1:5]
+print(json.dumps({
+    "type": "message",
+    "filename": filename,
+    "content_b64": content_b64,
+    "from": frm,
+    "to": to,
+    "source": "chat",
+}, separators=(",", ":")))
+' "$filename" "$content_b64" "$from" "$to" | _chat_append
 
     printf 'File sent: %s\n' "$filename" >&2
 }

@@ -1,38 +1,48 @@
-from headlong_telegram.filepayload import file_payload
-
-PNG = b"\x89PNG\r\n\x1a\n" + b"rest"
+from headlong_telegram.filepayload import CAPTION_MAX, file_payload
 
 
-def test_plain_text_is_none():
+def test_plain_text_is_not_a_file():
     assert file_payload({"type": "message", "content": "hello"}) is None
 
 
-def test_filename_field():
-    p = file_payload({"content": "<svg xmlns", "filename": "walk.svg", "caption": "a figure"})
-    assert p["filename"] == "walk.svg"
-    assert p["content"] == b"<svg xmlns"
-    assert p["initial_comment"] == "a figure"
-    assert p["title"] == "walk.svg"
+def test_filename_stamps_a_document():
+    payload = file_payload({"filename": "note.txt", "content": "hi"})
+    assert payload is not None
+    assert payload["filename"] == "note.txt"
+    assert payload["content"] == "hi"
+    assert payload["as_photo"] is False
+    assert payload["caption"] is None
 
 
-def test_svg_sniff_without_filename():
-    p = file_payload({"content": "  <svg xmlns=\"http://www.w3.org/2000/svg\">"})
-    assert p["filename"] == "figure.svg"
-    assert p["content"].lstrip().startswith(b"<svg")
+def test_content_b64_roundtrips_png_bytes():
+    import base64
+    png = b"\x89PNG\r\n\x1a\n" + b"rest"
+    payload = file_payload({
+        "filename": "fig.png",
+        "content_b64": base64.b64encode(png).decode("ascii"),
+    })
+    assert payload is not None
+    assert payload["content"] == png
+    assert payload["as_photo"] is True
 
 
-def test_png_sniff_without_filename():
-    p = file_payload({"content": PNG})
-    assert p["filename"] == "figure.png"
-    assert p["content"].startswith(b"\x89PNG")
+def test_svg_without_filename_stays_text():
+    assert file_payload({"content": "<svg xmlns='x'></svg>"}) is None
 
 
-def test_typed_attachment_without_name():
-    p = file_payload({"type": "file", "content": b"abc"})
-    assert p["filename"] == "attachment.bin"
-    assert p["content"] == b"abc"
+def test_path_is_reduced_to_basename():
+    payload = file_payload({"filename": "/etc/passwd", "content": "x"})
+    assert payload is not None
+    assert payload["filename"] == "passwd"
 
 
-def test_path_is_basename():
-    p = file_payload({"filename": "/tmp/secret/fig.png", "content": "x"})
-    assert p["filename"] == "fig.png"
+def test_invalid_b64_is_not_a_file():
+    assert file_payload({"filename": "a.bin", "content_b64": "!!!!"}) is None
+
+
+def test_caption_is_truncated():
+    payload = file_payload({
+        "filename": "a.txt", "content": "x", "caption": "c" * 2000,
+    })
+    assert payload is not None
+    assert payload["caption"] == "c" * CAPTION_MAX

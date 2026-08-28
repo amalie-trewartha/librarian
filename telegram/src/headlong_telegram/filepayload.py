@@ -1,48 +1,65 @@
 """Detect file-bearing mind-log steps for Telegram outbound.
 
-`chat send-file` stamps `filename` on the message step and puts the file
-bytes/text in `content`. Without this, outbound always used sendMessage
-and a PNG/SVG landed as raw source in the chat.
+`chat send-file` stamps `filename` on the message step. Binary files
+travel in `content_b64` (standard base64) because JSON cannot hold raw
+bytes; text may sit in `content`. Outbound uploads the decoded bytes
+via sendPhoto/sendDocument rather than stuffing them into sendMessage.
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 from pathlib import Path
 from typing import Any
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
-FILE_TYPES = {"file", "image", "attachment"}
+CAPTION_MAX = 1024  # Telegram media-caption limit
+
+
+def _content(step: dict[str, Any]) -> bytes | str | None:
+    b64 = step.get("content_b64")
+    if isinstance(b64, str) and b64:
+        try:
+            return base64.b64decode(b64, validate=True)
+        except (binascii.Error, ValueError):
+            return None
+    content = step.get("content")
+    if content is None or content == "":
+        return None
+    return content
 
 
 def file_payload(step: dict[str, Any]) -> dict[str, Any] | None:
-    """Return upload kwargs, or None if this step is ordinary text."""
-    filename = step.get("filename") or step.get("file") or ""
-    content = step.get("content") or ""
-    typed = str(step.get("type") or "") in FILE_TYPES
+    """Return upload kwargs, or None if this step is ordinary text.
 
-    if not filename:
-        if isinstance(content, str) and content.lstrip().startswith("<svg"):
-            filename = "figure.svg"
-        elif isinstance(content, (bytes, bytearray)) and bytes(content[:8]) == PNG_MAGIC:
-            filename = "figure.png"
-        elif typed:
-            filename = "attachment.bin"
-        else:
-            return None
+    A file step is one with a `filename` (or `file`) field. Content-sniffing
+    without a name is not used: a text reply that happens to start with
+    `<svg` must stay a sendMessage.
+    """
+    raw_name = step.get("filename") or step.get("file") or ""
+    if not isinstance(raw_name, str) or not raw_name.strip():
+        return None
+    filename = Path(raw_name).name
+    if not filename or filename in {".", ".."}:
+        return None
 
-    filename = Path(str(filename)).name or "attachment.bin"
-    if isinstance(content, str):
-        data = content.encode("utf-8")
+    content = _content(step)
+    if content is None:
+        return None
+
+    caption = step.get("caption")
+    if caption is None or caption == "":
+        caption_out = None
     else:
-        data = bytes(content)
+        caption_out = str(caption)[:CAPTION_MAX]
 
-    title = step.get("title") or filename
-    comment = (step.get("caption") or step.get("comment") or "").strip()
-    if len(comment) > 2000:
-        comment = comment[:1990] + "…"
+    raw = content if isinstance(content, (bytes, bytearray)) else None
+    as_photo = bool(raw and bytes(raw).startswith(PNG_MAGIC))
+
     return {
         "filename": filename,
-        "content": data,
-        "title": title,
-        "initial_comment": comment or None,
+        "content": content,
+        "caption": caption_out,
+        "as_photo": as_photo,
     }
