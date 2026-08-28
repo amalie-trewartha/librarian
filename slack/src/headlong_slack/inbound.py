@@ -37,6 +37,9 @@ class InboundMessage:
     channel: str
     thread_ts: str | None  # where an error notice would go; None = top level
     text: str
+    # True for channel reactions: resolve parent thread_ts in the worker
+    # so the bolt handler never blocks on conversations.history.
+    resolve_parent: bool = False
 
 
 class SlackNames:
@@ -76,6 +79,37 @@ class SlackNames:
         return self._channels[channel_id]
 
 
+def reaction_to_inbound(
+    event: dict[str, Any], *, bot_user_id: str
+) -> tuple[str, str, str, str, bool] | None:
+    """Decide whether a reaction_added event should reach the mind log.
+
+    Returns (user, channel, item_ts, reaction, want_thread) or None to drop.
+    want_thread is True for channels (lookup parent thread_ts); False for DMs.
+    """
+    if event.get("bot_id"):
+        return None
+    user = event.get("user")
+    if not user or user == bot_user_id:
+        return None
+    reaction = event.get("reaction")
+    if not reaction:
+        return None
+    item = event.get("item") or {}
+    if item.get("type") != "message":
+        return None
+    channel = item.get("channel")
+    item_ts = item.get("ts")
+    if not channel or not item_ts:
+        return None
+    is_im = channel.startswith("D")
+    item_user = event.get("item_user")
+    # DMs: every reaction is for us. Channels: only reactions on our messages.
+    if not is_im and item_user != bot_user_id:
+        return None
+    return (user, channel, item_ts, reaction, not is_im)
+
+
 class Inbound:
     def __init__(
         self,
@@ -97,12 +131,65 @@ class Inbound:
         )
         app.event("app_mention")(self._on_event)
         app.event("message")(self._on_event)
+        app.event("reaction_added")(self._on_reaction)
         self._worker = threading.Thread(
             target=self._drain, name="slack-inbound", daemon=True
         )
         self._worker.start()
 
     # -- event intake (bolt handler thread; must return fast) ----------------
+
+    def _on_reaction(self, event: dict[str, Any], logger: logging.Logger) -> None:
+        """Land emoji reactions on our messages (and all DM reactions) in the mind log.
+
+        Channel reactions on other people's messages are dropped — same gate as
+        un-mentioned channel traffic. Body is `:name:` so last-word can treat it
+        as reaction-only, not a request.
+
+        Thread parent lookup happens in the delivery worker, not here: bolt
+        must ack the envelope without waiting on conversations.history.
+        """
+        msg = reaction_to_inbound(event, bot_user_id=self.bot_user_id)
+        if msg is None:
+            return
+        user, channel, item_ts, reaction, want_thread = msg
+        event_ts = event.get("event_ts") or ""
+        if not self.dedupe.add(f"reaction:{channel}:{item_ts}:{user}:{reaction}:{event_ts}"):
+            return
+        if want_thread:
+            thread_ts = item_ts
+            from_name = naming.encode(user, channel, thread_ts)
+        else:
+            thread_ts = None
+            from_name = naming.encode(user, channel)
+        self.queue.put(
+            InboundMessage(
+                from_name,
+                user,
+                channel,
+                thread_ts,
+                f":{reaction}:",
+                resolve_parent=want_thread,
+            )
+        )
+
+    def _item_thread_ts(self, channel: str, ts: str) -> str | None:
+        """Parent thread_ts for the reacted-to message, if it is in a thread."""
+        try:
+            resp = self.app.client.conversations_history(
+                channel=channel,
+                latest=ts,
+                oldest=ts,
+                inclusive=True,
+                limit=1,
+            )
+            messages = resp.get("messages") or []
+            if not messages:
+                return None
+            return messages[0].get("thread_ts") or None
+        except Exception:
+            log.warning("conversations_history failed for %s ts=%s", channel, ts, exc_info=True)
+            return None
 
     def _on_event(self, event: dict[str, Any], logger: logging.Logger) -> None:
         if event.get("bot_id") or event.get("subtype"):
@@ -152,6 +239,19 @@ class Inbound:
                 log.exception("failed delivering %s", msg.from_name)
 
     def _deliver(self, msg: InboundMessage) -> None:
+        if msg.resolve_parent and msg.thread_ts:
+            parent = self._item_thread_ts(msg.channel, msg.thread_ts)
+            thread_ts = parent or msg.thread_ts
+            if thread_ts != msg.thread_ts:
+                msg = InboundMessage(
+                    naming.encode(msg.user, msg.channel, thread_ts),
+                    msg.user,
+                    msg.channel,
+                    thread_ts,
+                    msg.text,
+                    resolve_parent=False,
+                )
+            self.threads.touch(msg.channel, msg.thread_ts)
         content = clean_inbound(msg.text, self.bot_user_id)
         if not content:
             return
