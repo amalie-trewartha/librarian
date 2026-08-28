@@ -17,6 +17,7 @@ import threading
 import time
 
 from . import mindlog, naming
+from .filepayload import file_payload
 from .allowlist import Allowlist
 from .api import ApiError, Bot
 from .config import Config
@@ -78,6 +79,23 @@ def run(cfg: Config, bot: Bot, allowlist: Allowlist, stop_event: threading.Event
             continue
         if recent.is_duplicate(to, text):
             log.warning("skipping duplicate post to %s", to)
+            continue
+        payload = file_payload(step)
+        if payload is not None:
+            # File steps must not fall back to posting raw source as text.
+            name = payload["filename"]
+            data = payload["content"]
+            caption = payload.get("initial_comment")
+            lower = name.lower()
+            try:
+                if lower.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")) and hasattr(bot, "send_photo"):
+                    bot.send_photo(conv.chat, data, name, caption=caption)
+                elif hasattr(bot, "send_document"):
+                    bot.send_document(conv.chat, data, name, caption=caption)
+                else:
+                    log.error("bot cannot send files for %s", to)
+            except ApiError:
+                log.exception("file send failed for %s", to)
             continue
         for part in chunk(text):
             try:
