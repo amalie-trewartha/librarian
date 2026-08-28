@@ -351,6 +351,7 @@ if [[ -n "${LLM_API_URL:-}" && "$LLM_PROVIDER" != "openai-compatible" ]]; then
     _llm_url_host="${LLM_API_URL#*://}"
     _llm_url_host="${_llm_url_host%%/*}"
     _llm_url_host="${_llm_url_host%%\?*}"
+    _llm_url_host="${_llm_url_host%%#*}"
     _llm_url_host="${_llm_url_host##*@}"
     echo "llm: warning: LLM_API_URL overrides the default $LLM_PROVIDER endpoint (requests go to $_llm_url_host)" >&2
 fi
@@ -650,8 +651,13 @@ get_url_headers() {
                      -H "Authorization: Bearer $OPENCODE_API_KEY")
             ;;
         openai-compatible)
-            [[ -z "${LLM_API_URL:-}" ]] && die "LLM_API_URL is not set (openai-compatible has no default endpoint; e.g. http://localhost:11434/v1/chat/completions for Ollama)"
-            url="$LLM_API_URL"
+            # SHELLM_API_URL fallback, like SHELLM_MODEL above: shellm clears
+            # inherited LLM_API_URL, so a deployment configured per the docs
+            # sets SHELLM_API_URL — and thinkers, mem, recap call llm
+            # directly, outside shellm's re-export. Scoped to this provider;
+            # keyed providers' URLs stay LLM_API_URL-only.
+            url="${LLM_API_URL:-${SHELLM_API_URL:-}}"
+            [[ -z "$url" ]] && die "LLM_API_URL is not set (openai-compatible has no default endpoint; e.g. http://localhost:11434/v1/chat/completions for Ollama)"
             headers=(-H "Content-Type: application/json")
             if [[ -n "${LLM_API_KEY:-}" ]]; then
                 headers+=(-H "Authorization: Bearer $LLM_API_KEY")

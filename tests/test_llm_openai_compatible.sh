@@ -12,6 +12,8 @@
 #   - no Authorization header is sent when LLM_API_KEY is unset
 #   - LLM_API_KEY, when set, is sent as a Bearer token
 #   - LLM_API_URL is required: without it the call dies loudly
+#   - SHELLM_API_URL works as the fallback URL (direct llm callers in a
+#     shellm deployment: thinkers, mem, recap)
 #   - --provider openai-compatible works the same as the env var
 #   - the non-streaming path answers too
 #   - unknown model names default to the provider's 16384 output cap,
@@ -74,7 +76,7 @@ export LLM_RETRIES=0
 # the workdir so bin/llm finds no cwd .env either.
 unset ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY \
       OPENCODE_API_KEY LLM_API_KEY LLM_PROVIDER LLM_API_URL LLM_MODEL \
-      LLM_MAX_TOKENS SHELLM_MODEL
+      LLM_MAX_TOKENS SHELLM_MODEL SHELLM_API_URL
 cd "$WORK" || exit 1
 
 LLM="$REPO/bin/llm"
@@ -136,6 +138,20 @@ if [[ "$rc" -ne 0 ]] && grep -q 'LLM_API_URL is not set' "$WORK/stderr"; then
     ok "missing LLM_API_URL dies loudly"
 else
     bad "missing LLM_API_URL dies loudly" "rc=$rc"
+fi
+
+# ---------------------------------------------------------------------------
+# SHELLM_API_URL works as the fallback (thinkers, mem, recap call llm
+# directly, and a shellm deployment configures SHELLM_API_URL, not LLM_API_URL)
+# ---------------------------------------------------------------------------
+
+reset
+out=$(LLM_PROVIDER=openai-compatible SHELLM_API_URL="$URL" \
+      "$LLM" -m qwen3:8b "say ok" 2>"$WORK/stderr")
+if [[ "$out" == *ok* ]] && grep -q '127.0.0.1:9' "$CURL_ARGS"; then
+    ok "SHELLM_API_URL works as the URL fallback"
+else
+    bad "SHELLM_API_URL works as the URL fallback" "$(head -1 "$WORK/stderr")"
 fi
 
 # ---------------------------------------------------------------------------
@@ -228,6 +244,17 @@ if grep -q 'requests go to 127.0.0.1:9' "$WORK/stderr" \
     ok "URL credentials stay out of the warning"
 else
     bad "URL credentials stay out of the warning" "$(grep -m1 'LLM_API_URL' "$WORK/stderr")"
+fi
+
+reset
+LLM_PROVIDER=openai LLM_API_URL="http://127.0.0.1:9#token=topsecret" \
+    OPENAI_API_KEY="sekrit" \
+    "$LLM" -m gpt-4o "say ok" >/dev/null 2>"$WORK/stderr"
+if grep -q 'requests go to 127.0.0.1:9' "$WORK/stderr" \
+   && ! grep -q 'topsecret' "$WORK/stderr"; then
+    ok "URL fragments stay out of the warning"
+else
+    bad "URL fragments stay out of the warning" "$(grep -m1 'LLM_API_URL' "$WORK/stderr")"
 fi
 
 reset

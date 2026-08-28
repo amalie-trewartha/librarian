@@ -293,9 +293,11 @@ which providers live in core is in
 [design/providers.md](../design/providers.md).
 
 Under shellm, set `SHELLM_API_URL` instead of `LLM_API_URL` — shellm
-clears any inherited `LLM_API_URL` and re-exports it only from
-`SHELLM_API_URL` — and name the model, or shellm falls back to its
-default Claude model and sends that to your endpoint:
+clears any inherited `LLM_API_URL`, and `llm` itself falls back to
+`SHELLM_API_URL` for this provider, so thinkers and other tools that
+call `llm` directly reach the endpoint too. Name the model as well, or
+shellm falls back to its default Claude model and sends that to your
+endpoint:
 
 ```bash
 LLM_PROVIDER=openai-compatible \
