@@ -241,13 +241,14 @@ else
     bad "a TERM-ignoring adapter is KILLed within the grace period" "rc=$rc elapsed=${_elapsed}s: $(head -1 "$WORK/stderr")"
 fi
 
-# The deadline kills the adapter's whole process group: a child the adapter
-# spawned would otherwise survive and hold stdout open, blocking a $(...)
-# caller (thinkers use command substitution) long past the deadline.
+# The deadline kills the adapter's whole process group even when the group
+# leader exits cleanly on TERM while a child ignores it. Stopping the watcher
+# when the leader exits would let that child hold stdout open and block a
+# $(...) caller (thinkers use command substitution) past the deadline.
 cat > "$WORK/adapter-with-child" <<'EOF'
 #!/usr/bin/env bash
-trap '' TERM
-sleep 30 &
+trap 'exit 0' TERM
+bash -c 'trap "" TERM; sleep 30' &
 wait
 EOF
 chmod +x "$WORK/adapter-with-child"

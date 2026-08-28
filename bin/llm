@@ -1072,7 +1072,9 @@ if [[ "$LLM_PROVIDER" == "adapter" ]]; then
                 else
                     kill -- -"$_adapter_pid" 2>/dev/null
                     _g=0
-                    while [[ "$_g" -lt 5 ]] && kill -0 "$_adapter_pid" 2>/dev/null; do
+                    # Check the process group, not only its leader. The
+                    # adapter may exit on TERM while a child keeps running.
+                    while [[ "$_g" -lt 5 ]] && kill -0 -- -"$_adapter_pid" 2>/dev/null; do
                         sleep 1; _g=$((_g+1))
                     done
                     kill -9 -- -"$_adapter_pid" 2>/dev/null
@@ -1082,10 +1084,14 @@ if [[ "$LLM_PROVIDER" == "adapter" ]]; then
         _adapter_watch=$!
         wait "$_adapter_pid" || _adapter_rc=$?
         : > "$_adapter_dir/done"
-        # TERM the watcher rather than waiting out its poll tick — the tick
-        # would tax every successful call ~1s. Its in-flight sleep is
-        # stdio-detached and gone within a second.
-        kill "$_adapter_watch" 2>/dev/null || true
+        if [[ ! -e "$_adapter_dir/deadline" ]]; then
+            # A normal completion does not need to wait out the poll tick.
+            # The in-flight sleep is stdio-detached and gone within a second.
+            kill "$_adapter_watch" 2>/dev/null || true
+        fi
+        # After a deadline, the leader can exit on TERM while one of its
+        # children ignores it. Waiting lets the watcher finish its grace
+        # period and group KILL, so no child can hold stdout open.
         wait "$_adapter_watch" 2>/dev/null || true
     else
         "$LLM_ADAPTER" "${_adapter_args[@]}" < "$payload_file" || _adapter_rc=$?
