@@ -622,39 +622,62 @@ build_payload_opencode() {
 # URL and headers per provider
 # ---------------------------------------------------------------------------
 
+# Secret headers reach curl through a 0600 config file (`-K file`), never argv:
+# argv is readable by every same-host process (`ps`, /proc/*/cmdline) for the
+# life of the request (issue #80). Unlike `-H @file`, which needs curl 7.55,
+# config files work with the older curl shipped by macOS Mojave. Non-secret
+# headers stay on argv. One file is reused across retries and removed by
+# _llm_cleanup.
+_llm_auth_file=""
+add_auth_header() {
+    local _header="$1"
+    # Curl config values are double quoted. Escape every character that curl
+    # treats specially inside those quotes so an unusual key cannot add a
+    # second config option.
+    _header="${_header//\\/\\\\}"
+    _header="${_header//\"/\\\"}"
+    _header="${_header//$'\t'/\\t}"
+    _header="${_header//$'\n'/\\n}"
+    _header="${_header//$'\r'/\\r}"
+    _header="${_header//$'\v'/\\v}"
+    _llm_auth_file=$(mktemp "${TMPDIR:-/tmp}/llm-auth.XXXXXX")
+    printf 'header = "%s"\n' "$_header" > "$_llm_auth_file"
+    headers+=(-K "$_llm_auth_file")
+}
+
 get_url_headers() {
     case "$LLM_PROVIDER" in
         anthropic)
             [[ -z "${ANTHROPIC_API_KEY:-}" ]] && die "ANTHROPIC_API_KEY is not set"
             url="${LLM_API_URL:-https://api.anthropic.com/v1/messages}"
             headers=(-H "content-type: application/json"
-                     -H "x-api-key: $ANTHROPIC_API_KEY"
                      -H "anthropic-version: 2023-06-01")
+            add_auth_header "x-api-key: $ANTHROPIC_API_KEY"
             ;;
         openai)
             [[ -z "${OPENAI_API_KEY:-}" ]] && die "OPENAI_API_KEY is not set"
             url="${LLM_API_URL:-https://api.openai.com/v1/chat/completions}"
-            headers=(-H "Content-Type: application/json"
-                     -H "Authorization: Bearer $OPENAI_API_KEY")
+            headers=(-H "Content-Type: application/json")
+            add_auth_header "Authorization: Bearer $OPENAI_API_KEY"
             ;;
         openrouter)
             [[ -z "${OPENROUTER_API_KEY:-}" ]] && die "OPENROUTER_API_KEY is not set"
             url="${LLM_API_URL:-https://openrouter.ai/api/v1/chat/completions}"
-            headers=(-H "Content-Type: application/json"
-                     -H "Authorization: Bearer $OPENROUTER_API_KEY")
+            headers=(-H "Content-Type: application/json")
+            add_auth_header "Authorization: Bearer $OPENROUTER_API_KEY"
             ;;
         opencode)
             [[ -z "${OPENCODE_API_KEY:-}" ]] && die "OPENCODE_API_KEY is not set"
             url="${LLM_API_URL:-https://opencode.ai/zen/v1/messages}"
             headers=(-H "content-type: application/json"
-                     -H "x-api-key: $OPENCODE_API_KEY"
                      -H "anthropic-version: 2023-06-01")
+            add_auth_header "x-api-key: $OPENCODE_API_KEY"
             ;;
         opencode-go)
             [[ -z "${OPENCODE_API_KEY:-}" ]] && die "OPENCODE_API_KEY is not set"
             url="${LLM_API_URL:-https://opencode.ai/zen/go/v1/chat/completions}"
-            headers=(-H "Content-Type: application/json"
-                     -H "Authorization: Bearer $OPENCODE_API_KEY")
+            headers=(-H "Content-Type: application/json")
+            add_auth_header "Authorization: Bearer $OPENCODE_API_KEY"
             ;;
         openai-compatible)
             # SHELLM_API_URL fallback, like SHELLM_MODEL above: shellm clears
@@ -666,7 +689,7 @@ get_url_headers() {
             [[ -z "$url" ]] && die "LLM_API_URL is not set (openai-compatible has no default endpoint; e.g. http://localhost:11434/v1/chat/completions for Ollama)"
             headers=(-H "Content-Type: application/json")
             if [[ -n "${LLM_API_KEY:-}" ]]; then
-                headers+=(-H "Authorization: Bearer $LLM_API_KEY")
+                add_auth_header "Authorization: Bearer $LLM_API_KEY"
             fi
             ;;
         gemini)
@@ -674,8 +697,8 @@ get_url_headers() {
             local action="generateContent"
             [[ "$LLM_STREAM" -eq 1 ]] && action="streamGenerateContent?alt=sse"
             url="${LLM_API_URL:-https://generativelanguage.googleapis.com/v1beta/models/${LLM_MODEL}:${action}}"
-            headers=(-H "Content-Type: application/json"
-                     -H "x-goog-api-key: $GEMINI_API_KEY")
+            headers=(-H "Content-Type: application/json")
+            add_auth_header "x-goog-api-key: $GEMINI_API_KEY"
             ;;
         *)
             die "Unknown provider: $LLM_PROVIDER"
@@ -1006,6 +1029,7 @@ if [[ -z "$LLM_USAGE_FILE" ]]; then
 fi
 _llm_cleanup() {
     rm -f "$payload_file"
+    if [[ -n "${_llm_auth_file:-}" ]]; then rm -f "$_llm_auth_file"; fi
     if [[ -n "${_adapter_dir:-}" ]]; then rm -rf "$_adapter_dir"; fi
     if [[ "$_llm_usage_own" -eq 1 ]]; then rm -f "$LLM_USAGE_FILE"; fi
     return 0
