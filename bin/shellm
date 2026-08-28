@@ -775,8 +775,16 @@ env_metadata_mismatch_message() {
 #
 # No forks and no word splitting: bin/shellm also runs on macOS bash 3.2, and
 # splitting on IFS=/ would glob a segment containing `*`.
+#
+# Returns via _NORM_PATH, not stdout: a $(...) caller pays two forks per
+# coverage check and, worse, strips trailing newlines — a directory whose
+# name ends in a newline would compare equal to its newline-less sibling
+# and read as covered. (An empty input still normalizes to "/": degenerate
+# but harmless, and pinned by the tests.)
 _norm_path() {
     local rest="$1" out="" seg
+    [[ -z "$rest" || "$rest" == /* ]] \
+        || die "_norm_path: not an absolute path: $rest"
     while [[ -n "$rest" ]]; do
         seg="${rest%%/*}"
         if [[ "$seg" == "$rest" ]]; then rest=""; else rest="${rest#*/}"; fi
@@ -786,7 +794,7 @@ _norm_path() {
             *)    out="$out/$seg" ;;
         esac
     done
-    printf '%s\n' "${out:-/}"
+    _NORM_PATH="${out:-/}"
 }
 
 # True when `path` is already covered by an existing bind mount rooted at
@@ -800,8 +808,8 @@ _norm_path() {
 # the run continued against an empty directory with no error anywhere.
 _path_covered() {
     local path root
-    path=$(_norm_path "$1")
-    root=$(_norm_path "$2")
+    _norm_path "$1"; path="$_NORM_PATH"
+    _norm_path "$2"; root="$_NORM_PATH"
     # ${root%/} so a root of "/" yields the pattern /* rather than //*, which
     # matches nothing and would leave every path uncovered by the filesystem root.
     [[ "$path" == "$root" || "$path" == "${root%/}"/* ]]
@@ -964,6 +972,8 @@ docker_setup() {
         _is_sub=0
         while IFS= read -r _other; do
             [[ -z "$_other" || "$_tdir" == "$_other" ]] && continue
+            # Raw boundary test on purpose, not _path_covered: both sides
+            # are readlink -f output here, already canonical.
             if [[ "$_tdir" == "$_other"/* ]]; then
                 _is_sub=1; break
             fi
