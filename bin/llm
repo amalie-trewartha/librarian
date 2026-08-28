@@ -1005,8 +1005,8 @@ if [[ -z "$LLM_USAGE_FILE" ]]; then
     _llm_usage_own=1
 fi
 _llm_cleanup() {
-    rm -f "$payload_file" "$payload_file.system" \
-          "$payload_file.done" "$payload_file.deadline"
+    rm -f "$payload_file"
+    if [[ -n "${_adapter_dir:-}" ]]; then rm -rf "$_adapter_dir"; fi
     if [[ "$_llm_usage_own" -eq 1 ]]; then rm -f "$LLM_USAGE_FILE"; fi
     return 0
 }
@@ -1026,12 +1026,15 @@ if [[ "$LLM_PROVIDER" == "adapter" ]]; then
         [[ -n "$LLM_THINKING_LEVEL" ]] && _adapter_args+=("$LLM_THINKING_LEVEL")
     fi
     [[ "$LLM_STREAM" -eq 0 ]] && _adapter_args+=(--no-stream)
+    # Private 0700 sidecar directory for the system prompt and the deadline
+    # marker files. Derived names next to a visible /tmp file would be
+    # symlink-attackable by other local users; mktemp -d gives an
+    # unpredictable name only this process can enter. Removed by the EXIT
+    # cleanup.
+    _adapter_dir=$(mktemp -d "${TMPDIR:-/tmp}/llm-adapter.XXXXXX")
     if [[ -n "$LLM_SYSTEM" ]]; then
-        # 0600 like the mktemp'd payload file: the prompt is private, and a
-        # plain redirect under the default umask would land world-readable
-        # in /tmp. Removed by the EXIT cleanup with the rest.
-        ( umask 077; printf '%s' "$LLM_SYSTEM" > "$payload_file.system" )
-        _adapter_args+=(--system-prompt-file "$payload_file.system")
+        ( umask 077; printf '%s' "$LLM_SYSTEM" > "$_adapter_dir/system" )
+        _adapter_args+=(--system-prompt-file "$_adapter_dir/system")
     fi
     # Messages travel by file + stdin redirect, not argv (size caps) and
     # not a pipe (the adapter must be a direct child so the deadline can
@@ -1040,40 +1043,54 @@ if [[ "$LLM_PROVIDER" == "adapter" ]]; then
     export LLM_USAGE_FILE
     _adapter_rc=0
     if [[ "$LLM_MAX_TIME" =~ ^[0-9]+$ && "$LLM_MAX_TIME" -gt 0 ]]; then
+        # The adapter runs in its own process group (set -m) so the
+        # deadline can kill its whole tree: a shell adapter's provider
+        # child would otherwise survive a PID-targeted kill and hold the
+        # caller's stdout open past the deadline.
+        set -m
         "$LLM_ADAPTER" "${_adapter_args[@]}" < "$payload_file" &
         _adapter_pid=$!
+        set +m
         # Deadline watcher. It polls a done-marker once a second instead of
-        # sleeping the whole deadline, so it exits within ~1s of the adapter
-        # finishing and never leaves an orphaned long sleep (a background
-        # subshell gets no process group of its own here, so the sleep
-        # could not be killed with it). It detaches from stdio so it cannot
-        # hold a $(...) caller's stdout pipe open. On expiry it writes the
-        # deadline marker — the authoritative "this run timed out" signal,
-        # regardless of how the adapter exits — then escalates TERM, 5s
-        # grace, KILL, so an adapter that ignores TERM still dies.
+        # sleeping the whole deadline, so no long sleep can be orphaned. It
+        # detaches from stdio so it cannot hold a $(...) caller's stdout
+        # pipe open. On expiry it writes the deadline marker — the
+        # authoritative "this run timed out" signal, regardless of how the
+        # adapter exits — then TERMs the group, waits a 5s grace, and
+        # KILLs the group, so an adapter that ignores TERM still dies.
+        # (An adapter finishing in the same instant the deadline fires can
+        # be reported as timed out; the done re-check narrows that window.)
         (
             _t=0
-            while [[ ! -e "$payload_file.done" && "$_t" -lt "$LLM_MAX_TIME" ]]; do
+            while [[ ! -e "$_adapter_dir/done" && "$_t" -lt "$LLM_MAX_TIME" ]]; do
                 sleep 1; _t=$((_t+1))
             done
-            if [[ ! -e "$payload_file.done" ]]; then
-                : > "$payload_file.deadline"
-                kill "$_adapter_pid" 2>/dev/null
-                _g=0
-                while [[ "$_g" -lt 5 ]] && kill -0 "$_adapter_pid" 2>/dev/null; do
-                    sleep 1; _g=$((_g+1))
-                done
-                kill -9 "$_adapter_pid" 2>/dev/null
+            if [[ ! -e "$_adapter_dir/done" ]]; then
+                : > "$_adapter_dir/deadline"
+                if [[ -e "$_adapter_dir/done" ]]; then
+                    rm -f "$_adapter_dir/deadline"
+                else
+                    kill -- -"$_adapter_pid" 2>/dev/null
+                    _g=0
+                    while [[ "$_g" -lt 5 ]] && kill -0 "$_adapter_pid" 2>/dev/null; do
+                        sleep 1; _g=$((_g+1))
+                    done
+                    kill -9 -- -"$_adapter_pid" 2>/dev/null
+                fi
             fi
         ) >/dev/null 2>&1 </dev/null &
         _adapter_watch=$!
         wait "$_adapter_pid" || _adapter_rc=$?
-        : > "$payload_file.done"
+        : > "$_adapter_dir/done"
+        # TERM the watcher rather than waiting out its poll tick — the tick
+        # would tax every successful call ~1s. Its in-flight sleep is
+        # stdio-detached and gone within a second.
+        kill "$_adapter_watch" 2>/dev/null || true
         wait "$_adapter_watch" 2>/dev/null || true
     else
         "$LLM_ADAPTER" "${_adapter_args[@]}" < "$payload_file" || _adapter_rc=$?
     fi
-    if [[ -e "$payload_file.deadline" ]]; then
+    if [[ -e "$_adapter_dir/deadline" ]]; then
         # Deadline expiry is a failure even when the adapter, tapped on the
         # shoulder by TERM, manages to exit 0 — recording ok would make the
         # health marker lie about a call that produced no usable answer.
