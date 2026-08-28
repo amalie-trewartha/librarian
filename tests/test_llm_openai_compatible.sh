@@ -16,6 +16,12 @@
 #   - the non-streaming path answers too
 #   - unknown model names default to the provider's 16384 output cap,
 #     and -t still overrides it
+#   - model names the cap table knows keep their real caps through this
+#     provider (a proxy serving gpt-5 must not silently drop to 16384)
+#   - a typo'd provider name dies with "Unknown provider", not bash's
+#     exit-127 "command not found"
+#   - LLM_API_URL on a keyed provider warns on stderr (openai-compatible
+#     itself is exempt: the URL there is required configuration)
 
 set -uo pipefail
 
@@ -168,6 +174,55 @@ if grep -q '"max_tokens":[[:space:]]*512' "$CURL_PAYLOAD"; then
     ok "-t overrides the default cap"
 else
     bad "-t overrides the default cap" "$(grep -o '"max_tokens":[0-9]*' "$CURL_PAYLOAD" | head -1)"
+fi
+
+# ---------------------------------------------------------------------------
+# Known model names keep their table caps through this provider
+# ---------------------------------------------------------------------------
+
+reset
+LLM_PROVIDER=openai-compatible LLM_API_URL="$URL" \
+    "$LLM" -m gpt-5 "say ok" >/dev/null 2>"$WORK/stderr"
+if grep -q '128000' "$CURL_PAYLOAD"; then
+    ok "known model (gpt-5) keeps its 128000 table cap"
+else
+    bad "known model (gpt-5) keeps its 128000 table cap" "$(grep -o '"max[a-z_]*tokens":[0-9]*' "$CURL_PAYLOAD" | head -1)"
+fi
+
+# ---------------------------------------------------------------------------
+# A typo'd provider dies loudly, not with command-not-found
+# ---------------------------------------------------------------------------
+
+reset
+LLM_PROVIDER=openai-compatibel LLM_API_URL="$URL" \
+    "$LLM" -m qwen3:8b "say ok" >/dev/null 2>"$WORK/stderr"
+rc=$?
+if [[ "$rc" -ne 0 && "$rc" -ne 127 ]] && grep -q 'Unknown provider: openai-compatibel' "$WORK/stderr"; then
+    ok "typo'd provider dies with 'Unknown provider'"
+else
+    bad "typo'd provider dies with 'Unknown provider'" "rc=$rc: $(head -1 "$WORK/stderr")"
+fi
+
+# ---------------------------------------------------------------------------
+# LLM_API_URL on a keyed provider warns; on openai-compatible it does not
+# ---------------------------------------------------------------------------
+
+reset
+LLM_PROVIDER=openai LLM_API_URL="$URL" OPENAI_API_KEY="sekrit" \
+    "$LLM" -m gpt-4o "say ok" >/dev/null 2>"$WORK/stderr"
+if grep -q 'LLM_API_URL=.*overrides the default openai endpoint' "$WORK/stderr"; then
+    ok "LLM_API_URL on a keyed provider warns on stderr"
+else
+    bad "LLM_API_URL on a keyed provider warns on stderr" "$(head -1 "$WORK/stderr")"
+fi
+
+reset
+LLM_PROVIDER=openai-compatible LLM_API_URL="$URL" \
+    "$LLM" -m qwen3:8b "say ok" >/dev/null 2>"$WORK/stderr"
+if grep -q 'overrides the default' "$WORK/stderr"; then
+    bad "openai-compatible is exempt from the LLM_API_URL warning" "$(grep -m1 'overrides the default' "$WORK/stderr")"
+else
+    ok "openai-compatible is exempt from the LLM_API_URL warning"
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

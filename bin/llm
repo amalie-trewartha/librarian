@@ -341,6 +341,14 @@ if [[ -n "$_llm_provider_env" && "$LLM_PROVIDER" == "$_llm_provider_env" ]]; the
     fi
 fi
 
+# LLM_API_URL reroutes a provider's requests — credentials included — to an
+# arbitrary host, so like the provider override above it must never do it
+# silently. openai-compatible is exempt: it has no default endpoint, so the
+# URL there is configuration, not an override.
+if [[ -n "${LLM_API_URL:-}" && "$LLM_PROVIDER" != "openai-compatible" ]]; then
+    echo "llm: warning: LLM_API_URL=$LLM_API_URL overrides the default $LLM_PROVIDER endpoint" >&2
+fi
+
 # OpenCode routing prefixes hide the real catalog id from the API side;
 # strip once, up front, so the payload builders AND get_model_max_tokens see
 # the actual model name and its caps.
@@ -359,13 +367,6 @@ get_model_max_tokens() {
             glm-*|kimi-*|qwen*|minimax-*|deepseek-*|grok-*|longcat-*|mimo-*|hy3*|muse-*|ox-alpha-*) echo 32768 ;;
             *) echo 16384 ;;
         esac
-        return
-    fi
-    # openai-compatible endpoints serve arbitrary model names the tables
-    # below cannot know, and the conservative 4096 fallback starves agentic
-    # steps. Scoped to the provider; LLM_MAX_TOKENS overrides as usual.
-    if [[ "${LLM_PROVIDER:-}" == "openai-compatible" ]]; then
-        echo 16384
         return
     fi
     case "$model" in
@@ -400,8 +401,17 @@ get_model_max_tokens() {
         # thinking. Give it the reasoning-model tier like Anthropic above.
         x-ai/grok-4*|x-ai/grok*) echo 64000 ;;
         */*) echo 16384 ;;
-        # Conservative fallback for unknown models
-        *) echo 4096 ;;
+        *)
+            # Conservative fallback for unknown models. openai-compatible
+            # endpoints serve arbitrary names the table cannot know, and
+            # 4096 starves agentic steps there; names the table does know
+            # (a proxy serving gpt-5, ...) keep their real caps above.
+            if [[ "${LLM_PROVIDER:-}" == "openai-compatible" ]]; then
+                echo 16384
+            else
+                echo 4096
+            fi
+            ;;
     esac
 }
 
@@ -982,6 +992,11 @@ _llm_cleanup() {
     return 0
 }
 trap '_llm_cleanup' EXIT
+# A typo'd provider name would otherwise surface as bash's exit-127
+# "build_payload_...: command not found" instead of an error naming the
+# problem, because payload build runs before get_url_headers' own check.
+declare -f "build_payload_${LLM_PROVIDER}" >/dev/null \
+    || die "Unknown provider: $LLM_PROVIDER (see --provider in --help for the list)"
 "build_payload_${LLM_PROVIDER}" > "$payload_file"
 
 # Get URL and headers

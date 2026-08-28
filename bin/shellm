@@ -256,6 +256,12 @@ redact_sensitive() {
         output="${output//${ANTHROPIC_API_KEY}/<redacted-anthropic-key>}"
     fi
 
+    # LLM_API_KEY (openai-compatible endpoints) has no vendor prefix to
+    # pattern-match, so only value-based masking can catch it.
+    if [[ -n "${LLM_API_KEY:-}" ]]; then
+        output="${output//${LLM_API_KEY}/<redacted-api-key>}"
+    fi
+
     printf '%s' "$output" | LC_ALL=C sed -E 's/sk-ant-[A-Za-z0-9._-]+/<redacted-anthropic-key>/g'
 }
 

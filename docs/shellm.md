@@ -292,6 +292,23 @@ Set `LLM_API_KEY` if the endpoint wants a bearer token. The policy for
 which providers live in core is in
 [design/providers.md](../design/providers.md).
 
+Under shellm, set `SHELLM_API_URL` instead of `LLM_API_URL` — shellm
+clears any inherited `LLM_API_URL` and re-exports it only from
+`SHELLM_API_URL`, so the bare recipe above fails on every reasoning
+step:
+
+```bash
+LLM_PROVIDER=openai-compatible \
+SHELLM_API_URL=http://localhost:11434/v1/chat/completions \
+shellm "what os is this?"
+```
+
+One more caveat: generated code running in the sandbox receives the URL
+but not `LLM_PROVIDER` or `LLM_API_KEY`, so `llm` calls *inside*
+generated code fall back to auto-detection and fail without a provider
+key. If the generated code itself needs the endpoint, forward them
+explicitly with `--var LLM_PROVIDER --var LLM_API_KEY`.
+
 **Output contract:** stdout = text response, stderr = thinking tokens (Anthropic only), exit 0 = success. This makes it composable with pipes and subshells.
 
 ## mem and skills

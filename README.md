@@ -147,7 +147,7 @@ Headlong also gives an agent a few convenience tools, such as a way to
 distill and codify its experience (`mem`) and a way to save and reuse
 procedures for specialized tasks (`skills`). The core is the tools the
 running mind executes, the executables in `bin/` plus the thought
-processes in `thinkers/`, and it comes to 9.9K lines by cloc's count. A
+processes in `thinkers/`, and it comes to about 10K lines by cloc's count. A
 harness this small can be read end to end, and it is easy to modify and
 experiment with.
 
