@@ -278,6 +278,44 @@ llm -m claude-opus-4-7 -M '[{"role":"user","content":"hi"},{"role":"assistant","
 | `gemini-*` | Gemini (`GEMINI_API_KEY`) |
 | `vendor/model` (any slash) | OpenRouter (`OPENROUTER_API_KEY`) |
 
+Any OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, a proxy) works
+through the `openai-compatible` provider, with no API key required. It is
+never auto-detected, so name it and give it a URL:
+
+```bash
+LLM_PROVIDER=openai-compatible \
+LLM_API_URL=http://localhost:11434/v1/chat/completions \
+llm -m qwen3:8b "hello"
+```
+
+Set `LLM_API_KEY` if the endpoint wants a bearer token. The policy for
+which providers live in core is in
+[design/providers.md](../design/providers.md).
+
+Under shellm, set `SHELLM_API_URL` instead of `LLM_API_URL` — shellm
+clears any inherited `LLM_API_URL`, and `llm` itself falls back to
+`SHELLM_API_URL` for this provider, so thinkers and other tools that
+call `llm` directly reach the endpoint too. Name the model as well, or
+shellm falls back to its default Claude model and sends that to your
+endpoint:
+
+```bash
+LLM_PROVIDER=openai-compatible \
+SHELLM_API_URL=http://localhost:11434/v1/chat/completions \
+SHELLM_MODEL=qwen3:8b \
+shellm "what os is this?"
+```
+
+`LLM_PROVIDER` and `LLM_API_KEY` are forwarded into the sandbox and to
+nested shellm runs the same way the vendor keys are, so `llm` calls
+inside generated code reach the endpoint too.
+
+A provider that can't speak this protocol (an SDK, a vendor CLI,
+signed requests) runs outside core as an adapter: set
+`LLM_PROVIDER=adapter` and `LLM_ADAPTER=/path/to/executable`, and
+`llm` runs that executable in place of curl. The adapter contract is
+in [design/providers.md](../design/providers.md).
+
 **Output contract:** stdout = text response, stderr = thinking tokens (Anthropic only), exit 0 = success. This makes it composable with pipes and subshells.
 
 ## mem and skills

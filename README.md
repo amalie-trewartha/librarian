@@ -11,7 +11,7 @@
 
 [**Headlong**](https://www.laude.org/updates/headlong-a-microharness-for-persistent-agents)
 is an open source agent microharness, a complete agent harness with a core of
-less than 10K lines of Bash. Headlong's defining feature is **persistent
+about 10K lines of Bash. Headlong's defining feature is **persistent
 agency**. Your agent keeps thinking between external interactions in a
 self-guided loop inspired by human inner monologue. A message from a human
 doesn't start a session. It lands in the agent's thought stream as one more
@@ -147,7 +147,7 @@ Headlong also gives an agent a few convenience tools, such as a way to
 distill and codify its experience (`mem`) and a way to save and reuse
 procedures for specialized tasks (`skills`). The core is the tools the
 running mind executes, the executables in `bin/` plus the thought
-processes in `thinkers/`, and it comes to 9.9K lines by cloc's count. A
+processes in `thinkers/`, and it comes to about 10K lines by cloc's count. A
 harness this small can be read end to end, and it is easy to modify and
 experiment with.
 

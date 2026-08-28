@@ -2,7 +2,9 @@
 set -euo pipefail
 
 # llm — Minimal multi-provider LLM CLI tool
-# Supports the Anthropic, OpenAI, Gemini, and OpenRouter APIs.
+# Supports the Anthropic, OpenAI, Gemini, and OpenRouter APIs, plus any
+# OpenAI-compatible endpoint via --provider openai-compatible (see
+# design/providers.md for the provider policy).
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -150,7 +152,9 @@ Options:
   -t, --max-tokens N       Max output tokens. Default: model-specific cap
   -M, --messages JSON      Messages array JSON, e.g. [{"role":"user","content":"hi"}]
   --no-stream              Disable streaming (streaming is on by default)
-  --provider NAME          Provider: anthropic, openai, gemini, openrouter, opencode, or opencode-go
+  --provider NAME          Provider: anthropic, openai, gemini, openrouter,
+                           opencode, opencode-go, openai-compatible, or
+                           adapter (needs LLM_ADAPTER)
   --thinking [LEVEL]       Enable thinking (Anthropic: adaptive; Gemini: minimal/low/medium/high)
   --effort LEVEL           Thinking effort/provider output effort
   --raw                    Print raw non-streaming API response JSON
@@ -164,6 +168,12 @@ Models:
   OpenRouter: z-ai/glm-5.2, meta-llama/*, ... (any vendor/model name)
   OpenCode:   opencode-go/* (Go subscription, OpenAI wire format)
               opencode/*  (Zen pay-per-token, Anthropic wire format)
+  Compatible: any model name, via --provider openai-compatible and
+              LLM_API_URL (Ollama, vLLM, LM Studio, proxies; never
+              auto-detected)
+  Adapter:    any model name, via --provider adapter and LLM_ADAPTER
+              (an external executable handles the completion; see
+              design/providers.md for the contract)
 
 Thinking & effort:
   These flags control how much reasoning the model does before answering.
@@ -201,7 +211,13 @@ Environment:
   OPENCODE_API_KEY         Required for OpenCode models — both plans use it;
                            opencode-go/* bills the Go subscription, opencode/*
                            bills Zen. Keys: `opencode auth login`
-  LLM_API_URL              Override provider API URL
+  LLM_API_URL              Override provider API URL. Required for
+                           openai-compatible, which has no default endpoint
+  LLM_API_KEY              Optional key for openai-compatible, sent as
+                           Authorization: Bearer when set (local servers
+                           like Ollama need none)
+  LLM_ADAPTER              Path to an adapter executable; required with
+                           --provider adapter (contract: design/providers.md)
   LLM_PROVIDER             Provider to use when the model name implies none
                            (same names as --provider); --provider takes
                            precedence, and a value that disagrees with the
@@ -224,6 +240,8 @@ Examples:
   llm --thinking -m claude-opus-4-7 "solve this carefully"
   llm --raw -m gemini-2.0-flash "return a JSON greeting"
   llm -m z-ai/glm-5.2 "explain quicksort"
+  LLM_API_URL=http://localhost:11434/v1/chat/completions \
+    llm --provider openai-compatible -m qwen3:8b "explain quicksort"
 EOF
     exit "${1:-0}"
 }
@@ -329,6 +347,22 @@ if [[ -n "$_llm_provider_env" && "$LLM_PROVIDER" == "$_llm_provider_env" ]]; the
     fi
 fi
 
+# LLM_API_URL reroutes a provider's requests — credentials included — to an
+# arbitrary host, so like the provider override above it must never do it
+# silently. openai-compatible is exempt (it has no default endpoint, so the
+# URL there is configuration, not an override), and so is adapter (it
+# ignores LLM_API_URL entirely). Warn with the host only: a URL can itself
+# carry credentials (user:pass@, ?token=...) that must not reach stderr or
+# whatever captures it.
+if [[ -n "${LLM_API_URL:-}" && "$LLM_PROVIDER" != "openai-compatible" && "$LLM_PROVIDER" != "adapter" ]]; then
+    _llm_url_host="${LLM_API_URL#*://}"
+    _llm_url_host="${_llm_url_host%%/*}"
+    _llm_url_host="${_llm_url_host%%\?*}"
+    _llm_url_host="${_llm_url_host%%#*}"
+    _llm_url_host="${_llm_url_host##*@}"
+    echo "llm: warning: LLM_API_URL overrides the default $LLM_PROVIDER endpoint (requests go to $_llm_url_host)" >&2
+fi
+
 # OpenCode routing prefixes hide the real catalog id from the API side;
 # strip once, up front, so the payload builders AND get_model_max_tokens see
 # the actual model name and its caps.
@@ -381,8 +415,16 @@ get_model_max_tokens() {
         # thinking. Give it the reasoning-model tier like Anthropic above.
         x-ai/grok-4*|x-ai/grok*) echo 64000 ;;
         */*) echo 16384 ;;
-        # Conservative fallback for unknown models
-        *) echo 4096 ;;
+        *)
+            # Conservative fallback for unknown models. openai-compatible
+            # endpoints and adapters serve arbitrary names the table cannot
+            # know, and 4096 starves agentic steps there; names the table
+            # does know (a proxy serving gpt-5, ...) keep their real caps.
+            case "${LLM_PROVIDER:-}" in
+                openai-compatible|adapter) echo 16384 ;;
+                *) echo 4096 ;;
+            esac
+            ;;
     esac
 }
 
@@ -552,6 +594,11 @@ build_payload_gemini() {
 # OpenRouter is OpenAI-compatible (chat/completions wire format)
 build_payload_openrouter() { build_payload_openai; }
 
+# Generic openai-compatible endpoint (Ollama, vLLM, LM Studio, proxies):
+# the OpenAI wire format against a configured LLM_API_URL, key optional.
+# See design/providers.md.
+build_payload_openai-compatible() { build_payload_openai; }
+
 # OpenCode Go is OpenAI-compatible (@ai-sdk/openai-compatible upstream);
 # its opencode-go/ prefix was already stripped above.
 build_payload_opencode-go() { build_payload_openai; }
@@ -609,6 +656,19 @@ get_url_headers() {
             headers=(-H "Content-Type: application/json"
                      -H "Authorization: Bearer $OPENCODE_API_KEY")
             ;;
+        openai-compatible)
+            # SHELLM_API_URL fallback, like SHELLM_MODEL above: shellm clears
+            # inherited LLM_API_URL, so a deployment configured per the docs
+            # sets SHELLM_API_URL — and thinkers, mem, recap call llm
+            # directly, outside shellm's re-export. Scoped to this provider;
+            # keyed providers' URLs stay LLM_API_URL-only.
+            url="${LLM_API_URL:-${SHELLM_API_URL:-}}"
+            [[ -z "$url" ]] && die "LLM_API_URL is not set (openai-compatible has no default endpoint; e.g. http://localhost:11434/v1/chat/completions for Ollama)"
+            headers=(-H "Content-Type: application/json")
+            if [[ -n "${LLM_API_KEY:-}" ]]; then
+                headers+=(-H "Authorization: Bearer $LLM_API_KEY")
+            fi
+            ;;
         gemini)
             [[ -z "${GEMINI_API_KEY:-}" ]] && die "GEMINI_API_KEY is not set"
             local action="generateContent"
@@ -641,6 +701,7 @@ extract_text_gemini() {
 
 # OpenRouter is OpenAI-compatible
 extract_text_openrouter() { extract_text_openai; }
+extract_text_openai-compatible() { extract_text_openai; }
 
 # OpenCode: Go is OpenAI-compatible, Zen speaks the Anthropic protocol;
 # same response shapes as their respective bases throughout.
@@ -675,6 +736,7 @@ check_response_gemini() {
 }
 
 check_response_openrouter() { check_response_openai; }
+check_response_openai-compatible() { check_response_openai; }
 
 check_response_opencode-go() { check_response_openai; }
 check_response_opencode() { check_response_anthropic; }
@@ -699,6 +761,7 @@ check_truncated_gemini() {
 }
 
 check_truncated_openrouter() { check_truncated_openai; }
+check_truncated_openai-compatible() { check_truncated_openai; }
 
 check_truncated_opencode-go() { check_truncated_openai; }
 check_truncated_opencode() { check_truncated_anthropic; }
@@ -919,6 +982,7 @@ stream_gemini() {
 
 # OpenRouter is OpenAI-compatible (SSE chat/completions chunks)
 stream_openrouter() { stream_openai; }
+stream_openai-compatible() { stream_openai; }
 
 # OpenCode: same SSE shapes as their wire-format bases.
 stream_opencode-go() { stream_openai; }
@@ -942,10 +1006,118 @@ if [[ -z "$LLM_USAGE_FILE" ]]; then
 fi
 _llm_cleanup() {
     rm -f "$payload_file"
+    if [[ -n "${_adapter_dir:-}" ]]; then rm -rf "$_adapter_dir"; fi
     if [[ "$_llm_usage_own" -eq 1 ]]; then rm -f "$LLM_USAGE_FILE"; fi
     return 0
 }
 trap '_llm_cleanup' EXIT
+
+# Adapter seam (design/providers.md): LLM_PROVIDER=adapter hands the whole
+# completion to the executable named by LLM_ADAPTER instead of the curl
+# path. The adapter carries its own dependencies and auth; bin/llm keeps
+# the wall-clock deadline, the health marker, and the usage ledger.
+if [[ "$LLM_PROVIDER" == "adapter" ]]; then
+    [[ -n "${LLM_ADAPTER:-}" ]] || die "LLM_ADAPTER is not set (LLM_PROVIDER=adapter runs the executable at that path; see design/providers.md)"
+    [[ -x "$LLM_ADAPTER" ]] || die "LLM_ADAPTER is not executable: $LLM_ADAPTER"
+    _adapter_args=(--model "$LLM_MODEL" --max-tokens "$LLM_MAX_TOKENS")
+    [[ -n "$LLM_EFFORT" ]] && _adapter_args+=(--effort "$LLM_EFFORT")
+    if [[ "$LLM_THINKING" -eq 1 ]]; then
+        _adapter_args+=(--thinking)
+        [[ -n "$LLM_THINKING_LEVEL" ]] && _adapter_args+=("$LLM_THINKING_LEVEL")
+    fi
+    [[ "$LLM_STREAM" -eq 0 ]] && _adapter_args+=(--no-stream)
+    # Private 0700 sidecar directory for the system prompt and the deadline
+    # marker files. Derived names next to a visible /tmp file would be
+    # symlink-attackable by other local users; mktemp -d gives an
+    # unpredictable name only this process can enter. Removed by the EXIT
+    # cleanup.
+    _adapter_dir=$(mktemp -d "${TMPDIR:-/tmp}/llm-adapter.XXXXXX")
+    if [[ -n "$LLM_SYSTEM" ]]; then
+        ( umask 077; printf '%s' "$LLM_SYSTEM" > "$_adapter_dir/system" )
+        _adapter_args+=(--system-prompt-file "$_adapter_dir/system")
+    fi
+    # Messages travel by file + stdin redirect, not argv (size caps) and
+    # not a pipe (the adapter must be a direct child so the deadline can
+    # kill it). The payload tempfile and its cleanup are reused.
+    printf '%s' "$LLM_MESSAGES" > "$payload_file"
+    export LLM_USAGE_FILE
+    _adapter_rc=0
+    if [[ "$LLM_MAX_TIME" =~ ^[0-9]+$ && "$LLM_MAX_TIME" -gt 0 ]]; then
+        # The adapter runs in its own process group (set -m) so the
+        # deadline can kill its whole tree: a shell adapter's provider
+        # child would otherwise survive a PID-targeted kill and hold the
+        # caller's stdout open past the deadline.
+        set -m
+        "$LLM_ADAPTER" "${_adapter_args[@]}" < "$payload_file" &
+        _adapter_pid=$!
+        set +m
+        # Deadline watcher. It polls a done-marker once a second instead of
+        # sleeping the whole deadline, so no long sleep can be orphaned. It
+        # detaches from stdio so it cannot hold a $(...) caller's stdout
+        # pipe open. On expiry it writes the deadline marker — the
+        # authoritative "this run timed out" signal, regardless of how the
+        # adapter exits — then TERMs the group, waits a 5s grace, and
+        # KILLs the group, so an adapter that ignores TERM still dies.
+        # (An adapter finishing in the same instant the deadline fires can
+        # be reported as timed out; the done re-check narrows that window.)
+        (
+            _t=0
+            while [[ ! -e "$_adapter_dir/done" && "$_t" -lt "$LLM_MAX_TIME" ]]; do
+                sleep 1; _t=$((_t+1))
+            done
+            if [[ ! -e "$_adapter_dir/done" ]]; then
+                : > "$_adapter_dir/deadline"
+                if [[ -e "$_adapter_dir/done" ]]; then
+                    rm -f "$_adapter_dir/deadline"
+                else
+                    kill -- -"$_adapter_pid" 2>/dev/null
+                    _g=0
+                    # Check the process group, not only its leader. The
+                    # adapter may exit on TERM while a child keeps running.
+                    while [[ "$_g" -lt 5 ]] && kill -0 -- -"$_adapter_pid" 2>/dev/null; do
+                        sleep 1; _g=$((_g+1))
+                    done
+                    kill -9 -- -"$_adapter_pid" 2>/dev/null
+                fi
+            fi
+        ) >/dev/null 2>&1 </dev/null &
+        _adapter_watch=$!
+        wait "$_adapter_pid" || _adapter_rc=$?
+        : > "$_adapter_dir/done"
+        if [[ ! -e "$_adapter_dir/deadline" ]]; then
+            # A normal completion does not need to wait out the poll tick.
+            # The in-flight sleep is stdio-detached and gone within a second.
+            kill "$_adapter_watch" 2>/dev/null || true
+        fi
+        # After a deadline, the leader can exit on TERM while one of its
+        # children ignores it. Waiting lets the watcher finish its grace
+        # period and group KILL, so no child can hold stdout open.
+        wait "$_adapter_watch" 2>/dev/null || true
+    else
+        "$LLM_ADAPTER" "${_adapter_args[@]}" < "$payload_file" || _adapter_rc=$?
+    fi
+    if [[ -e "$_adapter_dir/deadline" ]]; then
+        # Deadline expiry is a failure even when the adapter, tapped on the
+        # shoulder by TERM, manages to exit 0 — recording ok would make the
+        # health marker lie about a call that produced no usable answer.
+        _adapter_msg="adapter killed after ${LLM_MAX_TIME}s (LLM_MAX_TIME deadline)"
+        _llm_note error "" "$_adapter_msg"
+        die "Adapter failed ($_adapter_msg): $LLM_ADAPTER"
+    fi
+    if [[ "$_adapter_rc" -eq 0 ]]; then
+        _llm_note ok
+        _llm_ledger_append
+        exit 0
+    fi
+    _llm_note error "" "adapter exited $_adapter_rc"
+    die "Adapter failed (adapter exited $_adapter_rc): $LLM_ADAPTER"
+fi
+
+# A typo'd provider name would otherwise surface as bash's exit-127
+# "build_payload_...: command not found" instead of an error naming the
+# problem, because payload build runs before get_url_headers' own check.
+declare -f "build_payload_${LLM_PROVIDER}" >/dev/null \
+    || die "Unknown provider: $LLM_PROVIDER (see --provider in --help for the list)"
 "build_payload_${LLM_PROVIDER}" > "$payload_file"
 
 # Get URL and headers
