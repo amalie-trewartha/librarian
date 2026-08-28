@@ -85,20 +85,32 @@ def run(cfg: Config, bot: Bot, allowlist: Allowlist, stop_event: threading.Event
             name = payload["filename"]
             data = payload["content"]
             caption = payload.get("caption")
+            sent_file = False
             try:
                 if payload.get("as_photo") and hasattr(bot, "send_photo"):
                     try:
                         bot.send_photo(conv.chat, data, name, caption=caption)
+                        sent_file = True
                     except ApiError:
                         if not hasattr(bot, "send_document"):
                             raise
                         bot.send_document(conv.chat, data, name, caption=caption)
+                        sent_file = True
                 elif hasattr(bot, "send_document"):
                     bot.send_document(conv.chat, data, name, caption=caption)
+                    sent_file = True
                 else:
                     log.error("bot cannot send files for %s", to)
             except (ApiError, httpx.HTTPError):
                 log.exception("file send failed for %s", to)
+            if not sent_file:
+                # Cursor already advanced past this step; tell the user
+                # the upload was lost rather than failing silently.
+                notice = f"(failed to deliver file {name})"
+                try:
+                    bot.send_message(conv.chat, notice)
+                except (ApiError, httpx.HTTPError):
+                    log.exception("delivery-failed notice also failed for %s", to)
             continue
         text = strip_leaked_command(str(step.get("content") or "")).strip()
         if not text:

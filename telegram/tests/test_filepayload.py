@@ -47,11 +47,24 @@ def test_caption_is_truncated():
     assert payload is not None
     assert payload["caption"] == "c" * CAPTION_MAX
 
-def test_file_alias_is_accepted():
-    payload = file_payload({"file": "note.txt", "content": "hi"})
+def test_file_alias_is_ignored():
+    # Canonical key is `filename`. A stray `file` field must not reclassify
+    # an ordinary message as an upload.
+    assert file_payload({"file": "note.txt", "content": "hi"}) is None
+    payload = file_payload({"filename": "note.txt", "file": "other.bin", "content": "hi"})
     assert payload is not None
     assert payload["filename"] == "note.txt"
-    assert payload["as_photo"] is False
+
+
+def test_caption_and_text_content_are_leak_filtered():
+    payload = file_payload({
+        "filename": "note.txt",
+        "content": "chat reply telegram-1-2 secret notes",
+        "caption": "chat reply telegram-1-2 look",
+    })
+    assert payload is not None
+    assert payload["content"] == "secret notes"
+    assert payload["caption"] == "look"
 
 
 def test_jpeg_uses_photo():

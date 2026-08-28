@@ -243,3 +243,33 @@ def test_jpeg_uses_send_photo(tmp_path, monkeypatch):
     assert photos == [("shot.jpg", jpeg, None)]
     assert sent == []
 
+
+def test_file_send_failure_falls_back_to_notice(tmp_path, monkeypatch):
+    import threading
+
+    from headlong_telegram import outbound
+    from headlong_telegram.api import ApiError
+
+    steps = [
+        {"type": "message", "from": "audel", "to": "telegram-1-1",
+         "source": "chat", "filename": "note.txt", "content": "hi",
+         "step_id": "fail1"},
+    ]
+    monkeypatch.setattr(outbound.mindlog, "find_trajectory", lambda d: tmp_path / "t.jsonl")
+    monkeypatch.setattr(outbound.mindlog, "follow", lambda *a, **k: iter(steps))
+
+    sent = []
+
+    class FakeBot:
+        def send_message(self, chat, text, html=False):
+            sent.append(text)
+
+        def send_document(self, chat, content, filename, caption=None):
+            raise ApiError("upload rejected")
+
+    class ApproveAll:
+        def is_approved(self, user):
+            return True
+
+    outbound.run(_cfg(tmp_path), FakeBot(), ApproveAll(), threading.Event())
+    assert sent == ["(failed to deliver file note.txt)"]

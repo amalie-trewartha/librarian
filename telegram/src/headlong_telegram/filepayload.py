@@ -13,6 +13,8 @@ import binascii
 from pathlib import Path
 from typing import Any
 
+from .tgfmt import strip_leaked_command
+
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 JPEG_MAGIC = b"\xff\xd8\xff"
 CAPTION_MAX = 1024  # Telegram media-caption limit
@@ -28,6 +30,8 @@ def _content(step: dict[str, Any]) -> bytes | str | None:
     content = step.get("content")
     if content is None or content == "":
         return None
+    if isinstance(content, str):
+        return strip_leaked_command(content)
     return content
 
 
@@ -41,11 +45,13 @@ def _as_photo(content: bytes | str | None) -> bool:
 def file_payload(step: dict[str, Any]) -> dict[str, Any] | None:
     """Return upload kwargs, or None if this step is ordinary text.
 
-    A file step is one with a `filename` (or `file`) field. Content-sniffing
-    without a name is not used: a text reply that happens to start with
-    `<svg` must stay a sendMessage.
+    A file step is one with an explicit `filename` field. The `file`
+    alias is not accepted: an ordinary message that happens to carry
+    that key must stay a sendMessage. Content-sniffing without a name
+    is not used either: a text reply that starts with `<svg` must
+    stay a sendMessage.
     """
-    raw_name = step.get("filename") or step.get("file") or ""
+    raw_name = step.get("filename") or ""
     if not isinstance(raw_name, str) or not raw_name.strip():
         return None
     filename = Path(raw_name).name
@@ -60,7 +66,7 @@ def file_payload(step: dict[str, Any]) -> dict[str, Any] | None:
     if caption is None or caption == "":
         caption_out = None
     else:
-        caption_out = str(caption)[:CAPTION_MAX]
+        caption_out = strip_leaked_command(str(caption))[:CAPTION_MAX] or None
 
     return {
         "filename": filename,
