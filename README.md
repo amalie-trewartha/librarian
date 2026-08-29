@@ -49,9 +49,11 @@ curl -fsSL https://headlong.ai/install.sh | bash
 ```
 
 You'll need bash 3.2+, git, curl, jq, and an LLM API key (Anthropic,
-OpenAI, Gemini, or OpenRouter); the dashboard also needs
-[uv](https://docs.astral.sh/uv/) and bun or node, and the installer offers
-to fetch those. 
+OpenAI, Gemini, or OpenRouter) — or a local model on any
+OpenAI-compatible server (llama.cpp, Ollama, vLLM, LM Studio; see
+[Local models](#local-models) below, no key needed); the dashboard also
+needs [uv](https://docs.astral.sh/uv/) and bun or node, and the installer
+offers to fetch those. 
 
 Headlong is alpha research software. Use a dedicated, spend-capped key, because
 your agent runs real shell commands and thinks around the clock. With Docker
@@ -162,7 +164,7 @@ experiment with.
 | Tool | What it does |
 |------|-------------|
 | **shellm** | The RLM core. It sends context to an LLM, runs the bash the LLM writes back, and repeats |
-| **llm** | Multi-provider LLM CLI. Anthropic, OpenAI, Gemini, and OpenRouter behind one interface |
+| **llm** | Multi-provider LLM CLI. Anthropic, OpenAI, Gemini, OpenRouter, and any local OpenAI-compatible server (llama.cpp, Ollama, vLLM, ...) behind one interface |
 | **traj** | Trajectory operations on append-only jsonl DAGs with fork and merge |
 | **context** | Renders a trajectory into an LLM messages array with tiered compaction |
 | **thinkers** | The mind. Reactive thought processes run by a dispatcher |
@@ -185,6 +187,49 @@ Everything you run *around* the mind lives in `tools/`:
 | **headlong-slack-bridge** / **headlong-telegram-bridge** | Slack and Telegram connectors into the same inner experience |
 | **headlong-killall** | Panic button that stops every Headlong-related process |
 | **pr-committee** | Multi-model pull request review, used on this repo |
+
+## Local models
+
+Headlong runs on any server that speaks the OpenAI chat-completions
+protocol — llama.cpp (`llama-server`), Ollama, vLLM, LM Studio, a
+corporate proxy — with or without an API key. The `llm` tool calls it
+through the `openai-compatible` provider, and nothing else in the harness
+changes: `shellm`, the thinkers, `recap`, and memory search all reach the
+model through that one endpoint.
+
+Start a server, e.g. llama.cpp or Ollama:
+
+```bash
+llama-server -m qwen3-8b-instruct.gguf -c 32768    # http://127.0.0.1:8080
+ollama serve                                       # http://127.0.0.1:11434
+```
+
+Call it from `llm`:
+
+```bash
+LLM_PROVIDER=openai-compatible \
+LLM_API_URL=http://127.0.0.1:8080/v1/chat/completions \
+llm -m qwen3-8b-instruct "hello"
+```
+
+Run a persistent agent on it by putting these in `~/.headlong/.env`
+(the installer's home): `SHELLM_MODEL` (the model name your server wants),
+`LLM_PROVIDER=openai-compatible`, and `SHELLM_API_URL` (the URL above).
+`LLM_API_KEY` goes there too if the server requires a bearer token
+(llama-server's `--api-key`); Ollama needs none. The provider is never
+auto-detected from the model name, so name it explicitly.
+
+Inside the Docker sandbox, `localhost` is the container, not your
+machine: point the URL at `http://host.docker.internal:8080/v1/chat/completions`
+on macOS, or the docker bridge address, on Linux.
+
+`--effort` is ignored by OpenAI-compatible providers, and `--thinking
+LEVEL` is sent only for models on the known reasoning list (set
+`LLM_ASSUME_THINKING=1` to send it anyway, e.g. for a local Qwen3). Details
+and the full local setup in
+[docs/shellm.md](docs/shellm.md#the-llm-tool); the
+policy for which providers live in core is in
+[design/providers.md](design/providers.md).
 
 ## Learn more
 
