@@ -151,6 +151,7 @@ Options:
   --system-prompt-file F   Read system prompt from file
   -t, --max-tokens N       Max output tokens. Default: model-specific cap
   -M, --messages JSON      Messages array JSON, e.g. [{"role":"user","content":"hi"}]
+  --messages-file F        Read messages array JSON from file
   --no-stream              Disable streaming (streaming is on by default)
   --provider NAME          Provider: anthropic, openai, gemini, openrouter,
                            opencode, opencode-go, openai-compatible, or
@@ -258,6 +259,7 @@ while [[ $# -gt 0 ]]; do
         --system-prompt-file) _spf="${2:?--system-prompt-file requires a path}"; [[ -f "$_spf" ]] || die "System prompt file not found: $_spf"; LLM_SYSTEM=$(cat "$_spf"); shift 2 ;;
         -t|--max-tokens) LLM_MAX_TOKENS="${2:?--max-tokens requires a value}"; shift 2 ;;
         -M|--messages)   LLM_MESSAGES="${2:?--messages requires a value}"; shift 2 ;;
+        --messages-file) _mf="${2:?--messages-file requires a path}"; [[ -f "$_mf" ]] || die "Messages file not found: $_mf"; LLM_MESSAGES=$(cat "$_mf"); shift 2 ;;
         --stream)        LLM_STREAM=1; shift ;;
         --no-stream)     LLM_STREAM=0; shift ;;
         --provider)      LLM_PROVIDER="${2:?--provider requires a value}"; shift 2 ;;

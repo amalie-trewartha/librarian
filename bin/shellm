@@ -194,6 +194,9 @@ Environment:
                           mem search); defaults to SHELLM_MODEL's provider
   SHELLM_MAX_ITERATIONS   Max loop iterations
   SHELLM_MAX_TOKENS       Max tokens per response
+  SHELLM_EMPTY_RESPONSE_RETRIES
+                          Empty-response retries before the run dies
+                          (default 8; set empty for unlimited)
   SHELLM_EFFORT           Thinking effort level (low/medium/high/xhigh/max)
   SHELLM_SYSTEM_PROMPT    Override the default system prompt text
   SHELLM_TRAJ_DIR         Trajectory directory
@@ -1361,8 +1364,15 @@ call_llm() {
     local messages_json="$2"
     local thinking_output_file="${3:-}"
 
+    # The message array rides a file, not argv: a long conversation (or the
+    # empty-response retry's fed-back thinking) can exceed the OS's per-argument
+    # cap (128KB on Linux), and exec would die with E2BIG before the call.
+    local messages_file
+    messages_file=$(mktemp)
+    printf '%s' "$messages_json" > "$messages_file"
+
     local -a args=(-m "$SHELLM_MODEL"
-        --effort "$SHELLM_EFFORT" --thinking --system-prompt "$system_prompt" -M "$messages_json")
+        --effort "$SHELLM_EFFORT" --thinking --system-prompt "$system_prompt" --messages-file "$messages_file")
     [[ -n "$SHELLM_MAX_TOKENS" ]] && args+=(-t "$SHELLM_MAX_TOKENS")
 
     local text_file stderr_file
@@ -1394,7 +1404,7 @@ call_llm() {
     if [[ "$llm_exit" -ne 0 ]]; then
         local _llm_err=""
         [[ -s "$stderr_file" ]] && _llm_err=$(tail -c 500 "$stderr_file")
-        rm -f "$text_file" "$stderr_file"
+        rm -f "$text_file" "$stderr_file" "$messages_file"
         die "llm failed (exit $llm_exit): $_llm_err"
     fi
 
@@ -1407,7 +1417,7 @@ call_llm() {
     # caught above.
 
     cat "$text_file"
-    rm -f "$text_file" "$stderr_file"
+    rm -f "$text_file" "$stderr_file" "$messages_file"
 }
 
 # ---------------------------------------------------------------------------
@@ -2294,21 +2304,34 @@ run_loop() {
         # Retry on empty response: feed captured thinking back as assistant
         # context so the model continues from where it left off (max_tokens
         # gets hit during thinking before any visible output is emitted).
-        # Default: unlimited retries; set SHELLM_EMPTY_RESPONSE_RETRIES to cap.
+        # Default: 8 retries; SHELLM_EMPTY_RESPONSE_RETRIES overrides (set it
+        # to the empty string for unlimited).
         local empty_retries=0
-        local max_empty_retries="${SHELLM_EMPTY_RESPONSE_RETRIES:-}"
+        local max_empty_retries="${SHELLM_EMPTY_RESPONSE_RETRIES-8}"
         local retry_messages_json="$messages_json"
         while [[ -z "$response" ]]; do
             if [[ -n "$max_empty_retries" && "$empty_retries" -ge "$max_empty_retries" ]]; then
                 break
             fi
             empty_retries=$((empty_retries + 1))
-            if [[ -n "$thinking" ]]; then
+            # llm's own stderr lines ("llm: warning: output truncated...")
+            # arrive mixed into the captured thinking; they are harness noise,
+            # not the model's reasoning, and must not become assistant content.
+            local feedback
+            feedback=$(printf '%s\n' "$thinking" | grep -Ev '^llm: (warning|note): ') || feedback=""
+            if [[ -n "$feedback" ]]; then
                 progress "Empty response — feeding thinking back to continue (retry $empty_retries${max_empty_retries:+/$max_empty_retries})..."
-                debug "empty_response_retry: fed back ${#thinking} chars of thinking"
+                debug "empty_response_retry: fed back ${#feedback} chars of thinking"
+                # --rawfile, not --arg: a full-budget thinking block can exceed
+                # the OS's 128KB per-argument cap.
+                local feedback_file
+                feedback_file=$(mktemp)
+                printf '%s' "$feedback" > "$feedback_file"
                 retry_messages_json=$(printf '%s' "$retry_messages_json" | jq \
-                    --arg t "$thinking" \
+                    --rawfile t "$feedback_file" \
                     '. + [{"role":"assistant","content":$t},{"role":"user","content":"Your previous response ran out of output tokens during the reasoning above before you could emit any visible text. Continue from where you left off and produce the bash code for the next step now."}]')
+                rm -f "$feedback_file"
+                sleep 1
             else
                 progress "Empty response from API (retry $empty_retries${max_empty_retries:+/$max_empty_retries})..."
                 sleep 1

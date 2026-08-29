@@ -11,6 +11,15 @@
 # so call_llm must hand it back an empty response instead of dying on the
 # thinking text. A real failure — llm exiting non-zero — must still die.
 #
+# Live-provider check (2026-08-29, OpenRouter, claude-sonnet-5 and
+# gpt-oss-120b): with the budget exhausted during reasoning, non-streaming
+# calls return exit 0 with empty stdout, so the retry is reachable. On
+# call_llm's actual streaming path it depends on whether any reasoning
+# delta streamed before truncation: if yes, mark_emitted lets llm exit 0
+# with the thinking on stderr (the case this retry feeds back); if nothing
+# streamed, llm's own empty-stream guard retries 3x and exits non-zero,
+# and call_llm correctly dies before the retry.
+#
 # call_llm is extracted from bin/shellm and exercised directly (sourcing the
 # whole script would run it) against a stub `llm` on PATH.
 
@@ -55,7 +64,13 @@ run_call_llm() {
         bash -c '
             set -euo pipefail
             die() { echo "shellm: error: $*" >&2; exit 1; }
-            eval "$(sed -n "/^call_llm()/,/^}/p" "$REPO/bin/shellm")"
+            _fn=$(sed -n "/^call_llm()/,/^}/p" "$REPO/bin/shellm")
+            _last=$(printf "%s" "$_fn" | tail -n 1)
+            if [ "$_last" != "}" ]; then
+                echo "test bug: could not extract call_llm from bin/shellm" >&2; exit 2
+            fi
+            eval "$_fn"
+            declare -f call_llm >/dev/null || { echo "test bug: call_llm not defined" >&2; exit 2; }
             _response=$(call_llm "system prompt" "[]" "$THINK_FILE")
             printf "%s" "$_response"
         ' 2>"$tmp/err"
