@@ -127,7 +127,8 @@ ask() {
     printf '%s' "${reply:-$def}"
 }
 
-ask_yn() {  # ask_yn <prompt> — succeeds unless the answer starts with n/N
+ask_yn() {  # ask_yn <prompt> — succeeds unless the answer starts with n/N.
+    # The [Y/n] hint is appended here; pass <prompt> WITHOUT one.
     local reply
     reply=$(ask "$1 [Y/n]" "y")
     [[ ! "$reply" =~ ^[Nn] ]]
@@ -756,7 +757,7 @@ _ask_local_or_cloud() {
     # a cloud key. No tty means no asking — fall through to the key checks
     # (which die with a clear message when there is no key and no server).
     if [[ "$HAS_TTY" -eq 1 ]]; then
-        ask_yn "Use a local model server (Ollama, LM Studio, vLLM; no API key)? [y/N]" && return 0
+        ask_yn "Use a local model server (Ollama, LM Studio, vLLM; no API key)?" && return 0
         return 1
     fi
     # No tty: only an already-configured local endpoint (a re-run, an env
