@@ -27,6 +27,10 @@ set -euo pipefail
 # State home: HEADLONG_HOME if set; else ~/.headlong. (An install from a
 # pre-headlong era lives in ~/.shelly or ~/.shellm — move it:
 # mv ~/.shelly ~/.headlong)
+# Whether the OPERATOR exported HEADLONG_REPO (before the default below
+# replaces "unset" with the public URL): decides if the container path may
+# retarget to this checkout's own origin/branch.
+HEADLONG_REPO_OPERATOR_SET="${HEADLONG_REPO+set}"
 HEADLONG_REPO="${HEADLONG_REPO:-https://github.com/laude-institute/headlong.git}"
 HEADLONG_BRANCH="${HEADLONG_BRANCH:-main}"
 HEADLONG_HOME="${HEADLONG_HOME:-$HOME/.headlong}"
@@ -494,6 +498,21 @@ main() {
             && ! -e "$script_dir/.identities/default" && ! -f /.dockerenv \
             && ! -f /run/.containerenv ]] \
             && (: </dev/tty) 2>/dev/null && _docker_daemon_ok; then
+        # The container path curls the PUBLIC installer, which would install
+        # upstream main — not the code being installed right now. Default the
+        # forwarded repo/branch to this checkout's own origin and branch so
+        # choice 1 runs the same code (an operator-exported HEADLONG_REPO
+        # still wins).
+        if [[ -z "$HEADLONG_REPO_OPERATOR_SET" ]] && git -C "$script_dir" rev-parse --git-dir >/dev/null 2>&1; then
+            local origin_url branch_name
+            origin_url=$(git -C "$script_dir" remote get-url origin 2>/dev/null || true)
+            branch_name=$(git -C "$script_dir" branch --show-current 2>/dev/null || true)
+            if [[ -n "$origin_url" && -n "$branch_name" ]]; then
+                HEADLONG_REPO="$origin_url"
+                HEADLONG_BRANCH="$branch_name"
+                export HEADLONG_REPO HEADLONG_BRANCH
+            fi
+        fi
         _offer_docker_install
     fi
 

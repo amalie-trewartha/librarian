@@ -424,6 +424,8 @@ _prompt_key() {
             tries=$((tries+1))
             [[ "$tries" -ge 5 ]] && return 1
             echo "  Nothing entered. Paste the key and press Enter, or Ctrl-C to quit." >/dev/tty
+            echo "  (If you meant to use a local model server instead, re-run and answer 'y'" >/dev/tty
+            echo "   at the 'Use a local model server?' prompt.)" >/dev/tty
         fi
     done
     var=$(_key_var_for "$key")
