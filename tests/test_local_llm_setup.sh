@@ -103,10 +103,10 @@ ACTEOF
 STUBEOF
 chmod +x "$APP/tools/identity"
 
-# thinkers / headlong-web: init starts the dash (no HEADLONG_NO_DASH in
-# these runs), so the web stub must look alive: background itself quietly and
-# print the serving line init greps for, then keep running so the pid check
-# passes. thinkers is a no-op.
+# thinkers / headlong-web: dash startup is skipped in these runs
+# (HEADLONG_NO_DASH=1: the dash is not this suite's subject, and a live
+# dash makes init open a browser and poll readiness). The stubs exist so
+# a stray call fails loudly in $WORK/out instead of 'command not found'.
 printf '#!/usr/bin/env bash\nexit 0\n' > "$APP/tools/thinkers"
 cat > "$APP/tools/headlong-web" <<'STUBEOF'
 #!/usr/bin/env bash
@@ -136,7 +136,8 @@ run_init() {
     mkdir -p "$home"
     env -i \
         HOME="$home" HEADLONG_HOME="$home/.headlong" HEADLONG_APP_DIR="$APP" \
-        HEADLONG_NO_TTY=1 HEADLONG_UNSANDBOXED=1 PATH="$STUB:$PATH" \
+        HEADLONG_NO_TTY=1 HEADLONG_UNSANDBOXED="${HEADLONG_UNSANDBOXED:-1}" \
+        HEADLONG_NO_DASH=1 PATH="$STUB:$PATH" \
         CURL_MODELS_FILE="$MODELS_FILE" CURL_MODELS_HITS="$CURL_MODELS_HITS" \
         CURL_MODELS_UP="${CURL_MODELS_UP:-1}" LLM_STUB_RC="${LLM_STUB_RC:-0}" "$@" \
         bash "$REPO/tools/headlong-init" </dev/null > "$WORK/out" 2>&1
@@ -260,6 +261,28 @@ run_init "$WORK/h8" \
 check "re-run: still exits 0"                                test "$RC" -eq 0
 check "re-run: config survives, exactly once per var" \
     test "$(grep -c '^SHELLM_API_URL=' "$WORK/h8/.headlong/.env")" -eq 1
+
+# ---------------------------------------------------------------------------
+# sandbox-aware URL: with the Docker sandbox on, a localhost address is
+# rewritten to host.docker.internal (the container's name for the host) in
+# the PERSISTED url; the operator-facing probe still succeeded through the
+# localhost twin. HEADLONG_LOCAL_URL given as host.docker.internal passes
+# through unchanged.
+# ---------------------------------------------------------------------------
+HEADLONG_UNSANDBOXED=0 run_init "$WORK/h9" \
+    HEADLONG_PROVIDER=local \
+    HEADLONG_LOCAL_URL=http://127.0.0.1:11434 \
+    HEADLONG_LOCAL_MODEL=qwen3:8b
+check "sandbox rewrite: exits 0"                             test "$RC" -eq 0
+check "sandbox rewrite: persisted url is container-reachable" grep -qx 'SHELLM_API_URL=http://host.docker.internal:11434/v1/chat/completions' "$WORK/h9/.headlong/.env"
+check "sandbox rewrite: announced the rewrite"               grep -q 'host.docker.internal' "$WORK/out"
+
+HEADLONG_UNSANDBOXED=0 run_init "$WORK/h9b" \
+    HEADLONG_PROVIDER=local \
+    HEADLONG_LOCAL_URL=http://host.docker.internal:1234 \
+    HEADLONG_LOCAL_MODEL=qwen3:8b
+check "explicit container url: exits 0"                      test "$RC" -eq 0
+check "explicit container url: kept as-is"                   grep -qx 'SHELLM_API_URL=http://host.docker.internal:1234/v1/chat/completions' "$WORK/h9b/.headlong/.env"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

@@ -486,6 +486,17 @@ main() {
         esac
     done
 
+    # A from-scratch `install.sh --init` in a checkout is the same decision
+    # the one-liner makes: container or this machine. Offer it when nothing
+    # has been installed yet; an existing identity (or no tty / no Docker)
+    # keeps the plain checkout-mode behavior.
+    if [[ "$RUN_INIT" -eq 1 && ! -e "$HEADLONG_HOME/app/.identities/default" \
+            && ! -e "$script_dir/.identities/default" && ! -f /.dockerenv \
+            && ! -f /run/.containerenv ]] \
+            && (: </dev/tty) 2>/dev/null && _docker_daemon_ok; then
+        _offer_docker_install
+    fi
+
     _require_deps jq curl
 
     mkdir -p "$PREFIX"

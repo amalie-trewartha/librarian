@@ -29,18 +29,21 @@ On the host path it then clones the repo to `~/.headlong/app`, symlinks
 the tools into `~/.local/bin`, and asks where the model should come from:
 
 - **A local model server** (Ollama, LM Studio, vLLM, llama.cpp, ...) —
-  answer `y` at the prompt, give the server's base URL (for Ollama,
-  `http://localhost:11434/v1`; for LM Studio, `http://localhost:1234/v1`),
+  answer `y` at the prompt, give the server's address as you know it
+  (`http://localhost:1234` for LM Studio, `http://192.168.3.23:1234` for
+  a box on your LAN — `/v1` is added automatically if you leave it off),
   an API key only if the server wants one, and pick the model from the
   list the server reports. Headlong verifies the endpoint twice: the
   model list before anything is written, and a real chat completion
   before the mind starts. No cloud account or API key is involved, and
   the agent's completions all stay on your machine or network. Headlong
   never installs a server or pulls models — have the server running
-  before you install. One caveat: if the agent's shell commands run in
-  the Docker sandbox, `localhost` inside the container is the container,
-  not your machine — use `host.docker.internal` (macOS) or the Docker
-  bridge address (Linux) instead.
+  before you install. If the agent's shell commands run in the Docker
+  sandbox, `localhost` inside the container is the container, not your
+  machine: a `localhost`/`127.0.0.1` address is rewritten to
+  `host.docker.internal` in the saved configuration automatically (on
+  Linux, which lacks that name by default, give the server's LAN address
+  instead).
 - **A cloud provider** — paste an API key (Anthropic, OpenAI, Gemini,
   OpenRouter, or OpenCode); headlong-init figures out the provider from
   the key's prefix.
