@@ -59,10 +59,13 @@ function CopyLinkButton() {
       title="Copy link to this item"
       className="absolute right-10 top-3 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
       onClick={() => {
-        void navigator.clipboard?.writeText(window.location.href).then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        });
+        void navigator.clipboard
+          ?.writeText(window.location.href)
+          .then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          })
+          .catch(() => {});
       }}
     >
       {copied ? (
