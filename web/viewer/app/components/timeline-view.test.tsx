@@ -1,8 +1,8 @@
 // Deeplink behavior of the Timeline tab: ?step=/?run= resolution at mount
 // (including a first layout that hasn't loaded yet), reconciliation with
 // later URL changes (soft navigation, Back/Forward), fallbacks for targets
-// outside the loaded window, follow-mode pinning, and the URL round-trip
-// of opening/closing the detail modal.
+// outside the loaded window, follow-mode pinning, the URL round-trip
+// of opening/closing the detail modal, and the substep copy-link URL.
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
@@ -276,6 +276,37 @@ describe("timeline deeplinks", () => {
       await new Promise((r) => setTimeout(r, 0));
     } finally {
       delete (navigator as unknown as Record<string, unknown>).clipboard;
+    }
+  });
+
+  it("a substep copy builds a ?step= deeplink, dropping ?run= and keeping other params", async () => {
+    // SubstepLink builds from window.location.href, not the nuqs adapter, so
+    // stage a real URL carrying the run param plus an unrelated one.
+    window.history.replaceState(null, "", "/?run=r1&theme=dark");
+    const written: string[] = [];
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn(async (t: string) => void written.push(t)) },
+    });
+    try {
+      renderTimeline({ url: "?run=r1" });
+      fireEvent.click(await screen.findByText("steps (2)"));
+      const buttons = screen.getAllByLabelText("Copy link to this step");
+      expect(buttons).toHaveLength(2);
+      for (const b of buttons) fireEvent.click(b);
+      await waitFor(() => expect(written).toHaveLength(2));
+      const urls = written.map((w) => new URL(w));
+      expect(urls.map((u) => u.searchParams.get("step")).sort()).toEqual([
+        "s-final",
+        "s-run-header",
+      ]);
+      for (const u of urls) {
+        expect(u.searchParams.get("run")).toBeNull();
+        expect(u.searchParams.get("theme")).toBe("dark");
+      }
+    } finally {
+      delete (navigator as unknown as Record<string, unknown>).clipboard;
+      window.history.replaceState(null, "", "/");
     }
   });
 
