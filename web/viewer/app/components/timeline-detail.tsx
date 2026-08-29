@@ -74,6 +74,35 @@ function CopyLinkButton() {
   );
 }
 
+/** Copy a deeplink to one run substep. While the run modal is open the
+ * URL carries ?run=, not the substep, so the link is built by hand. */
+function SubstepLink({ stepId }: { stepId: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      aria-label="Copy link to this step"
+      title="Copy link to this step"
+      className="absolute right-1 top-1.5 z-10 rounded-md p-1 text-muted-foreground opacity-0 hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/substep:opacity-100"
+      onClick={() => {
+        const url = new URL(window.location.href);
+        url.searchParams.set("step", stepId);
+        url.searchParams.delete("run");
+        void navigator.clipboard?.writeText(url.toString()).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        });
+      }}
+    >
+      {copied ? (
+        <Check className="h-3.5 w-3.5 text-green-500" />
+      ) : (
+        <Link className="h-3.5 w-3.5" />
+      )}
+    </button>
+  );
+}
+
 export function Modal({
   onClose,
   children,
@@ -334,7 +363,10 @@ function RunModal({
           {showSteps && (
             <div className="mt-1 space-y-0.5">
               {block.members.map((step) => (
-                <StepCard key={step.step_id} step={step} expandAll={false} />
+                <div key={step.step_id} className="group/substep relative">
+                  <SubstepLink stepId={step.step_id} />
+                  <StepCard step={step} expandAll={false} />
+                </div>
               ))}
             </div>
           )}
