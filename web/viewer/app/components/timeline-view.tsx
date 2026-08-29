@@ -177,12 +177,22 @@ export function TimelineView({
     step: string | null;
     run: string | null;
   } | null>({ step: stepParam, run: runParam });
+  // The params the current selection already reflects. applySelection and
+  // the resolver write it; the reconcile effect below reads it so their own
+  // URL echoes don't re-trigger a resolve.
+  const appliedParams = useRef<{ step: string | null; run: string | null }>({
+    step: stepParam,
+    run: runParam,
+  });
 
   const applySelection = useCallback(
     (sel: TimelineSelection | null) => {
+      const step = sel?.kind === "step" ? sel.step.step_id : null;
+      const run = sel?.kind === "run" ? sel.block.run.run_id : null;
+      appliedParams.current = { step, run };
       setSelected(sel);
-      void setStepParam(sel?.kind === "step" ? sel.step.step_id : null);
-      void setRunParam(sel?.kind === "run" ? sel.block.run.run_id : null);
+      void setStepParam(step);
+      void setRunParam(run);
     },
     [setStepParam, setRunParam]
   );
@@ -362,51 +372,90 @@ export function TimelineView({
 
   // --- deeplink resolution --------------------------------------------------
 
-  // Runs once, on the first layout: find the linked element, scroll its
-  // row into view, pulse it, and open its detail modal. A step outside the
-  // loaded window (or one that no longer exists) falls back to a fetch-one
-  // modal, like an old search hit — deliberately NOT auto-paging history
-  // in, which could mean tens of MB on a grown mind log.
+  // Find the linked element, scroll its row into view, pulse it, and open
+  // its detail modal. A step outside the loaded window (or one that no
+  // longer exists) falls back to a fetch-one modal, like an old search
+  // hit — deliberately NOT auto-paging history in, which could mean tens
+  // of MB on a grown mind log. Step wins when both params are set; the
+  // losing param is cleared so the URL always names exactly one item.
+  const resolveDeeplink = useCallback(
+    (want: { step: string | null; run: string | null }) => {
+      const scrollToRow = (row: number) => {
+        const el = scrollRef.current;
+        if (el) {
+          el.scrollTop = Math.max(0, layout.rowY[row] - el.clientHeight / 3);
+        }
+      };
+
+      if (want.step) {
+        const step = stepById.get(want.step);
+        if (!step) {
+          appliedParams.current = { step: want.step, run: null };
+          setSelected(null);
+          setMissing({ kind: "step", id: want.step });
+          void setRunParam(null);
+          return;
+        }
+        // Run machinery steps have no cell of their own; land on their block.
+        const cell = cellById.get(want.step);
+        const runId = typeof step.raw.run_id === "string" ? step.raw.run_id : null;
+        const block = !cell && runId ? blockById.get(runId) : undefined;
+        const row = cell?.row ?? block?.startRow;
+        if (row !== undefined) {
+          scrollToRow(row);
+          setFlashId(cell ? want.step : block!.run.run_id);
+        }
+        setMissing(null);
+        applySelection({ kind: "step", step });
+      } else if (want.run) {
+        const block = blockById.get(want.run);
+        if (!block) {
+          appliedParams.current = { step: null, run: want.run };
+          setSelected(null);
+          setMissing({ kind: "run", id: want.run });
+          void setStepParam(null);
+          return;
+        }
+        scrollToRow(block.startRow);
+        setFlashId(want.run);
+        setMissing(null);
+        applySelection({ kind: "run", block });
+      }
+    },
+    [layout, cellById, blockById, stepById, applySelection, setStepParam, setRunParam]
+  );
+
+  // Mount-time pass: resolve the params present at arrival once a real
+  // layout is up.
   useEffect(() => {
     const want = pendingDeeplink.current;
     if (!want) return;
-    pendingDeeplink.current = null;
-    if (!want.step && !want.run) return;
-
-    const scrollToRow = (row: number) => {
-      const el = scrollRef.current;
-      if (el) {
-        el.scrollTop = Math.max(0, layout.rowY[row] - el.clientHeight / 3);
-      }
-    };
-
-    if (want.step) {
-      const step = stepById.get(want.step);
-      if (!step) {
-        setMissing({ kind: "step", id: want.step });
-        return;
-      }
-      // Run machinery steps have no cell of their own; land on their block.
-      const cell = cellById.get(want.step);
-      const runId = typeof step.raw.run_id === "string" ? step.raw.run_id : null;
-      const block = !cell && runId ? blockById.get(runId) : undefined;
-      const row = cell?.row ?? block?.startRow;
-      if (row !== undefined) {
-        scrollToRow(row);
-        setFlashId(cell ? want.step : block!.run.run_id);
-      }
-      setSelected({ kind: "step", step });
-    } else if (want.run) {
-      const block = blockById.get(want.run);
-      if (!block) {
-        setMissing({ kind: "run", id: want.run });
-        return;
-      }
-      scrollToRow(block.startRow);
-      setFlashId(want.run);
-      setSelected({ kind: "run", block });
+    if (!want.step && !want.run) {
+      pendingDeeplink.current = null;
+      return;
     }
-  }, [layout, cellById, blockById, stepById]);
+    // Nothing to match against yet: keep the deeplink pending so a
+    // still-loading first layout doesn't produce a false "missing".
+    if (layout.cells.length === 0 && layout.blocks.length === 0) return;
+    pendingDeeplink.current = null;
+    resolveDeeplink(want);
+  }, [layout, resolveDeeplink]);
+
+  // Reconcile the modal with URL changes after mount (Back/Forward, soft
+  // navigation): re-run the resolve path when the params stop matching the
+  // selection they last produced, and close everything when both clear.
+  useEffect(() => {
+    if (pendingDeeplink.current) return; // mount pass owns the first resolve
+    const applied = appliedParams.current;
+    if (stepParam === applied.step && runParam === applied.run) return;
+    appliedParams.current = { step: stepParam, run: runParam };
+    if (!stepParam && !runParam) {
+      setSelected(null);
+      setMissing(null);
+      return;
+    }
+    resolveDeeplink({ step: stepParam, run: runParam });
+  }, [stepParam, runParam, resolveDeeplink]);
 
   useEffect(() => {
     if (!flashId) return;
@@ -951,6 +1000,19 @@ export function TimelineView({
             void setStepParam(null);
           }}
         />
+      )}
+      {missing?.kind === "step" && !traj && (
+        <Modal
+          onClose={() => {
+            setMissing(null);
+            void setStepParam(null);
+          }}
+        >
+          <div className="py-4 pr-8 text-sm text-muted-foreground">
+            This step is not in the loaded part of the timeline. Use “load
+            older” to page more history in, then open the link again.
+          </div>
+        </Modal>
       )}
       {missing?.kind === "run" && (
         <Modal
