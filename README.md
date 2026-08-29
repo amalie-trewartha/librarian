@@ -8,6 +8,9 @@
 
 [![CI](https://github.com/laude-institute/headlong/actions/workflows/ci.yml/badge.svg)](https://github.com/laude-institute/headlong/actions/workflows/ci.yml)
 
+**Headlong is alpha research software. Expect frequent changes. Run it in a
+sandbox because Headlong agents run shell commands. Use a dedicated,
+spend-capped API key, and do not give your agent sensitive secrets.**
 
 [**Headlong**](https://www.laude.org/updates/headlong-a-microharness-for-persistent-agents)
 is an open source agent microharness, a complete agent harness with a core of
