@@ -219,10 +219,11 @@ cmd_send_file() {
     # (same class of leak as API keys on curl command lines).
     base64 -w 0 < "$filepath" | tr -d '\n' | jq -nc \
         --arg filename "$filename" \
+        --arg content "[file: $filename]" \
         --arg from "$from" \
         --arg to "$to" \
         --rawfile content_b64 /dev/stdin \
-        '{type:"message", filename:$filename, content_b64:$content_b64, from:$from, to:$to, source:"chat"}' \
+        '{type:"message", content:$content, filename:$filename, content_b64:$content_b64, from:$from, to:$to, source:"chat"}' \
         | _chat_append \
         || die "failed to encode/append $filepath"
 
