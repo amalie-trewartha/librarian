@@ -408,6 +408,53 @@ _llm_ok() {
     llm -t 256 "Reply with the single word: ok" >/dev/null 2>>"$INIT_LOG"
 }
 
+_prompt_key() {
+    local key="" var="" tries=0
+    # Empty input (a stray Enter, a paste that didn't take) just asks again;
+    # Ctrl-C or Ctrl-D (EOF on the tty) gives up.
+    while [[ -z "$key" ]]; do
+        printf 'Paste your API key (input hidden; Ctrl-C to quit): ' >/dev/tty
+        if ! IFS= read -rs key </dev/tty; then
+            printf '\n' >/dev/tty
+            return 1
+        fi
+        printf '\n' >/dev/tty
+        key="${key//[[:space:]]/}"   # trailing newline/space from a paste
+        if [[ -z "$key" ]]; then
+            tries=$((tries+1))
+            [[ "$tries" -ge 5 ]] && return 1
+            echo "  Nothing entered. Paste the key and press Enter, or Ctrl-C to quit." >/dev/tty
+        fi
+    done
+    var=$(_key_var_for "$key")
+    if [[ "$key" == sk-* && "$key" != sk-ant-* && "$key" != sk-or-* ]]; then
+        # OpenAI and OpenCode keys share the bare sk- prefix, and a wrong
+        # guess sends the handshake to api.openai.com where it fails
+        # confusingly. Ask rather than guess; OpenAI stays the default so
+        # the common case is just Enter.
+        local which
+        which=$(ask "Is that an OpenAI or an OpenCode key? (1) OpenAI (2) OpenCode" "1")
+        case "$which" in
+            2) var=OPENCODE_API_KEY ;;
+            *) var=OPENAI_API_KEY ;;
+        esac
+    elif [[ -z "$var" ]]; then
+        local which
+        which=$(ask "Which provider is that key for? (1) Anthropic (2) OpenAI (3) Gemini (4) OpenRouter (5) OpenCode" "1")
+        case "$which" in
+            2) var=OPENAI_API_KEY ;;
+            3) var=GEMINI_API_KEY ;;
+            4) var=OPENROUTER_API_KEY ;;
+            5) var=OPENCODE_API_KEY ;;
+            *) var=ANTHROPIC_API_KEY ;;
+        esac
+    fi
+    _env_set "$HEADLONG_HOME/.env" "$var" "$key"
+    # Pin the model to this key's provider so a stale key for another
+    # provider's default can't shadow the one we just validated.
+    _env_set "$HEADLONG_HOME/.env" "SHELLM_MODEL" "$(_default_model_for "$var")"
+}
+
 # ---------------------------------------------------------------------------
 # Local (OpenAI-compatible) endpoint setup
 # ---------------------------------------------------------------------------
@@ -657,24 +704,28 @@ EOF
 # inferred: silent inference is how a keyless box quietly picks a default.
 # ---------------------------------------------------------------------------
 
-# _ask_local_or_cloud — 1 = local, 0 = cloud. Preceded by env and by a
-# usable local endpoint already in the state .env (a re-run re-checks it
-# rather than re-asking), and defaults to cloud when a key is present.
+# _ask_local_or_cloud — 1 = local, 0 = cloud. Preceded by HEADLONG_PROVIDER,
+# then a tty offer (first run), then a configured-but-unverified local
+# endpoint in the state .env (a re-run re-checks it rather than re-asking),
+# and defaults to cloud otherwise.
 _ask_local_or_cloud() {
     [[ "${HEADLONG_PROVIDER:-}" == "local" ]] && return 0
     [[ "${HEADLONG_PROVIDER:-}" == "cloud" ]] && return 1
-    # Nothing in the environment. A configured-but-unverified local endpoint
-    # (a re-run, an env carried from another setup) is worth one probe before
-    # falling through to the key prompts.
+    # First run with a human at a tty: offer the local server before demanding
+    # a cloud key. No tty means no asking — fall through to the key checks
+    # (which die with a clear message when there is no key and no server).
+    if [[ "$HAS_TTY" -eq 1 ]]; then
+        ask_yn "Use a local model server (Ollama, LM Studio, vLLM; no API key)? [y/N]" && return 0
+        return 1
+    fi
+    # No tty: only an already-configured local endpoint (a re-run, an env
+    # carried from another setup) is worth one probe before falling through.
     local probe_url="${SHELLM_API_URL:-${LLM_API_URL:-}}"
     [[ -n "$probe_url" && -n "${LLM_PROVIDER:-}" && "$LLM_PROVIDER" == "openai-compatible" ]] || return 1
-    # Only worth asking about when the endpoint still answers; a dead one
+    # Only worth keeping when the endpoint still answers; a dead one
     # falls through to the ordinary prompts (and HEADLONG_PROVIDER=local
     # above forces the repair path regardless).
-    _local_models_get "$(_local_base_url "$probe_url")" "${LLM_API_KEY:-}" >/dev/null 2>&1 || return 1
-    [[ "$HAS_TTY" -eq 0 ]] && return 0
-    ask_yn "Keep using the local model server at ${probe_url}? [Y/n]" && return 0
-    return 1
+    _local_models_get "$(_local_base_url "$probe_url")" "${LLM_API_KEY:-}" >/dev/null 2>&1
 }
 
 _ensure_api_key() {
