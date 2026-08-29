@@ -6,10 +6,11 @@
 ██  ██ █████ ██  ██ █████  █████  ████  ██  ██  █████      ██
 ```
 
+[![CI](https://github.com/laude-institute/headlong/actions/workflows/ci.yml/badge.svg)](https://github.com/laude-institute/headlong/actions/workflows/ci.yml)
+
 **Headlong** is an open source agent microharness, a complete agent harness
 with a core of about 10K lines of Bash.
 
-[![CI](https://github.com/laude-institute/headlong/actions/workflows/ci.yml/badge.svg)](https://github.com/laude-institute/headlong/actions/workflows/ci.yml)<br>
 [Launch post](https://www.laude.org/updates/headlong-a-microharness-for-persistent-agents) |
 [Announcement](https://x.com/andykonwinski/status/2091990178638496195)
 
