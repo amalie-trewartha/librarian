@@ -6,7 +6,15 @@
 // never reflows.
 
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, CornerDownRight, Play, X } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CornerDownRight,
+  Link,
+  Play,
+  X,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ExpandableText } from "~/components/expandable-text";
@@ -40,7 +48,33 @@ export type TimelineSelection =
   | { kind: "step"; step: NormalizedStep }
   | { kind: "run"; block: TimelineBlock };
 
-function Modal({
+/** While the modal is open the URL carries ?step=/?run= for the selected
+ * item, so the copy just lifts the address bar. */
+function CopyLinkButton() {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      aria-label="Copy link"
+      title="Copy link to this item"
+      className="absolute right-10 top-3 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+      onClick={() => {
+        void navigator.clipboard?.writeText(window.location.href).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        });
+      }}
+    >
+      {copied ? (
+        <Check className="h-4 w-4 text-green-500" />
+      ) : (
+        <Link className="h-4 w-4" />
+      )}
+    </button>
+  );
+}
+
+export function Modal({
   onClose,
   children,
 }: {
@@ -64,6 +98,7 @@ function Modal({
         className="relative max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-lg border bg-background p-4 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
+        <CopyLinkButton />
         <button
           type="button"
           onClick={onClose}
@@ -186,7 +221,7 @@ export function TimelineDetailModal({
     const hasContext = trigger || runBlock || triggeredRuns.length > 0;
     return (
       <Modal onClose={onClose}>
-        <div className="pr-8">
+        <div className="pr-14">
           <StepCard step={step} expandAll />
           {hasContext && (
             <div className="mt-3 space-y-0.5 border-t pt-2">
@@ -243,7 +278,7 @@ function RunModal({
   const result = typeof final?.raw.content === "string" ? final.raw.content : null;
   return (
     <Modal onClose={onClose}>
-      <div className="pr-8">
+      <div className="pr-14">
         <div className="mb-1 flex flex-wrap items-center gap-2">
           <Badge variant="outline" className="text-[10px]">
             run
