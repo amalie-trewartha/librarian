@@ -6,15 +6,19 @@
 ██  ██ █████ ██  ██ █████  █████  ████  ██  ██  █████      ██
 ```
 
+**Headlong** is an open source agent microharness, a complete agent harness
+with a core of about 10K lines of Bash.
+
+[Launch post](https://www.laude.org/updates/headlong-a-microharness-for-persistent-agents) |
+[Announcement](https://x.com/andykonwinski/status/2091990178638496195) |
 [![CI](https://github.com/laude-institute/headlong/actions/workflows/ci.yml/badge.svg)](https://github.com/laude-institute/headlong/actions/workflows/ci.yml)
 
-**Headlong is alpha research software. Expect frequent changes. Run it in a
-sandbox because Headlong agents run shell commands. Use a dedicated,
-spend-capped API key, and do not give your agent sensitive secrets.**
+> [!IMPORTANT]
+> Headlong is alpha research software. Expect frequent changes. Run it in a
+> sandbox because Headlong agents run shell commands. Use a dedicated,
+> spend-capped API key, and do not give your agent sensitive secrets.
 
-[**Headlong**](https://www.laude.org/updates/headlong-a-microharness-for-persistent-agents)
-is an open source agent microharness, a complete agent harness with a core of
-about 10K lines of Bash. Headlong's defining feature is **persistent
+Headlong's defining feature is **persistent
 agency**. Your agent keeps thinking between external interactions in a
 self-guided loop inspired by human inner monologue. A message from a human
 doesn't start a session. It lands in the agent's thought stream as one more
