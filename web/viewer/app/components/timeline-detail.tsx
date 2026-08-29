@@ -48,25 +48,33 @@ export type TimelineSelection =
   | { kind: "step"; step: NormalizedStep }
   | { kind: "run"; block: TimelineBlock };
 
+/** Copy `getUrl()` to the clipboard and flash `copied` for 1.5s; a denied
+ * clipboard (permissions, non-secure context) is silently ignored. */
+function useCopyLink(getUrl: () => string) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    void navigator.clipboard
+      ?.writeText(getUrl())
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch(() => {});
+  };
+  return { copied, copy };
+}
+
 /** While the modal is open the URL carries ?step=/?run= for the selected
  * item, so the copy just lifts the address bar. */
 function CopyLinkButton() {
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useCopyLink(() => window.location.href);
   return (
     <button
       type="button"
       aria-label="Copy link"
       title="Copy link to this item"
       className="absolute right-10 top-3 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-      onClick={() => {
-        void navigator.clipboard
-          ?.writeText(window.location.href)
-          .then(() => {
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
-          })
-          .catch(() => {});
-      }}
+      onClick={copy}
     >
       {copied ? (
         <Check className="h-4 w-4 text-green-500" />
@@ -80,22 +88,19 @@ function CopyLinkButton() {
 /** Copy a deeplink to one run substep. While the run modal is open the
  * URL carries ?run=, not the substep, so the link is built by hand. */
 function SubstepLink({ stepId }: { stepId: string }) {
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useCopyLink(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("step", stepId);
+    url.searchParams.delete("run");
+    return url.toString();
+  });
   return (
     <button
       type="button"
       aria-label="Copy link to this step"
       title="Copy link to this step"
       className="absolute right-1 top-1.5 z-10 rounded-md p-1 text-muted-foreground opacity-0 hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/substep:opacity-100"
-      onClick={() => {
-        const url = new URL(window.location.href);
-        url.searchParams.set("step", stepId);
-        url.searchParams.delete("run");
-        void navigator.clipboard?.writeText(url.toString()).then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        });
-      }}
+      onClick={copy}
     >
       {copied ? (
         <Check className="h-3.5 w-3.5 text-green-500" />
