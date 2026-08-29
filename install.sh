@@ -112,14 +112,20 @@ _docker_daemon_ok() {
 _docker_forward_args() {
     local var
     for var in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY \
-               OPENCODE_API_KEY; do
+               OPENCODE_API_KEY LLM_API_KEY; do
         if [[ -n "${!var:-}" ]]; then
             export "${var?}"
             printf '%s\0%s\0' "-e" "$var"
         fi
     done
+    # The local-model server choice and its endpoint are not secrets: forward
+    # them by value so the in-container headlong-init offers / keeps the same
+    # setup without re-asking. (LLM_PROVIDER itself travels inside the state
+    # .env, which the container's init re-persists; exporting it here would
+    # also pin it for the whole container, which the operator did not ask for.)
     for var in HEADLONG_IDENTITY_NAME HEADLONG_IDENTITY_VIBE HEADLONG_IDENTITY_FOCUS \
-               HEADLONG_IDENTITY_USER HEADLONG_OPERATOR_NAME HEADLONG_REPO HEADLONG_BRANCH; do
+               HEADLONG_IDENTITY_USER HEADLONG_OPERATOR_NAME HEADLONG_REPO HEADLONG_BRANCH \
+               HEADLONG_PROVIDER HEADLONG_LOCAL_URL HEADLONG_LOCAL_MODEL; do
         if [[ -n "${!var:-}" ]]; then printf '%s\0%s\0' "-e" "$var=${!var}"; fi
     done
 }

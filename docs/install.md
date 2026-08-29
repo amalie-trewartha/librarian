@@ -26,11 +26,29 @@ real shell commands and Docker is the sandbox for them.
   `yes` to continue without a sandbox.
 
 On the host path it then clones the repo to `~/.headlong/app`, symlinks
-the tools into `~/.local/bin`, asks for an LLM API key, and runs a short
-optional interview: a name, a few words of personality, what they should
-think about when idle. The answers become the agent's core identity and
-first memories. Then their mind starts and the dashboard opens. Their
-name becomes a command:
+the tools into `~/.local/bin`, and asks where the model should come from:
+
+- **A local model server** (Ollama, LM Studio, vLLM, llama.cpp, ...) —
+  answer `y` at the prompt, give the server's base URL (for Ollama,
+  `http://localhost:11434/v1`; for LM Studio, `http://localhost:1234/v1`),
+  an API key only if the server wants one, and pick the model from the
+  list the server reports. Headlong verifies the endpoint twice: the
+  model list before anything is written, and a real chat completion
+  before the mind starts. No cloud account or API key is involved, and
+  the agent's completions all stay on your machine or network. Headlong
+  never installs a server or pulls models — have the server running
+  before you install. One caveat: if the agent's shell commands run in
+  the Docker sandbox, `localhost` inside the container is the container,
+  not your machine — use `host.docker.internal` (macOS) or the Docker
+  bridge address (Linux) instead.
+- **A cloud provider** — paste an API key (Anthropic, OpenAI, Gemini,
+  OpenRouter, or OpenCode); headlong-init figures out the provider from
+  the key's prefix.
+
+Either way it then runs a short optional interview: a name, a few words
+of personality, what they should think about when idle. The answers
+become the agent's core identity and first memories. Then their mind
+starts and the dashboard opens. Their name becomes a command:
 
 ```bash
 ada                  # chat with them
@@ -103,8 +121,24 @@ export HEADLONG_IDENTITY_USER="I'm Sam, a programmer trying Headlong out"
 curl -fsSL https://headlong.ai/install.sh | bash
 ```
 
-A key must be in the environment; everything else is optional.
-`HEADLONG_NO_DASH=1` and `HEADLONG_NO_THINKERS=1` skip those parts.
+A key must be in the environment **for a cloud provider**; everything
+else is optional. `HEADLONG_NO_DASH=1` and `HEADLONG_NO_THINKERS=1`
+skip those parts.
+
+A local model server can be selected without a tty too:
+
+```bash
+export HEADLONG_PROVIDER=local
+export HEADLONG_LOCAL_URL=http://localhost:11434/v1   # the server's base URL
+# export HEADLONG_LOCAL_API_KEY=...   # only if the server wants a token
+# export HEADLONG_LOCAL_MODEL=qwen3:8b  # default: first model the server lists
+curl -fsSL https://headlong.ai/install.sh | bash
+```
+
+With no tty and no cloud key, `HEADLONG_PROVIDER=local` plus
+`HEADLONG_LOCAL_URL` is all that is required. The endpoint must be
+reachable (the install verifies it and stops if it is not) and it must
+expose a model list or a pinned `HEADLONG_LOCAL_MODEL`.
 
 With no tty there is nobody to answer the sandbox question, so on a
 machine without a working Docker daemon the install stops unless

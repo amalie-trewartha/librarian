@@ -23,6 +23,15 @@ set -euo pipefail
 #   HEADLONG_NO_DASH=1       don't start the web dash
 #   HEADLONG_WEB_ARGS        extra args for headlong-web (e.g. "--host 0.0.0.0"
 #                          to reach the dash through a Docker port mapping)
+#   HEADLONG_PROVIDER        "cloud" (default: pick a provider from an API
+#                          key) or "local" (OpenAI-compatible endpoint: ask
+#                          for a URL + optional key, verify with /v1/models,
+#                          pick the model from that list)
+#   HEADLONG_LOCAL_URL       endpoint for the local provider (skips the URL
+#                          prompt; e.g. http://localhost:11434/v1)
+#   HEADLONG_LOCAL_API_KEY   bearer token for the local endpoint, when it
+#                          wants one (LM Studio and router proxies often do)
+#   HEADLONG_LOCAL_MODEL     model to pin (skips the model-picker prompt)
 #
 # --dry-run walks the Docker sandbox gate interactively, writes nothing,
 # starts nothing, and exits. Pair with HEADLONG_FAKE_DOCKER=ok|down|missing
@@ -286,7 +295,14 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# API key: find one, or ask for one, and prove it works
+# Model backend: a cloud provider keyed by an API key, or a local
+# OpenAI-compatible endpoint (Ollama, LM Studio, vLLM, llama.cpp, a router
+# proxy). Everything downstream only cares that bin/llm can serve a
+# completion, so both paths end in the same place: a working model and,
+# for the local path, a provider + URL (+ optional key) persisted in .env.
+#
+# The local path never auto-detects (design/providers.md: arbitrary model
+# names imply nothing), so it is always an explicit choice.
 # ---------------------------------------------------------------------------
 
 _have_key() {
@@ -392,55 +408,285 @@ _llm_ok() {
     llm -t 256 "Reply with the single word: ok" >/dev/null 2>>"$INIT_LOG"
 }
 
-_prompt_key() {
-    local key="" var="" tries=0
-    # Empty input (a stray Enter, a paste that didn't take) just asks again;
-    # Ctrl-C or Ctrl-D (EOF on the tty) gives up.
-    while [[ -z "$key" ]]; do
-        printf 'Paste your API key (input hidden; Ctrl-C to quit): ' >/dev/tty
-        if ! IFS= read -rs key </dev/tty; then
-            printf '\n' >/dev/tty
-            return 1
-        fi
-        printf '\n' >/dev/tty
-        key="${key//[[:space:]]/}"   # trailing newline/space from a paste
-        if [[ -z "$key" ]]; then
-            tries=$((tries+1))
-            [[ "$tries" -ge 5 ]] && return 1
-            echo "  Nothing entered. Paste the key and press Enter, or Ctrl-C to quit." >/dev/tty
-        fi
-    done
-    var=$(_key_var_for "$key")
-    if [[ "$key" == sk-* && "$key" != sk-ant-* && "$key" != sk-or-* ]]; then
-        # OpenAI and OpenCode keys share the bare sk- prefix, and a wrong
-        # guess sends the handshake to api.openai.com where it fails
-        # confusingly. Ask rather than guess; OpenAI stays the default so
-        # the common case is just Enter.
-        local which
-        which=$(ask "Is that an OpenAI or an OpenCode key? (1) OpenAI (2) OpenCode" "1")
-        case "$which" in
-            2) var=OPENCODE_API_KEY ;;
-            *) var=OPENAI_API_KEY ;;
-        esac
-    elif [[ -z "$var" ]]; then
-        local which
-        which=$(ask "Which provider is that key for? (1) Anthropic (2) OpenAI (3) Gemini (4) OpenRouter (5) OpenCode" "1")
-        case "$which" in
-            2) var=OPENAI_API_KEY ;;
-            3) var=GEMINI_API_KEY ;;
-            4) var=OPENROUTER_API_KEY ;;
-            5) var=OPENCODE_API_KEY ;;
-            *) var=ANTHROPIC_API_KEY ;;
-        esac
+# ---------------------------------------------------------------------------
+# Local (OpenAI-compatible) endpoint setup
+# ---------------------------------------------------------------------------
+# bin/llm's openai-compatible provider takes the full chat-completions URL
+# (LLM_API_URL / SHELLM_API_URL), while servers advertise their base URL
+# (/v1). Operators think in base URLs, so accept either: anything already
+# ending in /chat/completions is left alone; anything else gets
+# /chat/completions appended. /v1/models is always probed at the BASE url.
+
+_local_base_url() {  # base URL (for /v1/models) from whatever was given
+    local url="$1"
+    url="${url%/}"
+    url="${url%/chat/completions}"
+    printf '%s' "$url"
+}
+
+_local_chat_url() {  # chat-completions URL from whatever was given
+    local url="$1"
+    url="${url%/}"
+    case "$url" in
+        */chat/completions) printf '%s' "$url" ;;
+        *)                  printf '%s/chat/completions' "$url" ;;
+    esac
+}
+
+# _local_models_get <base-url> <key> — fetch GET <base>/models. On success
+# sets _LOCAL_MODELS to the model ids, one per line (empty means the server
+# exposed no models), and returns 0. On failure sets _local_models_err —
+# "could not reach ..." when the server is unreachable, a parse complaint
+# when it answered with something else — and returns nonzero. Globals rather
+# than stdout because callers need the error message after a failure, which
+# a command substitution cannot carry back.
+_local_models_err=""
+_LOCAL_MODELS=""
+_local_models_get() {
+    _local_models_err=""
+    _LOCAL_MODELS=""
+    local url="$1" key="$2" body err rc
+    local -a curl_args=(fsS --max-time 10 "$url/models")
+    [[ -z "$key" ]] || curl_args+=(-H "Authorization: Bearer $key")
+    err=$(mktemp)
+    body=$(curl "${curl_args[@]}" 2>"$err")
+    rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        _local_models_err="could not reach $url ($(head -c 200 "$err" | tr -d '\n'))"
+        rm -f "$err"
+        return "$rc"
     fi
-    _env_set "$HEADLONG_HOME/.env" "$var" "$key"
-    # Pin the model to this key's provider so a stale key for another
-    # provider in the env can't shadow the one we just validated.
-    _env_set "$HEADLONG_HOME/.env" "SHELLM_MODEL" "$(_default_model_for "$var")"
+    rm -f "$err"
+    # The OpenAI ListModels shape is {"data":[{"id":...},...]}; jq -e makes a
+    # missing/broken body a loud failure instead of an empty, plausible list.
+    if ! _LOCAL_MODELS=$(printf '%s' "$body" | jq -r -e '.data[]?.id // empty' 2>/dev/null); then
+        _local_models_err="$url did not return a model list (is it an OpenAI-compatible server?)"
+        return 1
+    fi
+}
+
+# _prompt_local_url <default> — ask until the URL answers, on a tty; one try
+# with the default (or env value) when there is none.
+_prompt_local_url() {
+    local def="$1" url
+    while :; do
+        url=$(ask "Base URL of your OpenAI-compatible server (Ollama: http://localhost:11434/v1)" "$def")
+        [[ -n "$url" ]] || { def=""; continue; }
+        printf '%s' "$url"
+        return 0
+    done
+}
+
+# _prompt_local_key — hidden-input key prompt; empty input means "no key".
+_prompt_local_key() {
+    local key=""
+    if [[ "$HAS_TTY" -eq 0 ]]; then return 0; fi
+    printf 'API key for the server, if it wants one (Enter for none; input hidden): ' >/dev/tty
+    if ! IFS= read -rs key </dev/tty; then
+        printf '\n' >/dev/tty
+        return 0
+    fi
+    printf '\n' >/dev/tty
+    key="${key//[[:space:]]/}"
+    printf '%s' "$key"
+}
+
+# _pick_from_list <prompt> <one-choice-per-line> [default] — numbered menu on
+# the tty; empty reply keeps the default, a number picks from the list, and
+# anything else is taken as a literal model name (servers with hundreds of
+# entries are easier to type at than to page through).
+_pick_from_list() {
+    local prompt="$1" list="$2" def="${3:-}" reply
+    local count
+    count=$(printf '%s\n' "$list" | grep -c .)
+    printf '\n%s — %d available:\n' "$prompt" "$count" >/dev/tty
+    local i=0
+    while IFS= read -r m; do
+        [[ -n "$m" ]] || continue
+        i=$((i + 1))
+        if [[ -n "$def" && "$m" == "$def" ]]; then
+            printf '  %3d) %s   (current)\n' "$i" "$m" >/dev/tty
+        else
+            printf '  %3d) %s\n' "$i" "$m" >/dev/tty
+        fi
+    done <<<"$list"
+    while :; do
+        if [[ -n "$def" ]]; then
+            printf '%s [number, a name, or Enter for %s]: ' "$prompt" "$def" >/dev/tty
+        else
+            printf '%s [number or name]: ' "$prompt" >/dev/tty
+        fi
+        IFS= read -r reply </dev/tty || reply=""
+        reply="${reply//[[:space:]]/}"
+        if [[ -z "$reply" ]]; then
+            [[ -n "$def" ]] && { printf '%s' "$def"; return 0; }
+            continue
+        fi
+        if [[ "$reply" =~ ^[0-9]+$ ]]; then
+            local picked
+            picked=$(printf '%s\n' "$list" | grep -v '^$' | sed -n "${reply}p")
+            if [[ -n "$picked" ]]; then
+                printf '%s' "$picked"
+                return 0
+            fi
+            echo "  No such entry (1-$count)." >/dev/tty
+            continue
+        fi
+        printf '%s' "$reply"
+        return 0
+    done
+}
+
+# _setup_local_llm — the whole local path. Sets LLM_PROVIDER,
+# SHELLM_API_URL, LLM_API_KEY (when given) and SHELLM_MODEL, persists them,
+# and proves the whole chain with a real completion through bin/llm.
+_setup_local_llm() {
+    local base chat key models chosen url_env="${HEADLONG_LOCAL_URL:-${SHELLM_API_URL:-${LLM_API_URL:-}}}"
+    local key_env="${HEADLONG_LOCAL_API_KEY:-${LLM_API_KEY:-}}"
+    local model_env="${HEADLONG_LOCAL_MODEL:-${SHELLM_MODEL:-}}"
+
+    if [[ "$HAS_TTY" -eq 1 ]]; then
+        cat >/dev/tty <<'EOF'
+
+Local model server (Ollama, LM Studio, vLLM, llama.cpp, ...). Headlong
+talks to it through its OpenAI-compatible chat API; no cloud API key is
+needed, and the agent's completions all stay on this machine or your
+network. The server must already be running — Headlong never installs
+one or pulls models.
+
+EOF
+    fi
+
+    # --- URL -----------------------------------------------------------------
+    # No-tty: HEADLONG_LOCAL_URL (or an inherited URL) is required — there is
+    # no one to ask and no trustworthy default port (every server differs).
+    # A server that is DOWN is a hard error (starting the mind against it
+    # just fails later, unattended); a server that answers but exposes no
+    # model list (some proxies) only warns.
+    if [[ "$HAS_TTY" -eq 0 ]]; then
+        [[ -n "$url_env" ]] || die "local provider selected with no URL. Set HEADLONG_LOCAL_URL (e.g. http://localhost:11434/v1)"
+        base=$(_local_base_url "$url_env")
+        key="$key_env"
+        if ! _local_models_get "$base" "$key"; then
+            if [[ -n "$_local_models_err" && "$_local_models_err" == could\ not\ reach* ]]; then
+                die "local endpoint unreachable: $_local_models_err. Start the server and re-run headlong-init."
+            fi
+            echo "headlong-init: warning: could not list models: $_local_models_err" >&2
+            echo "headlong-init: continuing with the given URL — set HEADLONG_LOCAL_MODEL if the model name is not already pinned" >&2
+        fi
+    else
+        # A tty: default to the env/inherited value; otherwise suggest Ollama's
+        # — the common case — and let the operator correct it.
+        local def_url="${url_env:-http://localhost:11434/v1}"
+        base=""
+        while :; do
+            url_env=$(_prompt_local_url "$def_url")
+            base=$(_local_base_url "$url_env")
+            key="$key_env"
+            if [[ -z "$key" ]]; then
+                key=$(_prompt_local_key)
+            fi
+            if _local_models_get "$base" "$key"; then
+                break
+            fi
+            echo "  Could not list models: $_local_models_err" >/dev/tty
+            if ! ask_yn "Try a different URL/key?"; then
+                die "local endpoint unreachable. Start the server and re-run headlong-init."
+            fi
+            def_url="$url_env"
+        done
+    fi
+
+    # --- model ---------------------------------------------------------------
+    # The model comes from the server's own list (the point of this flow:
+    # local model names are arbitrary, so guessing one is how setups break).
+    models="$_LOCAL_MODELS"
+    if [[ -n "$models" ]]; then
+        if [[ "$HAS_TTY" -eq 1 ]]; then
+            chosen=$(_pick_from_list "Model to run your agent on" "$models" "${model_env:-}")
+        else
+            chosen="${model_env:-$(printf '%s\n' "$models" | head -1)}"
+        fi
+    else
+        # A server may hide /v1/models (some proxies do) while chat still
+        # works; accept an explicit model rather than dying.
+        chosen="${model_env:-}"
+        if [[ -z "$chosen" ]]; then
+            if [[ "$HAS_TTY" -eq 1 ]]; then
+                chosen=$(ask "The server did not expose a model list. Type the model name to use")
+                [[ -n "$chosen" ]] || die "no model given"
+            else
+                die "no model: the server exposed no model list. Set HEADLONG_LOCAL_MODEL."
+            fi
+        fi
+    fi
+    [[ -n "$chosen" ]] || die "no model selected"
+
+    chat=$(_local_chat_url "$url_env")
+    _env_set "$HEADLONG_HOME/.env" "LLM_PROVIDER" "openai-compatible"
+    _env_set "$HEADLONG_HOME/.env" "SHELLM_API_URL" "$chat"
+    if [[ -n "$key" ]]; then
+        _env_set "$HEADLONG_HOME/.env" "LLM_API_KEY" "$key"
+    else
+        # An old key would ride along to the new endpoint; the openai-compat
+        # provider must be keyless here, not mis-keyed.
+        if grep -q '^LLM_API_KEY=' "$HEADLONG_HOME/.env" 2>/dev/null; then
+            local tmp
+            tmp=$(mktemp)
+            grep -v '^LLM_API_KEY=' "$HEADLONG_HOME/.env" > "$tmp" || true
+            cat "$tmp" > "$HEADLONG_HOME/.env"
+            rm -f "$tmp"
+            unset LLM_API_KEY
+        fi
+    fi
+    _env_set "$HEADLONG_HOME/.env" "SHELLM_MODEL" "$chosen"
+
+    # Prove the whole chain with a real completion (bin/llm reads the same
+    # .env; this is the same handshake a thinker will make).
+    info "Checking the LLM connection (model: $chosen at $base)"
+    if _llm_ok; then
+        echo "    OK — $chosen answered."
+        return 0
+    fi
+    die "the endpoint did not answer a chat completion (models list worked, chat did not). Details: $INIT_LOG"
+}
+
+# ---------------------------------------------------------------------------
+# Provider selection: local vs cloud. Cloud needs an API key; local needs a
+# reachable OpenAI-compatible endpoint. The choice is explicit, never
+# inferred: silent inference is how a keyless box quietly picks a default.
+# ---------------------------------------------------------------------------
+
+# _ask_local_or_cloud — 1 = local, 0 = cloud. Preceded by env and by a
+# usable local endpoint already in the state .env (a re-run re-checks it
+# rather than re-asking), and defaults to cloud when a key is present.
+_ask_local_or_cloud() {
+    [[ "${HEADLONG_PROVIDER:-}" == "local" ]] && return 0
+    [[ "${HEADLONG_PROVIDER:-}" == "cloud" ]] && return 1
+    # Nothing in the environment. A configured-but-unverified local endpoint
+    # (a re-run, an env carried from another setup) is worth one probe before
+    # falling through to the key prompts.
+    local probe_url="${SHELLM_API_URL:-${LLM_API_URL:-}}"
+    [[ -n "$probe_url" && -n "${LLM_PROVIDER:-}" && "$LLM_PROVIDER" == "openai-compatible" ]] || return 1
+    # Only worth asking about when the endpoint still answers; a dead one
+    # falls through to the ordinary prompts (and HEADLONG_PROVIDER=local
+    # above forces the repair path regardless).
+    _local_models_get "$(_local_base_url "$probe_url")" "${LLM_API_KEY:-}" >/dev/null 2>&1 || return 1
+    [[ "$HAS_TTY" -eq 0 ]] && return 0
+    ask_yn "Keep using the local model server at ${probe_url}? [Y/n]" && return 0
+    return 1
 }
 
 _ensure_api_key() {
     _reconcile_key_vars
+
+    # Re-runs with a working local endpoint already configured stay on it;
+    # otherwise offer the local path before demanding a cloud key.
+    if _ask_local_or_cloud; then
+        _setup_local_llm
+        return 0
+    fi
+
     if ! _have_key && [[ "$HAS_TTY" -eq 0 ]]; then
         die "no API key found. Set ANTHROPIC_API_KEY (or OPENAI/GEMINI/OPENROUTER/OPENCODE_API_KEY), or put it in $HEADLONG_HOME/.env"
     fi
@@ -870,7 +1116,8 @@ case "${1:-}" in
     --dry-run)
         DRY_RUN=1
         ;;
-    "") ;;
+    "")
+        ;;
     *)
         die "unknown option: $1 (try --help)"
         ;;
