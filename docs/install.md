@@ -26,11 +26,47 @@ real shell commands and Docker is the sandbox for them.
   `yes` to continue without a sandbox.
 
 On the host path it then clones the repo to `~/.headlong/app`, symlinks
-the tools into `~/.local/bin`, asks for an LLM API key, and runs a short
-optional interview: a name, a few words of personality, what they should
-think about when idle. The answers become the agent's core identity and
-first memories. Then their mind starts and the dashboard opens. Their
-name becomes a command:
+the tools into `~/.local/bin`, and asks where the model should come from.
+
+- **A local model server.** Headlong supports Ollama, LM Studio, vLLM,
+  llama.cpp, and other servers with an OpenAI compatible API. Answer `y`
+  at the prompt and enter the server address, such as
+  `http://localhost:1234` for LM Studio. Headlong adds `/v1` when it is
+  missing. Enter an API key only when the server requires one. Headlong
+  asks the server for its model list, or lets you type a model name when
+  the server does not publish that list. It then checks a chat completion
+  before the mind starts. Headlong does not install a server or download
+  models, so start the server before you install.
+- **A cloud provider.** Paste an API key for Anthropic, OpenAI, Gemini,
+  OpenRouter, or OpenCode. `headlong-init` identifies the provider from
+  the key prefix.
+
+A host install saves a localhost model URL as localhost, so thinkers and
+ordinary `llm` calls can reach it. When shellm runs a command inside its
+Docker sandbox, shellm changes only that command's URL to
+`host.docker.internal`. A full Docker installation uses
+`host.docker.internal` for its main runtime too. On macOS and Windows,
+Docker Desktop carries that connection to a server bound to localhost.
+On Linux, the installer adds the Docker host name, but the model server
+must also listen on an address Docker can reach. For example, start
+llama.cpp with `--host 0.0.0.0`, or configure Ollama with
+`OLLAMA_HOST=0.0.0.0:11434`. Use the machine firewall to keep the model
+server off untrusted networks.
+
+Know what the host gateway exposes. The agent writes and runs real
+shell commands in its sandbox, and `host.docker.internal` routes to the
+whole host, not just the model server. Code running in the sandbox can
+therefore reach any service bound to the host's loopback: other
+dashboards, local databases, and admin APIs that skip authentication
+because they expect to be loopback only. Ollama's own admin API is one
+example: it can pull and delete models without a password. If that
+matters for your machine, run the model server on a separate host or
+interface, or firewall the ports you do not want a container to reach.
+
+Either way it then runs a short optional interview: a name, a few words
+of personality, what they should think about when idle. The answers
+become the agent's core identity and first memories. Then their mind
+starts and the dashboard opens. Their name becomes a command:
 
 ```bash
 ada                  # chat with them
@@ -63,7 +99,8 @@ installer apt-installs its own dependencies (as root in a fresh
 container) and the dashboard binds `0.0.0.0` so the published port works.
 
 ```bash
-docker run -it --name headlong --restart unless-stopped -p 8080:8080 buildpack-deps:curl \
+docker run -it --name headlong --restart unless-stopped -p 8080:8080 \
+  --add-host host.docker.internal:host-gateway buildpack-deps:curl \
   bash -c 'curl -fsSL https://headlong.ai/install.sh | bash; exec bash'
 ```
 
@@ -103,8 +140,23 @@ export HEADLONG_IDENTITY_USER="I'm Sam, a programmer trying Headlong out"
 curl -fsSL https://headlong.ai/install.sh | bash
 ```
 
-A key must be in the environment; everything else is optional.
-`HEADLONG_NO_DASH=1` and `HEADLONG_NO_THINKERS=1` skip those parts.
+A key must be in the environment **for a cloud provider**; everything
+else is optional. `HEADLONG_NO_DASH=1` and `HEADLONG_NO_THINKERS=1`
+skip those parts.
+
+A local model server can also be selected without a tty.
+
+```bash
+export HEADLONG_PROVIDER=local
+export HEADLONG_LOCAL_URL=http://localhost:11434/v1   # the server's base URL
+# export HEADLONG_LOCAL_API_KEY=...   # only if the server wants a token
+# export HEADLONG_LOCAL_MODEL=qwen3:8b  # default: first model the server lists
+curl -fsSL https://headlong.ai/install.sh | bash
+```
+
+With no tty and no cloud key, set `HEADLONG_PROVIDER=local` and
+`HEADLONG_LOCAL_URL`. The server must be reachable. If the server does
+not publish a model list, also set `HEADLONG_LOCAL_MODEL`.
 
 With no tty there is nobody to answer the sandbox question, so on a
 machine without a working Docker daemon the install stops unless
