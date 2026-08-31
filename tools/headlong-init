@@ -365,6 +365,7 @@ _key_var_unambiguous() {  # the ONLY provider var a key's prefix can belong to
 }
 
 _reconcile_key_vars() {
+    local persist="${1:-1}"
     # A key exported into the wrong provider variable -- an sk-or- OpenRouter
     # key sitting in OPENAI_API_KEY, say -- otherwise picks that variable's
     # default model (gpt-5.5), which detect_provider maps to openai, so the
@@ -389,15 +390,26 @@ _reconcile_key_vars() {
         fi
         printf 'headlong-init: warning: %s holds a key whose prefix belongs to %s; using it as %s.\n' \
             "$var" "$want" "$want" >&2
-        # Persist, not just export: later processes (tools/persona, bin/llm
-        # from a fresh shell) must see the same key the model default was
-        # derived from. _env_set also exports it here. Reconciliation runs
-        # only past the --dry-run exit, so the dry-run echo cannot print a key.
-        _env_set "$HEADLONG_HOME/.env" "$want" "${!var}"
+        # Persist on an ordinary setup so later processes see the corrected
+        # variable. During a local-to-cloud switch, stage the correction in
+        # this process only: the working local .env remains byte-for-byte
+        # intact until the cloud handshake succeeds.
+        if [[ "$persist" -eq 1 ]]; then
+            _env_set "$HEADLONG_HOME/.env" "$want" "${!var}"
+        else
+            export "$want=${!var}"
+            _STAGED_CLOUD_KEY_VAR="$want"
+            _STAGED_CLOUD_KEY_VALUE="${!var}"
+        fi
         # A SHELLM_MODEL pinned earlier from the misfiled variable's default
         # would keep routing to the wrong provider; follow the key.
         if [[ "${SHELLM_MODEL:-}" == "$(_default_model_for "$var")" ]]; then
-            _env_set "$HEADLONG_HOME/.env" "SHELLM_MODEL" "$(_default_model_for "$want")"
+            if [[ "$persist" -eq 1 ]]; then
+                _env_set "$HEADLONG_HOME/.env" "SHELLM_MODEL" "$(_default_model_for "$want")"
+            else
+                SHELLM_MODEL="$(_default_model_for "$want")"
+                export SHELLM_MODEL
+            fi
         fi
     done
 }
@@ -431,8 +443,21 @@ _llm_ok() {
     llm -t 256 "Reply with the single word: ok" >/dev/null 2>>"$INIT_LOG"
 }
 
+_cloud_llm_ok() {
+    # bin/llm fills variables that are UNSET from the saved state .env. Keep
+    # these variables present but empty so an explicit cloud switch cannot
+    # silently reload the old openai-compatible provider, URL, or local key.
+    # A subshell keeps the masking scoped to this one validation call.
+    (
+        export LLM_PROVIDER="" SHELLM_API_URL="" LLM_API_URL="" LLM_API_KEY=""
+        _llm_ok
+    )
+}
+
+_STAGED_CLOUD_KEY_VAR=""
+_STAGED_CLOUD_KEY_VALUE=""
 _prompt_key() {
-    local key="" var="" tries=0
+    local persist="${1:-1}" key="" var="" tries=0
     # Empty input (a stray Enter, a paste that didn't take) just asks again;
     # Ctrl-C or Ctrl-D (EOF on the tty) gives up.
     while [[ -z "$key" ]]; do
@@ -474,10 +499,21 @@ _prompt_key() {
             *) var=ANTHROPIC_API_KEY ;;
         esac
     fi
-    _env_set "$HEADLONG_HOME/.env" "$var" "$key"
-    # Pin the model to this key's provider so a stale key for another
-    # provider's default can't shadow the one we just validated.
-    _env_set "$HEADLONG_HOME/.env" "SHELLM_MODEL" "$(_default_model_for "$var")"
+    if [[ "$persist" -eq 1 ]]; then
+        _env_set "$HEADLONG_HOME/.env" "$var" "$key"
+        # Pin the model to this key's provider so a stale key for another
+        # provider's default can't shadow the one we just validated.
+        _env_set "$HEADLONG_HOME/.env" "SHELLM_MODEL" "$(_default_model_for "$var")"
+    else
+        # A prompted key would otherwise be lost when this init exits. Stage
+        # it until validation, then _commit_local_wipe persists it as part of
+        # the provider switch.
+        export "$var=$key"
+        SHELLM_MODEL="$(_default_model_for "$var")"
+        export SHELLM_MODEL
+        _STAGED_CLOUD_KEY_VAR="$var"
+        _STAGED_CLOUD_KEY_VALUE="$key"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -522,7 +558,8 @@ _LOCAL_MODELS=""
 _local_models_get() {
     _local_models_err=""
     _LOCAL_MODELS=""
-    local url="$1" key="$2" body err body_file auth_file="" status rc
+    local url="$1" key="$2" body err body_file auth_file="" status rc safe_url
+    safe_url=$(_url_safe_display "$url")
     err=$(mktemp)
     body_file=$(mktemp)
     local -a curl_args=(-sS --max-time 10 -o "$body_file" -w '%{http_code}')
@@ -543,13 +580,16 @@ _local_models_get() {
     rc=$?
     [[ -z "$auth_file" ]] || rm -f "$auth_file"
     if [[ "$rc" -ne 0 ]]; then
-        _local_models_err="could not reach $url ($(head -c 200 "$err" | tr -d '\n'))"
+        # curl diagnostics may repeat a credential-bearing URL. The status
+        # is enough here; never copy the raw URL or stderr into terminal/CI
+        # output.
+        _local_models_err="could not reach $safe_url"
         rm -f "$err" "$body_file"
         return "$rc"
     fi
     rm -f "$err"
     if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
-        _local_models_err="$url/models returned HTTP ${status:-unknown}"
+        _local_models_err="$safe_url/models returned HTTP ${status:-unknown}"
         rm -f "$body_file"
         return 1
     fi
@@ -560,7 +600,7 @@ _local_models_get() {
     # is a protocol failure, while a present-but-EMPTY list is a healthy
     # server with no models pulled yet (_LOCAL_MODELS="", rc 0).
     if ! printf '%s' "$body" | jq -e '.data | type == "array"' >/dev/null 2>&1; then
-        _local_models_err="$url did not return a model list (is it an OpenAI-compatible server?)"
+        _local_models_err="$safe_url did not return a model list (is it an OpenAI-compatible server?)"
         return 1
     fi
     _LOCAL_MODELS=$(printf '%s' "$body" | jq -r '.data[]?.id // empty' 2>/dev/null)
@@ -569,9 +609,19 @@ _local_models_get() {
 # _prompt_local_url <default> — ask until the URL answers, on a tty; one try
 # with the default (or env value) when there is none.
 _prompt_local_url() {
-    local def="$1" url
+    local def="$1" url reply prompt="Server address as your agent will reach it (e.g. http://localhost:1234 or http://192.168.3.23:1234; /v1 is added if missing)"
     while :; do
-        url=$(ask "Server address as your agent will reach it (e.g. http://localhost:1234 or http://192.168.3.23:1234; /v1 is added if missing)" "$def")
+        if [[ "$HAS_TTY" -eq 1 ]]; then
+            if [[ -n "$def" ]]; then
+                printf '%s [%s]: ' "$prompt" "$(_url_safe_display "$def")" >/dev/tty
+            else
+                printf '%s: ' "$prompt" >/dev/tty
+            fi
+            IFS= read -r reply </dev/tty || reply=""
+            url="${reply:-$def}"
+        else
+            url="$def"
+        fi
         [[ -n "$url" ]] || { def=""; continue; }
         printf '%s' "$url"
         return 0
@@ -603,6 +653,19 @@ _url_host() {
         \[*\]*) hostport="${hostport#\[}"; printf '%s' "${hostport%%]*}" ;;
         *)      printf '%s' "${hostport%%:*}" ;;
     esac
+}
+
+# _url_safe_display <url> — retain the useful server location while dropping
+# userinfo, query parameters, and fragments, all of which may carry secrets.
+_url_safe_display() {
+    local url="$1" rest="${1#*://}" scheme=""
+    [[ "$rest" == "$url" ]] || scheme="${url%%://*}://"
+    local authority="${rest%%[/?#]*}"
+    local hostport="${authority##*@}"
+    local tail="${rest#"$authority"}"
+    tail="${tail%%\?*}"
+    tail="${tail%%#*}"
+    printf '%s%s%s' "$scheme" "$hostport" "$tail"
 }
 
 # _url_host_swap <url> <newhost> — replace ONLY the authority's host,
@@ -864,7 +927,7 @@ EOF
     if [[ "$IN_CONTAINER" -eq 1 ]] && _url_is_loopback "$chat"; then
         local container_chat
         container_chat=$(_local_container_url "$chat")
-        echo "    Container install: the agent reaches the server at $container_chat (was $chat)."
+        echo "    Container install: the agent reaches the server at $(_url_safe_display "$container_chat") (was $(_url_safe_display "$chat"))."
         chat="$container_chat"
     fi
 
@@ -875,7 +938,7 @@ EOF
     # inline — an explicitly empty LLM_API_KEY keeps a stale one in the
     # .env files from riding along. The init process probes through its own
     # network view.
-    info "Checking the LLM connection (model: $chosen at $base)"
+    info "Checking the LLM connection (model: $chosen at $(_url_safe_display "$base"))"
     if ! LLM_PROVIDER="openai-compatible" SHELLM_MODEL="$chosen" \
             LLM_API_KEY="$key" LLM_API_URL="$(_local_probe_url "$chat")" _llm_ok; then
         die "the endpoint did not answer a chat completion (models list worked, chat did not); nothing was saved. Details: $INIT_LOG"
@@ -932,19 +995,20 @@ _ask_local_or_cloud() {
 
 # _commit_local_wipe — remove a saved local provider from .env, keeping the
 # cloud model chosen for this run. Called only once a cloud key has actually
-# answered (or answered before, on a revalidating re-run): committing the
-# switch any earlier could destroy the only working configuration.
+# answered: committing the switch any earlier could destroy the only working
+# configuration.
 _commit_local_wipe() {
     local keep_model="${SHELLM_MODEL:-}" local_var
     for local_var in LLM_PROVIDER SHELLM_API_URL LLM_API_URL LLM_API_KEY SHELLM_MODEL; do
         _env_unset "$HEADLONG_HOME/.env" "$local_var"
     done
+    if [[ -n "$_STAGED_CLOUD_KEY_VAR" ]]; then
+        _env_set "$HEADLONG_HOME/.env" "$_STAGED_CLOUD_KEY_VAR" "$_STAGED_CLOUD_KEY_VALUE"
+    fi
     [[ -z "$keep_model" ]] || _env_set "$HEADLONG_HOME/.env" "SHELLM_MODEL" "$keep_model"
 }
 
 _ensure_api_key() {
-    _reconcile_key_vars
-
     # An explicit cloud choice replaces a saved local provider. Clear the
     # local URL, optional key, and model before selecting the cloud default.
     local switching_from_local=0
@@ -952,6 +1016,7 @@ _ensure_api_key() {
             && "${LLM_PROVIDER:-}" == "openai-compatible" ]]; then
         switching_from_local=1
     fi
+    _reconcile_key_vars "$((1 - switching_from_local))"
 
     # Re-runs with a working local endpoint already configured stay on it;
     # otherwise offer the local path before demanding a cloud key.
@@ -986,7 +1051,7 @@ Paste just the key itself; headlong-init figures out the provider from it.
   * If the key runs out of credit, `ada status` and the dash say so.
 
 EOF
-        _prompt_key || die "no key entered (quit)"
+        _prompt_key "$((1 - switching_from_local))" || die "no key entered (quit)"
     fi
 
     # A predictable default model keeps first-run spend sane (the thinkers
@@ -1007,12 +1072,15 @@ EOF
     # attached) must then never die or block on a prompt over what may be
     # a transient API failure.
     local revalidating=0
-    [[ -L "$APP_DIR/.identities/default" ]] && revalidating=1
+    if [[ "$switching_from_local" -eq 0 && -L "$APP_DIR/.identities/default" ]]; then
+        revalidating=1
+    fi
 
     local _ var
     for _ in 1 2 3; do
         info "Checking the LLM connection (model: ${SHELLM_MODEL})"
-        if _llm_ok; then
+        if { [[ "$switching_from_local" -eq 1 ]] && _cloud_llm_ok; } \
+                || { [[ "$switching_from_local" -eq 0 ]] && _llm_ok; }; then
             echo "    OK — ${SHELLM_MODEL} answered."
             [[ "$switching_from_local" -eq 0 ]] || _commit_local_wipe
             return 0
@@ -1027,11 +1095,10 @@ EOF
         [[ "$HAS_TTY" -eq 1 ]] || die "LLM check failed with the configured key"
         echo >&2
         echo "Paste a different key to try again, or press Ctrl-C to quit." >&2
-        _prompt_key || die "no key entered (quit)"
+        _prompt_key "$((1 - switching_from_local))" || die "no key entered (quit)"
     done
-    if [[ "$revalidating" -eq 1 ]]; then
+    if [[ "$revalidating" -eq 1 && "$switching_from_local" -eq 0 ]]; then
         echo "headlong-init: continuing anyway — this key worked before, so the API may just be having a moment" >&2
-        [[ "$switching_from_local" -eq 0 ]] || _commit_local_wipe
         return 0
     fi
     die "could not validate an API key after 3 attempts"

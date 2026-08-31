@@ -85,10 +85,19 @@ STUBEOF
 # docker: daemon up, nothing else (no image pull).
 printf '#!/usr/bin/env bash\ncase "${1:-}" in info) exit 0 ;; *) exit 0 ;; esac\n' > "$STUB/docker"
 
-# llm: an init that gets this far proves the chain — record the exit and let
-# the caller decide the verdict via LLM_STUB_RC.
+# llm: an init that gets this far proves the chain. Optionally record whether
+# local routing variables were present in the environment. A cloud switch
+# must pass them as explicitly empty so the real llm cannot reload them from
+# the saved state .env.
 cat > "$STUB/llm" <<'STUBEOF'
 #!/usr/bin/env bash
+if [[ -n "${LLM_ENV_CAPTURE:-}" ]]; then
+    printf 'LLM_PROVIDER=%s:%s\n' "${LLM_PROVIDER+x}" "${LLM_PROVIDER-}" > "$LLM_ENV_CAPTURE"
+    printf 'SHELLM_API_URL=%s:%s\n' "${SHELLM_API_URL+x}" "${SHELLM_API_URL-}" >> "$LLM_ENV_CAPTURE"
+    printf 'LLM_API_URL=%s:%s\n' "${LLM_API_URL+x}" "${LLM_API_URL-}" >> "$LLM_ENV_CAPTURE"
+    printf 'LLM_API_KEY=%s:%s\n' "${LLM_API_KEY+x}" "${LLM_API_KEY-}" >> "$LLM_ENV_CAPTURE"
+    printf 'SHELLM_MODEL=%s\n' "${SHELLM_MODEL-}" >> "$LLM_ENV_CAPTURE"
+fi
 exit "${LLM_STUB_RC:-0}"
 STUBEOF
 
@@ -140,6 +149,7 @@ CURL_MODELS_HITS="$WORK/models_hits"
 CURL_ARGS="$WORK/curl_args"
 CURL_AUTH_FILE="$WORK/curl_auth"
 CURL_AUTH_MODE="$WORK/curl_auth_mode"
+LLM_ENV_CAPTURE="$WORK/llm_env"
 : > "$CURL_MODELS_HITS"
 : > "$CURL_ARGS"
 : > "$CURL_AUTH_FILE"
@@ -160,7 +170,7 @@ run_init() {
         CURL_MODELS_FILE="$MODELS_FILE" CURL_MODELS_HITS="$CURL_MODELS_HITS" \
         CURL_MODELS_UP="${CURL_MODELS_UP:-1}" CURL_MODELS_STATUS="${CURL_MODELS_STATUS:-200}" \
         CURL_ARGS="$CURL_ARGS" CURL_AUTH_FILE="$CURL_AUTH_FILE" CURL_AUTH_MODE="$CURL_AUTH_MODE" \
-        LLM_STUB_RC="${LLM_STUB_RC:-0}" "$@" \
+        LLM_STUB_RC="${LLM_STUB_RC:-0}" LLM_ENV_CAPTURE="${LLM_ENV_CAPTURE_ACTIVE:+$LLM_ENV_CAPTURE}" "$@" \
         bash "$APP/tools/headlong-init" </dev/null > "$WORK/out" 2>&1
     RC=$?
 }
@@ -225,6 +235,21 @@ check "dead endpoint: says it could not reach the server"    grep -qi 'could not
 # The sandbox gate writes its own lines before the provider step; what matters
 # is that no local-model config was persisted for a server that is not there.
 check_not "dead endpoint: no local config persisted"         grep -q '^LLM_PROVIDER=' "$WORK/h2/.headlong/.env"
+
+# Credentials embedded in an endpoint URL are needed by the HTTP client but
+# must not be repeated in terminal or CI output, on success or failure.
+CURL_MODELS_UP=0 run_init "$WORK/h2b" \
+    HEADLONG_PROVIDER=local \
+    HEADLONG_LOCAL_URL=http://local-user:local-pass@127.0.0.1:9999/v1 \
+    HEADLONG_LOCAL_MODEL=qwen3:8b
+check "credential URL: failure still identifies the host"    grep -q '127.0.0.1:9999' "$WORK/out"
+check_not "credential URL: userinfo is redacted from output"  grep -q 'local-user\|local-pass' "$WORK/out"
+run_init "$WORK/h2c" \
+    HEADLONG_PROVIDER=local \
+    HEADLONG_LOCAL_URL=http://local-user:local-pass@127.0.0.1:11434/v1 \
+    HEADLONG_LOCAL_MODEL=qwen3:8b
+check "credential URL: successful setup exits 0"             test "$RC" -eq 0
+check_not "credential URL: success output is also redacted"   grep -q 'local-user\|local-pass' "$WORK/out"
 
 # ---------------------------------------------------------------------------
 # URL normalization: a full chat-completions URL is accepted as given
@@ -342,7 +367,7 @@ run_init "$WORK/h7b" \
     HEADLONG_LOCAL_URL=http://127.0.0.1:11434/v1 \
     HEADLONG_LOCAL_MODEL=qwen3:8b \
     HEADLONG_LOCAL_API_KEY=local-secret
-run_init "$WORK/h7b" \
+LLM_ENV_CAPTURE_ACTIVE=1 run_init "$WORK/h7b" \
     HEADLONG_PROVIDER=cloud \
     OPENAI_API_KEY=«redacted:sk-…»
 check "local to cloud: exits 0"                              test "$RC" -eq 0
@@ -350,6 +375,14 @@ check_not "local to cloud: removes the local provider"       grep -q '^LLM_PROVI
 check_not "local to cloud: removes the local URL"            grep -q '^SHELLM_API_URL=' "$WORK/h7b/.headlong/.env"
 check_not "local to cloud: removes the local key"            grep -q '^LLM_API_KEY=' "$WORK/h7b/.headlong/.env"
 check "local to cloud: selects the OpenAI model"             grep -qx "SHELLM_MODEL='gpt-5.5'" "$WORK/h7b/.headlong/.env"
+check "local to cloud: masks saved provider during validation" \
+    grep -qx 'LLM_PROVIDER=x:' "$LLM_ENV_CAPTURE"
+check "local to cloud: masks saved URL during validation" \
+    grep -qx 'SHELLM_API_URL=x:' "$LLM_ENV_CAPTURE"
+check "local to cloud: masks saved local key during validation" \
+    grep -qx 'LLM_API_KEY=x:' "$LLM_ENV_CAPTURE"
+check "local to cloud: validates the cloud model" \
+    grep -qx 'SHELLM_MODEL=gpt-5.5' "$LLM_ENV_CAPTURE"
 
 # A cloud switch that FAILS (no key) must leave the working local config
 # intact: the wipe is committed only after a cloud key validates. Otherwise
@@ -362,6 +395,38 @@ run_init "$WORK/h7c" HEADLONG_PROVIDER=cloud   # no cloud key given
 check "failed switch: exits nonzero"                         test "$RC" -ne 0
 check "failed switch: local provider still present"          grep -qx "LLM_PROVIDER='openai-compatible'" "$WORK/h7c/.headlong/.env"
 check "failed switch: local URL still present"               grep -qx "SHELLM_API_URL='http://127.0.0.1:11434/v1/chat/completions'" "$WORK/h7c/.headlong/.env"
+
+# An existing identity does not make a newly supplied cloud key trusted. If
+# that key fails validation, the installer must fail and preserve the entire
+# working local route instead of treating it as a transient revalidation.
+run_init "$WORK/h7d" \
+    HEADLONG_PROVIDER=local \
+    HEADLONG_LOCAL_URL=http://127.0.0.1:11434/v1 \
+    HEADLONG_LOCAL_MODEL=qwen3:8b \
+    HEADLONG_LOCAL_API_KEY=local-secret
+grep -E '^(LLM_PROVIDER|SHELLM_API_URL|LLM_API_URL|LLM_API_KEY|SHELLM_MODEL)=' \
+    "$WORK/h7d/.headlong/.env" > "$WORK/h7d.route.before"
+LLM_STUB_RC=1 run_init "$WORK/h7d" \
+    HEADLONG_PROVIDER=cloud \
+    OPENAI_API_KEY=«redacted:sk-…»
+check "invalid cloud key switch: exits nonzero"              test "$RC" -ne 0
+grep -E '^(LLM_PROVIDER|SHELLM_API_URL|LLM_API_URL|LLM_API_KEY|SHELLM_MODEL)=' \
+    "$WORK/h7d/.headlong/.env" > "$WORK/h7d.route.after"
+check "invalid cloud key switch: saved route is unchanged"   cmp -s "$WORK/h7d.route.before" "$WORK/h7d.route.after"
+
+# Prefix-based key correction is staged too. Once the cloud check succeeds,
+# the corrected provider variable must be durable for future processes, not
+# merely exported in this init process.
+run_init "$WORK/h7e" \
+    HEADLONG_PROVIDER=local \
+    HEADLONG_LOCAL_URL=http://127.0.0.1:11434/v1 \
+    HEADLONG_LOCAL_MODEL=qwen3:8b
+run_init "$WORK/h7e" \
+    HEADLONG_PROVIDER=cloud \
+    OPENAI_API_KEY=sk-or-example-redacted-value
+check "corrected-key switch: exits 0"                        test "$RC" -eq 0
+check "corrected-key switch: corrected key is persisted"    grep -qx "OPENROUTER_API_KEY='sk-or-example-redacted-value'" "$WORK/h7e/.headlong/.env"
+check "corrected-key switch: model follows corrected key"    grep -qx "SHELLM_MODEL='anthropic/claude-sonnet-4.5'" "$WORK/h7e/.headlong/.env"
 
 # ---------------------------------------------------------------------------
 # re-run idempotence: the same local config persists again (keyless), and
@@ -397,6 +462,14 @@ HEADLONG_UNSANDBOXED=0 run_init "$WORK/h9b" \
 check "container install: exits 0"                           test "$RC" -eq 0
 check "container install: persists the Docker host URL"      grep -qx "SHELLM_API_URL='http://host.docker.internal:1234/v1/chat/completions'" "$WORK/h9b/.headlong/.env"
 check "container install: probes the Docker host URL"        grep -q 'host.docker.internal:1234/v1/models' "$CURL_MODELS_HITS"
+
+HEADLONG_UNSANDBOXED=0 run_init "$WORK/h9d" \
+    HEADLONG_FAKE_CONTAINER=1 HEADLONG_PROVIDER=local \
+    HEADLONG_LOCAL_URL=http://local-user:local-pass@127.0.0.1:1234 \
+    HEADLONG_LOCAL_MODEL=qwen3:8b
+check "container credential URL: exits 0"                    test "$RC" -eq 0
+check_not "container credential URL: rewrite output is redacted" \
+    grep -q 'local-user\|local-pass' "$WORK/out"
 
 # A URL whose host merely CONTAINS 'localhost' (or 'host.docker.internal')
 # as a substring must survive the container rewrite untouched: only the
