@@ -116,7 +116,7 @@ _docker_daemon_ok() {
 _docker_forward_args() {
     local var
     for var in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY \
-               OPENCODE_API_KEY LLM_API_KEY; do
+               OPENCODE_API_KEY LLM_API_KEY HEADLONG_LOCAL_API_KEY; do
         if [[ -n "${!var:-}" ]]; then
             export "${var?}"
             printf '%s\0%s\0' "-e" "$var"
@@ -130,7 +130,17 @@ _docker_forward_args() {
     for var in HEADLONG_IDENTITY_NAME HEADLONG_IDENTITY_VIBE HEADLONG_IDENTITY_FOCUS \
                HEADLONG_IDENTITY_USER HEADLONG_OPERATOR_NAME HEADLONG_REPO HEADLONG_BRANCH \
                HEADLONG_PROVIDER HEADLONG_LOCAL_URL HEADLONG_LOCAL_MODEL; do
-        if [[ -n "${!var:-}" ]]; then printf '%s\0%s\0' "-e" "$var=${!var}"; fi
+        if [[ -n "${!var:-}" ]]; then
+            local value="${!var}"
+            # The installer receiving this value runs inside the full
+            # Headlong container, where localhost names that container. Use
+            # Docker's hostname for a model server running on the host.
+            if [[ "$var" == "HEADLONG_LOCAL_URL" ]]; then
+                value="${value//localhost/host.docker.internal}"
+                value="${value//127.0.0.1/host.docker.internal}"
+            fi
+            printf '%s\0%s\0' "-e" "$var=$value"
+        fi
     done
 }
 
@@ -213,6 +223,7 @@ EOF
     echo
     local rc=0
     docker run -it --name headlong --restart unless-stopped -p 8080:8080 \
+        --add-host "host.docker.internal:host-gateway" \
         ${fwd[@]+"${fwd[@]}"} buildpack-deps:curl \
         bash -c 'curl -fsSL https://headlong.ai/install.sh | bash; exec bash' </dev/tty || rc=$?
     if [[ "$rc" -eq 0 ]]; then

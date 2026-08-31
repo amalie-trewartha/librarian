@@ -109,6 +109,7 @@ if [[ "${HEADLONG_NO_TTY:-0}" == "1" ]]; then HAS_TTY=0; fi
 # through a port mapping. Explicit HEADLONG_WEB_ARGS still wins.
 IN_CONTAINER=0
 [[ -f /.dockerenv || -f /run/.containerenv ]] && IN_CONTAINER=1
+[[ "${HEADLONG_FAKE_CONTAINER:-0}" == "1" ]] && IN_CONTAINER=1
 if [[ "$IN_CONTAINER" -eq 1 && -z "${HEADLONG_WEB_ARGS:-}" ]]; then
     HEADLONG_WEB_ARGS="--host 0.0.0.0"
 fi
@@ -185,6 +186,23 @@ _env_set() {
     fi
     printf '%s=%s\n' "$key" "$val" >> "$file"
     export "$key=$val"
+}
+
+# _env_unset <file> <key> — remove KEY from an env file and this process.
+_env_unset() {
+    local file="$1" key="$2" tmp
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        echo "    dry-run: would remove $key from $file"
+        unset "$key"
+        return 0
+    fi
+    if [[ -f "$file" ]] && grep -q "^${key}=" "$file" 2>/dev/null; then
+        tmp=$(mktemp)
+        grep -v "^${key}=" "$file" > "$tmp" || true
+        cat "$tmp" > "$file"
+        rm -f "$tmp"
+    fi
+    unset "$key"
 }
 
 # ---------------------------------------------------------------------------
@@ -500,18 +518,40 @@ _LOCAL_MODELS=""
 _local_models_get() {
     _local_models_err=""
     _LOCAL_MODELS=""
-    local url="$1" key="$2" body err rc
-    local -a curl_args=(fsS --max-time 10 "$url/models")
-    [[ -z "$key" ]] || curl_args+=(-H "Authorization: Bearer $key")
+    local url="$1" key="$2" body err body_file auth_file="" status rc
+    local -a curl_args=(-sS --max-time 10 -o "" -w '%{http_code}')
     err=$(mktemp)
-    body=$(curl "${curl_args[@]}" 2>"$err")
+    body_file=$(mktemp)
+    curl_args[4]="$body_file"
+    if [[ -n "$key" ]]; then
+        local header="Authorization: Bearer $key"
+        header="${header//\\/\\\\}"
+        header="${header//\"/\\\"}"
+        header="${header//$'\t'/\\t}"
+        header="${header//$'\n'/\\n}"
+        header="${header//$'\r'/\\r}"
+        header="${header//$'\v'/\\v}"
+        auth_file=$(mktemp "${TMPDIR:-/tmp}/headlong-init-auth.XXXXXX")
+        chmod 600 "$auth_file" 2>/dev/null || true
+        printf 'header = "%s"\n' "$header" > "$auth_file"
+        curl_args+=(-K "$auth_file")
+    fi
+    status=$(curl "${curl_args[@]}" "$url/models" 2>"$err")
     rc=$?
+    [[ -z "$auth_file" ]] || rm -f "$auth_file"
     if [[ "$rc" -ne 0 ]]; then
         _local_models_err="could not reach $url ($(head -c 200 "$err" | tr -d '\n'))"
-        rm -f "$err"
+        rm -f "$err" "$body_file"
         return "$rc"
     fi
     rm -f "$err"
+    if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
+        _local_models_err="$url/models returned HTTP ${status:-unknown}"
+        rm -f "$body_file"
+        return 1
+    fi
+    body=$(cat "$body_file")
+    rm -f "$body_file"
     # The OpenAI ListModels shape is {"data":[{"id":...},...]}; jq -e makes a
     # missing/broken body a loud failure instead of an empty, plausible list.
     if ! _LOCAL_MODELS=$(printf '%s' "$body" | jq -r -e '.data[]?.id // empty' 2>/dev/null); then
@@ -546,14 +586,25 @@ _prompt_local_key() {
     printf '%s' "$key"
 }
 
-# _local_host_url <url> — the HOST-side twin of a container-reachable URL.
-# host.docker.internal names the host from inside Docker's VM; on the host
-# itself (where this installer runs) it does not resolve, so a probe against
-# it would always fail even with the server up. Swap it for localhost when
-# probing from here. No sandbox (or a LAN address): returned unchanged.
-_local_host_url() {
+# _local_probe_url <url> — the URL this init process can reach. A host-side
+# installer probes the localhost twin of host.docker.internal. An installer
+# running inside the full Headlong container must keep host.docker.internal,
+# because localhost there means the Headlong container itself.
+_local_probe_url() {
     local url="$1"
-    printf '%s' "${url//host.docker.internal/localhost}"
+    if [[ "$IN_CONTAINER" -eq 0 ]]; then
+        url="${url//host.docker.internal/localhost}"
+    fi
+    printf '%s' "$url"
+}
+
+# _local_container_url <url> — the URL a container uses to reach a model
+# server bound to the machine running Docker.
+_local_container_url() {
+    local url="$1"
+    url="${url//localhost/host.docker.internal}"
+    url="${url//127.0.0.1/host.docker.internal}"
+    printf '%s' "$url"
 }
 
 # _pick_from_list <prompt> <one-choice-per-line> [default] — numbered menu on
@@ -608,7 +659,43 @@ _pick_from_list() {
 _setup_local_llm() {
     local base chat key models chosen url_env="${HEADLONG_LOCAL_URL:-${SHELLM_API_URL:-${LLM_API_URL:-}}}"
     local key_env="${HEADLONG_LOCAL_API_KEY:-${LLM_API_KEY:-}}"
-    local model_env="${HEADLONG_LOCAL_MODEL:-${SHELLM_MODEL:-}}"
+    local model_env="${HEADLONG_LOCAL_MODEL:-}"
+    local revalidating=0
+
+    # Keep a saved local model only when the saved local URL is also being
+    # reused. A cloud model from a checkout .env must not override the model
+    # list returned by a newly selected local server.
+    if [[ -z "$model_env" && -z "${HEADLONG_LOCAL_URL:-}" \
+            && "${LLM_PROVIDER:-}" == "openai-compatible" ]]; then
+        model_env="${SHELLM_MODEL:-}"
+    fi
+
+    # A URL supplied directly to an init process already running in the full
+    # Headlong container needs the Docker host name before the first probe.
+    if [[ "$IN_CONTAINER" -eq 1 ]]; then
+        url_env=$(_local_container_url "$url_env")
+    fi
+
+    # A completed local install must be safe to restart with a tty allocated
+    # and nobody attached. Keep its working configuration without asking the
+    # setup questions again. A transiently stopped server should not prevent
+    # the rest of init from restarting the mind and dashboard.
+    if [[ -L "$APP_DIR/.identities/default" && -n "${SHELLM_API_URL:-}" \
+            && "${LLM_PROVIDER:-}" == "openai-compatible" \
+            && -z "${HEADLONG_PROVIDER:-}" && -z "${HEADLONG_LOCAL_URL:-}" \
+            && -z "${HEADLONG_LOCAL_MODEL:-}" && -z "${HEADLONG_LOCAL_API_KEY:-}" ]]; then
+        revalidating=1
+    fi
+
+    if [[ "$revalidating" -eq 1 ]]; then
+        info "Checking the LLM connection (model: ${SHELLM_MODEL})"
+        if LLM_API_URL="$(_local_probe_url "$SHELLM_API_URL")" _llm_ok; then
+            echo "    OK — ${SHELLM_MODEL} answered."
+        else
+            echo "headlong-init: warning: the existing local model server did not answer; keeping its configuration" >&2
+        fi
+        return 0
+    fi
 
     if [[ "$HAS_TTY" -eq 1 ]]; then
         cat >/dev/tty <<'EOF'
@@ -630,7 +717,7 @@ EOF
     # model list (some proxies) only warns.
     if [[ "$HAS_TTY" -eq 0 ]]; then
         [[ -n "$url_env" ]] || die "local provider selected with no URL. Set HEADLONG_LOCAL_URL (e.g. http://localhost:11434)"
-        base=$(_local_base_url "$(_local_host_url "$url_env")")
+        base=$(_local_base_url "$(_local_probe_url "$url_env")")
         key="$key_env"
         if ! _local_models_get "$base" "$key"; then
             if [[ -n "$_local_models_err" && "$_local_models_err" == could\ not\ reach* ]]; then
@@ -649,7 +736,7 @@ EOF
         base=""
         while :; do
             url_env=$(_prompt_local_url "$def_url")
-            base=$(_local_base_url "$(_local_host_url "$url_env")")
+            base=$(_local_base_url "$(_local_probe_url "$url_env")")
             key="$key_env"
             if [[ -z "$key" ]]; then
                 key=$(_prompt_local_key)
@@ -658,6 +745,10 @@ EOF
                 break
             fi
             echo "  Could not list models: $_local_models_err" >/dev/tty
+            if [[ "$_local_models_err" != could\ not\ reach* ]]; then
+                echo "  The server answered, so you can type a model name instead." >/dev/tty
+                break
+            fi
             if ! ask_yn "Try a different URL/key?"; then
                 die "local endpoint unreachable. Start the server and re-run headlong-init."
             fi
@@ -690,21 +781,19 @@ EOF
     fi
     [[ -n "$chosen" ]] || die "no model selected"
 
-    # Persist the URL the AGENT's runtime will dial. With the Docker sandbox
-    # on (or inside a container), localhost/127.0.0.1 in generated code means
-    # the container, not this machine — rewrite it to host.docker.internal
-    # (Docker Desktop: macOS/Windows; on Linux add --add-host to the sandbox
-    # or give a LAN address). A LAN IP or an explicit host.docker.internal
-    # URL passes through unchanged. Without the sandbox the host URL is the
-    # agent URL and nothing is rewritten.
+    # Persist the URL the main runtime will dial. A host install keeps its
+    # localhost URL because thinkers and ordinary llm calls run on the host;
+    # bin/shellm translates that URL only for code it runs in its Docker
+    # sandbox. A full Headlong container needs host.docker.internal here
+    # because its main runtime is already inside Docker.
     chat=$(_local_chat_url "$url_env")
-    if [[ "${SHELLM_REQUIRE_DOCKER:-0}" == "1" || "$IN_CONTAINER" -eq 1 ]]; then
+    if [[ "$IN_CONTAINER" -eq 1 ]]; then
         case "$chat" in
             *//localhost:*|*//localhost/*|*//127.0.0.1:*)
-                local host_chat="${chat//localhost/host.docker.internal}"
-                host_chat="${host_chat//127.0.0.1/host.docker.internal}"
-                echo "    Sandbox is on: the agent reaches the server at $host_chat (was $chat)."
-                chat="$host_chat"
+                local container_chat
+                container_chat=$(_local_container_url "$chat")
+                echo "    Container install: the agent reaches the server at $container_chat (was $chat)."
+                chat="$container_chat"
                 ;;
         esac
     fi
@@ -728,12 +817,9 @@ EOF
 
     # Prove the whole chain with a real completion (bin/llm reads the same
     # .env; this is the same handshake a thinker will make). When the
-    # persisted URL is the container form (host.docker.internal), override
-    # LLM_API_URL with its localhost twin for THIS host-side check — the
-    # name only resolves inside containers, and the twin was already
-    # proven reachable by the models probe above.
+    # Use the same network view as the init process for the final check.
     info "Checking the LLM connection (model: $chosen at $base)"
-    if LLM_API_URL="$(_local_host_url "$chat")" _llm_ok; then
+    if LLM_API_URL="$(_local_probe_url "$chat")" _llm_ok; then
         echo "    OK — $chosen answered."
         return 0
     fi
@@ -753,31 +839,42 @@ EOF
 _ask_local_or_cloud() {
     [[ "${HEADLONG_PROVIDER:-}" == "local" ]] && return 0
     [[ "${HEADLONG_PROVIDER:-}" == "cloud" ]] && return 1
-    # First run with a human at a tty: offer the local server before demanding
-    # a cloud key. No tty means no asking — fall through to the key checks
-    # (which die with a clear message when there is no key and no server).
-    if [[ "$HAS_TTY" -eq 1 ]]; then
-        ask_yn "Use a local model server (Ollama, LM Studio, vLLM; no API key)?" && return 0
-        return 1
+    # Existing configuration wins before any tty prompt. This keeps both
+    # cloud and local re-runs unattended after the first successful install.
+    if [[ -n "${SHELLM_API_URL:-${LLM_API_URL:-}}" \
+            && "${LLM_PROVIDER:-}" == "openai-compatible" ]]; then
+        return 0
     fi
-    # No tty: only an already-configured local endpoint (a re-run, an env
-    # carried from another setup) is worth one probe before falling through.
-    local probe_url="${SHELLM_API_URL:-${LLM_API_URL:-}}"
-    [[ -n "$probe_url" && -n "${LLM_PROVIDER:-}" && "$LLM_PROVIDER" == "openai-compatible" ]] || return 1
-    # Only worth keeping when the endpoint still answers; a dead one
-    # falls through to the ordinary prompts (and HEADLONG_PROVIDER=local
-    # above forces the repair path regardless).
-    _local_models_get "$(_local_base_url "$probe_url")" "${LLM_API_KEY:-}" >/dev/null 2>&1
+    _have_key && return 1
+    # A first run with no configured provider can ask. No tty falls through
+    # to the ordinary missing-key error.
+    [[ "$HAS_TTY" -eq 1 ]] || return 1
+    ask_yn "Use a local model server (Ollama, LM Studio, vLLM; no API key)?"
 }
 
 _ensure_api_key() {
     _reconcile_key_vars
+
+    # An explicit cloud choice replaces a saved local provider. Clear the
+    # local URL, optional key, and model before selecting the cloud default.
+    local switching_from_local=0
+    if [[ "${HEADLONG_PROVIDER:-}" == "cloud" \
+            && "${LLM_PROVIDER:-}" == "openai-compatible" ]]; then
+        switching_from_local=1
+    fi
 
     # Re-runs with a working local endpoint already configured stay on it;
     # otherwise offer the local path before demanding a cloud key.
     if _ask_local_or_cloud; then
         _setup_local_llm
         return 0
+    fi
+
+    if [[ "$switching_from_local" -eq 1 ]]; then
+        local local_var
+        for local_var in LLM_PROVIDER SHELLM_API_URL LLM_API_URL LLM_API_KEY SHELLM_MODEL; do
+            _env_unset "$HEADLONG_HOME/.env" "$local_var"
+        done
     fi
 
     if ! _have_key && [[ "$HAS_TTY" -eq 0 ]]; then

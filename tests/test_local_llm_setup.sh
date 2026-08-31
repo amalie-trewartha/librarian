@@ -52,10 +52,17 @@ cat > "$STUB/curl" <<'STUBEOF'
 #!/usr/bin/env bash
 url=""
 prev=""
+out_file=""
 for a in "$@"; do
     [[ "$prev" != -* && "$a" == http* ]] && url="$a"
+    [[ "$prev" == "-o" ]] && out_file="$a"
+    if [[ "$prev" == "-K" ]]; then
+        cat "$a" > "$CURL_AUTH_FILE"
+        { stat -c %a "$a" 2>/dev/null || stat -f %Lp "$a"; } > "$CURL_AUTH_MODE"
+    fi
     prev="$a"
 done
+printf '%s\n' "$@" >> "$CURL_ARGS"
 case "$url" in
     */models)
         if [[ "${CURL_MODELS_UP:-1}" != "1" ]]; then
@@ -63,7 +70,12 @@ case "$url" in
             exit 7
         fi
         printf '%s\n' "$url" >> "$CURL_MODELS_HITS"
-        cat "$CURL_MODELS_FILE" 2>/dev/null || printf '{"data":[]}'
+        if [[ -n "$out_file" ]]; then
+            cat "$CURL_MODELS_FILE" > "$out_file" 2>/dev/null || printf '{"data":[]}' > "$out_file"
+        else
+            cat "$CURL_MODELS_FILE" 2>/dev/null || printf '{"data":[]}'
+        fi
+        printf '%s' "${CURL_MODELS_STATUS:-200}"
         exit 0
         ;;
 esac
@@ -87,6 +99,7 @@ chmod +x "$STUB/curl" "$STUB/docker" "$STUB/llm"
 # cloud tests drive it all the way there), so the tools it calls must exist.
 APP="$WORK/app"; mkdir -p "$APP/bin" "$APP/tools"
 : > "$APP/bin/shellm"
+cp "$REPO/tools/headlong-init" "$APP/tools/headlong-init"
 
 # identity: create the directory structure init writes into (memories, chat),
 # without the real tool's behavior.
@@ -124,7 +137,13 @@ printf '<html></html>' > "$APP/web/src/headlong_web/static/index.html"
 
 MODELS_FILE="$WORK/models.json"
 CURL_MODELS_HITS="$WORK/models_hits"
+CURL_ARGS="$WORK/curl_args"
+CURL_AUTH_FILE="$WORK/curl_auth"
+CURL_AUTH_MODE="$WORK/curl_auth_mode"
 : > "$CURL_MODELS_HITS"
+: > "$CURL_ARGS"
+: > "$CURL_AUTH_FILE"
+: > "$CURL_AUTH_MODE"
 
 # run_init <home> [VAR=VAL ...] — headlong-init with no tty, no inherited
 # keys or local config, stubs first on PATH. Output to $WORK/out; the exit
@@ -139,8 +158,10 @@ run_init() {
         HEADLONG_NO_TTY=1 HEADLONG_UNSANDBOXED="${HEADLONG_UNSANDBOXED:-1}" \
         HEADLONG_NO_DASH=1 PATH="$STUB:$PATH" \
         CURL_MODELS_FILE="$MODELS_FILE" CURL_MODELS_HITS="$CURL_MODELS_HITS" \
-        CURL_MODELS_UP="${CURL_MODELS_UP:-1}" LLM_STUB_RC="${LLM_STUB_RC:-0}" "$@" \
-        bash "$REPO/tools/headlong-init" </dev/null > "$WORK/out" 2>&1
+        CURL_MODELS_UP="${CURL_MODELS_UP:-1}" CURL_MODELS_STATUS="${CURL_MODELS_STATUS:-200}" \
+        CURL_ARGS="$CURL_ARGS" CURL_AUTH_FILE="$CURL_AUTH_FILE" CURL_AUTH_MODE="$CURL_AUTH_MODE" \
+        LLM_STUB_RC="${LLM_STUB_RC:-0}" "$@" \
+        bash "$APP/tools/headlong-init" </dev/null > "$WORK/out" 2>&1
     RC=$?
 }
 
@@ -163,10 +184,12 @@ check "local path: models probe hit /v1/models"              grep -q '127.0.0.1:
 run_init "$WORK/h1b" \
     HEADLONG_PROVIDER=local \
     HEADLONG_LOCAL_URL=http://127.0.0.1:11434/v1 \
-    HEADLONG_LOCAL_MODEL=qwen3:8b \
+    SHELLM_MODEL=openai/gpt-oss-120b \
     ANTHROPIC_API_KEY=«redacted:sk-ant-…»
 check "local path: a cloud key in the env stays out of the local .env" \
     check_not grep -q 'ANTHROPIC_API_KEY' "$WORK/h1b/.headlong/.env"
+check "local path: a cloud model does not override the server list" \
+    grep -qx 'SHELLM_MODEL=qwen3:8b' "$WORK/h1b/.headlong/.env"
 
 # ---------------------------------------------------------------------------
 # a dead endpoint: verify first, write nothing
@@ -212,6 +235,17 @@ run_init "$WORK/h4" \
     HEADLONG_LOCAL_API_KEY=«redacted:lm-studio-…»
 check "local key: exits 0"                                   test "$RC" -eq 0
 check "local key: persisted"                                 grep -qx 'LLM_API_KEY=«redacted:lm-studio-…»' "$WORK/h4/.headlong/.env"
+check "local key: stays off curl argv"                       check_not grep -q 'lm-studio' "$CURL_ARGS"
+check "local key: auth file is private"                      grep -qx '600' "$CURL_AUTH_MODE"
+
+# A reachable server may support chat without exposing its model catalog.
+# An explicit model is enough in that case.
+CURL_MODELS_STATUS=404 run_init "$WORK/h4b" \
+    HEADLONG_PROVIDER=local \
+    HEADLONG_LOCAL_URL=http://127.0.0.1:1234/v1 \
+    HEADLONG_LOCAL_MODEL=qwen3:8b
+check "models 404: explicit model still works"               test "$RC" -eq 0
+check "models 404: requested model is persisted"             grep -qx 'SHELLM_MODEL=qwen3:8b' "$WORK/h4b/.headlong/.env"
 
 # ---------------------------------------------------------------------------
 # no model pinned, server exposes several: first in the list is used
@@ -245,6 +279,22 @@ LLM_STUB_RC=1 run_init "$WORK/h7" \
 check "cloud explicit: exits nonzero (stub llm fails, as in the key tests)" test "$RC" -ne 0
 check "cloud explicit: no local config written"              check_not grep -q 'SHELLM_API_URL' "$WORK/h7/.headlong/.env"
 
+# An explicit cloud choice on a configured local install removes every local
+# routing value and picks the cloud provider's default model.
+run_init "$WORK/h7b" \
+    HEADLONG_PROVIDER=local \
+    HEADLONG_LOCAL_URL=http://127.0.0.1:11434/v1 \
+    HEADLONG_LOCAL_MODEL=qwen3:8b \
+    HEADLONG_LOCAL_API_KEY=local-secret
+run_init "$WORK/h7b" \
+    HEADLONG_PROVIDER=cloud \
+    OPENAI_API_KEY=«redacted:sk-…»
+check "local to cloud: exits 0"                              test "$RC" -eq 0
+check "local to cloud: removes the local provider"           check_not grep -q '^LLM_PROVIDER=' "$WORK/h7b/.headlong/.env"
+check "local to cloud: removes the local URL"                check_not grep -q '^SHELLM_API_URL=' "$WORK/h7b/.headlong/.env"
+check "local to cloud: removes the local key"                check_not grep -q '^LLM_API_KEY=' "$WORK/h7b/.headlong/.env"
+check "local to cloud: selects the OpenAI model"             grep -qx 'SHELLM_MODEL=gpt-5.5' "$WORK/h7b/.headlong/.env"
+
 # ---------------------------------------------------------------------------
 # re-run idempotence: the same local config persists again (keyless), and
 # an already-configured healthy local endpoint is kept without any
@@ -254,35 +304,31 @@ run_init "$WORK/h8" \
     HEADLONG_PROVIDER=local \
     HEADLONG_LOCAL_URL=http://127.0.0.1:11434/v1 \
     HEADLONG_LOCAL_MODEL=qwen3:8b
-run_init "$WORK/h8" \
-    HEADLONG_PROVIDER=local \
-    HEADLONG_LOCAL_URL=http://127.0.0.1:11434/v1 \
-    HEADLONG_LOCAL_MODEL=qwen3:8b
+run_init "$WORK/h8"
 check "re-run: still exits 0"                                test "$RC" -eq 0
 check "re-run: config survives, exactly once per var" \
     test "$(grep -c '^SHELLM_API_URL=' "$WORK/h8/.headlong/.env")" -eq 1
 
 # ---------------------------------------------------------------------------
-# sandbox-aware URL: with the Docker sandbox on, a localhost address is
-# rewritten to host.docker.internal (the container's name for the host) in
-# the PERSISTED url; the operator-facing probe still succeeded through the
-# localhost twin. HEADLONG_LOCAL_URL given as host.docker.internal passes
-# through unchanged.
+# A host install keeps its host-reachable URL even when the Docker sandbox is
+# on. shellm translates it only for commands executed inside that sandbox.
 # ---------------------------------------------------------------------------
 HEADLONG_UNSANDBOXED=0 run_init "$WORK/h9" \
     HEADLONG_PROVIDER=local \
     HEADLONG_LOCAL_URL=http://127.0.0.1:11434 \
     HEADLONG_LOCAL_MODEL=qwen3:8b
 check "sandbox rewrite: exits 0"                             test "$RC" -eq 0
-check "sandbox rewrite: persisted url is container-reachable" grep -qx 'SHELLM_API_URL=http://host.docker.internal:11434/v1/chat/completions' "$WORK/h9/.headlong/.env"
-check "sandbox rewrite: announced the rewrite"               grep -q 'host.docker.internal' "$WORK/out"
+check "host install: persisted url stays host-reachable"     grep -qx 'SHELLM_API_URL=http://127.0.0.1:11434/v1/chat/completions' "$WORK/h9/.headlong/.env"
 
+# A full Headlong container uses host.docker.internal for a server on the
+# Docker host, and it probes the same address from inside that container.
 HEADLONG_UNSANDBOXED=0 run_init "$WORK/h9b" \
-    HEADLONG_PROVIDER=local \
-    HEADLONG_LOCAL_URL=http://host.docker.internal:1234 \
+    HEADLONG_FAKE_CONTAINER=1 HEADLONG_PROVIDER=local \
+    HEADLONG_LOCAL_URL=http://127.0.0.1:1234 \
     HEADLONG_LOCAL_MODEL=qwen3:8b
-check "explicit container url: exits 0"                      test "$RC" -eq 0
-check "explicit container url: kept as-is"                   grep -qx 'SHELLM_API_URL=http://host.docker.internal:1234/v1/chat/completions' "$WORK/h9b/.headlong/.env"
+check "container install: exits 0"                           test "$RC" -eq 0
+check "container install: persists the Docker host URL"      grep -qx 'SHELLM_API_URL=http://host.docker.internal:1234/v1/chat/completions' "$WORK/h9b/.headlong/.env"
+check "container install: probes the Docker host URL"        grep -q 'host.docker.internal:1234/v1/models' "$CURL_MODELS_HITS"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
