@@ -42,6 +42,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             button.action = #selector(togglePopover)
             button.target = self
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+
+            // Unread badge overlaid on the icon's bottom-right corner
+            let badge = BadgeView(frame: button.bounds)
+            badge.autoresizingMask = [.width, .height]
+            button.addSubview(badge)
+            model.badgeView = badge
         }
 
         // Popover with ChatView
@@ -51,6 +57,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         popover.contentViewController = NSHostingController(
             rootView: ChatView(model: model, openSettings: { [weak self] in self?.openSettings() })
         )
+
+        // Opening the chat marks everything read
+        NotificationCenter.default.addObserver(forName: NSPopover.didShowNotification,
+                                               object: popover, queue: .main) { [weak self] _ in
+            self?.model.markAllRead()
+        }
 
         model.statusItem = statusItem
         model.popover = popover
@@ -67,12 +79,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             DispatchQueue.main.async { self.statusItem.menu = nil }
             return
         }
-        if popover.isShown {
-            popover.performClose(nil)
-        } else {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.makeKey()
-        }
+        model.togglePanel()
     }
 
     func openSettings() {
@@ -102,6 +109,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         handler([.banner, .sound])
     }
 
+    // Clicking a notification opens the chat
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse,
+                                withCompletionHandler handler: @escaping () -> Void) {
+        DispatchQueue.main.async { self.model.showPanel() }
+        handler()
+    }
+
     func promptAccessibilityIfNeeded() {
         // Check without prompting first
         let trusted = AXIsProcessTrusted()
@@ -110,6 +125,50 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             AXIsProcessTrustedWithOptions(
                 [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
         }
+    }
+}
+
+// MARK: - 1b. Unread Badge (red pill drawn over the status bar icon)
+
+final class BadgeView: NSView {
+    var count: Int = 0 {
+        didSet {
+            isHidden = count == 0
+            needsDisplay = true
+        }
+    }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        isHidden = true
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    // Let clicks fall through to the status bar button
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard count > 0 else { return }
+        let text = count > 99 ? "99+" : "\(count)"
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 8, weight: .bold),
+            .foregroundColor: NSColor.white,
+        ]
+        let textSize = (text as NSString).size(withAttributes: attrs)
+        let h: CGFloat = 12
+        let w = max(h, textSize.width + 6)
+        let pill = NSRect(x: bounds.maxX - w - 1, y: bounds.minY + 1, width: w, height: h)
+
+        // Thin outline in the menu bar color so the pill separates from the icon
+        NSColor.windowBackgroundColor.setFill()
+        NSBezierPath(roundedRect: pill.insetBy(dx: -1, dy: -1), xRadius: h / 2 + 1, yRadius: h / 2 + 1).fill()
+        NSColor.systemRed.setFill()
+        NSBezierPath(roundedRect: pill, xRadius: h / 2, yRadius: h / 2).fill()
+
+        (text as NSString).draw(
+            at: NSPoint(x: pill.midX - textSize.width / 2, y: pill.midY - textSize.height / 2),
+            withAttributes: attrs)
     }
 }
 
@@ -234,9 +293,19 @@ class ChatModel: ObservableObject {
     @Published var live = false
     @Published var identities: [IdentityListItem] = []
     @Published var error: String?
+    @Published var unreadCount = 0 {
+        didSet { badgeView?.count = unreadCount }
+    }
 
     weak var statusItem: NSStatusItem?
     weak var popover: NSPopover?
+    weak var badgeView: BadgeView?
+
+    // Step IDs already seen; lets us detect new messages even when the
+    // 200-message tail rotates (count alone misses those). Nil until the
+    // first successful fetch so history isn't reported as new.
+    private var seenStepIds: Set<String>?
+    private var seenIdentityId: String?
 
     var cfSecret: String {
         get { loadSecret() }
@@ -296,23 +365,30 @@ class ChatModel: ObservableObject {
         do {
             let resp = try await fetchChat(server: serverURL, identityId: identityId,
                 fromName: fromName, cfClientId: cfClientId, cfSecret: cfSecret)
-            let oldCount = messages.count
             if resp.messages != messages {
                 messages = resp.messages
                 outcomes = resp.outcomes
+            }
+            if resp.identity.id != seenIdentityId {
+                // Switched identity — treat its history as already read
+                seenIdentityId = resp.identity.id
+                seenStepIds = nil
             }
             identityName = resp.identity.name
             live = resp.live
             self.error = nil
 
-            // Notify on all new agent messages
-            if messages.count > oldCount {
-                for msg in messages.suffix(messages.count - oldCount) {
-                    if msg.from == identityName {
-                        notifyNewMessage(msg)
-                    }
+            // Incoming = anything not sent by us. Notify and count as unread
+            // (unless the chat is open on screen right now).
+            let fresh = messages.filter { seenStepIds?.contains($0.step_id) == false }
+            if !fresh.isEmpty {
+                let incoming = fresh.filter { $0.from != fromName }
+                for msg in incoming { notifyNewMessage(msg) }
+                if !(popover?.isShown ?? false) {
+                    unreadCount += incoming.count
                 }
             }
+            seenStepIds = Set(messages.map(\.step_id))
         } catch {
             self.error = error.localizedDescription
         }
@@ -420,14 +496,27 @@ class ChatModel: ObservableObject {
     }
 
     func togglePanel() {
-        guard let statusItem = statusItem, let button = statusItem.button else { return }
         guard let popover = popover else { return }
         if popover.isShown {
             popover.performClose(nil)
         } else {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.makeKey()
+            showPanel()
         }
+    }
+
+    func showPanel() {
+        guard let button = statusItem?.button, let popover = popover else { return }
+        if !popover.isShown {
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        }
+        popover.contentViewController?.view.window?.makeKey()
+        markAllRead()
+    }
+
+    func markAllRead() {
+        unreadCount = 0
+        // Also clear delivered banners from Notification Center
+        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
     }
 
     // MARK: Notifications
@@ -435,8 +524,12 @@ class ChatModel: ObservableObject {
     private func notifyNewMessage(_ msg: ChatMessage) {
         let content = UNMutableNotificationContent()
         content.title = msg.from
+        if let filename = msg.filename, !filename.isEmpty {
+            content.subtitle = "📎 \(filename)"
+        }
         content.body = String(msg.content.prefix(200))
         content.sound = .default
+        content.threadIdentifier = msg.from   // group banners per sender
         let req = UNNotificationRequest(identifier: msg.id,
             content: content, trigger: nil)
         UNUserNotificationCenter.current().add(req)
@@ -450,6 +543,7 @@ struct ChatView: View {
     var openSettings: () -> Void
     @State private var draft = ""
     @State private var isAtBottom = true
+    @State private var scroller = ScrollController()
     @FocusState private var inputFocused: Bool
 
     var body: some View {
@@ -488,41 +582,37 @@ struct ChatView: View {
             Divider()
 
             // Messages
-            ScrollViewReader { proxy in
-                ZStack(alignment: .bottom) {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 4) {
-                            ForEach(model.messages) { msg in
-                                MessageRow(msg: msg, identityName: model.identityName)
-                                    .id(msg.id)
-                            }
-                            // Invisible anchor at the very bottom
-                            Color.clear.frame(height: 1).id("bottom")
-                                .onAppear { isAtBottom = true }
-                                .onDisappear { isAtBottom = false }
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                    }
-                    .onChange(of: model.messages.count) {
-                        if isAtBottom, let last = model.messages.last {
-                            withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+            ZStack(alignment: .bottom) {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        ForEach(model.messages) { msg in
+                            MessageRow(msg: msg, identityName: model.identityName)
                         }
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    // Tracks whether the list is scrolled to (near) the bottom, and
+                    // scrolls to the newest message whenever the popover opens
+                    .background(ScrollBottomObserver(controller: scroller) { isAtBottom = $0 })
+                }
+                .onChange(of: model.messages.count) { old, _ in
+                    // Follow new messages when at bottom; always jump on first load
+                    if isAtBottom || old == 0 {
+                        scroller.scrollToBottom(animated: old != 0)
+                    }
+                }
 
-                    if !isAtBottom {
-                        Button {
-                            withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
-                        } label: {
-                            Image(systemName: "arrow.down.circle.fill")
-                                .font(.title2)
-                                .foregroundStyle(.primary)
+                if !isAtBottom {
+                    HStack {
+                        Spacer()
+                        // AppKit button: SwiftUI buttons layered over the (NSScrollView-backed)
+                        // list never receive clicks on macOS — the scroll view wins hit-testing.
+                        JumpToBottomButton {
+                            scroller.scrollToBottom(animated: true)
                         }
-                        .buttonStyle(.plain)
-                        .padding(8)
-                        .background(.ultraThinMaterial, in: Circle())
+                        .frame(width: 32, height: 32)
+                        .padding(.trailing, 12)
                         .padding(.bottom, 8)
-                        .transition(.opacity)
                     }
                 }
             }
@@ -553,6 +643,153 @@ struct ChatView: View {
         guard !text.isEmpty else { return }
         model.send(text)
         draft = ""
+    }
+}
+
+/// Floating "jump to bottom" arrow (white on blue, half-transparent).
+struct JumpToBottomButton: NSViewRepresentable {
+    var action: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(action: action) }
+
+    func makeNSView(context: Context) -> NSButton {
+        let config = NSImage.SymbolConfiguration(pointSize: 28, weight: .regular)
+            .applying(.init(paletteColors: [.white, .systemBlue]))
+        let image = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: "Jump to bottom")?
+            .withSymbolConfiguration(config)
+        let button = NSButton(image: image ?? NSImage(), target: context.coordinator, action: #selector(Coordinator.fire))
+        button.isBordered = false
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleNone
+        button.focusRingType = .none
+        button.refusesFirstResponder = true
+        button.alphaValue = 0.5
+        let shadow = NSShadow()
+        shadow.shadowBlurRadius = 2
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.5)
+        button.shadow = shadow
+        return button
+    }
+
+    func updateNSView(_ button: NSButton, context: Context) {
+        context.coordinator.action = action
+    }
+
+    final class Coordinator: NSObject {
+        var action: () -> Void
+        init(action: @escaping () -> Void) { self.action = action }
+        @objc func fire() { action() }
+    }
+}
+
+/// Handle SwiftUI uses to drive the native scroll view (see ScrollBottomObserver).
+final class ScrollController {
+    weak var view: ScrollBottomObserver.ObserverView?
+    func scrollToBottom(animated: Bool) { view?.scrollToBottom(animated: animated) }
+}
+
+/// Lives inside the ScrollView's content. Reports whether the enclosing
+/// NSScrollView is scrolled to (near) the bottom, and scrolls to the bottom
+/// natively. SwiftUI's GeometryReader/preference tricks don't update on macOS
+/// scroll and ScrollViewProxy is unreliable with LazyVStack, so use AppKit.
+struct ScrollBottomObserver: NSViewRepresentable {
+    var controller: ScrollController
+    var onChange: (Bool) -> Void
+
+    func makeNSView(context: Context) -> ObserverView {
+        let v = ObserverView()
+        v.onChange = onChange
+        controller.view = v
+        return v
+    }
+
+    func updateNSView(_ view: ObserverView, context: Context) {
+        view.onChange = onChange
+        controller.view = view
+    }
+
+    final class ObserverView: NSView {
+        var onChange: ((Bool) -> Void)?
+        private var tokens: [Any] = []
+        private var lastValue: Bool?
+        // After a scroll-to-bottom request, keep pinning to the bottom while the
+        // lazy content re-measures (its height grows as rows come on screen).
+        private var stickUntil = Date.distantPast
+
+        // Purely passive: never intercept clicks/selection meant for SwiftUI content
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil, let scroll = enclosingScrollView, let doc = scroll.documentView else { return }
+            if tokens.isEmpty {
+                let clip = scroll.contentView
+                clip.postsBoundsChangedNotifications = true
+                doc.postsFrameChangedNotifications = true
+                let nc = NotificationCenter.default
+                tokens.append(nc.addObserver(forName: NSView.boundsDidChangeNotification, object: clip, queue: .main) { [weak self] _ in self?.report() })
+                tokens.append(nc.addObserver(forName: NSView.frameDidChangeNotification, object: doc, queue: .main) { [weak self] _ in
+                    guard let self else { return }
+                    if Date() < self.stickUntil { self.pinToBottom() }
+                    self.report()
+                })
+            }
+            // Every time the popover opens, land on the newest message
+            scrollToBottom(animated: false)
+            report()
+        }
+
+        private func bottomOrigin(_ scroll: NSScrollView, _ doc: NSView) -> NSPoint {
+            let clip = scroll.contentView
+            return NSPoint(x: clip.bounds.origin.x,
+                           y: doc.isFlipped ? max(0, doc.frame.height - clip.bounds.height) : 0)
+        }
+
+        private func pinToBottom() {
+            guard let scroll = enclosingScrollView, let doc = scroll.documentView else { return }
+            let clip = scroll.contentView
+            let target = bottomOrigin(scroll, doc)
+            if abs(clip.bounds.origin.y - target.y) > 0.5 {
+                clip.scroll(to: target)
+                scroll.reflectScrolledClipView(clip)
+            }
+        }
+
+        func scrollToBottom(animated: Bool) {
+            guard let scroll = enclosingScrollView, let doc = scroll.documentView else { return }
+            let clip = scroll.contentView
+            let target = bottomOrigin(scroll, doc)
+            if animated {
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.25
+                    ctx.allowsImplicitAnimation = true
+                    clip.animator().setBoundsOrigin(target)
+                }
+            } else {
+                clip.scroll(to: target)
+            }
+            scroll.reflectScrolledClipView(clip)
+            // Stay pinned while lazy rows re-measure (see frameDidChange observer)
+            stickUntil = Date().addingTimeInterval(1.0)
+            DispatchQueue.main.asyncAfter(deadline: .now() + (animated ? 0.3 : 0.05)) { [weak self] in
+                self?.pinToBottom()
+            }
+        }
+
+        deinit { tokens.forEach { NotificationCenter.default.removeObserver($0) } }
+
+        private func report() {
+            guard let scroll = enclosingScrollView, let doc = scroll.documentView else { return }
+            let clip = scroll.contentView.bounds
+            let distance = doc.isFlipped
+                ? doc.frame.maxY - clip.maxY
+                : clip.minY - doc.frame.minY
+            let atBottom = distance < 40
+            guard atBottom != lastValue else { return }
+            lastValue = atBottom
+            // Defer so we never mutate SwiftUI state mid-layout
+            DispatchQueue.main.async { [weak self] in self?.onChange?(atBottom) }
+        }
     }
 }
 
