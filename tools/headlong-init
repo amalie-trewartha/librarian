@@ -128,11 +128,16 @@ ask() {
     printf '%s' "${reply:-$def}"
 }
 
-ask_yn() {  # ask_yn <prompt> — succeeds unless the answer starts with n/N.
-    # The [Y/n] hint is appended here; pass <prompt> WITHOUT one.
-    local reply
-    reply=$(ask "$1 [Y/n]" "y")
-    [[ ! "$reply" =~ ^[Nn] ]]
+ask_yn() {  # ask_yn <prompt> [default y|n]
+    # The hint is appended here; pass <prompt> WITHOUT one.
+    local def="${2:-y}" hint="[Y/n]" reply
+    if [[ "$def" == "n" ]]; then hint="[y/N]"; fi
+    reply=$(ask "$1 $hint" "$def")
+    if [[ "$def" == "n" ]]; then
+        [[ "$reply" =~ ^[Yy] ]]
+    else
+        [[ ! "$reply" =~ ^[Nn] ]]
+    fi
 }
 
 # confirm_install <prompt> — ask before installing software on someone's
@@ -990,7 +995,7 @@ _ask_local_or_cloud() {
     # A first run with no configured provider can ask. No tty falls through
     # to the ordinary missing-key error.
     [[ "$HAS_TTY" -eq 1 ]] || return 1
-    ask_yn "Use a local model server (Ollama, LM Studio, vLLM; no API key)?"
+    ask_yn "Use a local model server (Ollama, LM Studio, vLLM; no API key)?" "n"
 }
 
 # _commit_local_wipe — remove a saved local provider from .env, keeping the

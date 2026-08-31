@@ -100,6 +100,17 @@ _docker_daemon_ok() {
     command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
 }
 
+# The bootstrap installer asks before it clones anything onto the host. It
+# then replaces itself with the installer from that checkout. This temporary
+# marker carries the first answer across that handoff so the checkout does not
+# ask the same question again.
+_location_offer_available() {
+    [[ "${HEADLONG_INSTALL_LOCATION_CHOSEN:-0}" != "1" ]] || return 1
+    [[ ! -f /.dockerenv && ! -f /run/.containerenv ]] || return 1
+    (: </dev/tty) 2>/dev/null || return 1
+    _docker_daemon_ok
+}
+
 # URL helpers for the local-model endpoint: replace only a loopback
 # authority host, never substrings elsewhere in the URL (a host like
 # mylocalhost.dev, or a path segment, must survive untouched). The same
@@ -306,9 +317,9 @@ EOF
     # daemon, outside a container, as long as no agent exists yet. A leftover
     # checkout alone (an install aborted before an identity was created) does
     # not count as a decision; only a completed install skips the menu.
-    if [[ ! -e "$app_dir/.identities/default" && ! -f /.dockerenv && ! -f /run/.containerenv ]] \
-            && (: </dev/tty) 2>/dev/null && _docker_daemon_ok; then
+    if [[ ! -e "$app_dir/.identities/default" ]] && _location_offer_available; then
         _offer_docker_install
+        export HEADLONG_INSTALL_LOCATION_CHOSEN=1
     fi
     if [[ -d "$app_dir/.git" ]]; then
         echo "==> Updating existing checkout at $app_dir"
@@ -553,9 +564,8 @@ main() {
     # has been installed yet; an existing identity (or no tty / no Docker)
     # keeps the plain checkout-mode behavior.
     if [[ "$RUN_INIT" -eq 1 && ! -e "$HEADLONG_HOME/app/.identities/default" \
-            && ! -e "$script_dir/.identities/default" && ! -f /.dockerenv \
-            && ! -f /run/.containerenv ]] \
-            && (: </dev/tty) 2>/dev/null && _docker_daemon_ok; then
+            && ! -e "$script_dir/.identities/default" ]] \
+            && _location_offer_available; then
         # The container path curls the PUBLIC installer, which would install
         # upstream main — not the code being installed right now. Default the
         # forwarded repo/branch to this checkout's own origin and branch so
@@ -594,6 +604,7 @@ main() {
         fi
         _offer_docker_install
     fi
+    unset HEADLONG_INSTALL_LOCATION_CHOSEN
 
     _require_deps jq curl
 
