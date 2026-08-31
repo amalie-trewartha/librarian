@@ -9,8 +9,9 @@ import { toast } from "sonner";
 import { PushBell } from "~/components/push-bell";
 import { useControlsEnabled } from "~/components/thinker-controls";
 import { Button } from "~/components/ui/button";
-import { Input } from "~/components/ui/input";
 import { LoadingDots } from "~/components/ui/loading-dots";
+import { Textarea } from "~/components/ui/textarea";
+import { useAutosizeTextarea } from "~/hooks/use-autosize-textarea";
 import { fetchActivity, fetchChat, fetchThinkers, sendChat } from "~/lib/api";
 import type { ChatMessage } from "~/lib/types";
 import { getPwaName, pwaSender, setLastIdentity } from "~/lib/pwa";
@@ -165,6 +166,7 @@ export default function TalkChat() {
   const [lastSentAt, setLastSentAt] = useState<number | null>(null);
   const [typingExpired, setTypingExpired] = useState(false);
   const pendingKey = useRef(0);
+  const draftRef = useAutosizeTextarea(draft);
   const lastSentAtRef = useRef<number | null>(null);
   lastSentAtRef.current = lastSentAt;
   const awaitingRef = useRef(false);
@@ -418,18 +420,26 @@ export default function TalkChat() {
 
       {controlsEnabled && (
         <form
-          className="flex select-none items-center gap-2 border-t px-3 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)]"
+          className="flex select-none items-end gap-2 border-t px-3 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)]"
           onSubmit={(event) => {
             event.preventDefault();
             const content = draft.trim();
             if (content && !sendMutation.isPending) sendMutation.mutate(content);
           }}
         >
-          <Input
+          <Textarea
+            ref={draftRef}
+            rows={1}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
             placeholder={`Message ${identityName}…`}
-            className="h-10 flex-1 rounded-full px-4"
+            className="max-h-40 min-h-10 flex-1 rounded-3xl px-4 py-2.5"
             autoComplete="off"
           />
           <Button

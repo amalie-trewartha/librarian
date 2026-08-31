@@ -12,6 +12,8 @@ import {
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { LoadingDots } from "~/components/ui/loading-dots";
+import { Textarea } from "~/components/ui/textarea";
+import { useAutosizeTextarea } from "~/hooks/use-autosize-textarea";
 import {
   fetchChat,
   fetchConfig,
@@ -90,6 +92,7 @@ export default function ChatPage() {
   const [draft, setDraft] = useState("");
   const [myName, setMyName] = useState(storedName);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const draftRef = useAutosizeTextarea(draft);
 
   // Seed the from-field default from the CLI (chatrc default_send_from) unless
   // the user has ever touched the name field (tracked in localStorage, so the
@@ -182,7 +185,7 @@ export default function ChatPage() {
 
       {controlsEnabled && (
         <form
-          className="mt-3 flex items-center gap-2"
+          className="mt-3 flex items-end gap-2"
           onSubmit={(event) => {
             event.preventDefault();
             const content = draft.trim();
@@ -196,14 +199,22 @@ export default function ChatPage() {
               window.localStorage.setItem(MY_NAME_KEY, event.target.value);
             }}
             title="Your name (the from field on messages)"
-            className="h-9 w-24 font-mono text-xs"
+            className="h-9 w-24 shrink-0 font-mono text-xs"
           />
-          <Input
+          <Textarea
+            ref={draftRef}
             autoFocus
+            rows={1}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
             placeholder={`Message ${identityName}…`}
-            className="h-9 flex-1"
+            className="max-h-40 flex-1 py-2"
           />
           <Button
             type="submit"
