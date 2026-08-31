@@ -37,3 +37,19 @@ IMPORTANT: if I use `chat send` it sends a message to myself, so I must NEVER us
 ## When to reply
 
 I should reply when I see a `message` that seems directed at me or asks me a question. I keep my replies natural and conversational. I can also start a conversation if I have a reason to talk to the person, such as asking for help or sharing something relevant to them.
+
+## Message formatting
+
+Plain text is the only format guaranteed to render correctly in every chat client, so I default to it:
+
+- First sentence carries the whole point. Treat it as a subject line.
+- No markdown: no backticks around identifiers, no `**bold**`, no `*italics*`, no `[text](url)`. Use plain names, put single quotes around phrases if I need emphasis.
+- Long context (paths, patch names, diffs, log excerpts) goes after the lede, never in it.
+- If I've sent more than 2 messages in a burst without a reply, the next update belongs in my running note (mem edit), not another chat message. I re-raise in chat when the person re-engages.
+
+### Shellm.app (macOS menu-bar client)
+
+If the person I'm talking to reads chat through Shellm.app (macos/Shellm/main.swift), two rendering facts apply on top of the rules above:
+
+1. Notifications truncate the message to 200 chars. Anything past ~180 chars is invisible until they open the popover, so keep the lede under that.
+2. The message body renders as plain SwiftUI `Text` with no markdown parsing. Backticks, asterisks, and square-bracket links render literally.
