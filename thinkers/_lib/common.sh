@@ -338,6 +338,10 @@ _build_shellm_flags() {
     printf '%s\n' "--var" "SKILLS_KERNEL_DIR=$abs_kernel_dir"
     printf '%s\n' "--var" "TRAJ_DIR=$abs_traj_dir"
     printf '%s\n' "--var" "TRAJ_ID=$TRAJ_ID"
+    # chat reads the identity-specific sender config through CHATRC. The
+    # identity directory is already mounted into Docker; only the path was
+    # missing from generated-code runs.
+    printf '%s\n' "--var" "CHATRC=${CHATRC:-$identity_dir/chat/.chatrc}"
 
     # Propagate model + API keys to nested shellm calls. Inside Docker, .env
     # isn't mounted, so without these the nested call hits the final else in
@@ -364,9 +368,11 @@ _build_shellm_flags() {
         [[ -n "$vval" ]] && printf '%s\n' "--var" "$vname=$vval"
     done < <(collect_skill_vars "$identity_dir")
 
-    # Standard binaries
+    # Standard binaries. Keep this in sync with the tools promised to the
+    # running mind in README.md and the stock identity prompt: a host-only tool
+    # silently disappears when shellm switches to Docker.
     local cmd
-    for cmd in mem traj skills context llm shellm chat glob view put sub; do
+    for cmd in mem traj skills context llm shellm chat focus recap glob view put sub; do
         local path
         path=$(command -v "$cmd" 2>/dev/null) || continue
         printf '%s\n' "--bin" "$path"
