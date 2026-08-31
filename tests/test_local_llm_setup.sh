@@ -174,11 +174,32 @@ run_init "$WORK/h1" \
     HEADLONG_LOCAL_URL=http://127.0.0.1:11434/v1 \
     HEADLONG_LOCAL_MODEL=qwen3:8b
 check "local path: exits 0"                                  test "$RC" -eq 0
-check "local path: persists LLM_PROVIDER=openai-compatible"  grep -qx 'LLM_PROVIDER=openai-compatible' "$WORK/h1/.headlong/.env"
-check "local path: persists the chat-completions URL"        grep -qx 'SHELLM_API_URL=http://127.0.0.1:11434/v1/chat/completions' "$WORK/h1/.headlong/.env"
-check "local path: persists the requested model"             grep -qx 'SHELLM_MODEL=qwen3:8b' "$WORK/h1/.headlong/.env"
-check "local path: no key written"                           check_not grep -q '^LLM_API_KEY=' "$WORK/h1/.headlong/.env"
+check "local path: persists LLM_PROVIDER=openai-compatible"  grep -qx "LLM_PROVIDER='openai-compatible'" "$WORK/h1/.headlong/.env"
+check "local path: persists the chat-completions URL"        grep -qx "SHELLM_API_URL='http://127.0.0.1:11434/v1/chat/completions'" "$WORK/h1/.headlong/.env"
+check "local path: persists the requested model"             grep -qx "SHELLM_MODEL='qwen3:8b'" "$WORK/h1/.headlong/.env"
+check_not "local path: no key written"                       grep -q '^LLM_API_KEY=' "$WORK/h1/.headlong/.env"
 check "local path: models probe hit /v1/models"              grep -q '127.0.0.1:11434/v1/models' "$CURL_MODELS_HITS"
+
+# .env values are single-quoted, so a server-supplied model id carrying
+# shell metacharacters can neither execute when the file is sourced nor
+# even be stored: the id is rejected before anything is written.
+rm -f "$WORK/pwned"
+printf '{"data":[{"id":"qwen3$(touch %s/pwned)"}]}' "$WORK" > "$MODELS_FILE"
+run_init "$WORK/hrce" \
+    HEADLONG_PROVIDER=local \
+    HEADLONG_LOCAL_URL=http://127.0.0.1:11434/v1
+check "malicious model id: init refuses"                      test "$RC" -ne 0
+check_not "malicious model id: nothing executed on the host"  test -e "$WORK/pwned"
+check_not "malicious model id: not persisted"                 grep -q 'pwned' "$WORK/hrce/.headlong/.env"
+
+# A whitespace-bearing id is likewise refused (it would break sourcing).
+printf '{"data":[{"id":"qwen3 8b"}]}' > "$MODELS_FILE"
+run_init "$WORK/hrce2" \
+    HEADLONG_PROVIDER=local \
+    HEADLONG_LOCAL_URL=http://127.0.0.1:11434/v1
+check "space in model id: init refuses"                       test "$RC" -ne 0
+
+printf '{"data":[{"id":"qwen3:8b"},{"id":"gemma3:12b"},{"id":"llama3.2"}]}' > "$MODELS_FILE"
 
 # A stray cloud key in the environment must not leak into the local .env.
 run_init "$WORK/h1b" \
@@ -186,10 +207,10 @@ run_init "$WORK/h1b" \
     HEADLONG_LOCAL_URL=http://127.0.0.1:11434/v1 \
     SHELLM_MODEL=openai/gpt-oss-120b \
     ANTHROPIC_API_KEY=«redacted:sk-ant-…»
-check "local path: a cloud key in the env stays out of the local .env" \
-    check_not grep -q 'ANTHROPIC_API_KEY' "$WORK/h1b/.headlong/.env"
+check_not "local path: a cloud key in the env stays out of the local .env" \
+    grep -q 'ANTHROPIC_API_KEY' "$WORK/h1b/.headlong/.env"
 check "local path: a cloud model does not override the server list" \
-    grep -qx 'SHELLM_MODEL=qwen3:8b' "$WORK/h1b/.headlong/.env"
+    grep -qx "SHELLM_MODEL='qwen3:8b'" "$WORK/h1b/.headlong/.env"
 
 # ---------------------------------------------------------------------------
 # a dead endpoint: verify first, write nothing
@@ -203,7 +224,7 @@ check "dead endpoint: exits nonzero"                         test "$RC" -ne 0
 check "dead endpoint: says it could not reach the server"    grep -qi 'could not reach\|could not list' "$WORK/out"
 # The sandbox gate writes its own lines before the provider step; what matters
 # is that no local-model config was persisted for a server that is not there.
-check "dead endpoint: no local config persisted"             check_not grep -q 'LLM_PROVIDER=openai-compatible' "$WORK/h2/.headlong/.env"
+check_not "dead endpoint: no local config persisted"         grep -q '^LLM_PROVIDER=' "$WORK/h2/.headlong/.env"
 
 # ---------------------------------------------------------------------------
 # URL normalization: a full chat-completions URL is accepted as given
@@ -213,7 +234,7 @@ run_init "$WORK/h3" \
     HEADLONG_LOCAL_URL=http://127.0.0.1:8080/v1/chat/completions \
     HEADLONG_LOCAL_MODEL=gemma3:12b
 check "full URL accepted: exits 0"                           test "$RC" -eq 0
-check "full URL accepted: kept as the chat URL"              grep -qx 'SHELLM_API_URL=http://127.0.0.1:8080/v1/chat/completions' "$WORK/h3/.headlong/.env"
+check "full URL accepted: kept as the chat URL"              grep -qx "SHELLM_API_URL='http://127.0.0.1:8080/v1/chat/completions'" "$WORK/h3/.headlong/.env"
 check "full URL accepted: model probe still hit /v1/models"  grep -q '127.0.0.1:8080/v1/models' "$CURL_MODELS_HITS"
 
 # A trailing slash on the base URL must not double up.
@@ -222,7 +243,7 @@ run_init "$WORK/h3b" \
     HEADLONG_LOCAL_URL=http://127.0.0.1:11434/v1/ \
     HEADLONG_LOCAL_MODEL=llama3.2
 check "trailing slash: exits 0"                              test "$RC" -eq 0
-check "trailing slash: normalized chat URL"                  grep -qx 'SHELLM_API_URL=http://127.0.0.1:11434/v1/chat/completions' "$WORK/h3b/.headlong/.env"
+check "trailing slash: normalized chat URL"                  grep -qx "SHELLM_API_URL='http://127.0.0.1:11434/v1/chat/completions'" "$WORK/h3b/.headlong/.env"
 
 # ---------------------------------------------------------------------------
 # a key for a locked-down endpoint is persisted
@@ -234,9 +255,23 @@ run_init "$WORK/h4" \
     HEADLONG_LOCAL_MODEL=qwen3:8b \
     HEADLONG_LOCAL_API_KEY=«redacted:lm-studio-…»
 check "local key: exits 0"                                   test "$RC" -eq 0
-check "local key: persisted"                                 grep -qx 'LLM_API_KEY=«redacted:lm-studio-…»' "$WORK/h4/.headlong/.env"
-check "local key: stays off curl argv"                       check_not grep -q 'lm-studio' "$CURL_ARGS"
+check "local key: persisted"                                 grep -qx "LLM_API_KEY='«redacted:lm-studio-…»'" "$WORK/h4/.headlong/.env"
+check_not "local key: stays off curl argv"                   grep -q 'lm-studio' "$CURL_ARGS"
 check "local key: auth file is private"                      grep -qx '600' "$CURL_AUTH_MODE"
+
+# A stale LLM_API_KEY inherited from a prior/keyed .env must NOT be sent as
+# a Bearer token to a newly selected server, nor persisted for it: a key
+# belongs to the endpoint it was set for. Selecting a fresh HEADLONG_LOCAL_URL
+# means no key unless one is given for that server.
+: > "$CURL_AUTH_FILE"
+run_init "$WORK/h4e" \
+    HEADLONG_PROVIDER=local \
+    HEADLONG_LOCAL_URL=http://127.0.0.1:5678/v1 \
+    HEADLONG_LOCAL_MODEL=qwen3:8b \
+    LLM_API_KEY=stale-cloud-secret
+check "stale key: exits 0"                                   test "$RC" -eq 0
+check_not "stale key: no Bearer sent to the new server"      test -s "$CURL_AUTH_FILE"
+check_not "stale key: not persisted for the new endpoint"    grep -q '^LLM_API_KEY=' "$WORK/h4e/.headlong/.env"
 
 # A reachable server may support chat without exposing its model catalog.
 # An explicit model is enough in that case.
@@ -245,7 +280,24 @@ CURL_MODELS_STATUS=404 run_init "$WORK/h4b" \
     HEADLONG_LOCAL_URL=http://127.0.0.1:1234/v1 \
     HEADLONG_LOCAL_MODEL=qwen3:8b
 check "models 404: explicit model still works"               test "$RC" -eq 0
-check "models 404: requested model is persisted"             grep -qx 'SHELLM_MODEL=qwen3:8b' "$WORK/h4b/.headlong/.env"
+check "models 404: requested model is persisted"             grep -qx "SHELLM_MODEL='qwen3:8b'" "$WORK/h4b/.headlong/.env"
+
+# An OpenAI-compatible server with NO models pulled yet ({"data":[]}) is a
+# healthy server, not a protocol error: with an explicit model it succeeds,
+# and without one it dies telling the operator to provide a model — never
+# the misleading "is it an OpenAI-compatible server?" message.
+printf '{"data":[]}' > "$MODELS_FILE"
+run_init "$WORK/h4c" \
+    HEADLONG_PROVIDER=local \
+    HEADLONG_LOCAL_URL=http://127.0.0.1:1234/v1 \
+    HEADLONG_LOCAL_MODEL=qwen3:8b
+check "empty model list + explicit model: exits 0"           test "$RC" -eq 0
+run_init "$WORK/h4d" \
+    HEADLONG_PROVIDER=local \
+    HEADLONG_LOCAL_URL=http://127.0.0.1:1234/v1
+check "empty model list, no model: exits nonzero"            test "$RC" -ne 0
+check_not "empty model list: not blamed as incompatible"     grep -qi 'OpenAI-compatible server?' "$WORK/out"
+printf '{"data":[{"id":"qwen3:8b"}]}' > "$MODELS_FILE"
 
 # ---------------------------------------------------------------------------
 # no model pinned, server exposes several: first in the list is used
@@ -254,7 +306,7 @@ run_init "$WORK/h5" \
     HEADLONG_PROVIDER=local \
     HEADLONG_LOCAL_URL=http://127.0.0.1:11434/v1
 check "no model pin: exits 0"                                test "$RC" -eq 0
-check "no model pin: first listed model chosen"              grep -qx 'SHELLM_MODEL=qwen3:8b' "$WORK/h5/.headlong/.env"
+check "no model pin: first listed model chosen"              grep -qx "SHELLM_MODEL='qwen3:8b'" "$WORK/h5/.headlong/.env"
 
 # ---------------------------------------------------------------------------
 # the final check is a real completion: a failing chain fails the setup
@@ -265,6 +317,10 @@ LLM_STUB_RC=1 run_init "$WORK/h6" \
     HEADLONG_LOCAL_MODEL=qwen3:8b
 check "failing completion: exits nonzero"                    test "$RC" -ne 0
 check "failing completion: says chat did not answer"         grep -qi 'did not answer\|chat completion' "$WORK/out"
+# A failed chat check must persist nothing: a broken local provider left in
+# .env would shadow a working cloud key on every later run.
+check_not "failing completion: no local provider persisted"  grep -q '^LLM_PROVIDER=' "$WORK/h6/.headlong/.env"
+check_not "failing completion: no local URL persisted"       grep -q '^SHELLM_API_URL=' "$WORK/h6/.headlong/.env"
 
 # ---------------------------------------------------------------------------
 # cloud wins explicitly: local env vars are ignored. The stub llm fails, so a
@@ -277,7 +333,7 @@ LLM_STUB_RC=1 run_init "$WORK/h7" \
     HEADLONG_LOCAL_MODEL=qwen3:8b \
     OPENAI_API_KEY=«redacted:sk-…»
 check "cloud explicit: exits nonzero (stub llm fails, as in the key tests)" test "$RC" -ne 0
-check "cloud explicit: no local config written"              check_not grep -q 'SHELLM_API_URL' "$WORK/h7/.headlong/.env"
+check_not "cloud explicit: no local config written"          grep -q 'SHELLM_API_URL' "$WORK/h7/.headlong/.env"
 
 # An explicit cloud choice on a configured local install removes every local
 # routing value and picks the cloud provider's default model.
@@ -290,10 +346,22 @@ run_init "$WORK/h7b" \
     HEADLONG_PROVIDER=cloud \
     OPENAI_API_KEY=«redacted:sk-…»
 check "local to cloud: exits 0"                              test "$RC" -eq 0
-check "local to cloud: removes the local provider"           check_not grep -q '^LLM_PROVIDER=' "$WORK/h7b/.headlong/.env"
-check "local to cloud: removes the local URL"                check_not grep -q '^SHELLM_API_URL=' "$WORK/h7b/.headlong/.env"
-check "local to cloud: removes the local key"                check_not grep -q '^LLM_API_KEY=' "$WORK/h7b/.headlong/.env"
-check "local to cloud: selects the OpenAI model"             grep -qx 'SHELLM_MODEL=gpt-5.5' "$WORK/h7b/.headlong/.env"
+check_not "local to cloud: removes the local provider"       grep -q '^LLM_PROVIDER=' "$WORK/h7b/.headlong/.env"
+check_not "local to cloud: removes the local URL"            grep -q '^SHELLM_API_URL=' "$WORK/h7b/.headlong/.env"
+check_not "local to cloud: removes the local key"            grep -q '^LLM_API_KEY=' "$WORK/h7b/.headlong/.env"
+check "local to cloud: selects the OpenAI model"             grep -qx "SHELLM_MODEL='gpt-5.5'" "$WORK/h7b/.headlong/.env"
+
+# A cloud switch that FAILS (no key) must leave the working local config
+# intact: the wipe is committed only after a cloud key validates. Otherwise
+# a plain re-run could not recover the box.
+run_init "$WORK/h7c" \
+    HEADLONG_PROVIDER=local \
+    HEADLONG_LOCAL_URL=http://127.0.0.1:11434/v1 \
+    HEADLONG_LOCAL_MODEL=qwen3:8b
+run_init "$WORK/h7c" HEADLONG_PROVIDER=cloud   # no cloud key given
+check "failed switch: exits nonzero"                         test "$RC" -ne 0
+check "failed switch: local provider still present"          grep -qx "LLM_PROVIDER='openai-compatible'" "$WORK/h7c/.headlong/.env"
+check "failed switch: local URL still present"               grep -qx "SHELLM_API_URL='http://127.0.0.1:11434/v1/chat/completions'" "$WORK/h7c/.headlong/.env"
 
 # ---------------------------------------------------------------------------
 # re-run idempotence: the same local config persists again (keyless), and
@@ -318,7 +386,7 @@ HEADLONG_UNSANDBOXED=0 run_init "$WORK/h9" \
     HEADLONG_LOCAL_URL=http://127.0.0.1:11434 \
     HEADLONG_LOCAL_MODEL=qwen3:8b
 check "sandbox rewrite: exits 0"                             test "$RC" -eq 0
-check "host install: persisted url stays host-reachable"     grep -qx 'SHELLM_API_URL=http://127.0.0.1:11434/v1/chat/completions' "$WORK/h9/.headlong/.env"
+check "host install: persisted url stays host-reachable"     grep -qx "SHELLM_API_URL='http://127.0.0.1:11434/v1/chat/completions'" "$WORK/h9/.headlong/.env"
 
 # A full Headlong container uses host.docker.internal for a server on the
 # Docker host, and it probes the same address from inside that container.
@@ -327,8 +395,18 @@ HEADLONG_UNSANDBOXED=0 run_init "$WORK/h9b" \
     HEADLONG_LOCAL_URL=http://127.0.0.1:1234 \
     HEADLONG_LOCAL_MODEL=qwen3:8b
 check "container install: exits 0"                           test "$RC" -eq 0
-check "container install: persists the Docker host URL"      grep -qx 'SHELLM_API_URL=http://host.docker.internal:1234/v1/chat/completions' "$WORK/h9b/.headlong/.env"
+check "container install: persists the Docker host URL"      grep -qx "SHELLM_API_URL='http://host.docker.internal:1234/v1/chat/completions'" "$WORK/h9b/.headlong/.env"
 check "container install: probes the Docker host URL"        grep -q 'host.docker.internal:1234/v1/models' "$CURL_MODELS_HITS"
+
+# A URL whose host merely CONTAINS 'localhost' (or 'host.docker.internal')
+# as a substring must survive the container rewrite untouched: only the
+# authority host is swapped, never a substring elsewhere.
+HEADLONG_UNSANDBOXED=0 run_init "$WORK/h9c" \
+    HEADLONG_FAKE_CONTAINER=1 HEADLONG_PROVIDER=local \
+    HEADLONG_LOCAL_URL=http://mylocalhost.example:1234 \
+    HEADLONG_LOCAL_MODEL=qwen3:8b
+check "substring host: exits 0"                              test "$RC" -eq 0
+check "substring host: host is left untouched"               grep -qx "SHELLM_API_URL='http://mylocalhost.example:1234/v1/chat/completions'" "$WORK/h9c/.headlong/.env"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

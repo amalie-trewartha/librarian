@@ -100,19 +100,66 @@ _docker_daemon_ok() {
     command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
 }
 
+# URL helpers for the local-model endpoint: replace only a loopback
+# authority host, never substrings elsewhere in the URL (a host like
+# mylocalhost.dev, or a path segment, must survive untouched). The same
+# helpers live in bin/shellm and tools/headlong-init — this repo duplicates
+# small helpers rather than sharing a lib; keep the copies identical.
+_url_host() {
+    local rest="${1#*://}"
+    local authority="${rest%%[/?#]*}"
+    local hostport="${authority##*@}"
+    case "$hostport" in
+        \[*\]*) hostport="${hostport#\[}"; printf '%s' "${hostport%%]*}" ;;
+        *)      printf '%s' "${hostport%%:*}" ;;
+    esac
+}
+
+_url_host_swap() {
+    local url="$1" newhost="$2"
+    local rest="${url#*://}" scheme=""
+    [[ "$rest" == "$url" ]] || scheme="${url%%://*}://"
+    local authority="${rest%%[/?#]*}"
+    local tail="${rest#"$authority"}"
+    local userinfo=""
+    case "$authority" in
+        *@*) userinfo="${authority%@*}@" ;;
+    esac
+    local hostport="${authority##*@}" port=""
+    case "$hostport" in
+        \[*\]:*) port=":${hostport##*:}" ;;
+        \[*\])   port="" ;;
+        *:*)     port=":${hostport##*:}" ;;
+    esac
+    printf '%s%s%s%s%s' "$scheme" "$userinfo" "$newhost" "$port" "$tail"
+}
+
+_url_is_loopback() {
+    case "$(_url_host "$1")" in
+        localhost|127.*|0.0.0.0|::1) return 0 ;;
+    esac
+    return 1
+}
+
 # The `docker run` arguments that carry the operator's environment into the
 # container, NUL-delimited for the caller to read into an array: the interview
 # answers are free text, so a value may contain a newline.
 #
-# Keys go by NAME. `-e VAR=value` puts the value in the docker client's argv,
-# where `ps` shows it to every other user on the machine for as long as the
-# client runs; thinkers/_lib/common.sh forwards keys the same way for the same
-# reason, and tests/test_var_secrets.sh pins the rule for shellm. Docker reads a name-only
-# `-e VAR` from its own environment, so the name must be exported, which is why
-# the answers below do NOT use it: install.sh assigns HEADLONG_REPO and
-# HEADLONG_BRANCH itself without exporting them, so a bare name would forward
-# nothing and the container would clone the default repo instead of the
-# operator's. They are not secrets, so inline is fine.
+# Secrets go by NAME. `-e VAR=value` puts the value in the docker client's
+# argv, where `ps` shows it to every other user on the machine for as long as
+# the client runs; thinkers/_lib/common.sh forwards keys the same way for the
+# same reason, and tests/test_var_secrets.sh pins the rule for shellm. Docker
+# reads a name-only `-e VAR` from its own environment, so the name must be
+# exported.
+#
+# The interview answers are not secrets and stay inline: two of them
+# (HEADLONG_REPO, HEADLONG_BRANCH) are assigned by install.sh WITHOUT export,
+# so a bare name would forward nothing. The one exception is HEADLONG_LOCAL_URL
+# — an endpoint URL can carry user:pass@ credentials or a query token — so it
+# is treated like a secret and forwarded by name (it always arrives exported,
+# from the operator's own environment). This function is collected with a
+# redirect, not a pipe (see _offer_docker_install), so the export persists to
+# where `docker run` reads it.
 _docker_forward_args() {
     local var
     for var in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY \
@@ -122,24 +169,24 @@ _docker_forward_args() {
             printf '%s\0%s\0' "-e" "$var"
         fi
     done
-    # The local-model server choice and its endpoint are not secrets: forward
-    # them by value so the in-container headlong-init offers / keeps the same
-    # setup without re-asking. (LLM_PROVIDER itself travels inside the state
-    # .env, which the container's init re-persists; exporting it here would
-    # also pin it for the whole container, which the operator did not ask for.)
+    if [[ -n "${HEADLONG_LOCAL_URL:-}" ]]; then
+        # The installer receiving the URL runs inside the full Headlong
+        # container, where localhost names that container. Use Docker's
+        # hostname for a model server running on the host.
+        if _url_is_loopback "$HEADLONG_LOCAL_URL"; then
+            HEADLONG_LOCAL_URL=$(_url_host_swap "$HEADLONG_LOCAL_URL" host.docker.internal)
+        fi
+        export HEADLONG_LOCAL_URL
+        printf '%s\0%s\0' "-e" "HEADLONG_LOCAL_URL"
+    fi
+    # (LLM_PROVIDER itself travels inside the state .env, which the
+    # container's init re-persists; exporting it here would also pin it for
+    # the whole container, which the operator did not ask for.)
     for var in HEADLONG_IDENTITY_NAME HEADLONG_IDENTITY_VIBE HEADLONG_IDENTITY_FOCUS \
                HEADLONG_IDENTITY_USER HEADLONG_OPERATOR_NAME HEADLONG_REPO HEADLONG_BRANCH \
-               HEADLONG_PROVIDER HEADLONG_LOCAL_URL HEADLONG_LOCAL_MODEL; do
+               HEADLONG_PROVIDER HEADLONG_LOCAL_MODEL; do
         if [[ -n "${!var:-}" ]]; then
-            local value="${!var}"
-            # The installer receiving this value runs inside the full
-            # Headlong container, where localhost names that container. Use
-            # Docker's hostname for a model server running on the host.
-            if [[ "$var" == "HEADLONG_LOCAL_URL" ]]; then
-                value="${value//localhost/host.docker.internal}"
-                value="${value//127.0.0.1/host.docker.internal}"
-            fi
-            printf '%s\0%s\0' "-e" "$var=$value"
+            printf '%s\0%s\0' "-e" "$var=${!var}"
         fi
     done
 }
@@ -518,6 +565,27 @@ main() {
             local origin_url branch_name
             origin_url=$(git -C "$script_dir" remote get-url origin 2>/dev/null || true)
             branch_name=$(git -C "$script_dir" branch --show-current 2>/dev/null || true)
+            # The clone happens inside a fresh container with no SSH keys,
+            # so only an http(s) URL can work there. Rewrite the common SSH
+            # forms; a local path or anything else falls back to upstream —
+            # with a warning, so choice 1 is an informed one.
+            case "$origin_url" in
+                http://*|https://*) ;;
+                ssh://git@*)
+                    origin_url="https://${origin_url#ssh://git@}"
+                    ;;
+                git@*:*)
+                    origin_url="${origin_url#git@}"
+                    origin_url="https://${origin_url/://}"
+                    ;;
+                *)
+                    if [[ -n "$origin_url" ]]; then
+                        echo "note: this checkout's origin ($origin_url) cannot be cloned from inside a container;" >&2
+                        echo "      the container choice below would install upstream main instead (export HEADLONG_REPO to override)." >&2
+                    fi
+                    origin_url=""
+                    ;;
+            esac
             if [[ -n "$origin_url" && -n "$branch_name" ]]; then
                 HEADLONG_REPO="$origin_url"
                 HEADLONG_BRANCH="$branch_name"

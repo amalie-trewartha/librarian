@@ -7,10 +7,12 @@
 # so it is readable from `ps` by any other local user for as long as that
 # process lives; tests/test_var_secrets.sh already pins the same rule for the
 # shellm path, and thinkers/_lib/common.sh already forwards keys by bare name
-# for the same reason. Keys therefore go by NAME, which requires them to be exported, and
-# the non-secret answers stay inline because two of them (HEADLONG_REPO,
-# HEADLONG_BRANCH) are assigned by install.sh without export and a bare name
-# would silently forward nothing.
+# for the same reason. Keys therefore go by NAME, which requires them to be exported.
+# HEADLONG_LOCAL_URL is treated the same way: an endpoint URL can carry
+# user:pass@ credentials or a query token, so its value must not reach argv.
+# The remaining non-secret answers stay inline because two of them
+# (HEADLONG_REPO, HEADLONG_BRANCH) are assigned by install.sh without export
+# and a bare name would silently forward nothing.
 
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -67,10 +69,26 @@ case "$flat" in
     *"-e HEADLONG_LOCAL_API_KEY "*) ok "the local server key is forwarded by name" ;;
     *) bad "the local server key is forwarded by name" "got: $flat" ;;
 esac
+# The endpoint URL can carry user:pass@ credentials or a query token, so it
+# is forwarded by NAME (not inline), like the keys — its value must not reach
+# the docker client's argv.
 case "$flat" in
-    *"-e HEADLONG_LOCAL_URL=http://host.docker.internal:8090/v1 "*) ok "a localhost model URL is translated for the full container" ;;
-    *) bad "a localhost model URL is translated for the full container" "got: $flat" ;;
+    *"http://host.docker.internal:8090/v1"*) bad "the local model URL stays off the docker command line" "found the URL value in: $flat" ;;
+    *"-e HEADLONG_LOCAL_URL "*) ok "the local model URL is forwarded by name" ;;
+    *) bad "the local model URL is forwarded by name" "got: $flat" ;;
 esac
+# Forwarding by name only works if the (possibly rewritten) URL is exported.
+url_exported=$(
+    export HEADLONG_LOCAL_URL=http://127.0.0.1:8090/v1
+    # shellcheck disable=SC1090  # generated copy of the installer under test
+    source "$WORK/install.lib"
+    _docker_forward_args > "$WORK/fwd_url"
+    # shellcheck disable=SC2034  # records drained, not inspected
+    while IFS= read -r -d '' line; do :; done < "$WORK/fwd_url"
+    export -p | grep -c '^declare -x HEADLONG_LOCAL_URL=.*host.docker.internal' || true
+)
+[[ "$url_exported" -ge 1 ]] && ok "the rewritten URL is exported for the bare name" \
+    || bad "the rewritten URL is exported for the bare name" "not exported/rewritten after the call"
 case "$flat" in
     *"-e HEADLONG_IDENTITY_NAME=ada "*) ok "interview answers are still forwarded inline" ;;
     *) bad "interview answers are still forwarded inline" "got: $flat" ;;

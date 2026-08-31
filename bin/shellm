@@ -109,11 +109,57 @@ die() { echo "shellm: error: $*" >&2; exit 1; }
 
 # A local model bound to the Docker host is usually configured as localhost
 # for thinkers and other llm calls that run on that host. Code executed in a
-# shellm sandbox needs Docker's hostname for the same server.
+# shellm sandbox needs Docker's hostname for the same server. The rewrite
+# touches ONLY a loopback authority host — a substring replace would mangle
+# hosts like mylocalhost.dev or path segments containing the name, and
+# redirect a Bearer-keyed request to a host nobody configured. The same
+# helpers exist in tools/headlong-init (this repo duplicates small helpers
+# rather than sharing a lib; keep the copies identical).
+
+# _shellm_url_host <url> — the authority's host, IPv6 brackets stripped.
+_shellm_url_host() {
+    local rest="${1#*://}"
+    local authority="${rest%%[/?#]*}"
+    local hostport="${authority##*@}"
+    case "$hostport" in
+        \[*\]*) hostport="${hostport#\[}"; printf '%s' "${hostport%%]*}" ;;
+        *)      printf '%s' "${hostport%%:*}" ;;
+    esac
+}
+
+# _shellm_url_host_swap <url> <newhost> — replace only the authority's host.
+_shellm_url_host_swap() {
+    local url="$1" newhost="$2"
+    local rest="${url#*://}" scheme=""
+    [[ "$rest" == "$url" ]] || scheme="${url%%://*}://"
+    local authority="${rest%%[/?#]*}"
+    local tail="${rest#"$authority"}"
+    local userinfo=""
+    case "$authority" in
+        *@*) userinfo="${authority%@*}@" ;;
+    esac
+    local hostport="${authority##*@}" port=""
+    case "$hostport" in
+        \[*\]:*) port=":${hostport##*:}" ;;
+        \[*\])   port="" ;;
+        *:*)     port=":${hostport##*:}" ;;
+    esac
+    printf '%s%s%s%s%s' "$scheme" "$userinfo" "$newhost" "$port" "$tail"
+}
+
+# _shellm_url_is_loopback <url> — does the host name this machine's loopback?
+_shellm_url_is_loopback() {
+    case "$(_shellm_url_host "$1")" in
+        localhost|127.*|0.0.0.0|::1) return 0 ;;
+    esac
+    return 1
+}
+
 _shellm_container_api_url() {
     local url="$1"
-    url="${url//localhost/host.docker.internal}"
-    url="${url//127.0.0.1/host.docker.internal}"
+    if _shellm_url_is_loopback "$url"; then
+        url=$(_shellm_url_host_swap "$url" host.docker.internal)
+    fi
     printf '%s' "$url"
 }
 
@@ -881,14 +927,16 @@ docker_setup() {
         -w "$workspace"
         -e "HOME=$workspace"
     )
-    # Add the Docker host mapping when a localhost model URL will be
-    # translated for the sandbox below. Docker Desktop already defines the
-    # name, and this keeps the same behavior on Linux.
-    case "$SHELLM_API_URL" in
-        *//localhost:*|*//localhost/*|*//127.0.0.1:*)
-            docker_run_flags+=(--add-host "host.docker.internal:host-gateway")
-            ;;
-    esac
+    # Add the Docker host mapping when a loopback model URL will be
+    # translated for the sandbox below — the SAME predicate the rewrite in
+    # _shellm_container_api_url uses, so the two can never disagree. Docker
+    # Desktop already defines the name; this keeps Linux equivalent. Note
+    # the mapping routes to the host, so sandboxed code can reach any
+    # service bound to the host's loopback, not just the model server —
+    # documented in docs/install.md (local model server).
+    if _shellm_url_is_loopback "$SHELLM_API_URL"; then
+        docker_run_flags+=(--add-host "host.docker.internal:host-gateway")
+    fi
     local -a extra_mounts=()
     local -a seen_dirs=("$runs_mount")
     local -a install_packages=(jq curl python3 tmux sudo)

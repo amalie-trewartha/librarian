@@ -53,6 +53,16 @@ llama.cpp with `--host 0.0.0.0`, or configure Ollama with
 `OLLAMA_HOST=0.0.0.0:11434`. Use the machine firewall to keep the model
 server off untrusted networks.
 
+Know what the host gateway exposes. The agent writes and runs real
+shell commands in its sandbox, and `host.docker.internal` routes to the
+whole host, not just the model server. Code running in the sandbox can
+therefore reach any service bound to the host's loopback: other
+dashboards, local databases, and admin APIs that skip authentication
+because they expect to be loopback only. Ollama's own admin API is one
+example: it can pull and delete models without a password. If that
+matters for your machine, run the model server on a separate host or
+interface, or firewall the ports you do not want a container to reach.
+
 Either way it then runs a short optional interview: a name, a few words
 of personality, what they should think about when idle. The answers
 become the agent's core identity and first memories. Then their mind
