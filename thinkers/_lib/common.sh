@@ -546,8 +546,16 @@ _build_shellm_flags() {
     [[ -n "${SHELLM_MODEL:-}" ]] && printf '%s\n' "--var" "SHELLM_MODEL=$SHELLM_MODEL"
     # The generic openai-compatible provider is env-configured and never
     # auto-detected, so nested calls need the provider name (routing, not a
-    # secret) and its key (bare name, like the vendor keys below).
+    # secret), endpoint, and key. Endpoints go by bare NAME just like keys:
+    # private hosts and URL credentials must not appear in ps or trajectory
+    # command rows.
     [[ -n "${LLM_PROVIDER:-}" ]] && printf '%s\n' "--var" "LLM_PROVIDER=$LLM_PROVIDER"
+    for _cfg in SHELLM_API_URL LLM_API_URL; do
+        if [[ -n "${!_cfg:-}" ]]; then
+            export "${_cfg?}"
+            printf '%s\n' "--var" "$_cfg"
+        fi
+    done
     for _ak in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY \
                OPENCODE_API_KEY LLM_API_KEY; do
         if [[ -n "${!_ak:-}" ]]; then
@@ -560,7 +568,13 @@ _build_shellm_flags() {
     while IFS= read -r vname; do
         [[ -z "$vname" ]] && continue
         local vval="${!vname:-}"
-        [[ -n "$vval" ]] && printf '%s\n' "--var" "$vname=$vval"
+        if [[ -n "$vval" ]]; then
+            # Skills commonly declare credentials and service endpoints. Keep
+            # every declared value off argv rather than trying to infer which
+            # names are sensitive.
+            export "${vname?}"
+            printf '%s\n' "--var" "$vname"
+        fi
     done < <(collect_skill_vars "$identity_dir")
 
     # Standard binaries. Keep this in sync with the tools promised to the

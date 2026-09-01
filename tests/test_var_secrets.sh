@@ -9,8 +9,8 @@
 #   2. While the generated code runs, the secret's value appears in no
 #      process's argv (`ps`): not shellm's, not `env`'s, not bash's.
 #   3. The shellm-run trajectory row records the command with legacy
-#      `--var SOME_KEY=value` values masked, and the literal value is
-#      nowhere under the state home.
+#      credential and endpoint `--var NAME=value` values masked, and the
+#      literal values are nowhere under the state home.
 #
 # `llm` is stubbed (canned fenced blocks, no network), same pattern as
 # tests/test_inactivity_beacon.sh. Local execution is pinned: shellm would
@@ -64,6 +64,7 @@ run_shellm() {
 # (this script's own text included) unless something actually leaks them.
 SECRET="sk-test-secret-$$-$RANDOM$RANDOM"
 LEGACY="sk-legacy-literal-$$-$RANDOM$RANDOM"
+PRIVATE_URL="https://example.invalid/private/$$?opaque=$RANDOM"
 
 # --- 1. bare --var with the variable unset is an error ------------------------
 unset SECRET_PROBE
@@ -79,7 +80,8 @@ export SECRET_PROBE="$SECRET"
 fence "printf 'got=%s plain=%s\\n' \"\$SECRET_PROBE\" \"\$PLAIN\" > '$WORK/probe.txt'
 ps -axo args= > '$WORK/ps.txt' 2>/dev/null || ps -eo args= > '$WORK/ps.txt'" > "$WORK/script/1"
 fence 'FINAL=done' > "$WORK/script/last"
-run_shellm --var SECRET_PROBE --var PLAIN=1 --var "OPENROUTER_API_KEY=$LEGACY" "task"
+run_shellm --var SECRET_PROBE --var PLAIN=1 --var "OPENROUTER_API_KEY=$LEGACY" \
+    --var "SERVICE_ENDPOINT=$PRIVATE_URL" "task"
 if grep -qx "got=$SECRET plain=1" "$WORK/probe.txt" 2>/dev/null; then
     ok "bare --var NAME forwards the value into the generated code"
 else
@@ -109,10 +111,12 @@ fi
 
 # --- 3. recorded command is redacted; literal value nowhere in state ----------
 row=$(grep -rh '"type":"shellm-run"' "$HEADLONG_HOME" 2>/dev/null | tail -1)
-if [[ -n "$row" ]] && grep -qF 'OPENROUTER_API_KEY=<redacted>' <<<"$row" && ! grep -qF "$LEGACY" <<<"$row"; then
-    ok "shellm-run row masks credential-looking --var values"
+if [[ -n "$row" ]] && grep -qF 'OPENROUTER_API_KEY=<redacted>' <<<"$row" \
+    && grep -qF 'SERVICE_ENDPOINT=<redacted>' <<<"$row" \
+    && ! grep -qF "$LEGACY" <<<"$row" && ! grep -qF "$PRIVATE_URL" <<<"$row"; then
+    ok "shellm-run row masks credential and endpoint --var values"
 else
-    bad "shellm-run row masks credential-looking --var values" "$(printf '%s' "$row" | cut -c1-200)"
+    bad "shellm-run row masks credential and endpoint --var values" "redacted fields missing"
 fi
 if grep -qF -- '--var SECRET_PROBE --var PLAIN=1' <<<"$row"; then
     ok "shellm-run row keeps the bare name and non-secret vars readable"

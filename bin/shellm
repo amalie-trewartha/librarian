@@ -2980,8 +2980,9 @@ exit \$__shellm_rc
 
 # The command line as recorded in the shellm-run trajectory row. Trajectories
 # get rendered into prompts, exported and shared, so `--var NAME=VALUE` values
-# whose NAME looks like a credential are masked. (Passing secrets as a bare
-# `--var NAME` keeps them off the command line altogether.)
+# whose NAME looks like a credential or endpoint are masked. (Passing private
+# configuration as a bare `--var NAME` keeps it off the process command line
+# altogether.)
 _redacted_cmdline() {
     local out="shellm" prev="" a n nu
     for a in "$@"; do
@@ -2992,7 +2993,7 @@ _redacted_cmdline() {
             # substitution" that kills the whole run (every shellm run exited
             # rc=1 with no output on macOS).
             nu=$(printf '%s' "$n" | tr '[:lower:]' '[:upper:]')
-            if [[ "$nu" =~ (KEY|TOKEN|SECRET|PASSW|CREDENTIAL) ]]; then
+            if [[ "$nu" =~ (KEY|TOKEN|SECRET|PASSW|CREDENTIAL|URL|URI|ENDPOINT) ]]; then
                 a="$n=<redacted>"
             fi
         fi

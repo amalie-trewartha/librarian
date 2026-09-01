@@ -125,6 +125,48 @@ case "$out" in
     *) bad "the key is forwarded to the nested shellm" "no bare --var for it" ;;
 esac
 
+# Endpoints and skill-declared environment values are also private
+# configuration. They must be forwarded by bare NAME, never embedded in the
+# shellm command line. This also proves values loaded from .env were exported
+# before the bare-name handoff.
+out=$(
+    H=$(mktemp -d); trap 'rm -rf "$H"' EXIT; export HOME="$H"
+    unset HEADLONG_HOME SHELLM_HOME
+    mkdir -p "$H/id/memories" "$H/id/skills/probe" "$H/id/kernel" "$H/id/trajectories" "$H/wd"
+    printf 'name=probe\n' > "$H/id/info.txt"
+    cat > "$H/id/skills/probe/SKILL.md" <<'EOF'
+---
+name: probe
+description: Test fixture.
+metadata:
+  shelllm:
+    requires:
+      env: ["PROBE_SERVICE_CONFIG"]
+---
+EOF
+    export IDENTITY_DIR="$H/id" TRAJ_DIR="$H/id/trajectories" TRAJ_ID=t1 MEM_DIR="$H/id/memories"
+    export SHELLM_API_URL="https://example.invalid/v1/responses"
+    export LLM_API_URL="https://example.invalid/v1/responses"
+    export PROBE_SERVICE_CONFIG="private-config-canary"
+    cd "$H/wd" || exit 1
+    # shellcheck disable=SC1090  # the library under test
+    source "$REPO/thinkers/_lib/common.sh"
+    _require_env >/dev/null 2>&1
+    _build_shellm_flags "$IDENTITY_DIR" 2>/dev/null | tr '\n' ' '
+)
+case "$out" in
+    *"example.invalid"*|*"private-config-canary"*) bad "private config values stay out of thinker shellm flags" ;;
+    *)
+        if [[ "$out" == *"--var SHELLM_API_URL "* \
+           && "$out" == *"--var LLM_API_URL "* \
+           && "$out" == *"--var PROBE_SERVICE_CONFIG "* ]]; then
+            ok "endpoints and skill vars are forwarded by bare name"
+        else
+            bad "endpoints and skill vars are forwarded by bare name" "missing bare forwarding names"
+        fi
+        ;;
+esac
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
