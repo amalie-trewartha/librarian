@@ -271,6 +271,7 @@ goals=$(get_goals "$MEM_DIR")
 think_prompt=$(load_prompt "$prompt_file" "$IDENTITY_NAME" "$goals")
 
 # Build shellm flags (includes traj/mem/chat/etc. in --bin).
+_export_provider_keys
 _export_skill_vars "$IDENTITY_DIR"
 shellm_flags=()
 while IFS= read -r _flag; do

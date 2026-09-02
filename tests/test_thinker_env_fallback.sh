@@ -125,6 +125,46 @@ case "$out" in
     *) bad "the key is forwarded to the nested shellm" "no bare --var for it" ;;
 esac
 
+# A shell-local provider key must be exported before flags are assembled in a
+# process substitution. Exercise a real nested shellm: without the parent
+# export, its bare --var parser fails before generated code can see the key.
+out=$(
+    H=$(mktemp -d); trap 'rm -rf "$H"' EXIT; export HOME="$H"
+    unset ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY \
+          OPENCODE_API_KEY LLM_API_KEY HEADLONG_HOME SHELLM_HOME
+    mkdir -p "$H/id/memories" "$H/id/skills" "$H/id/kernel" "$H/id/trajectories" "$H/wd" "$H/bin"
+    printf 'name=probe\n' > "$H/id/info.txt"
+    cat > "$H/bin/llm" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' '```bash' 'if [[ -n "${OPENROUTER_API_KEY:-}" ]]; then FINAL=provider-key-present; else FINAL=provider-key-missing; fi' '```'
+EOF
+    chmod +x "$H/bin/llm"
+    export PATH="$H/bin:$REPO/bin:$REPO/tools:$PATH"
+    export IDENTITY_DIR="$H/id" TRAJ_DIR="$H/id/trajectories" TRAJ_ID=t1 MEM_DIR="$H/id/memories"
+    export SHELLM_MODEL=test-model SHELLM_THINKER_ENV=local
+    OPENROUTER_API_KEY=synthetic-provider-key
+    cd "$H/wd" || exit 1
+    # shellcheck disable=SC1090  # the library under test
+    source "$REPO/thinkers/_lib/common.sh"
+    _require_env >/dev/null 2>&1
+    _export_provider_keys
+    flags=()
+    while IFS= read -r flag; do
+        [[ -n "$flag" ]] && flags+=("$flag")
+    done < <(_build_shellm_flags "$IDENTITY_DIR" "$H/wd")
+    nested_out=$("$REPO/bin/shellm" "${flags[@]}" --max-iterations 1 key-probe 2>/dev/null)
+    printf '%s\n' "$nested_out"
+    row=$(grep -rh '"type":"shellm-run"' "$H/id/trajectories" 2>/dev/null | tail -1)
+    if [[ "$row" == *"--var OPENROUTER_API_KEY "* && "$row" != *"synthetic-provider-key"* ]]; then
+        printf 'provider-key-command-safe\n'
+    fi
+)
+if [[ "$out" == *provider-key-present* && "$out" == *provider-key-command-safe* ]]; then
+    ok "an unexported provider key reaches an actual nested shellm"
+else
+    bad "an unexported provider key reaches an actual nested shellm" "got $out"
+fi
+
 # Endpoints are inherited rather than repeated as --var, because shellm owns
 # their Docker rewrite. Skill-declared values still use bare --var NAME, and an
 # existing-but-unexported skill value must be exported in the parent before
