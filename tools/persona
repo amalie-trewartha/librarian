@@ -386,7 +386,7 @@ cmd_chat() {
         done
     ) &
     watcher=$!
-    trap 'kill "$watcher" 2>/dev/null || true' EXIT
+    trap "kill $watcher 2>/dev/null || true" EXIT
     local line
     while IFS= read -r -p "you> " line; do
         [[ -z "$line" ]] && continue
