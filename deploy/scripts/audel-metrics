@@ -134,8 +134,18 @@ skipped = 0
 total = 0
 ledger_rows = 0
 
-DAY_KEYS = ("rows", "in_msg", "out_msg", "runs", "reasoning", "calls", "in", "out", "think")
+DAY_KEYS = ("rows", "in_msg", "out_msg", "runs", "reasoning", "calls", "in", "out", "think",
+            "ctx_n", "ctx_zero")
 TOK = ("calls", "in", "out", "think")
+
+# Responder context metrics (design/conversation_memory.md, part 6): every
+# decision observation the responder writes carries context_msgs (earlier
+# messages with that person it had in the prompt) and gap_s (seconds since
+# the previous message exchanged with them; absent on first contact).
+# "Forgot" = context_msgs 0 while a previous exchange within 48h existed.
+CTX_BUCKETS = (("<2m", 0, 120), ("2-15m", 120, 900), ("15-60m", 900, 3600),
+               ("1-6h", 3600, 21600), ("6-48h", 21600, 172800))
+ctx_rows = []   # (ts, context_msgs, gap_s or None, decision)
 
 def day_key(ts):
     return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d")
@@ -187,6 +197,16 @@ with open(path, encoding="utf-8", errors="replace") as fh:
         elif t == "feedback" and step.get("source") == "dispatcher" and step.get("trigger_step"):
             fb_marked.add(step["trigger_step"])
             fb_events.append((step["trigger_step"], ts))
+        elif (t == "observation" and step.get("source") == "responder"
+              and step.get("decision") in ("replied", "no-reply")
+              and isinstance(step.get("context_msgs"), int)):
+            gap = step.get("gap_s")
+            gap = gap if isinstance(gap, (int, float)) else None
+            ctx_rows.append((ts, step["context_msgs"], gap, step["decision"]))
+            if gap is not None and gap < 172800:
+                dd["ctx_n"] += 1
+                if step["context_msgs"] == 0:
+                    dd["ctx_zero"] += 1
         elif t in ("reasoning", "shell-output"):
             if rid:
                 run_appends.append(ts)
@@ -326,6 +346,23 @@ for trig, fb_ts in fb_events:
             ev["model_s"] = round(r_ts - bnd, 1)
     injections.append(ev)
 real_runs = [r for r in runs.values() if r[3] > 0]
+
+# Responder context by gap bucket, the same table shape as the design doc.
+ctx_buckets = []
+for label, lo, hi in CTX_BUCKETS:
+    rows = [r for r in ctx_rows if r[2] is not None and lo <= r[2] < hi]
+    ctx_buckets.append({
+        "gap": label, "n": len(rows),
+        "forgot": sum(1 for r in rows if r[1] == 0),
+        "median_ctx": pct([r[1] for r in rows]).get("p50") if rows else None,
+    })
+context = {
+    "decisions": len(ctx_rows),
+    "first_contact": sum(1 for r in ctx_rows if r[2] is None),
+    "since": (datetime.fromtimestamp(min(r[0] for r in ctx_rows), timezone.utc).strftime("%Y-%m-%d")
+              if ctx_rows else None),
+    "buckets": ctx_buckets,
+}
 out = {
     "identity": ident,
     "log": path,
@@ -346,6 +383,7 @@ out = {
         "totals": {"in": sum(in_tok), "out": sum(out_tok), "think": sum(think_tok)},
     },
     "injections": injections,
+    "context": context,
     "daily": [[d, daily[d]] for d in sorted(daily)],
     "by_model": by_model,
     "ledger": {"rows": ledger_rows, "since": ledger_since},
@@ -475,19 +513,38 @@ if bym:
         print("  %-32s %6d %13s %12s %12s" % (m[:32], v["calls"],
               "{:,}".format(v["in"]), "{:,}".format(v["out"]), "{:,}".format(v["think"])))
 
+ctx = d.get("context") or {}
+print()
+print("responder context (what the responder had of the conversation; design/conversation_memory.md)")
+if not ctx.get("decisions"):
+    print("  none recorded (the responder stamps context_msgs/gap_s on its decision observations")
+    print("   from part 6 of that plan; nothing before that deploy is counted)")
+else:
+    print("  decisions: %d since %s   first contact (no previous exchange): %d"
+          % (ctx["decisions"], ctx.get("since"), ctx.get("first_contact", 0)))
+    print("  %-10s %6s %8s %8s %11s" % ("gap", "n", "forgot", "forgot%", "median_ctx"))
+    for b in ctx.get("buckets") or []:
+        share = ("%d%%" % round(100.0 * b["forgot"] / b["n"])) if b["n"] else "-"
+        med = b["median_ctx"] if b["median_ctx"] is not None else "-"
+        print("  %-10s %6d %8d %8s %11s" % (b["gap"], b["n"], b["forgot"], share, med))
+    print("  (gap = time since the previous message with that person; forgot = the prompt held")
+    print("   none of the earlier conversation; median_ctx = earlier messages in the prompt, cap 12)")
+
 daily = d.get("daily") or []
 if daily:
     print()
     print("per day (utc)")
-    print("  %-10s %5s %5s %5s %6s %7s %11s %10s %10s" % (
-        "day", "in", "out", "runs", "steps", "calls", "tok_in", "tok_out", "tok_think"))
+    print("  %-10s %5s %5s %5s %6s %7s %11s %10s %10s %8s" % (
+        "day", "in", "out", "runs", "steps", "calls", "tok_in", "tok_out", "tok_think", "forgot"))
     for day, v in daily:
-        print("  %-10s %5d %5d %5d %6d %7d %11s %10s %10s" % (
+        forgot = ("%d/%d" % (v.get("ctx_zero", 0), v.get("ctx_n", 0))) if v.get("ctx_n") else "-"
+        print("  %-10s %5d %5d %5d %6d %7d %11s %10s %10s %8s" % (
             day, v["in_msg"], v["out_msg"], v["runs"], v["reasoning"], v["calls"],
-            "{:,}".format(v["in"]), "{:,}".format(v["out"]), "{:,}".format(v["think"])))
+            "{:,}".format(v["in"]), "{:,}".format(v["out"]), "{:,}".format(v["think"]), forgot))
     print("  (in/out = messages; steps = reasoning steps; calls/tok = every llm call on ledger days%s,"
           % (" (from %s)" % led["since"] if led.get("since") else ""))
-    print("   shellm-run stamps only on earlier days)")
+    print("   shellm-run stamps only on earlier days; forgot = replies with no earlier conversation")
+    print("   in the prompt / replies where a previous exchange within 48h existed)")
 
 inj = d.get("injections")
 print()

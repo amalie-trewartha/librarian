@@ -22,6 +22,14 @@ THINK_MODEL="${THINK_MODEL:-${SHELLM_MODEL:-claude-opus-4-7}}"
 THINK_CONTEXT_TAIL="${THINK_CONTEXT_TAIL:-20}"
 REPLY_MODEL="${MONOLITH_REPLY_MODEL:-$THINK_MODEL}"
 
+# Wall-clock milliseconds, for compose_ms. Same perl path bin/traj uses for
+# its timestamps; the fallback is whole seconds, still a valid number.
+_now_ms() {
+    perl -MTime::HiRes=time -e 'printf "%d\n", time*1000' 2>/dev/null \
+        || printf '%s000\n' "$(date +%s)"
+}
+t_start_ms=$(_now_ms)
+
 # Read the triggering step from stdin.
 step_json=$(cat)
 [[ -z "$step_json" ]] && exit 0
@@ -38,13 +46,18 @@ msg_from=$(printf '%s' "$step_json" | jq -r '.from // "human"' 2>/dev/null) || t
 [[ "$msg_to" == "$IDENTITY_NAME" ]] || exit 0
 
 # Append an observation step crediting this thinker, tagged with the
-# trigger step when known. $1 = content, $2 (optional) = decision field.
+# trigger step when known. $1 = content, $2 (optional) = decision field,
+# $3 (optional) = a JSON object of extra fields (the context metrics below).
 _obs() {
+    local extra="${3:-}"
+    [[ -n "$extra" ]] || extra='{}'
     jq -nc --arg content "$1" --arg source "$THINKER_NAME" \
         --arg trigger "$trigger_step_id" --arg decision "${2:-}" \
+        --argjson extra "$extra" \
         '{type:"observation", content:$content, source:$source}
          + (if $decision == "" then {} else {decision: $decision} end)
-         + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
+         + (if $trigger == "" then {} else {trigger_step: $trigger} end)
+         + $extra' \
         | traj append >/dev/null || true
 }
 
@@ -109,21 +122,75 @@ if traj exists 2>/dev/null; then
     recent_context=$(_recent_stream "$THINK_CONTEXT_TAIL") || recent_context=""
 fi
 
-convo_json=$(printf '%s\n' "$recent_context" | jq -cRn \
-    --arg me "$IDENTITY_NAME" --arg them "$msg_from" '
+# The conversation, with the step id of each message kept alongside so the
+# observation below can record exactly which steps were in the prompt.
+convo_sel=$(printf '%s\n' "$recent_context" | jq -cRn \
+    --arg me "$IDENTITY_NAME" --arg them "$msg_from" \
+    --arg c "$trigger_content" --arg t "$trigger_step_id" '
     [inputs | fromjson? // empty
      | select(.type == "message")
-     | if .from == $them and .to == $me then {role:"user", content:(.content|tostring)}
-       elif .from == $me and .to == $them then {role:"assistant", content:(.content|tostring)}
+     | if .from == $them and .to == $me then {role:"user", content:(.content|tostring), step_id:(.step_id // "")}
+       elif .from == $me and .to == $them then {role:"assistant", content:(.content|tostring), step_id:(.step_id // "")}
        else empty end]
-    | .[-12:]' 2>/dev/null) || convo_json="[]"
-convo_json=$(printf '%s' "$convo_json" | jq -c --arg c "$trigger_content" '
-    (if length == 0 or .[-1].role != "user" then . + [{role:"user", content:$c}] else . end)
-    | (if (.[0].role // "user") == "assistant" then .[1:] else . end)')
+    | .[-12:]
+    | (if length == 0 or .[-1].role != "user" then . + [{role:"user", content:$c, step_id:$t}] else . end)
+    | (if (.[0].role // "user") == "assistant" then .[1:] else . end)' 2>/dev/null) \
+    || convo_sel=$(jq -nc --arg c "$trigger_content" --arg t "$trigger_step_id" '[{role:"user", content:$c, step_id:$t}]')
+convo_json=$(printf '%s' "$convo_sel" | jq -c 'map({role, content})')
 
-inner_context=$(printf '%s\n' "$recent_context" | jq -Rr \
-    'fromjson? // empty | select(.type != "message")
-     | "[\(.type)] \(.content|tostring)"' 2>/dev/null | tail -n 8) || inner_context=""
+inner_sel=$(printf '%s\n' "$recent_context" | jq -cR \
+    'fromjson? // empty | select(.type != "message")' 2>/dev/null | tail -n 8) || inner_sel=""
+inner_context=$(printf '%s\n' "$inner_sel" | jq -r \
+    '"[\(.type)] \(.content|tostring)"' 2>/dev/null) || inner_context=""
+
+# Context metrics, recorded on the decision observation so "how much of the
+# conversation did the responder actually have?" is a fact in the log rather
+# than a reconstruction (design/conversation_memory.md, part 6):
+#   context_msgs   earlier messages with this person in the prompt (the
+#                  trigger itself excluded)
+#   context_steps  step ids of everything in the prompt (conversation + the
+#                  inner-life excerpt); enough to rebuild the exact prompt
+#   model          the reply model
+#   compose_ms     wake to decision (added below)
+#   gap_s          seconds since the previous message exchanged with this
+#                  person, read from the raw tail (added below; absent when
+#                  none is in the tail)
+metrics_json=$(jq -nc --arg t "$trigger_step_id" --arg model "$REPLY_MODEL" \
+    --argjson convo "$convo_sel" \
+    --argjson inner "$(printf '%s\n' "$inner_sel" | jq -cs 'map(.step_id // empty)' 2>/dev/null || echo '[]')" '
+    {context_msgs: ([$convo[] | select(.step_id != $t)] | length),
+     context_steps: (([$convo[].step_id] + $inner) | map(select(. != ""))),
+     model: $model}')
+
+# Seconds between the trigger and the previous message exchanged with this
+# person. Read from the raw tail, not the filtered window: the window is the
+# thing that forgets, and this number has to be right exactly when it does.
+_gap_s() {
+    local trig_ts
+    trig_ts=$(printf '%s' "$step_json" | jq -r '.ts // empty' 2>/dev/null) || trig_ts=""
+    [[ -n "$trig_ts" ]] || return 0
+    _root_traj_raw_tail | jq -Rrn --arg me "$IDENTITY_NAME" --arg them "$msg_from" \
+        --arg t "$trigger_step_id" --arg tts "$trig_ts" '
+        def secs: .[0:19] + "Z" | try fromdateiso8601 catch empty;
+        [inputs | fromjson? // empty
+         | select(.type == "message" and (.step_id // "") != $t
+                  and (.reply_to // "") != $t
+                  and (.ts // "") != "" and .ts < $tts
+                  and ((.from == $them and .to == $me) or (.from == $me and .to == $them)))
+         | .ts] | last // empty
+        | (($tts | secs) - (. | secs))' 2>/dev/null
+}
+
+# Finish the metrics right before the decision observation is written, so
+# compose_ms covers everything up to (and including) the send.
+_finish_metrics() {
+    local ms gap
+    ms=$(( $(_now_ms) - t_start_ms ))
+    gap=$(_gap_s) || gap=""
+    printf '%s' "$metrics_json" | jq -c --argjson ms "$ms" --arg g "$gap" \
+        '. + {compose_ms: $ms} + (if $g == "" then {} else {gap_s: ($g | tonumber)} end)' \
+        2>/dev/null || printf '%s' "$metrics_json"
+}
 
 reply_system="$system_prompt
 
@@ -146,6 +213,19 @@ $inner_context
 Output ONLY the reply message text — no preamble, no quotes, no commands.
 Delivery is automatic: never write 'chat reply' or the recipient's address."
 
+# Debug aid: RESPONDER_LOG_PROMPT=1 writes the exact prompt to a rotated file
+# under run/logs/, never to the mind log (the system half is identical on
+# every call, and the trajectory is already mostly repeated prompt text).
+if [[ "${RESPONDER_LOG_PROMPT:-0}" == "1" && -n "${IDENTITY_DIR:-}" ]]; then
+    _plog_dir="$IDENTITY_DIR/run/logs/responder-prompts"
+    if mkdir -p "$_plog_dir" 2>/dev/null; then
+        _plog="$_plog_dir/$(date -u +%Y%m%dT%H%M%SZ)_${trigger_step_id:-notrigger}.txt"
+        printf '# system\n%s\n\n# messages\n%s\n' "$reply_system" "$convo_json" > "$_plog" 2>/dev/null || true
+        ls -1t "$_plog_dir" 2>/dev/null | tail -n +"$(( ${RESPONDER_LOG_PROMPT_KEEP:-50} + 1 ))" \
+            | while IFS= read -r _old; do rm -f "$_plog_dir/$_old"; done
+    fi
+fi
+
 printf '  replying to %s...\n' "$msg_from" >&2
 reply=$(llm -m "$REPLY_MODEL" -M "$convo_json" -s "$reply_system") || true
 
@@ -156,18 +236,18 @@ reply=$(printf '%s' "$reply" | sed -E '1s/^[[:space:]]*chat reply [A-Za-z0-9._-]
 first_line=$(printf '%s' "$reply" | head -n 1 | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')
 if [[ "$first_line" == "NO_REPLY" ]]; then
     printf '  model declined to reply (NO_REPLY)\n' >&2
-    _obs "Chose not to reply to $msg_from — their message needed no reply (already answered, or a bare acknowledgment). Their message was: $(printf '%.200s' "$trigger_content")" no-reply
+    _obs "Chose not to reply to $msg_from — their message needed no reply (already answered, or a bare acknowledgment). Their message was: $(printf '%.200s' "$trigger_content")" no-reply "$(_finish_metrics)"
     exit 0
 fi
 
 reply_args=()
 [[ -n "$trigger_step_id" ]] && reply_args+=(--reply-to "$trigger_step_id")
 if [[ -n "$reply" ]] && printf '%s' "$reply" | chat reply ${reply_args[@]+"${reply_args[@]}"} "$msg_from"; then
-    _obs "Replied to $msg_from: $(printf '%.200s' "$reply")" replied
+    _obs "Replied to $msg_from: $(printf '%.200s' "$reply")" replied "$(_finish_metrics)"
     printf '  [reply -> %s] %s\n' "$msg_from" "$(printf '%s' "$reply" | head -1)"
     exit 0
 fi
 
 # Reply failed — surface it so the monolith can pick it up.
 printf '  reply failed — appending failure observation\n' >&2
-_obs "reply failed: could not send a reply to $msg_from (empty model output or chat error — see responder log). Their message was: $(printf '%.200s' "$trigger_content")" reply-failed
+_obs "reply failed: could not send a reply to $msg_from (empty model output or chat error — see responder log). Their message was: $(printf '%.200s' "$trigger_content")" reply-failed "$(_finish_metrics)"

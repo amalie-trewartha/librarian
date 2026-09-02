@@ -1,6 +1,10 @@
 # Conversation memory for the responder
 
-Status: PROPOSED, 2026-09-02. Nothing here is built yet.
+Status: IN PROGRESS. Plan agreed 2026-09-02. Part 6 (metrics) is built and
+tested the same day (`thinkers/responder/step`,
+`tests/test_responder_metrics.sh`, `deploy/scripts/audel-metrics`); it
+reaches Audel on the next deploy plus a thinker sync of `responder`. Parts
+1 to 5 are not started.
 
 Related: [responder_thinker.md](responder_thinker.md) describes the thinker
 this plan changes. [monolith_thinker.md](monolith_thinker.md) and
@@ -296,6 +300,15 @@ trajectory is 91 percent repetition. For debugging, an env flag
 `deploy/scripts/audel-metrics` gets one more series, the share of inbound
 messages with `context_msgs` equal to zero when `gap_s` is under 48 hours
 and a previous exchange existed. The Usage tab can show it as a tile.
+
+As built: `gap_s` is read from the raw 5,000 line tail after the send, so
+it does not add latency and it is measured even when the filtered window
+has forgotten the person. It skips the trigger's own reply and any message
+with a later timestamp. When no earlier message with that person is in the
+tail the field is absent, which the report counts as first contact. The
+`audel-metrics` report prints the gap bucket table in the same shape as
+the tables above, plus a per day "forgot" column, from these fields only.
+Replies from before the deploy carry no fields and are not counted.
 
 ## Experiments
 
