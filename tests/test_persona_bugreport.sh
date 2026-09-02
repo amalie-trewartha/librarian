@@ -141,7 +141,74 @@ check "memory DSN literal scrubbed"           grep -q 'dsn is <redacted>' "$TOP/
 check "plain thought text kept"               grep -q 'all is well' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "source trajectory untouched"           grep -qF "$KEY" "$TJ/trajectory.jsonl"
 
-# 3. options
+# 3. anonymous sed programs and output-temp cleanup
+REAL_SED=$(command -v sed)
+mkdir -p "$WORK/failbin" "$WORK/redact-state"
+cat > "$WORK/failbin/sed" <<EOF
+#!/usr/bin/env bash
+real_sed='$REAL_SED'
+uses_program=0
+program_arg=""
+prev=""
+for arg in "\$@"; do
+    if [[ "\$prev" == -f ]]; then uses_program=1; program_arg="\$arg"; break; fi
+    prev="\$arg"
+done
+if [[ "\$uses_program" -eq 1 ]]; then
+    printf '%s\n' "\$program_arg" >> "\$REDACT_STATE/program-args"
+    if [[ -f "\$REDACT_STATE/previous-temp" ]]; then
+        old=\$(cat "\$REDACT_STATE/previous-temp")
+        [[ ! -e "\$old" ]] || touch "\$REDACT_STATE/leaked-temp"
+    fi
+    current=\$(find "\$TMPDIR" -name '.redact-output.*' -print -quit 2>/dev/null)
+    [[ -z "\$current" ]] || printf '%s\n' "\$current" > "\$REDACT_STATE/previous-temp"
+    if [[ "\${REDACT_SED_MODE:-}" == error && ! -f "\$REDACT_STATE/failed-once" ]]; then
+        touch "\$REDACT_STATE/failed-once"
+        exit 42
+    fi
+    if [[ "\${REDACT_SED_MODE:-}" == signal && ! -f "\$REDACT_STATE/signalled" ]]; then
+        touch "\$REDACT_STATE/signalled"
+        kill -TERM "\$PPID"
+        sleep 1
+        exit 143
+    fi
+fi
+exec "\$real_sed" "\$@"
+EOF
+chmod +x "$WORK/failbin/sed"
+
+rm -rf "$WORK/redact-state"; mkdir "$WORK/redact-state"
+if PATH="$WORK/failbin:$PATH" REDACT_STATE="$WORK/redact-state" REDACT_SED_MODE=error \
+        persona alpha bugreport --out "$WORK/error-pass.tgz" >/dev/null 2>&1; then
+    ok "one sed error does not abort later redaction passes"
+else
+    bad "one sed error does not abort later redaction passes"
+fi
+check_not "failed sed output temp is removed before the next pass" test -e "$WORK/redact-state/leaked-temp"
+if [[ -s "$WORK/redact-state/program-args" ]] \
+   && ! grep -qF "$KEY" "$WORK/redact-state/program-args" \
+   && ! grep -qF "$PW" "$WORK/redact-state/program-args" \
+   && ! grep -qF "$DSN" "$WORK/redact-state/program-args"; then
+    ok "sed program argv contains no private literals"
+else
+    bad "sed program argv contains no private literals"
+fi
+check_not "implementation has no secret sed script path" grep -q 'headlong-redact' "$REPO/tools/persona"
+rm -f "$WORK/error-pass.tgz"
+
+rm -rf "$WORK/redact-state"; mkdir "$WORK/redact-state"
+if PATH="$WORK/failbin:$PATH" REDACT_STATE="$WORK/redact-state" REDACT_SED_MODE=signal \
+        persona alpha bugreport --out "$WORK/signal-pass.tgz" >/dev/null 2>&1; then
+    bad "TERM interrupts redaction"
+else
+    ok "TERM interrupts redaction"
+fi
+check_not "signal leaves no output redaction temp" bash -c \
+    'find "$1" -name ".redact-output.*" -print -quit | grep -q .' _ "$WORK"
+check_not "signal leaves no secret-bearing sed script" bash -c \
+    'find "$1" -name "headlong-redact.*" -print -quit | grep -q .' _ "$WORK"
+
+# 4. options
 check "--include-workdir adds workdir" bash -c '
     persona alpha bugreport --out "$1" --include-workdir >/dev/null 2>&1 &&
     tar -tzf "$1" | grep -q "identity/workdir/scratch.txt"' _ "$WORK/b2.tgz"
@@ -151,7 +218,8 @@ check "--help exits 0 and mentions Usage" bash -c 'persona alpha bugreport --hel
 check_not "unknown option is an error"    persona alpha bugreport --bogus
 check "appears in persona --help"         bash -c 'persona alpha --help | grep -q bugreport'
 check_not "no stray staging dirs left"    bash -c 'ls -d "${TMPDIR:-/tmp}"/headlong-bugreport.* 2>/dev/null | grep -q .'
-check_not "private sed scripts are removed" bash -c 'ls -d "${TMPDIR:-/tmp}"/headlong-redact.* 2>/dev/null | grep -q .'
+check_not "no secret-bearing sed scripts exist" bash -c \
+    'find "$1" -name "headlong-redact.*" -print -quit | grep -q .' _ "$WORK"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

@@ -561,9 +561,12 @@ _bugreport_text() {
 # API keys and tokens keep their first and last 4 characters
 # (`<redacted sk-o...cdef>`) so two keys can be told apart; passwords and
 # anything under 20 characters are masked whole.
-_redact_tree() {
+_redact_tree() (
     local root="$1"
     local -a values=() replacements=() files=()
+    local tmp=""
+    trap '[[ -z "$tmp" ]] || rm -f "$tmp"' EXIT
+    trap 'exit 1' HUP INT TERM
     # Literal values: private-looking names from the env files and the
     # current environment (the env files were loaded into it at startup).
     local n v e
@@ -596,21 +599,23 @@ _redact_tree() {
     [[ "${#files[@]}" -gt 0 ]] || return 0
     # Keep literals out of sed's argv and isolate each one in its own pass, so
     # an unusual ambient value that sed cannot parse does not disable every
-    # other replacement. mktemp creates mode 0600; chmod makes that contract
-    # explicit on implementations with a surprising umask policy.
-    local sed_script f tmp i escaped_value escaped_replacement
-    sed_script=$(mktemp "${TMPDIR:-/tmp}/headlong-redact.XXXXXX") || return 1
-    chmod 600 "$sed_script" || { rm -f "$sed_script"; return 1; }
+    # other replacement. Process substitution gives sed an anonymous program
+    # FD: no literal enters argv or a filesystem script. Output temps live only
+    # under the staging root and the subshell-local traps clean them without
+    # disturbing cmd_bugreport's traps.
+    local f i escaped_value escaped_replacement
     for ((i=0; i<${#values[@]}; i++)); do
         escaped_value=$(_sed_escape "${values[$i]}")
         escaped_replacement=$(_sed_escape "${replacements[$i]}")
-        printf 's/%s/%s/g\n' "$escaped_value" "$escaped_replacement" > "$sed_script"
         for f in "${files[@]}"; do
-            tmp="$f.redact.$$"
-            if sed -E -f "$sed_script" "$f" > "$tmp" 2>/dev/null; then
+            tmp=$(mktemp "$root/.redact-output.XXXXXX") || return 1
+            if sed -E -f <(printf 's/%s/%s/g\n' "$escaped_value" "$escaped_replacement") \
+                    "$f" > "$tmp" 2>/dev/null; then
                 mv -f "$tmp" "$f"
+                tmp=""
             else
                 rm -f "$tmp"
+                tmp=""
             fi
         done
     done
@@ -619,23 +624,23 @@ _redact_tree() {
     # other private names are masked whole. Token boundaries are underscores
     # or the ends of the name, so CURL_OPTS is not treated as a URL variable.
     # (a value starting with "<" is one an earlier pass already replaced)
-    cat > "$sed_script" <<'SED'
-s/--var (([A-Za-z_][A-Za-z0-9_]*_)?(SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?|URL|URI|ENDPOINT|DSN)(_[A-Za-z0-9_]+)*)=[^ "<\\][^ "\\]*/--var \1=<redacted>/g
-s/--var (([A-Za-z_][A-Za-z0-9_]*_)?(KEY|TOKEN)(_[A-Za-z0-9_]+)*)=([^ "<\\]{4})[^ "\\]{12,}([^ "\\]{4})/--var \1=<redacted \5...\6>/g
-s/--var (([A-Za-z_][A-Za-z0-9_]*_)?(KEY|TOKEN)(_[A-Za-z0-9_]+)*)=[^ "<\\][^ "\\]*/--var \1=<redacted>/g
-s/sk-([A-Za-z0-9_-]{4})[A-Za-z0-9_-]{12,}([A-Za-z0-9_-]{4})/<redacted sk-\1...\2>/g
-s/sk-[A-Za-z0-9_-]{8,}/<redacted sk-...>/g
-SED
     for f in "${files[@]}"; do
-        tmp="$f.redact.$$"
-        if sed -E -f "$sed_script" "$f" > "$tmp" 2>/dev/null; then
+        tmp=$(mktemp "$root/.redact-output.XXXXXX") || return 1
+        if sed -E -f <(printf '%s\n' \
+                's/--var (([A-Za-z_][A-Za-z0-9_]*_)?(SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?|URL|URI|ENDPOINT|DSN)(_[A-Za-z0-9_]+)*)=[^ "<\\][^ "\\]*/--var \1=<redacted>/g' \
+                's/--var (([A-Za-z_][A-Za-z0-9_]*_)?(KEY|TOKEN)(_[A-Za-z0-9_]+)*)=([^ "<\\]{4})[^ "\\]{12,}([^ "\\]{4})/--var \1=<redacted \5...\6>/g' \
+                's/--var (([A-Za-z_][A-Za-z0-9_]*_)?(KEY|TOKEN)(_[A-Za-z0-9_]+)*)=[^ "<\\][^ "\\]*/--var \1=<redacted>/g' \
+                's/sk-([A-Za-z0-9_-]{4})[A-Za-z0-9_-]{12,}([A-Za-z0-9_-]{4})/<redacted sk-\1...\2>/g' \
+                's/sk-[A-Za-z0-9_-]{8,}/<redacted sk-...>/g') \
+                "$f" > "$tmp" 2>/dev/null; then
             mv -f "$tmp" "$f"
+            tmp=""
         else
             rm -f "$tmp"
+            tmp=""
         fi
     done
-    rm -f "$sed_script"
-}
+)
 
 # _redact_hint NAME VALUE — the replacement for VALUE: first/last 4 chars for
 # keys and tokens of 20+ chars, a plain <redacted> otherwise.
