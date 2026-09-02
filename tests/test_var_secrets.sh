@@ -65,6 +65,9 @@ run_shellm() {
 SECRET="sk-test-secret-$$-$RANDOM$RANDOM"
 LEGACY="sk-legacy-literal-$$-$RANDOM$RANDOM"
 PRIVATE_URL="https://example.invalid/private/$$?opaque=$RANDOM"
+PRIVATE_DSN="postgresql://user:password@example.invalid/private_$$"
+INHERITED_URL="http://127.0.0.1:9/private/$RANDOM"
+CURL_VALUE="--retry=2"
 
 # --- 1. bare --var with the variable unset is an error ------------------------
 unset SECRET_PROBE
@@ -77,15 +80,23 @@ fi
 
 # --- 2. forwarded value reaches the code; nothing carries it in argv ----------
 export SECRET_PROBE="$SECRET"
-fence "printf 'got=%s plain=%s\\n' \"\$SECRET_PROBE\" \"\$PLAIN\" > '$WORK/probe.txt'
+unset SHELLM_API_URL
+export LLM_API_URL="$INHERITED_URL"
+fence "printf 'got=%s plain=%s api=%s shellm=%s\\n' \"\$SECRET_PROBE\" \"\$PLAIN\" \"\$LLM_API_URL\" \"\$SHELLM_API_URL\" > '$WORK/probe.txt'
 ps -axo args= > '$WORK/ps.txt' 2>/dev/null || ps -eo args= > '$WORK/ps.txt'" > "$WORK/script/1"
 fence 'FINAL=done' > "$WORK/script/last"
 run_shellm --var SECRET_PROBE --var PLAIN=1 --var "OPENROUTER_API_KEY=$LEGACY" \
-    --var "SERVICE_ENDPOINT=$PRIVATE_URL" "task"
-if grep -qx "got=$SECRET plain=1" "$WORK/probe.txt" 2>/dev/null; then
+    --var "SERVICE_URL=$PRIVATE_URL" --var "DATABASE_DSN=$PRIVATE_DSN" \
+    --var "CURL_OPTS=$CURL_VALUE" "task"
+if grep -qx "got=$SECRET plain=1 api=$INHERITED_URL shellm=$INHERITED_URL" "$WORK/probe.txt" 2>/dev/null; then
     ok "bare --var NAME forwards the value into the generated code"
 else
     bad "bare --var NAME forwards the value into the generated code" "probe: $(cat "$WORK/probe.txt" 2>/dev/null) err: $(tail -2 "$WORK/err")"
+fi
+if [[ -z "${SHELLM_API_URL+x}" ]]; then
+    ok "the shellm run started with LLM_API_URL only"
+else
+    bad "the shellm run started with LLM_API_URL only"
 fi
 if [[ -s "$WORK/ps.txt" ]]; then
     if ! grep -qF "$SECRET" "$WORK/ps.txt"; then
@@ -112,16 +123,24 @@ fi
 # --- 3. recorded command is redacted; literal value nowhere in state ----------
 row=$(grep -rh '"type":"shellm-run"' "$HEADLONG_HOME" 2>/dev/null | tail -1)
 if [[ -n "$row" ]] && grep -qF 'OPENROUTER_API_KEY=<redacted>' <<<"$row" \
-    && grep -qF 'SERVICE_ENDPOINT=<redacted>' <<<"$row" \
-    && ! grep -qF "$LEGACY" <<<"$row" && ! grep -qF "$PRIVATE_URL" <<<"$row"; then
-    ok "shellm-run row masks credential and endpoint --var values"
+    && grep -qF 'SERVICE_URL=<redacted>' <<<"$row" \
+    && grep -qF 'DATABASE_DSN=<redacted>' <<<"$row" \
+    && ! grep -qF "$LEGACY" <<<"$row" && ! grep -qF "$PRIVATE_URL" <<<"$row" \
+    && ! grep -qF "$PRIVATE_DSN" <<<"$row"; then
+    ok "shellm-run row masks credential, URL, and DSN --var values"
 else
-    bad "shellm-run row masks credential and endpoint --var values" "redacted fields missing"
+    bad "shellm-run row masks credential, URL, and DSN --var values" "redacted fields missing"
 fi
-if grep -qF -- '--var SECRET_PROBE --var PLAIN=1' <<<"$row"; then
-    ok "shellm-run row keeps the bare name and non-secret vars readable"
+if grep -qF -- '--var SECRET_PROBE --var PLAIN=1' <<<"$row" \
+    && grep -qF -- "--var CURL_OPTS=$CURL_VALUE" <<<"$row"; then
+    ok "shellm-run row keeps bare names and CURL_OPTS readable"
 else
-    bad "shellm-run row keeps the bare name and non-secret vars readable" "$(printf '%s' "$row" | cut -c1-200)"
+    bad "shellm-run row keeps bare names and CURL_OPTS readable" "$(printf '%s' "$row" | cut -c1-200)"
+fi
+if ! grep -qF "$INHERITED_URL" <<<"$row"; then
+    ok "inherited endpoint is absent from the shellm command record"
+else
+    bad "inherited endpoint is absent from the shellm command record"
 fi
 hits=$(grep -rlF "$LEGACY" "$HEADLONG_HOME" "$WORK/wd" 2>/dev/null | wc -l | tr -d ' ')
 if [[ "$hits" -eq 0 ]]; then

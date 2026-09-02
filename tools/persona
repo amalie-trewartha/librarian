@@ -563,8 +563,8 @@ _bugreport_text() {
 # anything under 20 characters are masked whole.
 _redact_tree() {
     local root="$1"
-    local -a pairs=() files=()   # pairs: "value<TAB>replacement"
-    # Literal values: credential-looking names from the env files and the
+    local -a values=() replacements=() files=()
+    # Literal values: private-looking names from the env files and the
     # current environment (the env files were loaded into it at startup).
     local n v e
     for e in "$SHELLM_HOME/.env" "$APP_DIR/.env"; do
@@ -574,13 +574,19 @@ _redact_tree() {
             _is_secret_name "$n" || continue
             # shellcheck disable=SC1090
             v=$(set -a; . "$e" 2>/dev/null; printf '%s' "${!n}") || continue
-            [[ "${#v}" -ge 8 ]] && pairs+=("$v	$(_redact_hint "$n" "$v")")
+            if [[ "${#v}" -ge 8 ]]; then
+                values+=("$v")
+                replacements+=("$(_redact_hint "$n" "$v")")
+            fi
         done < <(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*=.*/\2/p' "$e")
     done
     while IFS= read -r n; do
         _is_secret_name "$n" || continue
         v="${!n:-}"
-        [[ "${#v}" -ge 8 ]] && pairs+=("$v	$(_redact_hint "$n" "$v")")
+        if [[ "${#v}" -ge 8 ]]; then
+            values+=("$v")
+            replacements+=("$(_redact_hint "$n" "$v")")
+        fi
     done < <(compgen -e)
     # Text files only (tar'd dirs can carry binaries in blobs/).
     while IFS= read -r -d '' f; do files+=("$f"); done \
@@ -588,29 +594,47 @@ _redact_tree() {
                 -o -name '*.txt' -o -name '*.md' -o -name '*.sh' -o -name '*.yaml' -o -name '*.yml' \
                 -o -name '*.toml' -o -name '*.env' -o -name '*.cfg' -o -name '*.ini' \) -print0 2>/dev/null)
     [[ "${#files[@]}" -gt 0 ]] || return 0
-    # One sed script for everything, ERE (`sed -E` is in both BSD and GNU sed;
-    # BSD sed has no usable BRE alternation). Write via temp file because
-    # `sed -i` differs between the two.
-    local script="" pr
-    for pr in "${pairs[@]+"${pairs[@]}"}"; do
-        script+="s/$(_sed_escape "${pr%%	*}")/$(_sed_escape "${pr#*	}")/g;"
+    # Keep literals out of sed's argv and isolate each one in its own pass, so
+    # an unusual ambient value that sed cannot parse does not disable every
+    # other replacement. mktemp creates mode 0600; chmod makes that contract
+    # explicit on implementations with a surprising umask policy.
+    local sed_script f tmp i escaped_value escaped_replacement
+    sed_script=$(mktemp "${TMPDIR:-/tmp}/headlong-redact.XXXXXX") || return 1
+    chmod 600 "$sed_script" || { rm -f "$sed_script"; return 1; }
+    for ((i=0; i<${#values[@]}; i++)); do
+        escaped_value=$(_sed_escape "${values[$i]}")
+        escaped_replacement=$(_sed_escape "${replacements[$i]}")
+        printf 's/%s/%s/g\n' "$escaped_value" "$escaped_replacement" > "$sed_script"
+        for f in "${files[@]}"; do
+            tmp="$f.redact.$$"
+            if sed -E -f "$sed_script" "$f" > "$tmp" 2>/dev/null; then
+                mv -f "$tmp" "$f"
+            else
+                rm -f "$tmp"
+            fi
+        done
     done
+
     # --var NAME=VALUE: KEY/TOKEN names keep a 4+4 hint when long enough,
-    # other credential names are masked whole.
+    # other private names are masked whole. Token boundaries are underscores
+    # or the ends of the name, so CURL_OPTS is not treated as a URL variable.
     # (a value starting with "<" is one an earlier pass already replaced)
-    script+='s/--var ([A-Za-z_]*(KEY|TOKEN)[A-Za-z0-9_]*)=([^ "<\\][^ "\\]{3})[^ "\\]{12,}([^ "\\]{4})/--var \1=<redacted \3...\4>/g;'
-    script+='s/--var ([A-Za-z_]*(KEY|TOKEN|SECRET|PASSW|CREDENTIAL)[A-Za-z0-9_]*)=[^ "<\\][^ "\\]*/--var \1=<redacted>/g;'
-    script+='s/sk-([A-Za-z0-9_-]{4})[A-Za-z0-9_-]{12,}([A-Za-z0-9_-]{4})/<redacted sk-\1...\2>/g;'
-    script+='s/sk-[A-Za-z0-9_-]{8,}/<redacted sk-...>/g;'
-    local f tmp
+    cat > "$sed_script" <<'SED'
+s/--var (([A-Za-z_][A-Za-z0-9_]*_)?(SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?|URL|URI|ENDPOINT|DSN)(_[A-Za-z0-9_]+)*)=[^ "<\\][^ "\\]*/--var \1=<redacted>/g
+s/--var (([A-Za-z_][A-Za-z0-9_]*_)?(KEY|TOKEN)(_[A-Za-z0-9_]+)*)=([^ "<\\]{4})[^ "\\]{12,}([^ "\\]{4})/--var \1=<redacted \5...\6>/g
+s/--var (([A-Za-z_][A-Za-z0-9_]*_)?(KEY|TOKEN)(_[A-Za-z0-9_]+)*)=[^ "<\\][^ "\\]*/--var \1=<redacted>/g
+s/sk-([A-Za-z0-9_-]{4})[A-Za-z0-9_-]{12,}([A-Za-z0-9_-]{4})/<redacted sk-\1...\2>/g
+s/sk-[A-Za-z0-9_-]{8,}/<redacted sk-...>/g
+SED
     for f in "${files[@]}"; do
         tmp="$f.redact.$$"
-        if sed -E "$script" "$f" > "$tmp" 2>/dev/null; then
+        if sed -E -f "$sed_script" "$f" > "$tmp" 2>/dev/null; then
             mv -f "$tmp" "$f"
         else
             rm -f "$tmp"
         fi
     done
+    rm -f "$sed_script"
 }
 
 # _redact_hint NAME VALUE — the replacement for VALUE: first/last 4 chars for
@@ -622,7 +646,9 @@ _upper() { printf '%s' "$1" | tr '[:lower:]' '[:upper:]'; }
 _redact_hint() {
     local u v="$2"
     u=$(_upper "$1")
-    if [[ "$u" =~ (KEY|TOKEN) && ! "$u" =~ (SECRET|PASSW|CREDENTIAL) && "${#v}" -ge 20 ]]; then
+    if [[ "$u" =~ (^|_)(KEY|TOKEN)(_|$) \
+       && ! "$u" =~ (^|_)(SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?|URL|URI|ENDPOINT|DSN)(_|$) \
+       && "${#v}" -ge 20 ]]; then
         printf '<redacted %s...%s>' "${v:0:4}" "${v: -4}"
     else
         printf '<redacted>'
@@ -632,7 +658,7 @@ _redact_hint() {
 _is_secret_name() {  # same notion as shellm's trajectory masking
     local u
     u=$(_upper "$1")
-    [[ "$u" =~ (KEY|TOKEN|SECRET|PASSW|CREDENTIAL) ]]
+    [[ "$u" =~ (^|_)(KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?|URL|URI|ENDPOINT|DSN)(_|$) ]]
 }
 
 _sed_escape() {  # escape a literal for use in an ERE sed s/// pattern or replacement

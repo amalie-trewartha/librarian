@@ -500,6 +500,16 @@ collect_skill_vars() {
     fi
 }
 
+# Bare `--var NAME` is resolved from shellm's inherited environment. Export
+# skill values in the caller before flag assembly runs in process substitution,
+# whose subshell cannot export anything back to its parent.
+_export_skill_vars() {
+    local identity_dir="$1" vname
+    while IFS= read -r vname; do
+        [[ -n "$vname" && -n "${!vname:-}" ]] && export "$vname"
+    done < <(collect_skill_vars "$identity_dir")
+}
+
 # ---------------------------------------------------------------------------
 # Path resolution
 # ---------------------------------------------------------------------------
@@ -546,20 +556,13 @@ _build_shellm_flags() {
     [[ -n "${SHELLM_MODEL:-}" ]] && printf '%s\n' "--var" "SHELLM_MODEL=$SHELLM_MODEL"
     # The generic openai-compatible provider is env-configured and never
     # auto-detected, so nested calls need the provider name (routing, not a
-    # secret), endpoint, and key. Endpoints go by bare NAME just like keys:
-    # private hosts and URL credentials must not appear in ps or trajectory
-    # command rows.
+    # secret) and key. Endpoint variables are inherited rather than repeated
+    # as --var: shellm rewrites their values for Docker, and a duplicate extra
+    # var would overwrite that rewritten value in generated code.
     [[ -n "${LLM_PROVIDER:-}" ]] && printf '%s\n' "--var" "LLM_PROVIDER=$LLM_PROVIDER"
-    for _cfg in SHELLM_API_URL LLM_API_URL; do
-        if [[ -n "${!_cfg:-}" ]]; then
-            export "${_cfg?}"
-            printf '%s\n' "--var" "$_cfg"
-        fi
-    done
     for _ak in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY \
                OPENCODE_API_KEY LLM_API_KEY; do
         if [[ -n "${!_ak:-}" ]]; then
-            export "${_ak?}"
             printf '%s\n' "--var" "$_ak"
         fi
     done
@@ -572,7 +575,6 @@ _build_shellm_flags() {
             # Skills commonly declare credentials and service endpoints. Keep
             # every declared value off argv rather than trying to infer which
             # names are sensitive.
-            export "${vname?}"
             printf '%s\n' "--var" "$vname"
         fi
     done < <(collect_skill_vars "$identity_dir")

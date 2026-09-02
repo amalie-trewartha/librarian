@@ -40,7 +40,8 @@ check_not() { local label="$1"; shift; if "$@" >/dev/null 2>&1; then bad "$label
 export HOME="$WORK/home"
 export HEADLONG_HOME="$WORK/home/.headlong"
 export HEADLONG_APP_DIR="$WORK/app"
-mkdir -p "$HOME" "$HEADLONG_HOME/logs" "$HEADLONG_APP_DIR"
+export TMPDIR="$WORK/tmp"
+mkdir -p "$HOME" "$HEADLONG_HOME/logs" "$HEADLONG_APP_DIR" "$TMPDIR"
 ln -s "$REPO/bin" "$HEADLONG_APP_DIR/bin"
 ln -s "$REPO/tools" "$HEADLONG_APP_DIR/tools"
 ln -s "$REPO/thinkers" "$HEADLONG_APP_DIR/thinkers"
@@ -49,9 +50,15 @@ export PATH="$REPO/bin:$REPO/tools:$PATH"
 
 KEY="sk-or-v1-0123456789abcdef0123456789abcdef0123456789abcdef"
 PW="hunter2hunter2-very-secret"
+DSN="postgresql://bugreport-user:bugreport-pass@example.invalid/private-db"
+# This produces a malformed one-line sed program. Its isolated literal pass
+# may fail, but it must not prevent the other literals or fixed patterns from
+# being scrubbed.
+export BROKEN_SECRET=$'first-line\nsecond-line'
 cat > "$HEADLONG_HOME/.env" <<ENV
 OPENROUTER_API_KEY=$KEY
 SUPABASE_DB_PASSWORD=$PW
+DATABASE_DSN=$DSN
 SHELLM_MODEL=anthropic/claude-sonnet-4.5
 ENV
 printf 'headlong-web serving on http://127.0.0.1:8080\n' > "$HEADLONG_HOME/logs/web.log"
@@ -70,11 +77,12 @@ cat >> "$TJ/trajectory.jsonl" <<ROWS
 {"type":"shellm-run","cmd":"shellm --var SHELLM_MODEL=anthropic/claude-sonnet-4.5 --var OPENROUTER_API_KEY=$KEY think","ts":"2026-08-21T14:00:00Z"}
 {"type":"shellm-run","cmd":"shellm --var OPENROUTER_API_KEY think","ts":"2026-08-21T15:00:00Z"}
 {"type":"shellm-run","cmd":"shellm --var GH_TOKEN=ghp_OTHERTOKEN0123456789abcdefghijkl --var PG_PASSWORD=correcthorsebatterystaple --var SHELLM_ENV=local run","ts":"2026-08-21T15:30:00Z"}
+{"type":"shellm-run","cmd":"shellm --var DATABASE_DSN=$DSN --var CURL_OPTS=--retry=2 run","ts":"2026-08-21T15:31:00Z"}
 {"type":"thought","content":"the model is anthropic/claude-sonnet-4.5 and all is well","ts":"2026-08-21T15:00:01Z"}
 ROWS
 mkdir -p "$ID/run/logs" "$ID/memories" "$ID/workdir" "$TJ/blobs"
 printf 'env: OPENROUTER_API_KEY=%s\n' "$KEY" > "$ID/run/logs/monolith.log"
-printf -- '---\ntitle: db\n---\nthe db password is %s\n' "$PW" > "$ID/memories/db.md"
+printf -- '---\ntitle: db\n---\nthe db password is %s\nthe dsn is %s\n' "$PW" "$DSN" > "$ID/memories/db.md"
 printf 'scratch file\n' > "$ID/workdir/scratch.txt"
 head -c 2048 /dev/urandom > "$TJ/blobs/bin.dat"
 
@@ -115,17 +123,21 @@ check "binary blob carried intact"        cmp -s "$TJ/blobs/bin.dat" "$TOP/ident
 # 2. scrubbing
 check_not "API key value nowhere in bundle"   grep -rqF "$KEY" "$TOP"
 check_not "DB password nowhere in bundle"     grep -rqF "$PW" "$TOP"
+check_not "DSN literal nowhere in bundle"     grep -rqF "$DSN" "$TOP"
 check_not "no sk-... shaped string survives"  grep -rqE 'sk-[A-Za-z0-9_-]{8,}' "$TOP"
 check_not "other token value nowhere in bundle" grep -rqF 'ghp_OTHERTOKEN0123456789abcdefghijkl' "$TOP"
 check_not "other password nowhere in bundle"  grep -rqF 'correcthorsebatterystaple' "$TOP"
 check "legacy --var KEY=value row masked, 4+4 hint kept" grep -q -- '--var OPENROUTER_API_KEY=<redacted sk-o...cdef> think' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "token not in .env still masked by pattern (hint kept)" grep -q -- '--var GH_TOKEN=<redacted ghp_...ijkl> ' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "password on argv masked whole"         grep -q -- '--var PG_PASSWORD=<redacted> --var SHELLM_ENV=local' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
+check "DSN on argv masked whole"              grep -q -- '--var DATABASE_DSN=<redacted> --var CURL_OPTS=--retry=2' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
+check "CURL_OPTS is not a URL false positive" grep -q -- '--var CURL_OPTS=--retry=2 run' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check_not "no dangling hint tails"            grep -q -- '<redacted> [^ ]*>' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "bare --var KEY row untouched"          grep -q -- '--var OPENROUTER_API_KEY think' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "non-secret --var value kept"           grep -q -- '--var SHELLM_MODEL=anthropic/claude-sonnet-4.5' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "thinker log key scrubbed (hint kept)"  grep -q 'OPENROUTER_API_KEY=<redacted sk-o...cdef>$' "$TOP/identity/run/logs/monolith.log"
 check "memory password scrubbed"              grep -q 'password is <redacted>' "$TOP/identity/memories/db.md"
+check "memory DSN literal scrubbed"           grep -q 'dsn is <redacted>' "$TOP/identity/memories/db.md"
 check "plain thought text kept"               grep -q 'all is well' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "source trajectory untouched"           grep -qF "$KEY" "$TJ/trajectory.jsonl"
 
@@ -139,6 +151,7 @@ check "--help exits 0 and mentions Usage" bash -c 'persona alpha bugreport --hel
 check_not "unknown option is an error"    persona alpha bugreport --bogus
 check "appears in persona --help"         bash -c 'persona alpha --help | grep -q bugreport'
 check_not "no stray staging dirs left"    bash -c 'ls -d "${TMPDIR:-/tmp}"/headlong-bugreport.* 2>/dev/null | grep -q .'
+check_not "private sed scripts are removed" bash -c 'ls -d "${TMPDIR:-/tmp}"/headlong-redact.* 2>/dev/null | grep -q .'
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

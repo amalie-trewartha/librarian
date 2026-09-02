@@ -70,7 +70,7 @@ SHELLM_MAX_ITERATIONS="${SHELLM_MAX_ITERATIONS:-}"
 SHELLM_MAX_CONSECUTIVE_FAILURES="${SHELLM_MAX_CONSECUTIVE_FAILURES:-10}"
 SHELLM_MAX_REPEAT_FAILURES="${SHELLM_MAX_REPEAT_FAILURES:-3}"
 SHELLM_TRUNCATE="${SHELLM_TRUNCATE:-2000}"
-SHELLM_API_URL="${SHELLM_API_URL:-}"
+SHELLM_API_URL="${SHELLM_API_URL:-${LLM_API_URL:-}}"
 # Clear any inherited LLM_API_URL so llm uses per-provider defaults
 unset LLM_API_URL 2>/dev/null || true
 if [[ -n "$SHELLM_API_URL" ]]; then
@@ -2983,17 +2983,18 @@ exit \$__shellm_rc
 # whose NAME looks like a credential or endpoint are masked. (Passing private
 # configuration as a bare `--var NAME` keeps it off the process command line
 # altogether.)
+_shellm_private_var_name() {
+    local u
+    u=$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')
+    [[ "$u" =~ (^|_)(KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?|URL|URI|ENDPOINT|DSN)(_|$) ]]
+}
+
 _redacted_cmdline() {
-    local out="shellm" prev="" a n nu
+    local out="shellm" prev="" a n
     for a in "$@"; do
         if [[ "$prev" == "--var" && "$a" == *=* ]]; then
             n="${a%%=*}"
-            # Uppercase via tr, not ${n^^}: the latter is a bash-4 expansion
-            # and macOS's /bin/bash is 3.2, where it is a fatal "bad
-            # substitution" that kills the whole run (every shellm run exited
-            # rc=1 with no output on macOS).
-            nu=$(printf '%s' "$n" | tr '[:lower:]' '[:upper:]')
-            if [[ "$nu" =~ (KEY|TOKEN|SECRET|PASSW|CREDENTIAL|URL|URI|ENDPOINT) ]]; then
+            if _shellm_private_var_name "$n"; then
                 a="$n=<redacted>"
             fi
         fi
