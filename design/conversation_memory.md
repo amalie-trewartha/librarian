@@ -235,6 +235,20 @@ ways, and unlinked aliases fall back to the first layer.
 Files touched: a helper in `bin/chat` or `thinkers/_lib/common.sh`, the
 Slack bridge for `display_name`, `thinkers/responder/step`.
 
+Thread context, added the same day after review. History by person
+alone misses what other people said in the same Slack thread, which is the
+conversation the sender is replying into. A thread key is the second pure
+function of the routing name, channel plus thread timestamp, so
+`chat history --thread <name>` returns every message in that thread from
+anyone, and `--with` plus `--thread` is the de-duplicated union. The
+responder adds the thread's last day (`RESPONDER_THREAD_SINCE`, 20
+messages) to the person's 7 days; other people's messages become user
+turns, and the bridge header in the text names the speaker. The system
+prompt says who is being answered. The observation gains `thread_msgs`,
+the count that came from the thread alone. Direct messages, the phone
+chat, and Telegram have no thread key and are unchanged.
+`tests/test_responder_thread_context.sh` covers it.
+
 As built: `chat person-key <name>` and the same rule inside the index
 filter. `chat history --with` accepts a routing name or a person key and
 merges the `aliases` of any `type: person` memory whose `person_key`

@@ -235,14 +235,24 @@ cmd_send_file() {
 #   Andy                                  ->  Andy
 # The same rule lives in jq below (_PERSON_KEY_JQ) so the index filter can
 # apply it per line; keep the two in step.
+# The thread key is the other axis: which conversation a message sits in,
+# whoever sent it. Only Slack channel threads have one (channel + thread ts);
+# a DM, the phone chat, and Telegram are one person deep, so they get none.
+#   slack-U07AB-C09XYZ-1722400000.123456  ->  slack-thread:C09XYZ-1722400000.123456
 _PERSON_KEY_JQ='def person_key:
     if test("^slack-[A-Za-z0-9]+-[A-Za-z0-9]+(-[0-9.]+)?$") then "slack:" + (split("-")[1])
     elif test("^telegram-[0-9]+-[0-9]+$") then "telegram:" + (split("-")[1])
     elif test("^pwa-.") then "pwa:" + .[4:]
-    else . end;'
+    else . end;
+  def thread_key:
+    if test("^slack-[A-Za-z0-9]+-[A-Za-z0-9]+-[0-9.]+$") then "slack-thread:" + (split("-")[2:] | join("-"))
+    else "" end;'
 
 _person_key() {
     printf '%s' "$1" | jq -Rr "$_PERSON_KEY_JQ person_key"
+}
+_thread_key() {
+    printf '%s' "$1" | jq -Rr "$_PERSON_KEY_JQ thread_key"
 }
 
 # All keys that mean the same person: the key itself plus any `aliases` listed
@@ -348,10 +358,11 @@ _duration_s() {
 }
 
 cmd_history() {
-    local n=20 with="" since="" as_json=0
+    local n=20 with="" thread="" since="" as_json=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --with)  with="${2:?--with requires a name or person key}"; shift 2 ;;
+            --thread) thread="${2:?--thread requires a routing name or thread key}"; shift 2 ;;
             --since) since="${2:?--since requires a duration like 7d}"; shift 2 ;;
             -n)      n="${2:?-n requires a count}"; shift 2 ;;
             --json)  as_json=1; shift ;;
@@ -362,28 +373,47 @@ cmd_history() {
 
     local identity_name="${IDENTITY_NAME:-agent}"
 
-    if [[ -n "$with" ]]; then
-        # Indexed path: this person's conversation with us, grouped by person
-        # key across every routing name they have used, newest last.
-        local tf idx key keys_json since_s
+    if [[ -n "$with" || -n "$thread" ]]; then
+        # Indexed path. --with: this person's conversation with us, grouped by
+        # person key across every routing name they have used. --thread: every
+        # message in one Slack thread, whoever sent it (their messages to us
+        # and our replies to anyone there). Both: the union. Newest last.
+        local tf idx key keys_json tkey since_s
         tf=$(traj path "${ROOT_TRAJ_ID:-$TRAJ_ID}" 2>/dev/null) || tf=""
         [[ -n "$tf" && -f "$tf" ]] || die "history: cannot resolve the root trajectory file"
         idx="$(dirname "$tf")/messages.jsonl"
         _index_update "$tf" "$idx" || true
         [[ -f "$idx" ]] || { [[ $as_json -eq 1 ]] && printf '[]\n'; return 0; }
-        key=$(_person_key "$with")
-        keys_json=$(_person_aliases "$key" | jq -Rn '[inputs | select(length > 0)]')
+        keys_json='[]'
+        if [[ -n "$with" ]]; then
+            key=$(_person_key "$with")
+            keys_json=$(_person_aliases "$key" | jq -Rn '[inputs | select(length > 0)]')
+        fi
+        tkey=""
+        if [[ -n "$thread" ]]; then
+            case "$thread" in
+                slack-thread:*) tkey="$thread" ;;
+                *) tkey=$(_thread_key "$thread") ;;
+            esac
+            if [[ -z "$tkey" && -z "$with" ]]; then
+                [[ $as_json -eq 1 ]] && printf '[]\n'
+                return 0   # not a threaded conversation: nothing to add
+            fi
+        fi
         since_s=0
         [[ -n "$since" ]] && since_s=$(_duration_s "$since")
-        jq -cn --arg me "$identity_name" --argjson keys "$keys_json" \
+        jq -cn --arg me "$identity_name" --argjson keys "$keys_json" --arg tkey "$tkey" \
                --argjson since "$since_s" --argjson n "$n" --argjson json "$as_json" "$_PERSON_KEY_JQ"'
             def secs: (.ts // "")[0:19] + "Z" | try fromdateiso8601 catch 0;
+            def with_person:
+                (.from == $me and ((.to | person_key) as $k | $keys | index($k)) != null)
+                or (.to == $me and ((.from | person_key) as $k | $keys | index($k)) != null);
+            def in_thread:
+                $tkey != "" and ((.from | thread_key) == $tkey or (.to | thread_key) == $tkey);
             [inputs | fromjson? // empty]
             | unique_by(.step_id)
-            | map(select(
-                ((.from == $me and ((.to | person_key) as $k | $keys | index($k)) != null)
-                 or (.to == $me and ((.from | person_key) as $k | $keys | index($k)) != null))
-                and ($since == 0 or (secs >= (now - $since)))))
+            | map(select((with_person or in_thread)
+                         and ($since == 0 or (secs >= (now - $since)))))
             | sort_by(.ts // "")
             | .[-$n:]
             | if $json == 1 then . else
@@ -421,6 +451,10 @@ cmd_person_key() {
     [[ -n "${1:-}" ]] || die "Usage: chat person-key <name>"
     _person_key "$1"; echo
 }
+cmd_thread_key() {
+    [[ -n "${1:-}" ]] || die "Usage: chat thread-key <name>"
+    _thread_key "$1"; echo
+}
 
 cmd_repl() {
     # Prefer the renamed TUI binary; fall back to a pre-rename build.
@@ -456,8 +490,13 @@ Usage:
                              names, from the messages.jsonl index next to the
                              trajectory (derived, self-maintaining; the
                              trajectory stays the source of truth)
+  chat history --thread <name> [--since 1d] [-n N] [--json]
+                             Every message in that Slack thread, whoever
+                             sent it (combine with --with for the union)
   chat person-key <name>     Print the stable person key for a routing name
                              (slack-U..-C..-ts -> slack:U..; pwa-x -> pwa:x)
+  chat thread-key <name>     Print the thread key (Slack channel threads
+                             only; empty for DMs, phone chat, Telegram)
   chat repl                  Interactive chat (shows agent replies inline)
 
 Config file ($CHATRC, default ./.chatrc):
@@ -483,6 +522,7 @@ case "${1:-}" in
     reply)     shift; cmd_reply "$@" ;;
     history) shift; cmd_history "$@" ;;
     person-key) shift; cmd_person_key "$@" ;;
+    thread-key) shift; cmd_thread_key "$@" ;;
     repl)    shift; cmd_repl "$@" ;;
     -h|--help|help) usage ;;
     "")     usage ;;

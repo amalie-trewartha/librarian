@@ -98,6 +98,30 @@ else
     bad "text output renders the messages"
 fi
 
+# --- threads: everyone in one Slack thread ------------------------------------
+# a3/a4 are Andy in thread T2; b1/b2 are Braden in thread T1, which is the same
+# thread as Andy's a1/a2 (both use thread ts 1787508187.726149).
+[[ "$(chat thread-key "$ANDY_T1")" == "slack-thread:C0BMVH6LM4K-1787508187.726149" ]] && ok "slack thread name -> thread key" || bad "slack thread name -> thread key" "got $(chat thread-key "$ANDY_T1")"
+[[ -z "$(chat thread-key "$ANDY_DM")" && -z "$(chat thread-key pwa-andy)" ]] && ok "DMs and the phone chat have no thread key" || bad "DMs and the phone chat have no thread key"
+out=$(chat history --thread "$BRADEN" --json)
+if printf '%s' "$out" | jq -e 'map(.step_id) == ["a1","a2","b1","b2"]' >/dev/null; then
+    ok "--thread returns everyone's messages in that thread, in order"
+else
+    bad "--thread returns everyone's messages in that thread" "$(printf '%s' "$out" | jq -c 'map(.step_id)')"
+fi
+n=$(chat history --thread "$BRADEN" --since 1d --json | jq 'length')
+[[ "$n" == 2 ]] && ok "--thread --since bounds the thread window" || bad "--thread --since bounds the thread window" "got $n"
+out=$(chat history --with "$BRADEN" --thread "$BRADEN" --json)
+if printf '%s' "$out" | jq -e 'map(.step_id) == ["a1","a2","b1","b2"]' >/dev/null; then
+    ok "--with plus --thread is the de-duplicated union"
+else
+    bad "--with plus --thread is the de-duplicated union" "$(printf '%s' "$out" | jq -c 'map(.step_id)')"
+fi
+n=$(chat history --thread "$ANDY_DM" --json | jq 'length')
+[[ "$n" == 0 ]] && ok "--thread on a DM name returns nothing" || bad "--thread on a DM name returns nothing" "got $n"
+n=$(chat history --thread "slack-thread:C0BMVH6LM4K-1787508187.726149" -n 1 --json | jq 'length')
+[[ "$n" == 1 ]] && ok "a thread key works as --thread" || bad "a thread key works as --thread" "got $n"
+
 # --- the index itself -------------------------------------------------------
 [[ -f "$IDX" ]] && ok "index created next to the trajectory" || bad "index created next to the trajectory"
 if [[ "$(jq -r .step_id "$IDX" | grep -c '^n')" == 0 ]] && [[ "$(wc -l < "$IDX" | tr -d ' ')" == 7 ]]; then

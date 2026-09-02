@@ -138,7 +138,20 @@ _age_jq='def age: ((now - ((.ts // "")[0:19] + "Z" | try fromdateiso8601 catch n
       elif $s < 5400 then "\(($s / 60) | floor) min ago"
       elif $s < 172800 then "\(($s / 3600) | floor) h ago"
       else "\(($s / 86400) | floor) days ago" end;'
+# Thread context: in a Slack channel thread other people talk too, and their
+# messages are the conversation the sender is replying into. Add the thread's
+# last RESPONDER_THREAD_SINCE (1d) of messages from anyone; the union is
+# de-duplicated by step id below. DMs, the phone chat and Telegram have no
+# thread, so this adds nothing there.
+THREAD_SINCE="${RESPONDER_THREAD_SINCE:-1d}"
+THREAD_MAX="${RESPONDER_THREAD_MAX:-20}"
+thread_key=$(chat thread-key "$msg_from" 2>/dev/null) || thread_key=""
 history_json=$(chat history --with "$msg_from" --since "$HISTORY_SINCE" -n "$HISTORY_MAX" --json 2>/dev/null) || history_json=""
+thread_json="[]"
+if [[ -n "$thread_key" ]]; then
+    thread_json=$(chat history --thread "$msg_from" --since "$THREAD_SINCE" -n "$THREAD_MAX" --json 2>/dev/null) || thread_json="[]"
+    [[ -n "$thread_json" ]] || thread_json="[]"
+fi
 history_source="index"
 if [[ -z "$history_json" || "$history_json" == "[]" ]]; then
     # Nothing indexed for this person (or the index is unreadable): fall back
@@ -151,16 +164,24 @@ if [[ -z "$history_json" || "$history_json" == "[]" ]]; then
                   and ((.from == $them and .to == $me) or (.from == $me and .to == $them)))]' 2>/dev/null) \
         || history_json="[]"
 fi
-# Roles by direction; the trigger always ends the list exactly once (it is
-# usually already indexed, but may not be if the index update lost a race).
-convo_sel=$(printf '%s' "$history_json" | jq -c \
+# Roles by direction: anything we sent is an assistant turn, anything sent to
+# us (by the sender or by someone else in the thread; the bridge header in the
+# text names the speaker) is a user turn stamped with its age. Union of person
+# history and thread context, de-duplicated by step id, in time order. The
+# trigger always ends the list exactly once (it is usually already indexed,
+# but may not be if the index update lost a race).
+convo_sel=$(jq -nc --argjson person "$history_json" --argjson thread "$thread_json" \
     --arg me "$IDENTITY_NAME" --arg c "$trigger_content" --arg t "$trigger_step_id" "$_age_jq"'
-    map(if .to == $me then {role:"user", content:("[\(age)] " + (.content|tostring)), step_id:(.step_id // "")}
-        elif .from == $me then {role:"assistant", content:(.content|tostring), step_id:(.step_id // "")}
-        else empty end)
-    | map(select(.step_id != $t)) + [{role:"user", content:$c, step_id:$t}]
+    ($person | map(.step_id // "")) as $pids
+    | ($person + $thread)
+    | unique_by(.step_id) | sort_by(.ts // "")
+    | map((.step_id // "") as $sid
+          | if .to == $me then {role:"user", content:("[\(age)] " + (.content|tostring)), step_id:$sid, thread_only: (($pids | index($sid)) == null)}
+            elif .from == $me then {role:"assistant", content:(.content|tostring), step_id:$sid, thread_only: (($pids | index($sid)) == null)}
+            else empty end)
+    | map(select(.step_id != $t)) + [{role:"user", content:$c, step_id:$t, thread_only:false}]
     | (if (.[0].role // "user") == "assistant" then .[1:] else . end)' 2>/dev/null) \
-    || convo_sel=$(jq -nc --arg c "$trigger_content" --arg t "$trigger_step_id" '[{role:"user", content:$c, step_id:$t}]')
+    || convo_sel=$(jq -nc --arg c "$trigger_content" --arg t "$trigger_step_id" '[{role:"user", content:$c, step_id:$t, thread_only:false}]')
 convo_json=$(printf '%s' "$convo_sel" | jq -c 'map({role, content})')
 now_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
@@ -176,6 +197,8 @@ inner_context=$(printf '%s\n' "$inner_sel" | jq -r \
 #                  trigger itself excluded)
 #   context_steps  step ids of everything in the prompt (conversation + the
 #                  inner-life excerpt); enough to rebuild the exact prompt
+#   thread_msgs    how many of those came only from the thread (other
+#                  people's messages, and ours to them)
 #   history_source "index" (chat history --with) or "window" (the
 #                  recent-stream fallback)
 #   model          the reply model
@@ -188,6 +211,7 @@ metrics_json=$(jq -nc --arg t "$trigger_step_id" --arg model "$REPLY_MODEL" \
     --argjson inner "$(printf '%s\n' "$inner_sel" | jq -cs 'map(.step_id // empty)' 2>/dev/null || echo '[]')" \
     --arg hs "$history_source" '
     {context_msgs: ([$convo[] | select(.step_id != $t)] | length),
+     thread_msgs: ([$convo[] | select(.step_id != $t and .thread_only == true)] | length),
      context_steps: (([$convo[].step_id] + $inner) | map(select(. != ""))),
      history_source: $hs,
      model: $model}')
@@ -270,7 +294,9 @@ reply_system="$system_prompt
 The current time is $now_utc. You are in a live chat conversation with
 $msg_from. The messages are the real back-and-forth so far, spanning up to
 $HISTORY_SINCE; each of their messages is prefixed with how long ago it was sent,
-so mind the gaps (an answer from days ago is not \"this morning\"). Reply to
+so mind the gaps (an answer from days ago is not \"this morning\"). In a group
+thread some earlier messages are from other people (the header in each message
+names the speaker); they are context, and you are answering $msg_from. Reply to
 their newest message — first person, natural, conversational, concise. Never repeat or rephrase an earlier reply of yours.
 Answer completely from what you already know. If a real answer needs tools,
 files, or looking something up, do not guess and do not promise to check
