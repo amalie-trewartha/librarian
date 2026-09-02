@@ -80,7 +80,7 @@ run_llm() {
 q() { jq -r "$1" "$PAYLOAD_OUT" 2>/dev/null; }
 
 # --- 1. unpinned callers are unchanged ---------------------------------------
-run_llm -- 
+run_llm --
 [[ "$(q 'has("provider")')" == "false" ]] \
     && ok "no knobs: payload carries no provider block" \
     || bad "no knobs: payload carries no provider block" "got $(q 'has("provider")')"
@@ -203,7 +203,7 @@ rc=$?
 grep -q "OpenRouter-only" "$WORK/err" \
     && ok "an --or-* flag on another provider warns on stderr" \
     || bad "an --or-* flag on another provider warns on stderr" "stderr: $(head -c200 "$WORK/err")"
-[[ "$(q 'has("provider")')" != "true" ]] \
+[[ "$(q 'has("provider")')" == "false" ]] \
     && ok "an --or-* flag adds no provider block for another provider" \
     || bad "an --or-* flag adds no provider block for another provider" "got $(q '.provider')"
 
