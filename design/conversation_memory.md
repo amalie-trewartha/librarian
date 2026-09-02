@@ -3,7 +3,10 @@
 Status: IN PROGRESS. Plan agreed 2026-09-02. Part 6 (metrics) shipped as
 883339f and was deployed to Audel the same day. Experiments B and C both
 ran on 2026-09-02; B passed and C changed the plan (see the experiment
-sections and the revised rollout order). Parts 1 to 5 are not started.
+sections and the revised rollout order). Parts 1 and 2 are built and
+tested (`bin/chat`, `thinkers/responder/step`,
+`tests/test_chat_history_index.sh`), pending push and deploy. Parts 3 to
+5 are not started.
 
 Related: [responder_thinker.md](responder_thinker.md) describes the thinker
 this plan changes. [monolith_thinker.md](monolith_thinker.md) and
@@ -177,6 +180,20 @@ hook inside `chat send` would miss.
 Files touched: `bin/chat`, `thinkers/responder/step`, a new test under
 `tests/`.
 
+As built: `chat history --with <name> [--since 7d] [-n N] [--json]`. The
+index is `messages.jsonl` beside the trajectory with a `.offset` file that
+records the consumed byte count and the trajectory header id; a header
+mismatch or a missing index triggers a rebuild. Only complete lines are
+consumed, so a line still being written waits for the next call. A
+directory lock keeps to one updater at a time and a concurrent reader
+just uses what is there. Indexed content is capped at 8,000 characters.
+The responder asks for `--since 7d -n 20` (env `RESPONDER_HISTORY_SINCE`
+and `RESPONDER_HISTORY_MAX`), prefixes each of the person's messages with
+its age, states the current time in the system prompt, and records
+`history_source` ("index" or "window") on its decision observation. When
+the index returns nothing for the person it falls back to the old window
+filter.
+
 ### Part 2. Person identity separate from routing identity
 
 The `from` field stays the routing name, because the bridges need it to
@@ -211,6 +228,12 @@ ways, and unlinked aliases fall back to the first layer.
 
 Files touched: a helper in `bin/chat` or `thinkers/_lib/common.sh`, the
 Slack bridge for `display_name`, `thinkers/responder/step`.
+
+As built: `chat person-key <name>` and the same rule inside the index
+filter. `chat history --with` accepts a routing name or a person key and
+merges the `aliases` of any `type: person` memory whose `person_key`
+matches or whose aliases list the key. The Slack `display_name` stamp is
+deferred to Part 4, which is when aliases start to matter.
 
 ### Part 3. A cleaner recent stream
 

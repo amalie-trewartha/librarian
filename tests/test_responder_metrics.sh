@@ -97,7 +97,7 @@ msg r-old  "$ME"   "$THEM" "about half done"               3500
 thoughts 5 th
 msg trig-1 "$THEM" "$ME"   "any update"                    0
 printf 'still about half done\n' > "$STUB_REPLY_FILE"
-run_step "$(trigger_json trig-1)"
+LOG_PROMPT=1 run_step "$(trigger_json trig-1)"
 
 obs=$(obs_for trig-1)
 if [[ -n "$obs" && "$(field "$obs" decision)" == replied ]]; then
@@ -128,29 +128,49 @@ fi
 ms=$(field "$obs" compose_ms)
 [[ "$ms" =~ ^[0-9]+$ ]] && ok "compose_ms is a number" || bad "compose_ms is a number" "got '$ms'"
 [[ "$(field "$obs" model)" == stub-model ]] && ok "model recorded" || bad "model recorded" "got '$(field "$obs" model)'"
+[[ "$(field "$obs" history_source)" == index ]] && ok "history came from the message index" || bad "history came from the message index" "got '$(field "$obs" history_source)'"
+if grep -q '\[60 min ago\] how is the bridge work going' "$ID/run/logs/responder-prompts/"*trig-1* 2>/dev/null \
+   && grep -q 'The current time is 20' "$ID/run/logs/responder-prompts/"*trig-1* 2>/dev/null; then
+    ok "their messages carry an age stamp and the prompt states the current time"
+else
+    bad "their messages carry an age stamp and the prompt states the current time" "$(grep -o '\[[^]]*ago\]' "$ID/run/logs/responder-prompts/"*trig-1* 2>/dev/null | head -2 | tr '\n' ' ')"
+fi
 
-# --- 2. the window has forgotten: context_msgs is 0 but gap_s still knows ----
-# 40 thoughts push both earlier messages out of a 20-step window; the raw tail
-# still holds them, so the gap is measured even though the prompt had nothing.
+# --- 2. beyond the history window: context_msgs is 0 but gap_s still knows ---
+# Parts 1+2 read this person's messages over the last 7 days from the index, so
+# mind activity no longer evicts a conversation. Only age does: a sender whose
+# whole exchange is 8 days old gets an empty history, while gap_s (raw tail)
+# still reports the real gap.
+msg o-old  "oldfriend" "$ME"   "remember me?"   $((8*86400))
+msg o-rep  "$ME"   "oldfriend" "of course"      $((8*86400-60))
 thoughts 40 pad
-msg trig-2 "$THEM" "$ME" "sure!" +5
+msg trig-2 "oldfriend" "$ME" "sure!" +5
 printf 'sure what?\n' > "$STUB_REPLY_FILE"
 run_step "$(trigger_json trig-2)"
 obs=$(obs_for trig-2)
 [[ "$(field "$obs" context_msgs)" == 0 ]] \
-    && ok "forgotten conversation is recorded as context_msgs 0" \
-    || bad "forgotten conversation is recorded as context_msgs 0" "got '$(field "$obs" context_msgs)'"
+    && ok "a conversation older than the history window is recorded as context_msgs 0" \
+    || bad "a conversation older than the history window is recorded as context_msgs 0" "got '$(field "$obs" context_msgs)'"
 gap=$(field "$obs" gap_s)
-if [[ "$gap" =~ ^[0-9]+$ ]] && (( gap >= 0 && gap <= 30 )); then
-    ok "gap_s measured from the raw tail, not the window"
+if [[ "$gap" =~ ^[0-9]+$ ]] && (( gap >= 8*86400-120 && gap <= 8*86400+60 )); then
+    ok "gap_s measured from the raw tail, not the history"
 else
-    bad "gap_s measured from the raw tail, not the window" "got '$gap'"
+    bad "gap_s measured from the raw tail, not the history" "got '$gap'"
 fi
-if printf '%s' "$obs" | jq -e '.context_steps | index("m-old") == null and index("trig-2")' >/dev/null 2>&1; then
-    ok "context_steps reflects the forgotten window"
+if printf '%s' "$obs" | jq -e '.context_steps | index("o-old") == null and index("trig-2")' >/dev/null 2>&1; then
+    ok "context_steps reflects the empty history"
 else
-    bad "context_steps reflects the forgotten window" "got $(printf '%s' "$obs" | jq -c .context_steps)"
+    bad "context_steps reflects the empty history" "got $(printf '%s' "$obs" | jq -c .context_steps)"
 fi
+# and the case the whole plan is for: 40 thoughts between messages no longer
+# makes the responder forget nick
+msg trig-2b "$THEM" "$ME" "still there?" +6
+printf 'yes\n' > "$STUB_REPLY_FILE"
+run_step "$(trigger_json trig-2b)"
+obs=$(obs_for trig-2b)
+[[ "$(field "$obs" context_msgs)" -ge 4 ]] \
+    && ok "mind activity no longer evicts the conversation (context_msgs $(field "$obs" context_msgs) after 40 thoughts)" \
+    || bad "mind activity no longer evicts the conversation" "got '$(field "$obs" context_msgs)'"
 
 # --- 3. NO_REPLY carries the same metrics -------------------------------------
 msg trig-3 "$THEM" "$ME" "thanks" +10

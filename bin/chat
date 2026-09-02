@@ -214,11 +214,175 @@ cmd_send_file() {
     printf 'File sent: %s\n' "$filename" >&2
 }
 
+# ---------------------------------------------------------------------------
+# Person keys (design/conversation_memory.md, part 2)
+# ---------------------------------------------------------------------------
+# The chat `from` name is a ROUTING name: a bridge packs everything it needs
+# to deliver the reply into it, so one human is many names (a Slack user is a
+# new name in every channel thread). The person key is what stays stable:
+#   slack-U07AB-C09XYZ-1722400000.123456  ->  slack:U07AB
+#   slack-U07AB-D09XYZ                    ->  slack:U07AB
+#   telegram-8525624593-8525624593        ->  telegram:8525624593
+#   pwa-andy                              ->  pwa:andy
+#   Andy                                  ->  Andy
+# The same rule lives in jq below (_PERSON_KEY_JQ) so the index filter can
+# apply it per line; keep the two in step.
+_PERSON_KEY_JQ='def person_key:
+    if test("^slack-[A-Za-z0-9]+-[A-Za-z0-9]+(-[0-9.]+)?$") then "slack:" + (split("-")[1])
+    elif test("^telegram-[0-9]+-[0-9]+$") then "telegram:" + (split("-")[1])
+    elif test("^pwa-.") then "pwa:" + .[4:]
+    else . end;'
+
+_person_key() {
+    printf '%s' "$1" | jq -Rr "$_PERSON_KEY_JQ person_key"
+}
+
+# All keys that mean the same person: the key itself plus any `aliases` listed
+# in a `type: person` memory whose `person_key` matches (or whose own key is
+# listed as an alias). Reads $MEM_DIR; silent when unset. One key per line.
+_person_aliases() {
+    local key="$1" f ftype fkey aliases
+    printf '%s\n' "$key"
+    [[ -n "${MEM_DIR:-}" && -d "$MEM_DIR" ]] || return 0
+    for f in "$MEM_DIR"/*.md; do
+        [[ -f "$f" ]] || continue
+        ftype=$(awk 'NR==1 && /^---$/{f=1; next} f && /^---$/{exit} f && /^type:/{sub(/^type:[[:space:]]*/, ""); print; exit}' "$f")
+        [[ "$ftype" == person ]] || continue
+        fkey=$(awk 'NR==1 && /^---$/{f=1; next} f && /^---$/{exit} f && /^person_key:/{sub(/^person_key:[[:space:]]*/, ""); print; exit}' "$f")
+        # aliases: [a, b]  or  aliases:\n  - a\n  - b
+        aliases=$(awk 'NR==1 && /^---$/{f=1; next} f && /^---$/{exit}
+            f && /^aliases:[[:space:]]*\[/ {s=$0; sub(/^aliases:[[:space:]]*\[/, "", s); sub(/\].*$/, "", s); gsub(/,/, "\n", s); print s; next}
+            f && /^aliases:[[:space:]]*$/ {a=1; next}
+            f && a && /^[[:space:]]*-[[:space:]]*/ {sub(/^[[:space:]]*-[[:space:]]*/, ""); print; next}
+            f && a {a=0}' "$f" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^"//;s/"$//' | sed '/^$/d')
+        if [[ "$fkey" == "$key" ]] || printf '%s\n' "$aliases" | grep -qx -- "$key"; then
+            [[ -n "$fkey" ]] && printf '%s\n' "$fkey"
+            [[ -n "$aliases" ]] && printf '%s\n' "$aliases"
+        fi
+    done | sort -u
+}
+
+# ---------------------------------------------------------------------------
+# Message index (design/conversation_memory.md, part 1)
+# ---------------------------------------------------------------------------
+# messages.jsonl next to the trajectory holds every message step, one slim
+# line each. It is DERIVED: the trajectory stays the only truth, and the index
+# is rebuilt from it whenever it is missing or does not match. It maintains
+# itself on read: each call appends the message lines from the bytes the
+# trajectory gained since the recorded offset (usually a few MB), so nothing
+# that writes messages has to know it exists, and a busy identity does not pay
+# a whole-file scan on every reply (a 5,000 line tail was 1.3s and could not
+# see past ~a day; the full file is over 1GB on Audel).
+_INDEX_CONTENT_CAP=8000
+
+# _index_update <trajectory file> <index file>
+# Brings the index up to date. Only complete lines are consumed: a line still
+# being appended is left for the next call, so a message is never skipped.
+_index_update() {
+    local tf="$1" idx="$2" off="$2.offset" lock="$2.lock"
+    local header have_off have_header size
+    header=$(head -n 1 -- "$tf" 2>/dev/null | jq -r '.step_id // .traj_id // ""' 2>/dev/null) || header=""
+    have_off=0; have_header=""
+    if [[ -f "$off" ]]; then
+        read -r have_off have_header < "$off" || true
+        [[ "$have_off" =~ ^[0-9]+$ ]] || have_off=0
+    fi
+    if [[ ! -f "$idx" || "$have_header" != "$header" ]]; then
+        have_off=0
+        : > "$idx.rebuild" || return 1
+        mv -f "$idx.rebuild" "$idx"
+    fi
+    size=$(wc -c < "$tf" | tr -d ' ')
+    (( size > have_off )) || return 0
+    # One updater at a time; a concurrent reader just uses what is there.
+    mkdir "$lock" 2>/dev/null || return 0
+    _index_apply "$tf" "$idx" "$off" "$header" "$have_off"
+    local rc=$?
+    rmdir "$lock" 2>/dev/null
+    return $rc
+}
+
+# The locked part of _index_update: read the new bytes, index the complete
+# message lines among them, advance the offset.
+_index_apply() {
+    local tf="$1" idx="$2" off="$3" header="$4" have_off="$5"
+    local new_bytes tmp partial
+    tmp=$(mktemp) || return 1
+    tail -c +"$((have_off + 1))" -- "$tf" > "$tmp"
+    new_bytes=$(wc -c < "$tmp" | tr -d ' ')
+    partial=0
+    if [[ "$new_bytes" -gt 0 && "$(tail -c 1 "$tmp" | wc -l | tr -d ' ')" -eq 0 ]]; then
+        partial=$(tail -n 1 "$tmp" | wc -c | tr -d ' ')
+    fi
+    if (( new_bytes - partial > 0 )); then
+        head -c "$((new_bytes - partial))" "$tmp" \
+            | grep -F '"type":"message"' \
+            | jq -c --argjson cap "$_INDEX_CONTENT_CAP" 'fromjson? // empty
+                | select(.type == "message" and (.from // "") != "" and (.to // "") != "")
+                | {step_id, ts, from, to, reply_to, filename,
+                   content: ((.content // "") | tostring
+                             | if length > $cap then .[0:$cap] + "…[truncated]" else . end)}
+                | with_entries(select(.value != null))' -R >> "$idx" 2>/dev/null || true
+    fi
+    printf '%s %s\n' "$((have_off + new_bytes - partial))" "$header" > "$off"
+    rm -f "$tmp"
+}
+
+# Parse "7d" / "36h" / "90m" / "3600" (seconds) into seconds.
+_duration_s() {
+    case "$1" in
+        *d) printf '%s' "$(( ${1%d} * 86400 ))" ;;
+        *h) printf '%s' "$(( ${1%h} * 3600 ))" ;;
+        *m) printf '%s' "$(( ${1%m} * 60 ))" ;;
+        *s) printf '%s' "${1%s}" ;;
+        *)  printf '%s' "$1" ;;
+    esac
+}
+
 cmd_history() {
-    local n=20
-    [[ -n "${1:-}" ]] && n="$1"
+    local n=20 with="" since="" as_json=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --with)  with="${2:?--with requires a name or person key}"; shift 2 ;;
+            --since) since="${2:?--since requires a duration like 7d}"; shift 2 ;;
+            -n)      n="${2:?-n requires a count}"; shift 2 ;;
+            --json)  as_json=1; shift ;;
+            *)       n="$1"; shift ;;
+        esac
+    done
+    [[ "$n" =~ ^[0-9]+$ ]] || die "history: count must be a number, got '$n'"
 
     local identity_name="${IDENTITY_NAME:-agent}"
+
+    if [[ -n "$with" ]]; then
+        # Indexed path: this person's conversation with us, grouped by person
+        # key across every routing name they have used, newest last.
+        local tf idx key keys_json since_s
+        tf=$(traj path "${ROOT_TRAJ_ID:-$TRAJ_ID}" 2>/dev/null) || tf=""
+        [[ -n "$tf" && -f "$tf" ]] || die "history: cannot resolve the root trajectory file"
+        idx="$(dirname "$tf")/messages.jsonl"
+        _index_update "$tf" "$idx" || true
+        [[ -f "$idx" ]] || { [[ $as_json -eq 1 ]] && printf '[]\n'; return 0; }
+        key=$(_person_key "$with")
+        keys_json=$(_person_aliases "$key" | jq -Rn '[inputs | select(length > 0)]')
+        since_s=0
+        [[ -n "$since" ]] && since_s=$(_duration_s "$since")
+        jq -cn --arg me "$identity_name" --argjson keys "$keys_json" \
+               --argjson since "$since_s" --argjson n "$n" --argjson json "$as_json" "$_PERSON_KEY_JQ"'
+            def secs: (.ts // "")[0:19] + "Z" | try fromdateiso8601 catch 0;
+            [inputs | fromjson? // empty]
+            | unique_by(.step_id)
+            | map(select(
+                ((.from == $me and ((.to | person_key) as $k | $keys | index($k)) != null)
+                 or (.to == $me and ((.from | person_key) as $k | $keys | index($k)) != null))
+                and ($since == 0 or (secs >= (now - $since)))))
+            | sort_by(.ts // "")
+            | .[-$n:]
+            | if $json == 1 then . else
+                .[] | "\(.ts // "?") \(.from) → \(.to): \(.content)"
+              end' -R < "$idx"
+        return 0
+    fi
 
     # Support both new "message" type and legacy "human-msg"/"agent-msg" types
     traj cat "${ROOT_TRAJ_ID:-$TRAJ_ID}" --filter type=message,human-msg,agent-msg --raw 2>/dev/null \
@@ -245,6 +409,11 @@ cmd_history() {
     done
 }
 
+cmd_person_key() {
+    [[ -n "${1:-}" ]] || die "Usage: chat person-key <name>"
+    _person_key "$1"; echo
+}
+
 cmd_repl() {
     # Prefer the renamed TUI binary; fall back to a pre-rename build.
     if command -v headlong-tui >/dev/null 2>&1; then
@@ -269,6 +438,14 @@ Usage:
                              inferred (latest unanswered message from
                              <to_name>) unless --reply-to overrides.
   chat history [N]           Show last N messages (default 20)
+  chat history --with <name> [--since 7d] [-n N] [--json]
+                             This person's conversation with the identity,
+                             grouped by person key across all their routing
+                             names, from the messages.jsonl index next to the
+                             trajectory (derived, self-maintaining; the
+                             trajectory stays the source of truth)
+  chat person-key <name>     Print the stable person key for a routing name
+                             (slack-U..-C..-ts -> slack:U..; pwa-x -> pwa:x)
   chat repl                  Interactive chat (shows agent replies inline)
 
 Config file ($CHATRC, default ./.chatrc):
@@ -280,6 +457,9 @@ Environment:
   TRAJ_ID         Trajectory ID (set by `identity shell`)
   IDENTITY_NAME   Identity name (for reply attribution and --to default)
   IDENTITY_DIR    Identity directory (for repl history)
+  MEM_DIR         Memories dir; `type: person` memories with `person_key`
+                  and `aliases` merge several keys into one person for
+                  history --with
 EOF
     exit 0
 }
@@ -290,6 +470,7 @@ case "${1:-}" in
     send-file) shift; cmd_send_file "$@" ;;
     reply)     shift; cmd_reply "$@" ;;
     history) shift; cmd_history "$@" ;;
+    person-key) shift; cmd_person_key "$@" ;;
     repl)    shift; cmd_repl "$@" ;;
     -h|--help|help) usage ;;
     "")     usage ;;

@@ -122,21 +122,47 @@ if traj exists 2>/dev/null; then
     recent_context=$(_recent_stream "$THINK_CONTEXT_TAIL") || recent_context=""
 fi
 
-# The conversation, with the step id of each message kept alongside so the
+# The conversation: this person's messages with us over the last
+# RESPONDER_HISTORY_SINCE (7d), grouped by person key across every routing name
+# they use (Slack thread names, DM name, phone chat), read from the derived
+# message index via `chat history --with` (design/conversation_memory.md,
+# parts 1+2). Each of their messages is stamped with its age so the model can
+# tell "this morning" from "six days ago" (Experiment C found both new prompts
+# misread time without it). Falls back to the recent-stream window when the
+# index cannot be read. The step id of each message is kept alongside so the
 # observation below can record exactly which steps were in the prompt.
-convo_sel=$(printf '%s\n' "$recent_context" | jq -cRn \
-    --arg me "$IDENTITY_NAME" --arg them "$msg_from" \
-    --arg c "$trigger_content" --arg t "$trigger_step_id" '
-    [inputs | fromjson? // empty
-     | select(.type == "message")
-     | if .from == $them and .to == $me then {role:"user", content:(.content|tostring), step_id:(.step_id // "")}
-       elif .from == $me and .to == $them then {role:"assistant", content:(.content|tostring), step_id:(.step_id // "")}
-       else empty end]
-    | .[-12:]
-    | (if length == 0 or .[-1].role != "user" then . + [{role:"user", content:$c, step_id:$t}] else . end)
+HISTORY_SINCE="${RESPONDER_HISTORY_SINCE:-7d}"
+HISTORY_MAX="${RESPONDER_HISTORY_MAX:-20}"
+_age_jq='def age: ((now - ((.ts // "")[0:19] + "Z" | try fromdateiso8601 catch now)) | floor) as $s
+    | if $s < 90 then "just now"
+      elif $s < 5400 then "\(($s / 60) | floor) min ago"
+      elif $s < 172800 then "\(($s / 3600) | floor) h ago"
+      else "\(($s / 86400) | floor) days ago" end;'
+history_json=$(chat history --with "$msg_from" --since "$HISTORY_SINCE" -n "$HISTORY_MAX" --json 2>/dev/null) || history_json=""
+history_source="index"
+if [[ -z "$history_json" || "$history_json" == "[]" ]]; then
+    # Nothing indexed for this person (or the index is unreadable): fall back
+    # to the messages in the recent-stream window, as before parts 1+2.
+    history_source="window"
+    history_json=$(printf '%s\n' "$recent_context" | jq -cRn \
+        --arg me "$IDENTITY_NAME" --arg them "$msg_from" '
+        [inputs | fromjson? // empty
+         | select(.type == "message"
+                  and ((.from == $them and .to == $me) or (.from == $me and .to == $them)))]' 2>/dev/null) \
+        || history_json="[]"
+fi
+# Roles by direction; the trigger always ends the list exactly once (it is
+# usually already indexed, but may not be if the index update lost a race).
+convo_sel=$(printf '%s' "$history_json" | jq -c \
+    --arg me "$IDENTITY_NAME" --arg c "$trigger_content" --arg t "$trigger_step_id" "$_age_jq"'
+    map(if .to == $me then {role:"user", content:("[\(age)] " + (.content|tostring)), step_id:(.step_id // "")}
+        elif .from == $me then {role:"assistant", content:(.content|tostring), step_id:(.step_id // "")}
+        else empty end)
+    | map(select(.step_id != $t)) + [{role:"user", content:$c, step_id:$t}]
     | (if (.[0].role // "user") == "assistant" then .[1:] else . end)' 2>/dev/null) \
     || convo_sel=$(jq -nc --arg c "$trigger_content" --arg t "$trigger_step_id" '[{role:"user", content:$c, step_id:$t}]')
 convo_json=$(printf '%s' "$convo_sel" | jq -c 'map({role, content})')
+now_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 inner_sel=$(printf '%s\n' "$recent_context" | jq -cR \
     'fromjson? // empty | select(.type != "message")' 2>/dev/null | tail -n 8) || inner_sel=""
@@ -150,6 +176,8 @@ inner_context=$(printf '%s\n' "$inner_sel" | jq -r \
 #                  trigger itself excluded)
 #   context_steps  step ids of everything in the prompt (conversation + the
 #                  inner-life excerpt); enough to rebuild the exact prompt
+#   history_source "index" (chat history --with) or "window" (the
+#                  recent-stream fallback)
 #   model          the reply model
 #   compose_ms     wake to decision (added below)
 #   gap_s          seconds since the previous message exchanged with this
@@ -157,9 +185,11 @@ inner_context=$(printf '%s\n' "$inner_sel" | jq -r \
 #                  none is in the tail)
 metrics_json=$(jq -nc --arg t "$trigger_step_id" --arg model "$REPLY_MODEL" \
     --argjson convo "$convo_sel" \
-    --argjson inner "$(printf '%s\n' "$inner_sel" | jq -cs 'map(.step_id // empty)' 2>/dev/null || echo '[]')" '
+    --argjson inner "$(printf '%s\n' "$inner_sel" | jq -cs 'map(.step_id // empty)' 2>/dev/null || echo '[]')" \
+    --arg hs "$history_source" '
     {context_msgs: ([$convo[] | select(.step_id != $t)] | length),
      context_steps: (([$convo[].step_id] + $inner) | map(select(. != ""))),
+     history_source: $hs,
      model: $model}')
 
 # Seconds between the trigger and the previous message exchanged with this
@@ -194,9 +224,11 @@ _finish_metrics() {
 
 reply_system="$system_prompt
 
-You are in a live chat conversation with $msg_from. The messages are the real
-back-and-forth so far; reply to their newest message — first person, natural,
-conversational, concise. Never repeat or rephrase an earlier reply of yours.
+The current time is $now_utc. You are in a live chat conversation with
+$msg_from. The messages are the real back-and-forth so far, spanning up to
+$HISTORY_SINCE; each of their messages is prefixed with how long ago it was sent,
+so mind the gaps (an answer from days ago is not \"this morning\"). Reply to
+their newest message — first person, natural, conversational, concise. Never repeat or rephrase an earlier reply of yours.
 Answer completely from what you already know; only if it genuinely requires
 running tools or looking something up should you instead briefly say you're on
 it (the work happens separately) — in that case do not guess.

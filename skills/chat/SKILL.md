@@ -32,7 +32,15 @@ IMPORTANT: if I use `chat send` it sends a message to myself, so I must NEVER us
 
 ## Reviewing conversation history
 
-    chat history [N]     # show last N messages (default 20)
+    chat history [N]                          # show last N messages (default 20)
+    chat history --with <name> [--since 7d]   # my whole conversation with one person
+    chat history --with <name> -n 50 --json   # same, as JSON with timestamps
+
+`--with` groups a person across every name a bridge has used for them (a
+Slack user's DM and every channel thread, a phone chat name), so it is the
+way to check what someone and I said before, even days ago. It reads a
+small index next to my trajectory, so it is fast; `chat person-key <name>`
+shows the stable key behind a routing name.
 
 ## When to reply
 

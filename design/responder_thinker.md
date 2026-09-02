@@ -32,9 +32,15 @@ it's purely reactive.)
 3. **Claim.** Append a `reply_claim` step immediately (before composing),
    `{type:"reply_claim", trigger_step:t, source:"responder"}` — intended to tell
    the monolith router "this message is being handled, don't also reply."
-4. **Compose.** One `llm` call. Context is built as a real chat: recent
-   `message` steps mapped to `{role:user|assistant}` (last ~12, `-M` messages
-   array), plus recent non-message steps as a short "inner life (context only)"
+4. **Compose.** One `llm` call. Context is built as a real chat: this
+   person's `message` steps with us over the last 7 days (`chat history
+   --with`, grouped by person key across their routing names, last 20, each
+   of theirs stamped with its age; since 2026-09-02, see
+   [conversation_memory.md](conversation_memory.md); before that, the
+   messages inside the last ~30 recent-stream steps, which forgot a
+   conversation in a median 16 minutes) mapped to `{role:user|assistant}`
+   (`-M` messages array), plus recent non-message steps as a short "inner
+   life (context only)"
    block. The system prompt asks for a first-person, concise reply, forbids
    repeating an earlier reply, and allows the model to output exactly
    `NO_REPLY` when nothing needs saying.
