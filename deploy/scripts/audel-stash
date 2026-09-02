@@ -8,7 +8,9 @@
 #   deploy/scripts/audel-stash restore [--here] run after the deploy: goes back to
 #                                              the branch `branch` left, then
 #                                              re-applies the stash (--here: stay)
-#   deploy/scripts/audel-stash branch [--back] show the checkout / go back early
+#   deploy/scripts/audel-stash branch [--back|--forget]
+#                                              show the checkout / go back early /
+#                                              forget the recorded branch (stay here)
 #   deploy/scripts/audel-stash status          held stashes, branch, dirty tree
 #
 # Audel often leaves the box checkout on a branch of its own. update.sh needs
@@ -43,7 +45,7 @@ BACKUP_DIR=/opt/shellm/backups
 MARKER=audel-stash
 PREV_FILE=.git/AUDEL_PREV_BRANCH   # relative to BOX_REPO; written by `branch`
 
-usage() { sed -n '3,17p' "${BASH_SOURCE[0]}"; exit 1; }
+usage() { sed -n '3,19p' "${BASH_SOURCE[0]}"; exit 1; }
 
 section() { awk -v s="=== $1 ===" '$0==s{f=1;next} /^=== /{f=0} f' <<<"$2"; }
 
@@ -179,6 +181,13 @@ cmd_branch() {
             printf 'checkout: %s\n' \"\$(g branch --show-current)\"
             printf 'recorded previous branch: %s\n' \"\$(sudo -u shellm cat $BOX_REPO/$PREV_FILE 2>/dev/null || echo '(none)')\"
         "
+        return 0
+    fi
+    if [[ "$target" == --forget ]]; then
+        # Stop remembering the branch `branch main` left, so restore stays on
+        # the current checkout. Use after deciding the box lives on main now.
+        run_script_on_box "sudo -u shellm rm -f $BOX_REPO/$PREV_FILE" >/dev/null \
+            && info "forgot the recorded previous branch" || die "could not clear $PREV_FILE"
         return 0
     fi
     [[ "$target" =~ ^(--back|[A-Za-z0-9._/-]+)$ ]] || die "not a branch name: $target"
