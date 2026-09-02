@@ -50,6 +50,33 @@ LLM_THINKING_LEVEL=""
 LLM_EFFORT=""
 LLM_RAW=0
 LLM_PROMPT=""
+# OpenRouter provider routing. OpenRouter fans a single model id out over
+# several hosts (one openai/* id can be served by OpenAI, Azure and Amazon
+# Bedrock) and picks one per request, so where a prompt is sent is a routing
+# decision rather than a model choice, and without these it is not expressible
+# from here:
+#   LLM_OR_ONLY             comma-separated provider slugs. Emits
+#                           provider.only, which OpenRouter treats as a hard
+#                           allowlist: a host outside it is never used, and an
+#                           unsatisfiable pin returns 404 rather than quietly
+#                           rerouting. Availability *within* the list is a
+#                           separate question — allow_fallbacks is OpenRouter's
+#                           retry setting, not part of the allowlist, so it is
+#                           left at its default here.
+#   LLM_OR_DATA_COLLECTION  "allow" or "deny" hosts that may store the prompt.
+#   LLM_OR_ZDR              zero-data-retention endpoints only. Intersected
+#                           with the pin rather than layered on it: a model
+#                           whose only ZDR endpoint is a host the pin excludes
+#                           has no endpoints left and 404s.
+# All three apply when the effective provider is openrouter, whether named
+# with --provider/LLM_PROVIDER or inferred from the model name.
+LLM_OR_ONLY="${LLM_OR_ONLY:-}"
+LLM_OR_DATA_COLLECTION="${LLM_OR_DATA_COLLECTION:-}"
+LLM_OR_ZDR="${LLM_OR_ZDR:-}"
+# Whether any of the three arrived from the environment or a .env layer. A
+# routing constraint nobody typed on this command line still changes where the
+# prompt may go, so it is announced once rather than applied invisibly.
+_llm_or_env="$LLM_OR_ONLY$LLM_OR_DATA_COLLECTION$LLM_OR_ZDR"
 # Token usage is captured on every call. A caller that wants this call's
 # numbers sets LLM_USAGE_FILE and gets a one-line JSON record
 # ({in_tok, out_tok, think_tok}) written there after the call (bin/shellm
@@ -156,6 +183,11 @@ Options:
   --provider NAME          Provider: anthropic, openai, gemini, openrouter,
                            opencode, opencode-go, openai-compatible, or
                            adapter (needs LLM_ADAPTER)
+  --or-only SLUGS          Pin routing to these provider slugs
+  --or-data-collection X   "allow" or "deny" hosts that may store the prompt
+  --or-zdr                 Zero-data-retention endpoints only
+                           (the three apply when the effective provider is
+                           openrouter, named or inferred from the model)
   --thinking [LEVEL]       Enable thinking (Anthropic: adaptive; Gemini: minimal/low/medium/high)
   --effort LEVEL           Thinking effort/provider output effort
   --raw                    Print raw non-streaming API response JSON
@@ -209,6 +241,10 @@ Environment:
   OPENAI_API_KEY           Required for OpenAI models
   GEMINI_API_KEY           Required for Gemini models
   OPENROUTER_API_KEY       Required for OpenRouter models
+  LLM_OR_ONLY, LLM_OR_DATA_COLLECTION, LLM_OR_ZDR
+                           Defaults for the matching --or-* flags. Applied
+                           when the effective provider is openrouter; setting
+                           one here prints the effective routing on stderr
   OPENCODE_API_KEY         Required for OpenCode models — both plans use it;
                            opencode-go/* bills the Go subscription, opencode/*
                            bills Zen. Keys: `opencode auth login`
@@ -263,6 +299,9 @@ while [[ $# -gt 0 ]]; do
         --stream)        LLM_STREAM=1; shift ;;
         --no-stream)     LLM_STREAM=0; shift ;;
         --provider)      LLM_PROVIDER="${2:?--provider requires a value}"; shift 2 ;;
+        --or-only)       LLM_OR_ONLY="${2:?--or-only requires a value}"; shift 2 ;;
+        --or-data-collection) LLM_OR_DATA_COLLECTION="${2:?--or-data-collection requires a value}"; shift 2 ;;
+        --or-zdr)        LLM_OR_ZDR=1; shift ;;
         --thinking)
             LLM_THINKING=1
             if [[ -n "${2:-}" && "$2" != -* ]]; then
@@ -369,6 +408,44 @@ fi
 # strip once, up front, so the payload builders AND get_model_max_tokens see
 # the actual model name and its caps.
 case "$LLM_PROVIDER" in opencode) LLM_MODEL="${LLM_MODEL#opencode/}" ;; opencode-go) LLM_MODEL="${LLM_MODEL#opencode-go/}" ;; esac
+
+# The --or-* knobs are OpenRouter routing controls and mean nothing to the
+# other providers, which are each a single host already. Clear them out loud
+# rather than silently: a stray LLM_OR_ZDR in a shell profile must not quietly
+# read as a residency guarantee on an Anthropic call, and must not kill it
+# either.
+if [[ "$LLM_PROVIDER" != "openrouter" ]]; then
+    if [[ -n "$LLM_OR_ONLY$LLM_OR_DATA_COLLECTION$LLM_OR_ZDR" ]]; then
+        echo "llm: warning: --or-*/LLM_OR_* are OpenRouter-only and ignored for provider '$LLM_PROVIDER'" >&2
+        LLM_OR_ONLY=""; LLM_OR_DATA_COLLECTION=""; LLM_OR_ZDR=""
+    fi
+else
+    # Normalise once, here, rather than at each use. A settings file saying
+    # LLM_OR_ZDR=true that read as false further down would drop a retention
+    # requirement without saying so, which is the one failure mode these knobs
+    # exist to prevent.
+    case "$(printf '%s' "$LLM_OR_ZDR" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|on) LLM_OR_ZDR=1 ;;
+        0|false|no|"") LLM_OR_ZDR="" ;;
+        *) die "--or-zdr/LLM_OR_ZDR must be 1/true/yes/on or 0/false/no/empty (got '$LLM_OR_ZDR')" ;;
+    esac
+    case "$LLM_OR_DATA_COLLECTION" in
+        ""|allow|deny) ;;
+        *) die "--or-data-collection/LLM_OR_DATA_COLLECTION must be allow or deny (got '$LLM_OR_DATA_COLLECTION')" ;;
+    esac
+    if [[ -n "$LLM_OR_ONLY" ]]; then
+        # OpenRouter matches slugs exactly, and case, padding and empty
+        # elements all come out of real .env files and shell profiles.
+        LLM_OR_ONLY=$(printf '%s' "$LLM_OR_ONLY" | tr '[:upper:]' '[:lower:]' \
+            | tr -d '[:space:]' | sed 's/,\{1,\}/,/g; s/^,//; s/,$//')
+        # A pin that normalises away is a typo, and treating it as "no pin"
+        # would route anywhere — the opposite of what was asked for.
+        [[ -n "$LLM_OR_ONLY" ]] || die "--or-only/LLM_OR_ONLY had no provider slugs left after normalization"
+    fi
+    if [[ -n "$_llm_or_env" && -n "$LLM_OR_ONLY$LLM_OR_DATA_COLLECTION$LLM_OR_ZDR" ]]; then
+        echo "llm: routing: openrouter${LLM_OR_ONLY:+ only=$LLM_OR_ONLY}${LLM_OR_DATA_COLLECTION:+ data_collection=$LLM_OR_DATA_COLLECTION}${LLM_OR_ZDR:+ zdr=true}" >&2
+    fi
+fi
 
 # Per-model max output token caps (synchronous APIs, no beta headers).
 # Used as the default when -t/--max-tokens is not given.
@@ -594,7 +671,28 @@ build_payload_gemini() {
 }
 
 # OpenRouter is OpenAI-compatible (chat/completions wire format)
-build_payload_openrouter() { build_payload_openai; }
+# OpenRouter is OpenAI-compatible (chat/completions wire format), plus an
+# optional "provider" object carrying the routing preferences above. Without
+# that object OpenRouter is free to pick any host serving the model.
+build_payload_openrouter() {
+    # Unpinned callers pay nothing: no extra jq pass, byte-identical to before.
+    if [[ -z "$LLM_OR_ONLY$LLM_OR_DATA_COLLECTION$LLM_OR_ZDR" ]]; then
+        build_payload_openai
+        return
+    fi
+    # Values are already normalised above, so this only assembles them. The sum
+    # is bound with `as $p` rather than written inline as the object's value:
+    # jq 1.7 (what ubuntu-latest, and therefore CI, runs) rejects a `+` chain of
+    # parenthesised ifs in that position, and only 1.8 relaxed the grammar.
+    build_payload_openai | jq -c \
+        --arg only "$LLM_OR_ONLY" \
+        --arg dc "$LLM_OR_DATA_COLLECTION" \
+        --arg zdr "$LLM_OR_ZDR" \
+        '((if $only != "" then {only: ($only | split(","))} else {} end)
+          + (if $dc != "" then {data_collection: $dc} else {} end)
+          + (if $zdr != "" then {zdr: true} else {} end)) as $p
+         | . + {provider: $p}'
+}
 
 # Generic openai-compatible endpoint (Ollama, vLLM, LM Studio, proxies):
 # the OpenAI wire format against a configured LLM_API_URL, key optional.
