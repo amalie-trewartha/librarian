@@ -207,8 +207,14 @@ export default function ChatPage() {
             rows={1}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
+            enterKeyHint="send"
             onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
+              if (
+                event.key === "Enter" &&
+                !event.shiftKey &&
+                !event.nativeEvent.isComposing &&
+                event.keyCode !== 229
+              ) {
                 event.preventDefault();
                 event.currentTarget.form?.requestSubmit();
               }

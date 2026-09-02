@@ -13,7 +13,11 @@ export function useAutosizeTextarea(value: string) {
     const el = ref.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
+    const styles = window.getComputedStyle(el);
+    const borderHeight =
+      (Number.parseFloat(styles.borderTopWidth) || 0) +
+      (Number.parseFloat(styles.borderBottomWidth) || 0);
+    el.style.height = `${el.scrollHeight + borderHeight}px`;
   }, [value]);
 
   return ref;

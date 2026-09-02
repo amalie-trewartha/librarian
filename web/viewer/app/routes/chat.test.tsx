@@ -118,6 +118,9 @@ describe("chat composer", () => {
     fireEvent.keyDown(box, { key: "Enter" });
     await waitFor(() => expect(sendChat).toHaveBeenCalledTimes(1));
     expect(sendChat).toHaveBeenCalledWith("ada", "hello there", "you");
+    await waitFor(() =>
+      expect((box as HTMLTextAreaElement).value).toBe("")
+    );
   });
 
   it("Shift+Enter does not send", async () => {
@@ -129,5 +132,15 @@ describe("chat composer", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(sendChat).not.toHaveBeenCalled();
     expect((box as HTMLTextAreaElement).value).toBe("line one");
+  });
+
+  it("Enter does not send while an input method composition is active", async () => {
+    renderChatPage();
+    const box = await screen.findByPlaceholderText("Message ada…");
+    fireEvent.change(box, { target: { value: "unfinished" } });
+    fireEvent.keyDown(box, { key: "Enter", isComposing: true });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sendChat).not.toHaveBeenCalled();
+    expect((box as HTMLTextAreaElement).value).toBe("unfinished");
   });
 });

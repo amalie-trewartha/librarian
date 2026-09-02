@@ -432,12 +432,7 @@ export default function TalkChat() {
             rows={1}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                event.currentTarget.form?.requestSubmit();
-              }
-            }}
+            enterKeyHint="enter"
             placeholder={`Message ${identityName}…`}
             className="max-h-40 min-h-10 flex-1 rounded-3xl px-4 py-2.5"
             autoComplete="off"
