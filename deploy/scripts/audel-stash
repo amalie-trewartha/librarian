@@ -3,9 +3,18 @@
 # deploy and bring it back afterward.
 #
 # Usage:
-#   deploy/scripts/audel-stash save      run before deploy/scripts/update
-#   deploy/scripts/audel-stash restore   run after the deploy
-#   deploy/scripts/audel-stash status    show held stashes and the dirty tree
+#   deploy/scripts/audel-stash save            run before deploy/scripts/update
+#   deploy/scripts/audel-stash branch main     then put the box checkout on main
+#   deploy/scripts/audel-stash restore [--here] run after the deploy: goes back to
+#                                              the branch `branch` left, then
+#                                              re-applies the stash (--here: stay)
+#   deploy/scripts/audel-stash branch [--back] show the checkout / go back early
+#   deploy/scripts/audel-stash status          held stashes, branch, dirty tree
+#
+# Audel often leaves the box checkout on a branch of its own. update.sh needs
+# main (ff-only pull), so `branch main` switches over and remembers where the
+# box was in .git/AUDEL_PREV_BRANCH; `restore` (or `branch --back`) puts it
+# back. Both refuse to move a dirty tree: run `save` first.
 #
 # The box tree is often dirty with Audel's uncommitted work, and when a
 # dirty file overlaps an incoming commit the ff-only pull in update.sh
@@ -32,8 +41,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 BOX_REPO=/opt/shellm/app
 BACKUP_DIR=/opt/shellm/backups
 MARKER=audel-stash
+PREV_FILE=.git/AUDEL_PREV_BRANCH   # relative to BOX_REPO; written by `branch`
 
-usage() { sed -n '3,9p' "${BASH_SOURCE[0]}"; exit 1; }
+usage() { sed -n '3,17p' "${BASH_SOURCE[0]}"; exit 1; }
 
 section() { awk -v s="=== $1 ===" '$0==s{f=1;next} /^=== /{f=0} f' <<<"$2"; }
 
@@ -46,6 +56,8 @@ cmd_save() {
     out=$(run_script_on_box "
         g() { sudo -u shellm git -C $BOX_REPO \"\$@\"; }
         g fetch --quiet origin || echo '=== NOFETCH ==='
+        echo '=== BRANCH ==='
+        g branch --show-current
         echo '=== COLLIDE ==='
         comm -12 <(g diff --name-only HEAD origin/main | sort) \
                  <(g ls-files --others --exclude-standard | sort)
@@ -56,12 +68,15 @@ cmd_save() {
             g diff HEAD --stat | tail -20
             sudo mkdir -p $BACKUP_DIR
             g diff HEAD | sudo tee $BACKUP_DIR/audel-uncommitted-$ts.patch >/dev/null
-            g stash push -m '$MARKER $ts' >/dev/null
+            g stash push -m \"$MARKER $ts on \$(g branch --show-current)\" >/dev/null
             echo '=== STASHED ==='
         fi
     ") || die "save failed — box unchanged"
-    local collide
+    local collide branch
     collide=$(section COLLIDE "$out")
+    branch=$(section BRANCH "$out")
+    [[ -n "$branch" && "$branch" != main ]] \
+        && info "box checkout is on '$branch' — run '$0 branch main' before update"
     grep -q '=== NOFETCH ===' <<<"$out" \
         && info "warning: box could not fetch origin — untracked collision check ran against a stale origin/main"
     if [[ -n "$collide" ]]; then
@@ -80,10 +95,27 @@ cmd_save() {
 cmd_restore() {
     require_tools jq git
     require_state; require_aws
+    local here=0
+    [[ "${1:-}" == "--here" ]] && here=1
     info "restoring stashed box work..."
     local out
     out=$(run_script_on_box "
         g() { sudo -u shellm git -C $BOX_REPO \"\$@\"; }
+        prev=\$(sudo -u shellm cat $BOX_REPO/$PREV_FILE 2>/dev/null || true)
+        if [ -n \"\$prev\" ] && [ $here -eq 0 ] && [ \"\$prev\" != \"\$(g branch --show-current)\" ]; then
+            if ! g diff --quiet HEAD; then
+                echo '=== DIRTY ==='
+                g status --short | head -20
+                exit 1
+            fi
+            if g checkout --quiet \"\$prev\" 2>&1; then
+                sudo -u shellm rm -f $BOX_REPO/$PREV_FILE
+                echo \"=== BACK === \$prev\"
+            else
+                echo \"=== NOBRANCH === \$prev\"
+                exit 1
+            fi
+        fi
         ref=\$(g stash list | grep -m1 '$MARKER' | cut -d: -f1)
         [ -z \"\$ref\" ] && { echo '=== NONE ==='; exit 0; }
         if ! g diff --quiet HEAD; then
@@ -111,8 +143,15 @@ cmd_restore() {
             echo "${out:-}"
             die "stash does not apply on the new base — stash and patch backup kept, tree reset to clean; merge by hand (patches in $BACKUP_DIR)"
         fi
+        if grep -q '=== NOBRANCH ===' <<<"${out:-}"; then
+            echo "${out:-}"
+            die "could not check the recorded branch back out — stash kept; fix by hand or restore --here"
+        fi
         die "restore failed — see output above"
     }
+    if grep -q '=== BACK ===' <<<"$out"; then
+        info "box checkout back on '$(grep '=== BACK ===' <<<"$out" | awk '{print $NF}')'"
+    fi
     if grep -q '=== NONE ===' <<<"$out"; then
         info "no $MARKER stash on the box — nothing to restore"
         return 0
@@ -126,11 +165,72 @@ cmd_restore() {
     info "if the restored work includes bridge code, restart that bridge so the process matches the tree"
 }
 
+# branch            show the checkout and any recorded previous branch
+# branch <name>     check <name> out (tracked tree must be clean); when leaving
+#                   a branch other than <name>, remember it for restore/--back
+# branch --back     check the remembered branch out again and forget it
+cmd_branch() {
+    require_tools jq git
+    require_state; require_aws
+    local target="${1:-}" out
+    if [[ -z "$target" ]]; then
+        run_script_on_box "
+            g() { sudo -u shellm git -C $BOX_REPO \"\$@\"; }
+            printf 'checkout: %s\n' \"\$(g branch --show-current)\"
+            printf 'recorded previous branch: %s\n' \"\$(sudo -u shellm cat $BOX_REPO/$PREV_FILE 2>/dev/null || echo '(none)')\"
+        "
+        return 0
+    fi
+    [[ "$target" =~ ^(--back|[A-Za-z0-9._/-]+)$ ]] || die "not a branch name: $target"
+    info "switching the box checkout..."
+    out=$(run_script_on_box "
+        g() { sudo -u shellm git -C $BOX_REPO \"\$@\"; }
+        cur=\$(g branch --show-current)
+        target='$target'
+        if [ \"\$target\" = --back ]; then
+            target=\$(sudo -u shellm cat $BOX_REPO/$PREV_FILE 2>/dev/null || true)
+            [ -z \"\$target\" ] && { echo '=== NOPREV ==='; exit 1; }
+        fi
+        [ \"\$cur\" = \"\$target\" ] && { echo \"=== SAME === \$cur\"; exit 0; }
+        if ! g diff --quiet HEAD; then
+            echo '=== DIRTY ==='
+            g status --short | head -20
+            exit 1
+        fi
+        if ! g checkout --quiet \"\$target\" 2>&1; then
+            echo \"=== FAILED === \$target\"
+            exit 1
+        fi
+        if [ '$target' = --back ]; then
+            sudo -u shellm rm -f $BOX_REPO/$PREV_FILE
+        elif [ ! -s $BOX_REPO/$PREV_FILE ]; then
+            printf '%s\n' \"\$cur\" | sudo -u shellm tee $BOX_REPO/$PREV_FILE >/dev/null
+        fi
+        echo \"=== SWITCHED === \$cur -> \$target\"
+    ") || {
+        grep -q '=== DIRTY ===' <<<"${out:-}" && { echo "${out:-}"; die "box tree is dirty — run '$0 save' first"; }
+        grep -q '=== NOPREV ===' <<<"${out:-}" && die "no previous branch recorded on the box"
+        grep -q '=== FAILED ===' <<<"${out:-}" && { echo "${out:-}"; die "checkout failed — box unchanged"; }
+        die "branch failed — see output above"
+    }
+    if grep -q '=== SAME ===' <<<"$out"; then
+        info "box already on '$(awk '{print $NF}' <<<"$out")'"
+    else
+        info "$(grep '=== SWITCHED ===' <<<"$out" | sed 's/=== SWITCHED === /box checkout: /')"
+        [[ "$target" != --back ]] && info "restore (or 'branch --back') returns to the branch it left"
+    fi
+}
+
 cmd_status() {
     require_tools jq git
     require_state; require_aws
     run_script_on_box "
         g() { sudo -u shellm git -C $BOX_REPO \"\$@\"; }
+        echo '--- checkout ---'
+        printf '%s' \"\$(g branch --show-current)\"
+        prev=\$(sudo -u shellm cat $BOX_REPO/$PREV_FILE 2>/dev/null || true)
+        [ -n \"\$prev\" ] && printf '  (restore goes back to %s)' \"\$prev\"
+        echo
         echo '--- stashes ---'
         g stash list | grep '$MARKER' || echo '(none held by audel-stash)'
         echo '--- tree ---'
@@ -142,7 +242,8 @@ cmd_status() {
 
 case "${1:-}" in
     save)    cmd_save ;;
-    restore) cmd_restore ;;
+    restore) shift; cmd_restore "$@" ;;
+    branch)  shift; cmd_branch "$@" ;;
     status)  cmd_status ;;
     *)       usage ;;
 esac
