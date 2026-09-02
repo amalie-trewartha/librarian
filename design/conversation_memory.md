@@ -5,8 +5,10 @@ Status: IN PROGRESS. Plan agreed 2026-09-02. Part 6 (metrics) shipped as
 ran on 2026-09-02; B passed and C changed the plan (see the experiment
 sections and the revised rollout order). Parts 1 and 2 are built and
 tested (`bin/chat`, `thinkers/responder/step`,
-`tests/test_chat_history_index.sh`), pending push and deploy. Parts 3 to
-5 are not started.
+`tests/test_chat_history_index.sh`), pending push and deploy. Part 3 is
+built and tested (`thinkers/_lib/common.sh`,
+`tests/test_recent_stream_filter.sh`), pending push and deploy. Parts 4
+and 5 are not started.
 
 Related: [responder_thinker.md](responder_thinker.md) describes the thinker
 this plan changes. [monolith_thinker.md](monolith_thinker.md) and
@@ -262,6 +264,18 @@ monolith's prompt shrinks by roughly 22,000 characters per wake.
 This part ships only after Experiment B below passes.
 
 Files touched: `thinkers/_lib/common.sh`, `tests/`.
+
+As built (2026-09-02, after Experiment B passed): `_recent_stream` keeps
+thought, action, observation, message, idle, merge, final, and error
+steps, drops reasoning, truncates content at 1,500 characters, takes the
+last N kept steps, and then collapses consecutive idle steps and
+consecutive error steps into one line each. The collapsed line reads
+"idle x22 over 2h10m" or "run failed x5 over 40m (rc=1)", carries the
+last step's id and timestamp, and has a `collapsed` count. The window N
+bounds the raw steps considered, so the output is at most N lines and
+usually fewer. That matches the transform the replay tested. Reaches
+Audel with a thinker sync of `_lib`; the monolith and responder both read
+it on their next wake.
 
 ### Part 4. A rolling summary of each person
 
