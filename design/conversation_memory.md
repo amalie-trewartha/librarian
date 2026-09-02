@@ -1,10 +1,9 @@
 # Conversation memory for the responder
 
-Status: IN PROGRESS. Plan agreed 2026-09-02. Part 6 (metrics) is built and
-tested the same day (`thinkers/responder/step`,
-`tests/test_responder_metrics.sh`, `deploy/scripts/audel-metrics`); it
-reaches Audel on the next deploy plus a thinker sync of `responder`. Parts
-1 to 5 are not started.
+Status: IN PROGRESS. Plan agreed 2026-09-02. Part 6 (metrics) shipped as
+883339f and was deployed to Audel the same day. Experiments B and C both
+ran on 2026-09-02; B passed and C changed the plan (see the experiment
+sections and the revised rollout order). Parts 1 to 5 are not started.
 
 Related: [responder_thinker.md](responder_thinker.md) describes the thinker
 this plan changes. [monolith_thinker.md](monolith_thinker.md) and
@@ -160,7 +159,12 @@ to change.
   step id, so duplicates are harmless.
 
 The responder then calls `chat history --with <person> --since 7d -n 20` in
-place of the message filter over `_recent_stream`. The inner life excerpt
+place of the message filter over `_recent_stream`.
+
+Experiment C added a requirement. Each history message must carry its age,
+e.g. "[6 days ago]", and the system prompt must state the current time.
+Without them both new prompts described a six day old exchange as "this
+morning". The message steps have timestamps, so this is formatting only. The inner life excerpt
 (the last 8 non message steps) stays as it is until Part 3 changes the
 filter.
 
@@ -258,6 +262,13 @@ through its normal recall.
 I considered extending `recap` instead. It rolls up by trajectory position,
 and per person threads are too sparse for that to fit.
 
+Experiment C found that the summary changes tone as well as recall. In 2 of
+22 cases the summary condition refused things the other conditions agreed
+to, because one old refusal in the summary was read as a standing policy.
+The summary prompt needs a facts only rule that forbids inferring a stance
+from a single incident, and Part 4 waits until a rerun of the saved 22
+cases shows the refusals gone.
+
 Files touched: `thinkers/responder/step`, `bin/mem` only if the person type
 needs anything new.
 
@@ -321,7 +332,33 @@ confirm the zero context share drops to zero for every gap under 7 days.
 After Part 6 ships the real `context_msgs` field replaces the
 reconstruction.
 
-### Experiment B. Replay of the recent stream change, before Part 3 ships
+### Experiment B. Replay of the recent stream change, done, passed
+
+Ran 2026-09-02 in the private replay harness. 30 new Grok 4.6 trials cost
+$1.83. The control arm reused the 10 baseline runs from 08-28 plus 5 new
+per snapshot. The third snapshot during an active conversation was skipped
+because capturing it needs temp files on the box.
+
+| Snapshot | Arm | Idle | Thought only | Substantive | Mean turns | Prompt chars |
+|---|---|---|---|---|---|---|
+| s4-idle | control | 9 | 1 | 0 | 2.0 | 73,125 |
+| s4-idle | part 3 | 8 | 2 | 0 | 1.1 | 38,657 |
+| s5-reread | control | 8 | 2 | 0 | 1.0 | 102,426 |
+| s5-reread | part 3 | 8 | 2 | 0 | 1.0 | 64,297 |
+
+Same outcome classes in both arms on both snapshots. Hand review of all 20
+filtered transcripts found no run that referred to or needed anything that
+was only in the dropped reasoning lines. On s4, 8 of 10 controls opened by
+copying a caption verbatim from a dropped reasoning line and then ran a
+chat history check for 2 to 4 turns; 0 of 10 filtered runs did either. The
+reasoning lines were being copied as a ritual, not used as information.
+The prompt shrank 47 percent on s4 and 37 percent on s5. Verdict: pass.
+Part 3 can ship. Two things to watch live afterward: a wake during an
+active conversation, where the circling hint may fire more, and a multi
+hour idle streak, since the snapshots only had idle pairs minutes apart.
+Results: `results/recent-stream-filter-20260902.md` in the harness.
+
+The original plan for the experiment follows.
 
 The 2026-08-29 ablations showed that Grok's behavior on the monolith
 depends on accumulated prompt state in ways that are hard to predict, so
@@ -343,7 +380,36 @@ private replay harness at
   saved results, and no run loses a decision it needed from a dropped
   reasoning step.
 
-### Experiment C. Responder quality after Part 1 and Part 4
+### Experiment C. Responder quality, done, changed the plan
+
+Ran 2026-09-02. 22 cases, not 30, because only 22 inbound messages in the
+last 17 days arrived more than an hour after the previous exchange once
+the codex and Telegram bot senders were excluded. In all 22 today's window
+held zero earlier messages. 88 calls cost $0.67. One scorer, one sample per
+condition. The skills layer was absent in all three conditions because
+`skills prompt` returned nothing on the box.
+
+| Condition | Aware of the earlier exchange, of 11 where it applied | Promises work it cannot do, of 22 | Wrong about visible facts, of 22 |
+|---|---|---|---|
+| Today's prompt | 0 | 6 | 3 |
+| Part 1 history | 7 | 9 | 2 |
+| Part 1 plus person summary | 9 | 6 | 1 |
+
+Findings. Both new conditions misread time because the history has no
+timestamps and the prompt has no current time (now a Part 1 requirement).
+The summary shifted tone in 2 of 22 cases (now a Part 4 requirement).
+History raised promised but impossible work from 6 to 9, because with
+history the responder knows there is unfinished work and says it is
+checking; that is the case for doing Part 5 early. Today's three factual
+errors were cross thread mistakes, answering Andy with material from the
+inner life excerpt because there was no conversation to anchor to.
+
+Decision. Ship Part 1 with timestamps. Hold Part 4 until its summary
+prompt has the facts only rule and the saved 22 cases rerun clean (a few
+minutes, about 40 cents). Results and every prompt and reply:
+`headlong-experiments/responder-memory/experiment-c/`.
+
+The original plan for the experiment follows.
 
 A cheap side by side on the responder alone, which is one `llm` call and
 needs no harness. Take 30 real inbound messages from Audel's log that
@@ -369,13 +435,17 @@ problem Part 5 addresses.
 
 ## Rollout order
 
-1. Part 6 first, so there is a real baseline before anything changes. It is
-   the smallest change and touches only observation fields.
-2. Parts 1 and 2 together, since Part 2 is a small addition to the same
-   code path. Run Experiment A after.
-3. Experiment C, then Part 4.
-4. Experiment B, then Part 3.
-5. Part 5 last, since it changes the monolith's rules about chat.
+Revised 2026-09-02 after Experiments B and C.
+
+1. Part 6. Done and deployed.
+2. Parts 1 and 2 together, with the timestamp requirement from Experiment
+   C. Re-run Experiment A after the deploy.
+3. Part 3. Experiment B passed, so it can ship next; watch the two live
+   cases named in the experiment section.
+4. Part 5, moved up because Experiment C showed history makes the
+   responder promise more work it cannot do.
+5. Part 4 last, after the summary prompt gets the facts only rule and the
+   saved Experiment C cases rerun clean.
 
 Each deploy to Audel follows the normal runbook, `update` then thinker sync
 of `responder` and `_lib` from a pristine tree. `bin/chat` takes effect on
