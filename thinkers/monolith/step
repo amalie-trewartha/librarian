@@ -189,6 +189,19 @@ if [[ $(printf '%s\n' "$last_three" | jq -r '.type' 2>/dev/null | sort -u | tr '
     hints="${hints}- The last few steps are all thoughts — the stream may be circling; consider acting, recalling, or advancing decisively.
 "
 fi
+# Pending request from the responder (design/conversation_memory.md, part 5):
+# the responder told someone "let me look into that" and appended an `action`
+# (source responder, trigger_step = their message) describing the work. It is
+# pending until an observation carries resolves=<that trigger_step>. The hint
+# gives the exact delivery command so the reply lands on the right message.
+pending_req=$(printf '%s\n' "$recent_context" | jq -rs '
+    ([.[] | select(.type == "observation" and (.resolves // "") != "") | .resolves]) as $done
+    | [.[] | select(.type == "action" and .source == "responder" and (.trigger_step // "") != ""
+                    and (.trigger_step as $t | $done | index($t) | not))]
+    | last // empty
+    | "- PENDING REQUEST from \(.person // "someone"): \(.request // .content). The responder already told them you would get back to them. Do the work now (act), then deliver the result with exactly: chat reply --follow-up --reply-to \(.trigger_step) \(.person // "<their-name>") \"<result>\"  — and append an observation with --field resolves=\(.trigger_step) so this request stops showing here."' 2>/dev/null) || pending_req=""
+[[ -n "$pending_req" ]] && hints="${hints}${pending_req}
+"
 # Share nudge: outward initiative needs a periodic prompt-side invitation, or
 # restraint rules learned from feedback ratchet the mind into pure listening
 # (observed on Audel 2026-08-21: a self-imposed "last-word-ours -> do not

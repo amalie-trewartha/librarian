@@ -7,8 +7,12 @@ sections and the revised rollout order). Parts 1 and 2 are built and
 tested (`bin/chat`, `thinkers/responder/step`,
 `tests/test_chat_history_index.sh`), pending push and deploy. Part 3 is
 built and tested (`thinkers/_lib/common.sh`,
-`tests/test_recent_stream_filter.sh`), pending push and deploy. Parts 4
-and 5 are not started.
+`tests/test_recent_stream_filter.sh`), pending push and deploy. Parts 5
+and 4 are built and tested the same day (`thinkers/responder/step`,
+`thinkers/monolith/step`, `thinkers/monolith/prompt.md`, `bin/chat`,
+`tests/test_responder_deferral.sh`, `tests/test_responder_person_notes.sh`),
+pending the Experiment C rerun and the push. Everything ships in one
+deploy with a thinker sync of `responder`, `monolith`, and `_lib`.
 
 Related: [responder_thinker.md](responder_thinker.md) describes the thinker
 this plan changes. [monolith_thinker.md](monolith_thinker.md) and
@@ -309,6 +313,24 @@ cases shows the refusals gone.
 Files touched: `thinkers/responder/step`, `bin/mem` only if the person type
 needs anything new.
 
+As built: the notes live in `memories/` as `type: person` files in mem's
+own naming and frontmatter, plus `person_key` and `aliases`. The responder
+writes them itself rather than through `mem update`, which would drop the
+extra fields; `mem list`, `search`, and `show` read them fine. The writer
+runs after the send in a background subshell (foreground with
+`RESPONDER_PERSON_NOTES_SYNC=1` for tests), on `RESPONDER_NOTES_MODEL`,
+falling back to `RECAP_MAP_MODEL`, then the reply model. It feeds the
+model the previous notes plus the last 30 days of conversation with that
+person, keeps a directory lock so one writer runs at a time, redacts key
+shaped strings, caps the body at 20 lines, and rewrites the existing file
+in place keeping id, created, and aliases. The system prompt is the facts
+only rule from Experiment C in full: facts and stated preferences only,
+never turn one incident into a rule or a stance, do not record refusals.
+The reader puts the body into the responder's system prompt under "What
+you know about <person>" with a note not to treat one past incident as a
+rule. `RESPONDER_PERSON_NOTES=0` turns both off. The Slack `display_name`
+stamp for seeding aliases is still open.
+
 ### Part 5. Deferrals that the monolith must pick up
 
 When the responder decides it cannot answer without doing work, it says
@@ -324,6 +346,23 @@ since it cannot.
 
 Files touched: `thinkers/responder/step`, `thinkers/monolith/prompt.md`,
 `thinkers/monolith/step` for the permission check.
+
+As built: the responder's prompt now says that when a real answer needs
+tools or a lookup it must put `DEFER: <the work>` on the first line and
+the holding message below it, and must not promise to check anything
+itself. On a DEFER line the step appends an `action` step (source
+responder, `trigger_step`, `person`, `request`, and the exact delivery
+command in its content) before sending the holding message, and marks its
+observation `deferred: true` with the request. The monolith already
+subscribes to actions, so it wakes; its step adds a "PENDING REQUEST"
+routing signal for the newest responder action that no observation has
+resolved, naming the person, the request, and the exact commands. Its
+prompt gains one exception to the no-reply rule: deliver such a request
+with `chat reply --follow-up --reply-to <trigger> <person>` and append an
+observation with `--field resolves=<trigger>`, one delivery per request.
+`chat reply --follow-up` stamps `reply_to` and `follow_up: true` and skips
+the duplicate guard, which exists for races, not for follow-ups. A plain
+second reply is still refused.
 
 ### Part 6. Metrics, so the problem stays visible
 
@@ -446,6 +485,28 @@ prompt has the facts only rule and the saved 22 cases rerun clean (a few
 minutes, about 40 cents). Results and every prompt and reply:
 `headlong-experiments/responder-memory/experiment-c/`.
 
+Rerun, same day, with Part 4 as built (condition D: Part 1 history with
+age stamps and current time, plus the notes block from the facts only
+prompt). 44 calls, $0.33.
+
+| Condition | Aware, of 11 | Promises work, of 22 | Wrong about visible facts, of 22 |
+|---|---|---|---|
+| Today's prompt | 0 | 6 | 3 |
+| Part 1 history | 7 | 9 | 2 |
+| Part 1 plus first summary | 9 | 6 | 1 |
+| Part 1 plus Part 4 as built | 8 | 9 | 0 |
+
+One of the two refusals is gone. The other is softened: the reply answers
+the question and then adds that it will not post a log of other people's
+messages, because the notes still recorded the old refusal in neutral
+words. The "this morning" error is gone. Promises stayed at 9 because
+the rerun deliberately left DEFER out, so they are the replies Part 5
+converts. Awareness dropped one case against the first summary, where a
+longer first person summary happened to lead with the specific thread.
+Decision: ship Part 4 with the rest. The notes prompt gained one more
+sentence, that a declined request is left out entirely, not recorded in
+neutral words. Re-score the remaining case on live notes after a week.
+
 The original plan for the experiment follows.
 
 A cheap side by side on the responder alone, which is one `llm` call and
@@ -482,7 +543,8 @@ Revised 2026-09-02 after Experiments B and C.
 4. Part 5, moved up because Experiment C showed history makes the
    responder promise more work it cannot do.
 5. Part 4 last, after the summary prompt gets the facts only rule and the
-   saved Experiment C cases rerun clean.
+   saved Experiment C cases rerun clean. Done 2026-09-02; all five parts
+   ship in one deploy.
 
 Each deploy to Audel follows the normal runbook, `update` then thinker sync
 of `responder` and `_lib` from a pristine tree. `bin/chat` takes effect on

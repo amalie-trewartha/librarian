@@ -222,6 +222,49 @@ _finish_metrics() {
         2>/dev/null || printf '%s' "$metrics_json"
 }
 
+# ---------------------------------------------------------------------------
+# Person notes (design/conversation_memory.md, part 4): a `type: person` memory
+# per person key, written by _update_person_notes after each reply and read
+# here into the system prompt. Aliases in its frontmatter are what
+# `chat history --with` merges. mem's own frontmatter is kept (id, summary,
+# type, created, updated) plus person_key and aliases; written directly, not
+# via `mem update`, which would drop the extra fields.
+# ---------------------------------------------------------------------------
+person_key=$(chat person-key "$msg_from" 2>/dev/null) || person_key="$msg_from"
+
+# _person_notes_file <key> — path of the person memory for <key>, or nothing.
+_person_notes_file() {
+    local key="$1" f
+    [[ -n "${MEM_DIR:-}" && -d "$MEM_DIR" ]] || return 0
+    for f in "$MEM_DIR"/*.md; do
+        [[ -f "$f" ]] || continue
+        awk -v key="$key" '
+            NR==1 && /^---$/ {fm=1; next}
+            fm && /^---$/ {exit}
+            fm && /^type:[[:space:]]*person[[:space:]]*$/ {t=1}
+            fm && /^person_key:/ {sub(/^person_key:[[:space:]]*/, ""); k=$0}
+            fm && /^aliases:[[:space:]]*\[/ {a=$0; sub(/^aliases:[[:space:]]*\[/, "", a); sub(/\].*$/, "", a); gsub(/[[:space:]"]/, "", a); n=split(a, parts, ","); for (i=1;i<=n;i++) if (parts[i]==key) k2=1}
+            fm && /^[[:space:]]*-[[:space:]]*/ {v=$0; sub(/^[[:space:]]*-[[:space:]]*/, "", v); gsub(/"/, "", v); if (v==key) k2=1}
+            END {exit !(t && (k==key || k2))}' "$f" 2>/dev/null && { printf '%s\n' "$f"; return 0; }
+    done
+    return 0
+}
+_notes_body() {  # body after the frontmatter
+    awk 'NR==1 && /^---$/ {fm=1; next} fm && /^---$/ {fm=0; body=1; next} body {print}' "$1" | sed '/./,$!d'
+}
+person_notes_block=""
+if [[ "${RESPONDER_PERSON_NOTES:-1}" == "1" ]]; then
+    _pnf=$(_person_notes_file "$person_key") || _pnf=""
+    if [[ -n "$_pnf" ]]; then
+        _pnb=$(_notes_body "$_pnf" | head -n 20)
+        [[ -n "$_pnb" ]] && person_notes_block="What you know about $msg_from (your own notes; keep them in mind, do not
+recite them, and do not treat one past incident as a rule):
+$_pnb
+
+"
+    fi
+fi
+
 reply_system="$system_prompt
 
 The current time is $now_utc. You are in a live chat conversation with
@@ -229,9 +272,11 @@ $msg_from. The messages are the real back-and-forth so far, spanning up to
 $HISTORY_SINCE; each of their messages is prefixed with how long ago it was sent,
 so mind the gaps (an answer from days ago is not \"this morning\"). Reply to
 their newest message — first person, natural, conversational, concise. Never repeat or rephrase an earlier reply of yours.
-Answer completely from what you already know; only if it genuinely requires
-running tools or looking something up should you instead briefly say you're on
-it (the work happens separately) — in that case do not guess.
+Answer completely from what you already know. If a real answer needs tools,
+files, or looking something up, do not guess and do not promise to check
+yourself: put \`DEFER: <the work, one line>\` on the first line, then the short
+message to send (e.g. \"Let me look into that and get back to you.\"). The work
+is handed to the mind, which follows up with the result.
 
 Not every message needs a reply. If their newest message is already answered
 (a reply of yours addressing it is visible above), is a bare acknowledgment
@@ -239,11 +284,96 @@ like \"thanks\" or \"ok\", or anything you could say would only repeat you,
 output exactly NO_REPLY on its own line and nothing else. Staying quiet is
 better than a duplicate or a contentless reply.
 
-Your recent inner life (context only, not part of the conversation):
+${person_notes_block}Your recent inner life (context only, not part of the conversation):
 $inner_context
 
 Output ONLY the reply message text — no preamble, no quotes, no commands.
 Delivery is automatic: never write 'chat reply' or the recipient's address."
+
+# ---------------------------------------------------------------------------
+# Person notes writer (part 4). After a reply is sent, rewrite this person's
+# notes from the previous notes plus the last 30 days of conversation, on a
+# cheap model, in the background so the human never waits for it. Facts and
+# stated preferences only: Experiment C showed a summary that led with one old
+# refusal turned into a standing stance in 2 of 22 replies.
+# ---------------------------------------------------------------------------
+NOTES_MODEL="${RESPONDER_NOTES_MODEL:-${RECAP_MAP_MODEL:-$REPLY_MODEL}}"
+_person_notes_system() {
+    cat <<NOTES
+You maintain $IDENTITY_NAME's private notes about one person they talk with,
+$msg_from. Rewrite the notes from the previous notes plus the recent
+conversation. Include only: who they are (name, role, how they reach
+$IDENTITY_NAME), how they prefer to be talked to, ongoing threads and open
+commitments with dates, and facts they stated. Rules: facts and stated
+preferences only. Never turn one incident into a rule, a stance, or a policy
+about the person, and do not record refusals or things $IDENTITY_NAME declined,
+not even in neutral words: leave any declined request out entirely.
+No secrets, keys, or credentials. Keep what is still true from the previous
+notes and drop what the conversation shows is stale. At most 12 short lines of
+plain text, no headers, no bullet syntax. Output only the notes.
+NOTES
+}
+_redact_keys() { sed -E 's/(sk|xox[abp]|ghp|gho|AKIA)[-_A-Za-z0-9]{12,}/[redacted]/g'; }
+_update_person_notes() {
+    local key="$1" person="$2" hist prev_body prev_file system user new_body
+    local lockdir="${MEM_DIR:-/tmp}/.person-notes.lock"
+    mkdir -p "${MEM_DIR:-/tmp}" 2>/dev/null || return 0
+    mkdir "$lockdir" 2>/dev/null || return 0   # another writer is on it
+    # shellcheck disable=SC2064
+    trap "rmdir '$lockdir' 2>/dev/null" EXIT
+    hist=$(chat history --with "$person" --since "${RESPONDER_NOTES_SINCE:-30d}" -n "${RESPONDER_NOTES_MAX:-40}" --json 2>/dev/null) || hist="[]"
+    [[ -n "$hist" && "$hist" != "[]" ]] || return 0
+    prev_file=$(_person_notes_file "$key") || prev_file=""
+    prev_body=""; [[ -n "$prev_file" ]] && prev_body=$(_notes_body "$prev_file")
+    system=$(_person_notes_system)
+    user=$(printf '%s' "$hist" | jq -r --arg me "$IDENTITY_NAME" '
+        .[] | "\(.ts // "?" | .[0:16]) \(if .from == $me then $me else "them" end): \(.content | tostring | .[0:600])"')
+    user="Previous notes:
+${prev_body:-(none yet)}
+
+Recent conversation (UTC, oldest first; \"them\" is $person):
+$user
+
+Now: $(date -u +%Y-%m-%dT%H:%MZ). Output the rewritten notes."
+    new_body=$(llm -m "$NOTES_MODEL" -s "$system" -M "$(jq -nc --arg u "$user" '[{role:"user", content:$u}]')" 2>/dev/null | _redact_keys | head -n 20) || new_body=""
+    new_body=$(printf '%s' "$new_body" | sed '/./,$!d')
+    [[ -n "$new_body" ]] || return 0
+    local now summary
+    now=$(date +"%Y-%m-%d %H:%M:%S")
+    summary="Notes on $person: $(printf '%s' "$new_body" | head -1 | cut -c1-60)"
+    if [[ -n "$prev_file" ]]; then
+        # Rewrite in place, keeping id/created/person_key/aliases as they are.
+        local fm id created aliases_block
+        fm=$(awk 'NR==1 && /^---$/ {fm=1; next} fm && /^---$/ {exit} fm {print}' "$prev_file")
+        id=$(printf '%s\n' "$fm" | sed -n 's/^id:[[:space:]]*//p' | head -1)
+        created=$(printf '%s\n' "$fm" | sed -n 's/^created:[[:space:]]*//p' | head -1)
+        aliases_block=$(printf '%s\n' "$fm" | awk '/^aliases:/{p=1; print; next} p && /^[[:space:]]*-[[:space:]]/{print; next} p{p=0}')
+        [[ -z "$aliases_block" ]] && aliases_block="aliases: []"
+        {
+            printf -- '---\n'
+            [[ -n "$id" ]] && printf 'id: %s\n' "$id"
+            printf 'summary: %s\ntype: person\nperson_key: %s\n%s\ncreated: %s\nupdated: %s\n---\n\n%s\n' \
+                "$summary" "$key" "$aliases_block" "${created:-$now}" "$now" "$new_body"
+        } > "$prev_file.tmp" && mv -f "$prev_file.tmp" "$prev_file"
+    else
+        local hex slug
+        hex=$(head -c4 /dev/urandom | od -An -tx1 | tr -d ' \n')
+        slug=$(printf 'person-%s' "$key" | tr -c 'A-Za-z0-9\n' '-' | tr -s '-' | sed 's/^-//;s/-$//' | cut -c1-60)
+        printf -- '---\nid: %s\nsummary: %s\ntype: person\nperson_key: %s\naliases: []\ncreated: %s\n---\n\n%s\n' \
+            "$hex" "$summary" "$key" "$now" "$new_body" \
+            > "$MEM_DIR/$(date +%Y-%m-%d-%H-%M-%S)_${hex}_${slug}.md"
+    fi
+}
+_update_person_notes_async() {
+    [[ "${RESPONDER_PERSON_NOTES:-1}" == "1" ]] || return 0
+    if [[ "${RESPONDER_PERSON_NOTES_SYNC:-0}" == "1" ]]; then
+        ( _update_person_notes "$person_key" "$msg_from" ) || true
+    else
+        local _nlog="${IDENTITY_DIR:-.}/run/logs/responder-notes.log"
+        mkdir -p "$(dirname "$_nlog")" 2>/dev/null || true
+        ( _update_person_notes "$person_key" "$msg_from" ) >>"$_nlog" 2>&1 </dev/null &
+    fi
+}
 
 # Debug aid: RESPONDER_LOG_PROMPT=1 writes the exact prompt to a rotated file
 # under run/logs/, never to the mind log (the system half is identical on
@@ -272,11 +402,42 @@ if [[ "$first_line" == "NO_REPLY" ]]; then
     exit 0
 fi
 
+# Deferral (design/conversation_memory.md, part 5): "DEFER: <work>" on the
+# first line means the reply below it is a holding message and the real work
+# goes to the mind as an `action` step. The monolith subscribes to actions,
+# shows a PENDING REQUEST routing hint until an observation resolves it, and
+# delivers the result with `chat reply --follow-up`. Without this the
+# responder's "let me check" bound nobody (Experiment C: 6 to 9 of 22 replies
+# promised work that never happened).
+deferred_request=""
+if [[ "$first_line" == DEFER:* ]]; then
+    deferred_request=$(printf '%s' "$first_line" | sed -E 's/^DEFER:[[:space:]]*//')
+    reply=$(printf '%s' "$reply" | sed '1d' | sed '/./,$!d')
+    [[ -z "$reply" ]] && reply="Let me look into that and get back to you."
+    printf '  deferring to the mind: %s\n' "$deferred_request" >&2
+    jq -nc --arg source "$THINKER_NAME" --arg trigger "$trigger_step_id" \
+        --arg person "$msg_from" --arg request "$deferred_request" \
+        '{type:"action",
+          content:("Pending request from " + $person + ": " + $request
+                   + ". The responder told them I would get back to them. Do the work, then deliver with: chat reply --follow-up --reply-to "
+                   + $trigger + " " + $person + " \"<result>\" and append an observation with --field resolves=" + $trigger),
+          source:$source, person:$person, request:$request}
+         + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
+        | traj append >/dev/null || true
+fi
+
 reply_args=()
 [[ -n "$trigger_step_id" ]] && reply_args+=(--reply-to "$trigger_step_id")
 if [[ -n "$reply" ]] && printf '%s' "$reply" | chat reply ${reply_args[@]+"${reply_args[@]}"} "$msg_from"; then
-    _obs "Replied to $msg_from: $(printf '%.200s' "$reply")" replied "$(_finish_metrics)"
+    _extra=$(_finish_metrics)
+    if [[ -n "$deferred_request" ]]; then
+        _extra=$(printf '%s' "$_extra" | jq -c --arg r "$deferred_request" '. + {deferred: true, request: $r}')
+        _obs "Replied to $msg_from with a holding message and handed the mind a pending request: $(printf '%.200s' "$deferred_request")" replied "$_extra"
+    else
+        _obs "Replied to $msg_from: $(printf '%.200s' "$reply")" replied "$_extra"
+    fi
     printf '  [reply -> %s] %s\n' "$msg_from" "$(printf '%s' "$reply" | head -1)"
+    _update_person_notes_async
     exit 0
 fi
 
