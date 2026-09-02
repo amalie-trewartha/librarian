@@ -53,7 +53,7 @@ OpenAI, Gemini, or OpenRouter) — or a local model on any
 OpenAI-compatible server (llama.cpp, Ollama, vLLM, LM Studio; see
 [Local models](#local-models) below, no key needed); the dashboard also
 needs [uv](https://docs.astral.sh/uv/) and bun or node, and the installer
-offers to fetch those. 
+offers to fetch those.
 
 Headlong is alpha research software. Use a dedicated, spend-capped key, because
 your agent runs real shell commands and thinks around the clock. With Docker
@@ -89,7 +89,8 @@ The container flow the installer offers is this, and you can also run it
 yourself:
 
 ```bash
-docker run -it --name headlong --restart unless-stopped -p 8080:8080 buildpack-deps:curl \
+docker run -it --name headlong --restart unless-stopped -p 8080:8080 \
+  --add-host host.docker.internal:host-gateway buildpack-deps:curl \
   bash -c 'curl -fsSL https://headlong.ai/install.sh | bash; exec bash'
 ```
 
@@ -190,21 +191,21 @@ Everything you run *around* the mind lives in `tools/`:
 
 ## Local models
 
-Headlong runs on any server that speaks the OpenAI chat-completions
-protocol — llama.cpp (`llama-server`), Ollama, vLLM, LM Studio, a
-corporate proxy — with or without an API key. The `llm` tool calls it
-through the `openai-compatible` provider, and nothing else in the harness
-changes: `shellm`, the thinkers, `recap`, and memory search all reach the
-model through that one endpoint.
+Headlong can use any server that supports the OpenAI chat completions API,
+including llama.cpp, Ollama, vLLM, and LM Studio. A local server does not
+need an API key unless you configured the server to require one.
 
-Start a server, e.g. llama.cpp or Ollama:
+For llama.cpp, start the server with an alias that Headlong can use as the
+model name:
 
 ```bash
-llama-server -m qwen3-8b-instruct.gguf -c 32768    # http://127.0.0.1:8080
-ollama serve                                       # http://127.0.0.1:11434
+llama-server \
+  -m qwen3-8b-instruct.gguf \
+  --alias qwen3-8b-instruct \
+  -c 32768
 ```
 
-Call it from `llm`:
+Then check the connection:
 
 ```bash
 LLM_PROVIDER=openai-compatible \
@@ -212,24 +213,77 @@ LLM_API_URL=http://127.0.0.1:8080/v1/chat/completions \
 llm -m qwen3-8b-instruct "hello"
 ```
 
-Run a persistent agent on it by putting these in `~/.headlong/.env`
-(the installer's home): `SHELLM_MODEL` (the model name your server wants),
-`LLM_PROVIDER=openai-compatible`, and `SHELLM_API_URL` (the URL above).
-`LLM_API_KEY` goes there too if the server requires a bearer token
-(llama-server's `--api-key`); Ollama needs none. The provider is never
-auto-detected from the model name, so name it explicitly.
+For Ollama, start the server if it is not already running:
 
-Inside the Docker sandbox, `localhost` is the container, not your
-machine: point the URL at `http://host.docker.internal:8080/v1/chat/completions`
-on macOS, or the docker bridge address, on Linux.
+```bash
+ollama serve
+```
 
-`--effort` is ignored by OpenAI-compatible providers, and `--thinking
-LEVEL` is sent only for models on the known reasoning list (set
-`LLM_ASSUME_THINKING=1` to send it anyway, e.g. for a local Qwen3). Details
-and the full local setup in
-[docs/shellm.md](docs/shellm.md#the-llm-tool); the
-policy for which providers live in core is in
-[design/providers.md](design/providers.md).
+With the server running, download a model and check the connection:
+
+```bash
+ollama pull qwen3:8b
+LLM_PROVIDER=openai-compatible \
+LLM_API_URL=http://127.0.0.1:11434/v1/chat/completions \
+llm -m qwen3:8b "hello"
+```
+
+To configure an existing Headlong agent without running the installer again,
+add the provider, server address, and model to `~/.headlong/.env`:
+
+```bash
+LLM_PROVIDER='openai-compatible'
+SHELLM_API_URL='http://127.0.0.1:11434/v1/chat/completions'
+SHELLM_MODEL='qwen3:8b'
+```
+
+The example uses Ollama. For the llama.cpp example above, use port 8080 and
+the `qwen3-8b-instruct` model alias instead. If the server requires a bearer
+token, add `LLM_API_KEY` to the same file.
+
+Restart the agent after changing an existing configuration. Replace `ada`
+with your agent's name:
+
+```bash
+ada stop
+ada start
+```
+
+To let the installer write the same settings, run it and choose the local
+model server when asked:
+
+```bash
+curl -fsSL https://headlong.ai/install.sh | bash
+```
+
+A local server can also be selected without a terminal:
+
+```bash
+export HEADLONG_PROVIDER=local
+export HEADLONG_LOCAL_URL=http://127.0.0.1:11434/v1
+export HEADLONG_LOCAL_MODEL=qwen3:8b
+curl -fsSL https://headlong.ai/install.sh | bash
+```
+
+For a host installation, keep a local server address such as `127.0.0.1`
+or `localhost`. Headlong changes the address only when `shellm` runs code
+inside its Docker sandbox. A full Headlong container uses
+`host.docker.internal` to reach a server on the Docker host.
+
+On Linux, the model server must listen on an address that Docker can reach.
+For example, llama.cpp can use `--host 0.0.0.0`, and Ollama can use
+`OLLAMA_HOST=0.0.0.0:11434`. Use the machine firewall to keep the model
+server off untrusted networks.
+
+Be aware that `host.docker.internal` gives agent code access to other
+services running on the host. Do not rely on loopback binding alone to
+protect a sensitive service when this route is enabled. See
+[the installation guide](docs/install.md#the-one-liner) for the full
+networking and security details.
+
+For direct `llm` configuration, thinking options, and provider behavior,
+see [the shellm guide](docs/shellm.md#the-llm-tool). The provider policy is
+in [design/providers.md](design/providers.md).
 
 ## Learn more
 
