@@ -47,7 +47,11 @@ setup_identity() {
 #!/usr/bin/env bash
 json=$(cat)
 printf '%s\n' "$json" >> "$IDENTITY_DIR/record"
-sleep 3
+if [[ -f "$IDENTITY_DIR/hold_slowpoke" ]]; then
+    while [[ -f "$IDENTITY_DIR/hold_slowpoke" ]]; do sleep 0.1; done
+else
+    sleep 3
+fi
 EOF
     chmod +x "$TMP/id/thinkers/slowpoke/step"
     printf '{"types":["action","message","observation"]}\n' > "$TMP/id/thinkers/slowpoke/subscriptions.jsonl"
@@ -241,6 +245,10 @@ test_selfwake_coalesce() {
 # ---------------------------------------------------------------------------
 test_queue_cap() {
     setup_identity
+    # Keep the worker busy until the feeder has filled the queue. Letting the
+    # three-second fake worker drain entries here makes reaching the cap depend
+    # on runner speed.
+    : > "$TMP/id/hold_slowpoke"
     start_thinkers
 
     append_step '{"type":"action","content":"A","source":"test"}'
@@ -249,10 +257,7 @@ test_queue_cap() {
     for i in $(seq 1 18); do
         append_step "{\"type\":\"action\",\"content\":\"Q$i\",\"source\":\"test\"}"
     done
-    # Wait for the cap to be hit rather than a fixed sleep: the dispatcher
-    # queues one step per feeder line, and on a slow runner (the CI macOS
-    # box) 18 arrivals take longer than 2s to land, so a fixed sleep saw a
-    # short queue and no drop.
+    # Wait for the feeder to process enough arrivals to hit the cap.
     i=0
     while ! grep -q 'queue full' "$TMP/id/run/logs/dispatcher.log" 2>/dev/null && [[ "$i" -lt 200 ]]; do
         sleep 0.1; i=$((i+1))
@@ -260,7 +265,7 @@ test_queue_cap() {
 
     local count
     count=$(compgen -G "$TMP/id/run/pending/slowpoke.action.*" | wc -l | tr -d ' ')
-    if [[ "$count" -le 16 ]]; then
+    if [[ "$count" -eq 16 ]]; then
         ok "pending queue capped at 16 (got $count)"
     else
         bad "pending queue capped at 16" "count: $count"
@@ -272,6 +277,7 @@ test_queue_cap() {
         bad "queue-full drop logged"
     fi
 
+    rm -f "$TMP/id/hold_slowpoke"
     stop_thinkers
 }
 
