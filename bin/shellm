@@ -84,6 +84,13 @@ SHELLM_EFFORT="${SHELLM_EFFORT:-high}"
 # its command, or loops that way until the transfer times out, then costs
 # nothing past the block. 0 reads every response to the end as before.
 SHELLM_STOP_AFTER_CODE_BLOCK="${SHELLM_STOP_AFTER_CODE_BLOCK:-1}"
+# What the model sees of the trajectory on each call. "traj" (default): the
+# trajectory's head and tail, so a --traj/--resume run continues the earlier
+# conversation. "run": only this run's own steps, with its prompt pinned
+# whole, for a caller whose prompt already carries the history it wants
+# (the monolith: its wakeup prompt has the recent stream and life summary,
+# and earlier runs' raw commands only pull the model toward repeating them).
+SHELLM_CONTEXT_SCOPE="${SHELLM_CONTEXT_SCOPE:-traj}"
 # Whether the image was chosen for this run (environment here, --docker-image
 # below) rather than defaulted. A resume inherits the trajectory's image only
 # when it was not, so resuming never silently overrides what the caller asked
@@ -246,6 +253,9 @@ Options:
   --docker-access MODE Docker access for generated code: none, broker, socket, dind
   --traj TRAJ_ID         Write steps to an existing trajectory (no child traj or fork)
   --resume               Shorthand for --traj with the most recent trajectory
+  --context-scope SCOPE  What the model sees of the trajectory: "traj" (default,
+                         earlier steps included) or "run" (only this run's
+                         steps, prompt pinned whole)
   --traj-dir DIR         Trajectory directory (default: <state-home>/trajectories,
                          where the state home is ~/.headlong)
   --var NAME=VALUE       Set env var for generated code (repeatable)
@@ -266,6 +276,7 @@ Environment:
                           1 (default): stop reading a response once its first
                           code block closes; only that block runs anyway.
                           0 reads to the end.
+  SHELLM_CONTEXT_SCOPE    traj (default) or run; see --context-scope
   SHELLM_EMPTY_RESPONSE_RETRIES
                           Empty-response retries before the run dies
                           (default 8; set empty for unlimited)
@@ -2304,7 +2315,7 @@ run_loop() {
     # traj append prints the assigned step_id; keep it so every machinery step
     # this run writes can carry run_id (crucial with --traj, where many runs
     # interleave in one shared trajectory)
-    local _run_step_id
+    local _run_step_id _prompt_step_id=""
     _run_step_id=$(printf '%s' "$_shellm_run_json" | traj append --traj_dir "$_run_traj_dir" "$_run_traj_id")
     # Launcher opt-in: report this run's header step_id to the given file so
     # the caller can pair its own steps with this exact run — the trajectory
@@ -2329,8 +2340,8 @@ run_loop() {
         local _p_tmp
         _p_tmp=$(mktemp)
         printf '%s' "$prompt" > "$_p_tmp"
-        printf '%s' "$(jq -n --rawfile p "$_p_tmp" --arg run_id "$_run_step_id" '{type:"prompt",content:$p,run_id:$run_id}')" \
-            | traj append --traj_dir "$_run_traj_dir" "$_run_traj_id" >/dev/null
+        _prompt_step_id=$(printf '%s' "$(jq -n --rawfile p "$_p_tmp" --arg run_id "$_run_step_id" '{type:"prompt",content:$p,run_id:$run_id}')" \
+            | traj append --traj_dir "$_run_traj_dir" "$_run_traj_id")
         rm -f "$_p_tmp"
     fi
 
@@ -2402,11 +2413,22 @@ run_loop() {
         [[ "$QUIET" -eq 0 ]] && echo >&2
         progress "Iteration $iter_label — calling $SHELLM_MODEL..."
 
-        # Build model context from trajectory as multi-turn messages
-        messages_json=$(context --traj_dir "$_run_traj_dir" "$_run_traj_id" \
-            --assistant-types reasoning,final \
-            --user-types prompt,shell-output,feedback \
-            --exclude-types shellm-run,run-summary 2>/dev/null) || messages_json='[]'
+        # Build model context from trajectory as multi-turn messages. The
+        # prompt is never truncated: a cut prompt hands the model a stub
+        # pointing at its own instructions on disk (Audel ran for months on
+        # the first and last KB of its wakeup prompt, 2026-09). In run scope
+        # only this run's steps render, with the prompt pinned so a long run
+        # keeps its instructions past the tail window.
+        local -a _ctx_args=(--traj_dir "$_run_traj_dir" "$_run_traj_id"
+            --assistant-types "reasoning,final"
+            --user-types "prompt,shell-output,feedback"
+            --exclude-types "shellm-run,run-summary"
+            --full-types prompt)
+        if [[ "$SHELLM_CONTEXT_SCOPE" == "run" ]]; then
+            _ctx_args+=(--run "$_run_step_id" --head 0)
+            [[ -n "$_prompt_step_id" ]] && _ctx_args+=(--pin "$_prompt_step_id")
+        fi
+        messages_json=$(context "${_ctx_args[@]}" 2>/dev/null) || messages_json='[]'
 
         # Call Claude (capture thinking/reasoning to file)
         local thinking_file="$rundir/.last_thinking"
@@ -2973,6 +2995,10 @@ main() {
                 SHELLM_MAX_TOKENS="${2:?--max-tokens requires a value}"
                 shift 2
                 ;;
+            --context-scope)
+                SHELLM_CONTEXT_SCOPE="${2:?--context-scope requires a value}"
+                shift 2
+                ;;
             --effort)
                 SHELLM_EFFORT="${2:?--effort requires a value}"
                 shift 2
@@ -3075,6 +3101,10 @@ main() {
     fi
 
     validate_docker_config
+    case "$SHELLM_CONTEXT_SCOPE" in
+        traj|run) ;;
+        *) die "--context-scope must be traj or run (got '$SHELLM_CONTEXT_SCOPE')" ;;
+    esac
 
     if [[ "$print_prompt" -eq 1 ]]; then
         build_system_prompt "" 0

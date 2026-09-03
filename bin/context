@@ -24,6 +24,8 @@ CTX_PINS=()
 CTX_ASSISTANT_TYPES=""
 CTX_USER_TYPES=""
 CTX_EXCLUDE_TYPES=""
+CTX_FULL_TYPES=""
+CTX_RUN=""
 CTX_TRAJ_DIR_OPT=""
 CTX_TRAJ_ID_OPT=""
 
@@ -49,9 +51,17 @@ Step selection:
   --head N              Keep first N steps. Default: 1.
   --tail N              Keep last N steps. Default: 50.
   --pin <step_id>       Always include this step. Repeatable.
+  --run RUN_ID          Keep only steps whose run_id is RUN_ID (pins always
+                        stay). Steps of other runs never render and never
+                        count as elided; a gap inside the run renders as
+                        "[earlier steps elided]" with no count.
 
 Per-step content:
   --prompt-limit BYTES  Per-step field truncation for large values. Default: 2048.
+  --full-types LIST     Step types whose fields are never truncated, e.g.
+                        "prompt": instructions arrive whole or not at all (a
+                        cut prompt leaves the model a stub pointing at its
+                        own instructions on disk).
 
 Elision:
   --elision-style S     none|count. Default: count.
@@ -85,6 +95,8 @@ while [[ $# -gt 0 ]]; do
         --assistant-types)  CTX_ASSISTANT_TYPES="${2:?--assistant-types requires LIST}"; shift 2 ;;
         --user-types)       CTX_USER_TYPES="${2:?--user-types requires LIST}"; shift 2 ;;
         --exclude-types)    CTX_EXCLUDE_TYPES="${2:?--exclude-types requires LIST}"; shift 2 ;;
+        --full-types)       CTX_FULL_TYPES="${2:?--full-types requires LIST}"; shift 2 ;;
+        --run)              CTX_RUN="${2:?--run requires RUN_ID}"; shift 2 ;;
         --traj_dir)         CTX_TRAJ_DIR_OPT="${2:?--traj_dir requires DIR}"; shift 2 ;;
         -h|--help)          usage 0 ;;
         -*)                 die "unknown option: $1" ;;
@@ -250,11 +262,13 @@ def role_for($t; $A; $U; $E):
 def selected($i; $sid; $N; $head; $tail; $pins):
   ($i < $head) or ($i >= ($N - $tail)) or (($pins | index($sid)) != null);
 
-# Render one step row into message text content.
-def render_step($limit; $blobs):
+# Render one step row into message text content. Types in $full (e.g. a
+# prompt) are never truncated, whatever $limit0 says.
+def render_step($limit0; $blobs; $full):
   . as $row |
   ($row.step_id | tostring) as $sid |
   (($row.type // "") | tostring) as $t |
+  (if ($full | index($t)) != null then 1000000000000 else $limit0 end) as $limit |
   if $t == "fork" then "[Forked child: \($row.child | jqr_empty)]"
   elif $t == "trajectory" then ""
   elif $t == "merge" then
@@ -293,20 +307,28 @@ def render_step($limit; $blobs):
 # excluded/malformed rows we DID read). Dropped rows in the unread middle
 # can't be subtracted, so middle markers may overcount by a little — the old
 # whole-file pass excluded them exactly, at the price of parsing everything.
-def build_messages($kept; $limit; $blobs; $elision; $total; $skip):
+# In run scope ($run != "") rows of other runs are dropped silently: a gap
+# before the first kept row is never marked (everything earlier is another
+# run's by definition), and a gap inside the run cannot be counted without
+# reading the unread middle, so it renders without a number.
+def build_messages($kept; $limit; $blobs; $elision; $total; $skip; $full; $run):
   def gap_between($a; $b):
     ($b - $a - 1) - ([$skip[] | select(. > $a and . < $b)] | length);
+  def marker($gap; $first):
+    if $run == "" then [{role: "user", content: "[\($gap) steps elided]"}]
+    elif $first then []
+    else [{role: "user", content: "[earlier steps elided]"}] end;
   reduce $kept[] as $it ({msgs: [], last: -1};
       gap_between(.last; $it.i) as $gap |
       (if $elision != "none" and $gap > 0
-       then .msgs + [{role: "user", content: "[\($gap) steps elided]"}]
+       then .msgs + marker($gap; .last == -1)
        else .msgs end) as $m |
-      ($it.row | render_step($limit; $blobs) | rtrim) as $c |
+      ($it.row | render_step($limit; $blobs; $full) | rtrim) as $c |
       {msgs: (if $c == "" then $m else $m + [{role: $it.role, content: $c}] end),
        last: $it.i}
   ) |
   (gap_between(.last; $total) as $gap |
-   if $elision != "none" and $gap > 0
+   if $elision != "none" and $gap > 0 and $run == ""
    then .msgs + [{role: "user", content: "[\($gap) steps elided]"}]
    else .msgs end);
 
@@ -323,6 +345,7 @@ def merge_roles:
 ($astr | if . == "" then [] else split(",") end) as $A |
 ($ustr | if . == "" then [] else split(",") end) as $U |
 ($estr | if . == "" then [] else split(",") end) as $E |
+($fullstr | if . == "" then [] else split(",") end) as $FULL |
 ($blobsraw[0] // {}) as $blobs |
 # Input lines are "<original line index>\t<raw JSONL line>" — only the head,
 # tail, and pin-candidate lines of the file (see the loader below). $total
@@ -335,9 +358,13 @@ def merge_roles:
 ([$fed[] | select(.row != null)
          | . + {role: role_for(((.row.type // "") | tostring); $A; $U; $E)}]) as $items |
 ($items | length) as $N |
-([$items[] | select(.role != "exclude")
+# Run scope: a row belongs when its run_id matches or it is pinned.
+def in_run: (.row.step_id | tostring) as $sid |
+            $run == "" or ((.row.run_id // "") | tostring) == $run
+            or (($pins | index($sid)) != null);
+([$items[] | select(.role != "exclude") | select(in_run)
            | select(selected(.i; (.row.step_id | tostring); $total; $head; $tail; $pins))]) as $kept |
-([$fed[] | select(.row == null)] + [$items[] | select(.role == "exclude")]
+([$fed[] | select(.row == null)] + [$items[] | select(.role == "exclude" or (in_run | not))]
  | map(.i) | sort) as $skip |
 if $mode == "refs" then
     [ $kept[].row |
@@ -346,7 +373,7 @@ if $mode == "refs" then
     ] | unique | .[]
 else
     $N,
-    (build_messages($kept; $limit; $blobs; $elision; $total; $skip) | merge_roles)
+    (build_messages($kept; $limit; $blobs; $elision; $total; $skip; $FULL; $run) | merge_roles)
 end
 JQEOF
 )
@@ -414,6 +441,8 @@ _ctx_jq() {
         --arg astr "$CTX_ASSISTANT_TYPES" \
         --arg ustr "$CTX_USER_TYPES" \
         --arg estr "$CTX_EXCLUDE_TYPES" \
+        --arg fullstr "$CTX_FULL_TYPES" \
+        --arg run "$CTX_RUN" \
         --arg elision "$CTX_ELISION_STYLE" \
         --slurpfile blobsraw "$3" \
         "$JQ_PROG"

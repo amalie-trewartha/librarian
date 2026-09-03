@@ -348,7 +348,7 @@ run_response=$(SHELLM_NO_BANNER=1 \
     SHELLM_TRIGGER_STEP_ID="$trigger_step_id" \
     SHELLM_WAKE="$wake_reason" \
     SHELLM_RUN_ID_OUT="$run_id_file" \
-    shellm --model "$THINK_MODEL" --traj "$TRAJ_ID" \
+    shellm --model "$THINK_MODEL" --traj "$TRAJ_ID" --context-scope run \
     "${shellm_flags[@]}" \
     --prompt-file "$prompt_file_tmp") || run_rc=$?
 rm -f "$prompt_file_tmp"

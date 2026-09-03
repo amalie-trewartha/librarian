@@ -122,6 +122,68 @@ else
     bad "invariant/valid-utf8-truncation"
 fi
 
+# 2c. Run scope and whole prompts. Two runs share a trajectory with a chat
+# message between them; the second run's prompt is far over the field limit.
+# --full-types prompt renders it whole (the model must never get a stub for
+# its own instructions), --run keeps only that run's steps with no marker
+# for the earlier rows, and a pinned prompt survives a tail window smaller
+# than the run.
+RS="$WORK_BK/runs"
+mkdir -p "$RS/rs"
+python3 - "$RS/rs/trajectory.jsonl" <<'PYEOF'
+import json, sys
+big = "PROMPT-HEAD " + ("x" * 3000) + " MIDDLE-MARKER " + ("y" * 3000) + " PROMPT-TAIL"
+rows = [
+  {"type": "trajectory", "step_id": "r-000"},
+  {"type": "shellm-run", "step_id": "run-a"},
+  {"type": "prompt", "content": "first run prompt FIRST-MARKER", "run_id": "run-a", "step_id": "pa"},
+  {"type": "reasoning", "cmd": "echo a", "run_id": "run-a", "step_id": "ra"},
+  {"type": "shell-output", "stdout": "a out", "exit": 0, "run_id": "run-a", "step_id": "oa"},
+  {"type": "final", "content": "done a", "run_id": "run-a", "step_id": "fa"},
+  {"type": "message", "content": "CHAT-MARKER hello", "step_id": "m1"},
+  {"type": "shellm-run", "step_id": "run-b"},
+  {"type": "prompt", "content": big, "run_id": "run-b", "step_id": "pb"},
+  {"type": "reasoning", "cmd": "echo b1", "run_id": "run-b", "step_id": "rb1"},
+  {"type": "shell-output", "stdout": "b1 out", "exit": 0, "run_id": "run-b", "step_id": "ob1"},
+  {"type": "reasoning", "cmd": "echo b2", "run_id": "run-b", "step_id": "rb2"},
+  {"type": "shell-output", "stdout": "B-BIG " * 1000, "exit": 0, "run_id": "run-b", "step_id": "ob2"},
+]
+open(sys.argv[1], "w").write("".join(json.dumps(r) + "\n" for r in rows))
+PYEOF
+# shellcheck disable=SC2086
+rs_cut=$("$CONTEXT" --traj_dir "$RS" rs $PROD 2>/dev/null)
+if printf '%s' "$rs_cut" | grep -q 'MIDDLE-MARKER'; then
+    bad "run-scope/prompt-cut-by-default" "expected the 6K prompt to be truncated without --full-types"
+else
+    ok "run-scope/prompt-cut-by-default (documents the default; shellm passes --full-types prompt)"
+fi
+# shellcheck disable=SC2086
+rs_full=$("$CONTEXT" --traj_dir "$RS" rs $PROD --full-types prompt 2>/dev/null)
+if printf '%s' "$rs_full" | grep -q 'MIDDLE-MARKER' && printf '%s' "$rs_full" | grep -q 'FIRST-MARKER' \
+   && printf '%s' "$rs_full" | grep -q 'truncated: 6000 bytes'; then
+    ok "run-scope/full-types-prompt-whole (prompt whole, shell output still cut)"
+else
+    bad "run-scope/full-types-prompt-whole"
+fi
+# shellcheck disable=SC2086
+rs_run=$("$CONTEXT" --traj_dir "$RS" rs $PROD --full-types prompt --run run-b --pin pb --head 0 2>/dev/null)
+if printf '%s' "$rs_run" | grep -q 'MIDDLE-MARKER' \
+   && ! printf '%s' "$rs_run" | grep -q -e 'FIRST-MARKER' -e 'CHAT-MARKER' -e 'done a' -e 'steps elided' \
+   && [[ "$(printf '%s' "$rs_run" | jq -r '.[0].role + " " + (.[0].content[0:11])')" == "user PROMPT-HEAD" ]] \
+   && [[ "$(printf '%s' "$rs_run" | jq 'length')" == "5" ]]; then
+    ok "run-scope/only-this-run (prompt first, no other run, no chat, no marker)"
+else
+    bad "run-scope/only-this-run" "$(printf '%s' "$rs_run" | jq -r '.[] | .role + " " + (.content[0:30])' | tr '\n' '|')"
+fi
+# shellcheck disable=SC2086
+rs_pin=$("$CONTEXT" --traj_dir "$RS" rs $PROD --full-types prompt --run run-b --pin pb --head 0 --tail 1 2>/dev/null)
+if printf '%s' "$rs_pin" | grep -q 'MIDDLE-MARKER' && printf '%s' "$rs_pin" | grep -q '\[earlier steps elided\]' \
+   && printf '%s' "$rs_pin" | grep -q 'B-BIG' && ! printf '%s' "$rs_pin" | grep -q 'b1 out'; then
+    ok "run-scope/pinned-prompt-survives-small-tail"
+else
+    bad "run-scope/pinned-prompt-survives-small-tail" "$(printf '%s' "$rs_pin" | jq -r '.[] | .role + " " + (.content[0:30])' | tr '\n' '|')"
+fi
+
 # 2b. Bookkeeping stamped on steps (token counts, latency, run id) never
 # reaches the model; the thought and the code block do.
 BK="$WORK_BK"
