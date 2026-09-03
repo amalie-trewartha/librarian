@@ -257,14 +257,19 @@ test_queue_cap() {
     for i in $(seq 1 18); do
         append_step "{\"type\":\"action\",\"content\":\"Q$i\",\"source\":\"test\"}"
     done
-    # Wait for the feeder to process enough arrivals to hit the cap.
+    # Wait for the queue to settle, not just for the cap to be hit: the
+    # dispatcher logs "queue full", removes the oldest file, and only then
+    # writes the new one, so between the log line and that write the
+    # directory holds 15 files. Q17 and Q18 both overflow, so settled means
+    # two drop lines and 16 files (the worker is held, so nothing drains).
+    local count=0
     i=0
-    while ! grep -q 'queue full' "$TMP/id/run/logs/dispatcher.log" 2>/dev/null && [[ "$i" -lt 200 ]]; do
+    while [[ "$(grep -c 'queue full' "$TMP/id/run/logs/dispatcher.log" 2>/dev/null)" -lt 2 || "$count" -ne 16 ]] \
+          && [[ "$i" -lt 300 ]]; do
         sleep 0.1; i=$((i+1))
+        count=$(compgen -G "$TMP/id/run/pending/slowpoke.action.*" | wc -l | tr -d ' ')
     done
 
-    local count
-    count=$(compgen -G "$TMP/id/run/pending/slowpoke.action.*" | wc -l | tr -d ' ')
     if [[ "$count" -eq 16 ]]; then
         ok "pending queue capped at 16 (got $count)"
     else
