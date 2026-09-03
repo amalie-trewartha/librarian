@@ -146,28 +146,66 @@ EOF
     printf '%s\n' "$filename"
 }
 
+# Stage 1 of a search: a local keyword score picks the candidates the model
+# reads. Terms are the query's words of three or more characters, minus a few
+# stopwords; a file scores the sum over its matched terms of an IDF weight
+# (rare terms count for more) times a log of the term's count. Prints the
+# top N paths, best first; nothing when no term matches any file.
+mem_prefilter() {
+    local query="$1" top="$2" terms
+    terms=$(printf '%s' "$query" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_#@.-' '\n' \
+        | awk 'length($0) >= 3' | grep -vxE 'the|and|for|not|from|with|that|this|are|was|what|when|how|about|into' \
+        | sort -u | tr '\n' ' ')
+    [[ -n "${terms// /}" ]] || return 0
+    awk -v terms="$terms" '
+        BEGIN { n = split(terms, T, " ") }
+        FNR == 1 { nf++; files[nf] = FILENAME }
+        { line = tolower($0)
+          for (i = 1; i <= n; i++) { c = gsub(T[i], "&", line); if (c > 0) cnt[nf, i] += c } }
+        END {
+          for (i = 1; i <= n; i++) {
+              df = 0; for (f = 1; f <= nf; f++) if (cnt[f, i] > 0) df++
+              idf[i] = log(1 + nf / (1 + df)) }
+          for (f = 1; f <= nf; f++) {
+              s = 0; for (i = 1; i <= n; i++) if (cnt[f, i] > 0) s += idf[i] * (1 + log(cnt[f, i]))
+              if (s > 0) printf "%f\t%s\n", s, files[f] }
+        }' "$MEM_DIR"/*.md | sort -t "$(printf '\t')" -k1,1 -gr | head -n "$top" | cut -f2-
+}
+
 action_search() {
     local query="$1"
 
     local count
-    count=$(ls -1 "$MEM_DIR"/*.md 2>/dev/null | wc -l | tr -d ' ')
+    count=$(ls -1 "$MEM_DIR"/*.md 2>/dev/null | wc -l | tr -d ' ') || count=0
     [[ "$count" -eq 0 ]] && { echo "No memories stored." >&2; return 0; }
 
-    # Concatenate all memories with filenames as headers
-    local memories=""
-    local f
-    for f in "$MEM_DIR"/*.md; do
+    # Two stages. Sending every memory to the model was 700KB for a mature
+    # identity (about 200K tokens): 44 cents a search on the mind's model,
+    # slower than shellm's inactivity limit (billed, then killed), and a
+    # cheap model given that haystack returns the first files it saw. The
+    # local prefilter sends the model a few kilobytes instead; with no term
+    # overlap at all, the newest files are the best guess (2026-09-03).
+    local top="${MEM_SEARCH_TOP:-40}" candidates
+    candidates=$(mem_prefilter "$query" "$top")
+    [[ -n "$candidates" ]] || candidates=$(ls -1 "$MEM_DIR"/*.md | tail -n "$top")
+
+    local memories="" f
+    while IFS= read -r f; do
+        [[ -f "$f" ]] || continue
         memories+="=== $(basename "$f") ===
 $(cat "$f")
 
 "
-    done
+    done <<< "$candidates"
 
-    # Utility call: use the cheap model class when one is configured
-    # Pipe the corpus via stdin to avoid ARG_MAX limits on large memory sets.
+    # Stage 2: the model ranks the candidates. Utility call: use the cheap
+    # model class when one is configured. A reasoning model spends output
+    # tokens thinking before it answers, so the output cap stays far above
+    # what the answer needs (MEM_SEARCH_MAX_TOKENS), or the reply comes back
+    # empty. The corpus rides stdin, not argv (ARG_MAX).
     # shellcheck disable=SC2086
     printf 'Search these memories for: %s\n\n%s' "$query" "$memories" | \
-        llm ${SHELLM_FAST_MODEL:+-m "$SHELLM_FAST_MODEL"} \
+        llm ${SHELLM_FAST_MODEL:+-m "$SHELLM_FAST_MODEL"} -t "${MEM_SEARCH_MAX_TOKENS:-16000}" \
             -s "You are a semantic search engine for memory files. Each memory has a filename header (=== filename ===), YAML frontmatter (summary, type), and a body. Return ONLY the filenames and summaries of semantically matching memories, one per line. If nothing matches, say 'No matches found.'"
 }
 
@@ -366,7 +404,8 @@ mem — CLI memory store
 
 Usage:
   mem add [--type TYPE] <text>   Add a memory (or pipe text via stdin)
-  mem search <query>             Semantic search via shellm
+  mem search <query>             Semantic search: a local keyword score picks
+                                 the top MEM_SEARCH_TOP memories, the model ranks them
   mem list [options] [N]         List memories (last N if given)
   mem types                      List memory types with counts
   mem show <id>                  Show a memory's full contents
@@ -390,6 +429,10 @@ Options:
 
 Environment:
   MEM_DIR   Override memory directory (default: ./.memories)
+  MEM_SEARCH_TOP         Candidates the keyword prefilter sends the model (40)
+  MEM_SEARCH_MAX_TOKENS  Output cap for the search call (16000; a reasoning
+                         model thinks against it, so keep it roomy)
+  SHELLM_FAST_MODEL      Cheap model class for the search call
 EOF
     exit 0
 }

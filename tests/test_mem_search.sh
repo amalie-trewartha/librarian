@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# test_mem_search.sh — `mem search` sends the model candidates, not the store
+#
+# Usage: tests/test_mem_search.sh
+#
+# Why: the search used to concatenate every memory file into one request.
+# For a mature identity that was 700KB (about 200K tokens): 44 cents a
+# search on the mind's model, slower than shellm's 30s inactivity limit
+# (billed, then killed), and a cheap model given that haystack returned the
+# first files it saw (2026-09-03). Now a local keyword score picks the top
+# MEM_SEARCH_TOP files and the model reads only those. Checks, with a stubbed
+# llm that records what it was sent: the matching files reach the model and
+# the filler does not, the candidate count is capped, rare terms outrank
+# common ones, a query with no overlap falls back to the newest files, and
+# the call carries the fast model and a roomy output cap.
+
+set -uo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(dirname "$HERE")"
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+
+pass=0
+fail=0
+ok()  { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
+bad() { fail=$((fail+1)); printf 'FAIL %s%s\n' "$1" "${2:+ — $2}"; }
+
+mkdir -p "$WORK/bin" "$WORK/mem"
+cat > "$WORK/bin/llm" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$LLM_STUB_ARGS"
+cat > "$LLM_STUB_PROMPT"
+echo "stub reply"
+STUB
+chmod +x "$WORK/bin/llm"
+export PATH="$WORK/bin:$REPO/bin:$PATH"
+export MEM_DIR="$WORK/mem" LLM_STUB_ARGS="$WORK/args" LLM_STUB_PROMPT="$WORK/prompt"
+
+# 60 filler memories about unrelated things, then a few targets. Filenames
+# carry a timestamp so "newest" is well defined.
+mk() {  # mk <name> <summary> <body>
+    printf -- '---\nsummary: %s\ntype: memory\n---\n\n%s\n' "$2" "$3" > "$MEM_DIR/$1.md"
+}
+for i in $(seq -w 1 60); do
+    mk "2026-08-01-00-00-$i" "Filler note $i" "The build ran and the tests passed on the box. Nothing else to report today."
+done
+mk "2026-08-20-00-00-01" "host-health checks" "The host-health probe checks disk, memory, and the dispatcher unit. Noah asked about it once."
+mk "2026-08-21-00-00-02" "Noah intro" "New Slack guest Noah Ziems joined the channel; Braden asked me to introduce myself."
+mk "2026-08-22-00-00-03" "Noah reply" "Noah Ziems acked the RLM reply. Last word his; do not follow up."
+mk "2026-08-23-00-00-04" "recent unrelated" "A note about the weather on the box, which is always the same."
+
+sent_files() { grep -o '^=== .*\.md ===' "$LLM_STUB_PROMPT" | sed 's/^=== //; s/ ===$//'; }
+
+# --- 1. targets reach the model, filler does not, count is capped ---------
+MEM_SEARCH_TOP=5 mem search "Noah Ziems" >/dev/null 2>&1; rc=$?
+n=$(sent_files | wc -l | tr -d ' ')
+if [[ "$rc" -eq 0 ]] && sent_files | grep -q "2026-08-21-00-00-02" && sent_files | grep -q "2026-08-22-00-00-03" \
+   && ! sent_files | grep -q "2026-08-01-00-00-0[1-9]" && [[ "$n" -le 5 ]]; then
+    ok "search sends the matching memories and caps the candidates ($n of 64 files sent)"
+else
+    bad "search sends the matching memories and caps the candidates" "rc=$rc sent: $(sent_files | tr '\n' ' ')"
+fi
+if grep -q '^Search these memories for: Noah Ziems' "$LLM_STUB_PROMPT" && grep -q 'Noah Ziems acked' "$LLM_STUB_PROMPT"; then
+    ok "candidates are sent in full with the query"
+else
+    bad "candidates are sent in full with the query"
+fi
+
+# --- 2. a rare term outranks a common one ----------------------------------
+# "tests" is in all 60 filler files, "host-health" in one: the one wins.
+MEM_SEARCH_TOP=1 mem search "tests host-health" >/dev/null 2>&1
+if [[ "$(sent_files)" == "2026-08-20-00-00-01.md" ]]; then
+    ok "rare term outranks a common one (IDF weighting)"
+else
+    bad "rare term outranks a common one" "sent: $(sent_files | tr '\n' ' ')"
+fi
+
+# --- 3. no overlap at all: newest files ------------------------------------
+MEM_SEARCH_TOP=3 mem search "zzz qqq" >/dev/null 2>&1
+if [[ "$(sent_files | tr '\n' ' ')" == "2026-08-22-00-00-03.md 2026-08-23-00-00-04.md " ]] || [[ "$(sent_files | tail -1)" == "2026-08-23-00-00-04.md" && "$(sent_files | wc -l | tr -d ' ')" == "3" ]]; then
+    ok "no term overlap falls back to the newest files"
+else
+    bad "no term overlap falls back to the newest files" "sent: $(sent_files | tr '\n' ' ')"
+fi
+
+# --- 4. the call: fast model when set, roomy output cap always -------------
+SHELLM_FAST_MODEL="z-ai/glm-5.3-flash" mem search "Noah" >/dev/null 2>&1
+if grep -q -- '-m z-ai/glm-5.3-flash' "$LLM_STUB_ARGS" && grep -q -- '-t 16000' "$LLM_STUB_ARGS"; then
+    ok "fast model and a 16000 token output cap are passed"
+else
+    bad "fast model and a 16000 token output cap are passed" "$(cat "$LLM_STUB_ARGS")"
+fi
+MEM_SEARCH_MAX_TOKENS=4000 mem search "Noah" >/dev/null 2>&1
+if ! grep -q -- ' -m ' "$LLM_STUB_ARGS" && grep -q -- '-t 4000' "$LLM_STUB_ARGS"; then
+    ok "no fast model means the default model; the cap is tunable"
+else
+    bad "no fast model means the default model; the cap is tunable" "$(cat "$LLM_STUB_ARGS")"
+fi
+
+# --- 5. empty store ----------------------------------------------------------
+rm -f "$MEM_DIR"/*.md
+out=$(mem search "anything" 2>&1)
+if [[ "$out" == *"No memories stored"* ]]; then ok "empty store says so"; else bad "empty store says so" "$out"; fi
+
+printf '\n%d passed, %d failed\n' "$pass" "$fail"
+[[ "$fail" -eq 0 ]]
