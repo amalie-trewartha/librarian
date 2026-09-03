@@ -100,6 +100,10 @@ LLM_RETRY_BACKOFF="${LLM_RETRY_BACKOFF:-1}"   # seconds; grows linearly per atte
 # for a whole minute is stuck. Each is 0 to disable.
 LLM_CONNECT_TIMEOUT="${LLM_CONNECT_TIMEOUT:-10}"
 LLM_MAX_TIME="${LLM_MAX_TIME:-600}"
+# Stop reading the stream once the first fenced code block closes (see
+# _fs_line below). Off by default: only callers that execute the first block
+# and discard the rest (bin/shellm) should set it.
+LLM_STOP_AFTER_CODE_BLOCK="${LLM_STOP_AFTER_CODE_BLOCK:-0}"
 LLM_SPEED_LIMIT="${LLM_SPEED_LIMIT:-100}"
 LLM_SPEED_TIME="${LLM_SPEED_TIME:-60}"
 
@@ -162,6 +166,75 @@ die_retryable() {
 # thinking on stderr) — from that point on, failures must not retry.
 mark_emitted() {
     { [[ -n "${LLM_DATA_MARKER:-}" ]] && : > "$LLM_DATA_MARKER" 2>/dev/null; } || true
+}
+
+# --- first-code-block stop (LLM_STOP_AFTER_CODE_BLOCK) ---------------------
+# bin/shellm executes the first fenced block of a response and discards the
+# rest. Some models keep writing after their command: on Audel (grok, 2026-09)
+# 7% of responses continued with fake step metadata, another thought and
+# another block, and a few looped that way for ten minutes until the transfer
+# timed out and the whole run died. Watching the emitted text line by line
+# with shellm's own fence rules (a tagged ```bash may hang off the end of a
+# prose line; a bare ``` closes only outside a heredoc), the stream is cut the
+# moment the first block closes. Everything a caller in that mode keeps has
+# been emitted by then.
+_fs_buf="" _fs_in=0 _fs_hd=() _fs_bytes=0
+_fs_ident='^[A-Za-z_][A-Za-z_0-9]*'
+_fs_open_re='<<-?'
+_fs_tagged_re='```(bash|shell|sh)[[:space:]]*$'
+_fs_close_re='^```[[:space:]]*$'
+_fs_try_open_heredoc() {
+    local line="$1" rest
+    [[ "$line" =~ $_fs_open_re ]] || return 0
+    rest="${line#*<<}"; rest="${rest#-}"
+    rest="${rest#"${rest%%[![:space:]]*}"}"
+    case "$rest" in
+        \"*)  rest="${rest#\"}"; rest="${rest%%\"*}"; [[ -n "$rest" ]] && _fs_hd+=("$rest") ;;
+        \'*)  rest="${rest#\'}"; rest="${rest%%\'*}"; [[ -n "$rest" ]] && _fs_hd+=("$rest") ;;
+        \\*) rest="${rest#\\}"; [[ "$rest" =~ $_fs_ident ]] && _fs_hd+=("${BASH_REMATCH[0]}") ;;
+        *)    [[ "$rest" =~ $_fs_ident ]] && _fs_hd+=("${BASH_REMATCH[0]}") ;;
+    esac
+    return 0
+}
+_fs_line() {   # one complete line of emitted text; returns 0 when the first block just closed
+    local line="$1" stripped n
+    if [[ "$_fs_in" -eq 0 ]]; then
+        if [[ "$line" == '```'* || "$line" =~ $_fs_tagged_re ]]; then _fs_in=1; fi
+        return 1
+    fi
+    n=${#_fs_hd[@]}
+    if [[ "$n" -gt 0 ]]; then
+        stripped="${line#"${line%%[![:space:]]*}"}"; stripped="${stripped%"${stripped##*[![:space:]]}"}"
+        if [[ "$stripped" == "${_fs_hd[n-1]}" ]]; then
+            unset "_fs_hd[n-1]"
+            n=$((n - 1))
+        fi
+    fi
+    if [[ "$n" -eq 0 && "$line" =~ $_fs_close_re ]]; then return 0; fi
+    _fs_try_open_heredoc "$line"
+    return 1
+}
+_fs_feed() {   # text just emitted; returns 0 once the first block has closed
+    local line
+    _fs_buf+="$1"
+    _fs_bytes=$(( _fs_bytes + ${#1} ))
+    while [[ "$_fs_buf" == *$'\n'* ]]; do
+        line="${_fs_buf%%$'\n'*}"; _fs_buf="${_fs_buf#*$'\n'}"
+        if _fs_line "${line%$'\r'}"; then return 0; fi
+    done
+    return 1
+}
+# Print a visible-text delta. In stop mode, returns 1 once the first code
+# block has closed: the handler breaks out of its read loop, the pipe from
+# curl closes, curl dies on its next write, and the retry loop treats the
+# marker as a clean finish.
+_emit_text() {
+    printf '%s' "$1"
+    [[ "$LLM_STOP_AFTER_CODE_BLOCK" == 1 ]] || return 0
+    _fs_feed "$1" || return 0
+    { [[ -n "${LLM_STOP_MARKER:-}" ]] && printf '%s' "$_fs_bytes" > "$LLM_STOP_MARKER" 2>/dev/null; } || true
+    echo "llm: stopped reading after the first code block closed (LLM_STOP_AFTER_CODE_BLOCK)" >&2
+    return 1
 }
 
 usage() {
@@ -270,6 +343,15 @@ Environment:
   LLM_SPEED_LIMIT          Abort a transfer slower than this many bytes/s...
   LLM_SPEED_TIME           ...for this many consecutive seconds (defaults:
                            100 bytes/s over 60s; 0 on either disables)
+  LLM_STOP_AFTER_CODE_BLOCK
+                           1 (or --stop-after-code-block): stop reading the
+                           stream once the first fenced code block closes
+                           (heredoc-aware, same rules as bin/shellm) and
+                           return what was emitted. For callers that run the
+                           first block and drop the rest: a model that keeps
+                           writing after its command no longer costs tokens
+                           or wall time. Usage is then estimated
+                           (out_tok from bytes, estimated:true).
 
 Examples:
   llm -m claude-sonnet-4-5-20250929 "explain quicksort"
@@ -310,6 +392,7 @@ while [[ $# -gt 0 ]]; do
             shift ;;
         --effort)        LLM_EFFORT="${2:?--effort requires a value}"; shift 2 ;;
         --raw)           LLM_RAW=1; shift ;;
+        --stop-after-code-block) LLM_STOP_AFTER_CODE_BLOCK=1; shift ;;
         -*)              die "Unknown option: $1 (try llm --help)" ;;
         *)               LLM_PROMPT="$*"; break ;;
     esac
@@ -897,12 +980,15 @@ warn_truncated() {
 
 # Write the LLM_USAGE_FILE record. Args: input tokens, output tokens,
 # reasoning/thinking tokens — non-numeric args are omitted from the record.
+# A fourth arg "estimated" marks a record derived from bytes rather than the
+# provider's count (the stream was cut before the usage event arrived).
 write_usage() {
-    jq -nc --arg i "${1:-}" --arg o "${2:-}" --arg t "${3:-}" '
+    jq -nc --arg i "${1:-}" --arg o "${2:-}" --arg t "${3:-}" --arg e "${4:-}" '
         {}
         + (if ($i | test("^[0-9]+$")) then {in_tok: ($i | tonumber)} else {} end)
         + (if ($o | test("^[0-9]+$")) then {out_tok: ($o | tonumber)} else {} end)
-        + (if ($t | test("^[0-9]+$")) then {think_tok: ($t | tonumber)} else {} end)' \
+        + (if ($t | test("^[0-9]+$")) then {think_tok: ($t | tonumber)} else {} end)
+        + (if $e == "estimated" then {estimated: true} else {} end)' \
         > "$LLM_USAGE_FILE" 2>/dev/null || true
 }
 
@@ -976,7 +1062,10 @@ stream_anthropic() {
                         printf '%s' "$json" | jq -j '.delta.thinking // empty' >&2
                     elif [[ "$_block" == "text" ]]; then
                         mark_emitted
-                        printf '%s' "$json" | jq -j '.delta.text // empty'
+                        # Trailing X keeps newline-only deltas; see stream_openai.
+                        _chunk=$(printf '%s' "$json" | jq -j '.delta.text // empty'; printf X)
+                        _chunk="${_chunk%X}"
+                        _emit_text "$_chunk" || break
                     fi
                     ;;
                 *'"content_block_stop"'*)
@@ -1029,7 +1118,7 @@ stream_openai() {
             _chunk="${_chunk%X}"
             if [[ -n "$_chunk" ]]; then
                 mark_emitted
-                printf '%s' "$_chunk"
+                _emit_text "$_chunk" || break
             fi
             # Only the final chunk carries a non-null finish_reason; the glob
             # keeps jq off the hot per-delta path.
@@ -1073,7 +1162,7 @@ stream_gemini() {
             _chunk="${_chunk%X}"
             if [[ -n "$_chunk" ]]; then
                 mark_emitted
-                printf '%s' "$_chunk"
+                _emit_text "$_chunk" || break
             fi
             # finishReason appears only on the final chunk.
             if [[ "$json" == *'"finishReason"'* ]]; then
@@ -1276,17 +1365,29 @@ if [[ "$LLM_STREAM" -eq 1 ]]; then
         _curl_err=$(mktemp)
         LLM_RETRY_ERR=$(mktemp)
         LLM_DATA_MARKER="${LLM_RETRY_ERR}.emitted"
+        LLM_STOP_MARKER="${LLM_RETRY_ERR}.stopped"
         _rc=0
         ( "stream_${LLM_PROVIDER}" < <(curl -sS -N ${_net_args[@]+"${_net_args[@]}"} "${headers[@]}" -d @"$payload_file" "$url" 2>"$_curl_err") ) || _rc=$?
 
         _emitted=0
         [[ -e "$LLM_DATA_MARKER" ]] && _emitted=1
+        # Cut after the first code block: the handler left the pipe, so curl
+        # dies on its next write ("Failed writing body") and its usage event
+        # never arrives. That is a clean finish, not a transfer error.
+        _stopped=""
+        [[ -e "$LLM_STOP_MARKER" ]] && _stopped=$(cat "$LLM_STOP_MARKER" 2>/dev/null)
         _ce=""
         [[ -s "$_curl_err" ]] && _ce=$(cat "$_curl_err")
         _retry_msg=""
         [[ -s "$LLM_RETRY_ERR" ]] && _retry_msg=$(cat "$LLM_RETRY_ERR")
-        rm -f "$_curl_err" "$LLM_RETRY_ERR" "$LLM_DATA_MARKER"
+        rm -f "$_curl_err" "$LLM_RETRY_ERR" "$LLM_DATA_MARKER" "$LLM_STOP_MARKER"
 
+        if [[ -n "$_stopped" && "$_rc" -eq 0 && "$_emitted" -eq 1 ]]; then
+            [[ "$_stopped" =~ ^[0-9]+$ ]] && write_usage "" "$(( (_stopped + 3) / 4 ))" "" estimated
+            _llm_note ok
+            _llm_ledger_append
+            break   # cut on purpose after the first code block
+        fi
         if [[ "$_rc" -eq 0 && -z "$_ce" && "$_emitted" -eq 1 ]]; then
             _llm_note ok
             _llm_ledger_append

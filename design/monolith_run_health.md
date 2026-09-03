@@ -214,6 +214,60 @@ the timeline and the backoff can tell "reasoned but landed nothing" apart from
 non-idle run with a durable step — a thought summarizing what it learned — so
 real work isn't discarded when the run ends.)
 
+## Issue C — the model keeps writing after its code block until the transfer times out
+
+### Evidence
+
+Audel on grok-4.6, 2026-09-02: 22 of 187 monolith runs died as `error`
+steps with `rc=1`. Every one had the same shape in `monolith.log`: a few
+normal steps, then ten minutes of silence, then
+
+    llm: error: curl error: curl: (28) Operation timed out after 600000
+    milliseconds with 12237224 bytes received
+
+All 116 such timeouts in the log had received more than 5 MB, so they were
+runaway generations, not dead connections. The streamed text shows what
+the model was writing: a small code block, then the trajectory's own step
+rendering imitated back (`[in_tok]`, `[llm_s]`, `[out_tok]`, `[run_id]`,
+`[think_tok]` with invented numbers), then a fresh thought and a second
+block (`echo ping649`, `echo ping650`, ...), 1,337 fences in one run. At
+grok's 67 tokens per second the 64,000 token cap cannot be reached inside
+`LLM_MAX_TIME`, so the run always lost the step and the wake.
+
+Over the 2,471 most recent responses, 2,300 had nothing after the first
+closed block. 165 continued with the fake metadata pattern, doubling from 4
+to 9 percent across the sample. None had genuine prose after the block.
+`bin/shellm` executes only the first block and drops the rest, so nothing
+kept was ever in the discarded tail. Same day, 18 and 21 failures on
+2026-08-24 and 2026-08-29 show it was not new.
+
+### Root cause
+
+`bin/context` rendered every non-meta field of a past step as `[field]`
+then value, including the bookkeeping `bin/llm` and `bin/shellm` stamp
+(token counts, latency, run id). The model saw dozens of those blocks per
+prompt right after its own commands and continued the pattern.
+
+### Fixes (built 2026-09-03)
+
+1. `bin/context` hides `run_id`, `llm_s`, `in_tok`, `out_tok`,
+   `think_tok`, and `estimated` (`is_meta`). The imitated template is gone
+   from the prompt. `tests/test_context.sh` has the invariant.
+2. `bin/llm --stop-after-code-block` (`LLM_STOP_AFTER_CODE_BLOCK=1`) stops
+   reading the stream the moment the first fenced block closes, using the
+   same heredoc-aware fence rules as `extract_code`. curl then dies on its
+   next write, which the retry loop treats as a clean finish, and the usage
+   record is estimated from bytes with `estimated: true` since the
+   provider's usage event never arrives. `bin/shellm` passes the flag by
+   default (`SHELLM_STOP_AFTER_CODE_BLOCK=0` reads to the end).
+   `tests/test_llm_stop_after_code_block.sh` covers the runaway, heredocs
+   holding fences, a tagged fence hanging off prose, and no-block answers.
+
+Together: a loop that starts after the block now ends the step normally,
+with the command it was going to run, instead of a ten minute stall and a
+dead run. A loop that starts before any block closes is not caught; a
+repeated-line guard would be the next net if the timeouts persist.
+
 ## Rollout & testing
 
 Order matters — B before A, so we can *see* the effect, and cheap/high-leverage

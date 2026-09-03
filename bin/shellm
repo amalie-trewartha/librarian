@@ -78,6 +78,12 @@ if [[ -n "$SHELLM_API_URL" ]]; then
 fi
 SHELLM_MAX_TOKENS="${SHELLM_MAX_TOKENS:-}"
 SHELLM_EFFORT="${SHELLM_EFFORT:-high}"
+# The loop runs the first fenced block of a response and drops the rest, so
+# llm may stop reading the stream the moment that block closes
+# (LLM_STOP_AFTER_CODE_BLOCK in bin/llm). A model that keeps writing after
+# its command, or loops that way until the transfer times out, then costs
+# nothing past the block. 0 reads every response to the end as before.
+SHELLM_STOP_AFTER_CODE_BLOCK="${SHELLM_STOP_AFTER_CODE_BLOCK:-1}"
 # Whether the image was chosen for this run (environment here, --docker-image
 # below) rather than defaulted. A resume inherits the trajectory's image only
 # when it was not, so resuming never silently overrides what the caller asked
@@ -256,6 +262,10 @@ Environment:
                           mem search); defaults to SHELLM_MODEL's provider
   SHELLM_MAX_ITERATIONS   Max loop iterations
   SHELLM_MAX_TOKENS       Max tokens per response
+  SHELLM_STOP_AFTER_CODE_BLOCK
+                          1 (default): stop reading a response once its first
+                          code block closes; only that block runs anyway.
+                          0 reads to the end.
   SHELLM_EMPTY_RESPONSE_RETRIES
                           Empty-response retries before the run dies
                           (default 8; set empty for unlimited)
@@ -1491,6 +1501,7 @@ call_llm() {
     local -a args=(-m "$SHELLM_MODEL"
         --effort "$SHELLM_EFFORT" --thinking --system-prompt "$system_prompt" --messages-file "$messages_file")
     [[ -n "$SHELLM_MAX_TOKENS" ]] && args+=(-t "$SHELLM_MAX_TOKENS")
+    [[ "${SHELLM_STOP_AFTER_CODE_BLOCK:-1}" == 1 ]] && args+=(--stop-after-code-block)
 
     local text_file stderr_file
     text_file=$(mktemp)
