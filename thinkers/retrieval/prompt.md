@@ -8,4 +8,5 @@ and has not surfaced recently, emit an observation: "I'm reminded of memory
 <id>: <summary>". Memories surface when the current step resonates with
 them, without the mind asking. No LLM call unless `RETRIEVAL_SEMANTIC=1`.
 
-Shipped disabled: delete the `disabled` marker to turn it on.
+Shipped disabled: enable it in the dashboard or delete the identity's
+`disabled` marker. Updates preserve that per-identity choice.

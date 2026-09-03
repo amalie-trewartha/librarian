@@ -97,6 +97,27 @@ def test_install_injects_traj_id(bundled: Path, identity: Path):
     assert sub["traj_id"] == ROOT_TRAJ
 
 
+def test_fresh_install_keeps_bundled_disabled_default(
+    bundled: Path, identity: Path
+):
+    retrieval = bundled / "retrieval"
+    retrieval.mkdir()
+    (retrieval / "step").write_text("#!/bin/bash\n")
+    (retrieval / "subscriptions.jsonl").write_text('{"types":["thought"]}\n')
+    (retrieval / "disabled").write_text("disabled by default\n")
+
+    result = thinker_sync.sync(identity, ["retrieval"])
+    marker = identity / "thinkers" / "retrieval" / "disabled"
+    assert result["results"][0]["action"] == "installed"
+    assert marker.read_text() == "disabled by default\n"
+
+    # Enabling is an identity choice. A later pull must not restore the
+    # bundled default and silently turn the thinker back off.
+    marker.unlink()
+    thinker_sync.sync(identity, ["retrieval"])
+    assert not marker.exists()
+
+
 def test_endpoints(bundled: Path, identity: Path, tmp_path: Path):
     client = TestClient(create_app(tmp_path))
     identity_id = ".identities~bot"

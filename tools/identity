@@ -211,20 +211,25 @@ _ensure_thinkers() {
         local name
         name=$(basename "$src_dir")
         local dest="$thinkers_dir/$name"
+        local dest_existed=0
 
         # Guard: if a prior (mis)install left `dest` as a directory symlink
         # pointing back at the source, the file-level symlink pass below would
         # resolve `$dest/<file>` through it and create self-referential links
         # *inside the source repo* (ELOOP corruption). A thinker dir must be a
         # real directory, so drop any symlink here and rebuild it.
-        [[ -L "$dest" ]] && rm -f "$dest"
+        if [[ -L "$dest" ]]; then
+            rm -f "$dest"
+        elif [[ -d "$dest" ]]; then
+            dest_existed=1
+        fi
 
         # Resolve src_dir through symlinks (bundled_dir entries may be symlinks)
         local real_src
         real_src="$(cd "$src_dir" && pwd -P)"
 
         if [[ "$use_symlinks" -eq 1 ]]; then
-            # Symlink mode: link code files, copy subscriptions.jsonl
+            # Symlink mode: link code files, copy per-identity state.
             mkdir -p "$dest"
 
             # Symlink code files (step, start, stop, *.md, *.sh)
@@ -237,6 +242,31 @@ _ensure_thinkers() {
                 # subscriptions.jsonl is per-identity — only copy if missing
                 if [[ "$fname" == "subscriptions.jsonl" ]]; then
                     [[ -f "$dest/$fname" ]] || cp "$src_file" "$dest/$fname"
+                    continue
+                fi
+
+                # `disabled` in the bundle is a default for fresh identities,
+                # not shared state. Keep a real per-identity copy so removing
+                # it in the dashboard survives the next sync/update. Convert
+                # old installs that linked the marker into a local copy once;
+                # an absent marker on an existing dir means the operator
+                # deliberately enabled that thinker and must stay absent.
+                if [[ "$fname" == "disabled" ]]; then
+                    if [[ -L "$dest/$fname" ]]; then
+                        # A live legacy link means the thinker was disabled;
+                        # preserve that state in a regular identity-local file.
+                        # A dangling link means its bundled marker was removed
+                        # to enable the thinker; remove the stale link without
+                        # silently restoring the disabled default.
+                        if [[ -e "$dest/$fname" ]]; then
+                            rm -f "$dest/$fname"
+                            cp "$src_file" "$dest/$fname"
+                        else
+                            rm -f "$dest/$fname"
+                        fi
+                    elif [[ "$dest_existed" -eq 0 && ! -e "$dest/$fname" ]]; then
+                        cp "$src_file" "$dest/$fname"
+                    fi
                     continue
                 fi
 
@@ -1197,7 +1227,8 @@ upstream has retired. User-authored thinkers are never touched. In copy
 mode (the default), existing dirs and their local edits are never
 modified or deleted; in a symlink install (.use-symlinks), bundled CODE
 files (step, *.md) are re-pointed at the bundle, so local edits to those
-belong upstream, not in the identity dir. Runs on every `thinkers start`
+belong upstream, not in the identity dir. The `disabled` marker is copied
+as per-identity state and is never re-linked to the bundle. Runs on every `thinkers start`
 via the systemd service wrapper, so an upgraded deployment picks up
 roster changes on restart — this command exists for running the same
 reconcile by hand.
