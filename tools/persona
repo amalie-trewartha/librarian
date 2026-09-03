@@ -386,6 +386,8 @@ cmd_chat() {
         done
     ) &
     watcher=$!
+    # Expand the function-local PID while it is still in scope.
+    # shellcheck disable=SC2064
     trap "kill $watcher 2>/dev/null || true" EXIT
     local line
     while IFS= read -r -p "you> " line; do
