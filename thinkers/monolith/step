@@ -198,10 +198,14 @@ fi
 # old recent-stream scan showed only the newest one, inside a 20-step window:
 # on 2026-09-02 a request was masked by a newer one, then aged out unseen).
 # Every open request is listed, oldest first, with its age; past
-# PENDING_OVERDUE_S the hint says so. The hint gives the exact delivery
-# command so the reply lands on the right message.
+# PENDING_OVERDUE_S (4h) the hint says so. The hint gives the exact delivery
+# command so the reply lands on the right message. The wording is a strong
+# preference with a stated escape hatch, not an order: on 2026-09-03 two
+# timer wakes in a row read the hint and filed research notes instead,
+# under Audel's own "timer wakeups are for inner life" rule, and said
+# nothing about why. A declined request must now leave a thought behind.
 PENDING_MAX_AGE="${MONOLITH_PENDING_MAX_AGE:-14d}"
-PENDING_OVERDUE_S="${MONOLITH_PENDING_OVERDUE_S:-86400}"
+PENDING_OVERDUE_S="${MONOLITH_PENDING_OVERDUE_S:-14400}"
 PENDING_LIST_MAX="${MONOLITH_PENDING_LIST_MAX:-5}"
 pending_req=""
 if command -v chat >/dev/null 2>&1; then
@@ -215,7 +219,7 @@ if command -v chat >/dev/null 2>&1; then
         | (.[] | "- PENDING REQUEST from \(.person // "someone"): \(.request)"
             + " (pending for \(.age_s | age_text)"
             + (if .age_s > $overdue then ", OVERDUE: deliver what you have, or that it cannot be done, this wake" else "" end)
-            + "). The responder already told them you would get back to them. Do the work now (act), then deliver the result with exactly: chat reply --follow-up --reply-to \(.trigger_step) \(.person // "<their-name>") \"<result>\"  — and append an observation with --field resolves=\(.trigger_step) so this request stops showing here."),
+            + "). The responder already told them you would get back to them, so they are waiting. Strongly prefer doing this work now (act), timer wake or not, over inner-life work; then deliver the result with exactly: chat reply --follow-up --reply-to \(.trigger_step) \(.person // "<their-name>") \"<result>\"  — and append an observation with --field resolves=\(.trigger_step) so this request stops showing here. If you have a good reason not to this wake, append a thought saying why and what would unblock it."),
           (if $n > $max then "- \($n - $max) more pending requests: run `chat pending` to see them all." else empty end)' 2>/dev/null) || pending_req=""
 fi
 [[ -n "$pending_req" ]] && hints="${hints}${pending_req}

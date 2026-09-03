@@ -114,6 +114,19 @@ if grep -q 'pending request' "$REPO/thinkers/monolith/prompt.md" && grep -q -- '
 else
     bad "the monolith prompt allows the one reply exception"
 fi
+if grep -q 'outranks the rest of this menu' "$REPO/thinkers/monolith/prompt.md" \
+   && grep -q 'unless you have a good reason not to' "$REPO/thinkers/monolith/prompt.md" \
+   && grep -q 'names the reason and what would unblock it' "$REPO/thinkers/monolith/prompt.md"; then
+    ok "the monolith prompt ranks a pending request first, with a stated-reason escape hatch"
+else
+    bad "the monolith prompt ranks a pending request first, with a stated-reason escape hatch"
+fi
+if grep -q 'Strongly prefer doing this work now (act), timer wake or not' "$STUB_CAPTURE" 2>/dev/null \
+   && grep -q 'If you have a good reason not to this wake, append a thought saying why' "$STUB_CAPTURE" 2>/dev/null; then
+    ok "the hint says to strongly prefer acting, or to say why not"
+else
+    bad "the hint says to strongly prefer acting, or to say why not"
+fi
 
 # --- 2b. every open request stays visible: an older one is not masked by a
 # newer one, and none ages out of the recent-stream window (Audel, 2026-09-02:

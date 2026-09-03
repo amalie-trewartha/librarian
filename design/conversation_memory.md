@@ -378,9 +378,14 @@ of it. The first version scanned the 20-step recent stream and showed only
 the newest request; on 2026-09-02 Nick's request was masked by a newer one
 from Braden, then aged out of the window before the mind's runs (which
 were dying on a model timeout that afternoon) delivered it. Requests
-older than a day are marked overdue in the hint; older than 14 days they
-are dropped from it (`MONOLITH_PENDING_MAX_AGE`), though `chat pending`
-still lists them. Its
+older than four hours are marked overdue in the hint; older than 14 days
+they are dropped from it (`MONOLITH_PENDING_MAX_AGE`), though `chat
+pending` still lists them. After the deploy on 2026-09-03 two timer wakes
+in a row saw the hint and filed research notes instead, following Audel's
+own "timer wakeups are for inner life" rule. The prompt now says a
+pending request outranks the menu on any wake and to strongly prefer
+acting on it, with one escape hatch: a good reason, stated in a thought
+with what would unblock it. Silence is no longer an option. Its
 prompt gains one exception to the no-reply rule: deliver such a request
 with `chat reply --follow-up --reply-to <trigger> <person>` and append an
 observation with `--field resolves=<trigger>`, one delivery per request.
