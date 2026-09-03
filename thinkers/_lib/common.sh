@@ -285,6 +285,12 @@ _RECENT_STREAM_COLLAPSE_JQ='
 # A run's final is all the next wake sees of that run (the mind's render is
 # run scoped, so earlier runs' commands and outputs are not in its context),
 # so each final carries a `details` command that prints the run's raw steps.
+# Only the fields the mind can use are kept: the responder stamps metrics on
+# its observations (context_steps, a list of 27 UUIDs, compose_ms, model,
+# ...) for audel-metrics, and those were 10K of a 17K stream on Audel,
+# 2026-09-03. Ids are cut to 8 characters (traj accepts a prefix), except
+# trigger_step and resolves, which the mind copies verbatim; the details
+# command keeps the full run id because the traj filter matches exactly.
 _recent_stream() {
     local n="${1:-${THINK_CONTEXT_TAIL:-20}}"
     # Tolerant parse (fromjson?): skip corrupt lines rather than dying —
@@ -297,10 +303,14 @@ _recent_stream() {
             | .content = ((.content // "") | tostring
                 | if length > 1500 then .[0:1500] + "…[truncated]" else . end)
             | if .type == "final" and ((.run_id // "") | tostring) != ""
-              then .details = "traj tail -n 400 --filter run_id=" + (.run_id | tostring) else . end' \
+              then .details = "traj tail -n 400 --filter run_id=" + (.run_id | tostring) else . end
+            | with_entries(select(.key | IN("type", "content", "source", "ts", "from", "to", "run_id", "step_id", "request", "person", "resolves", "trigger_step", "reply_to", "follow_up", "decision", "deferred", "rc", "details")))' \
         2>/dev/null \
         | tail -n "$n" \
-        | jq -cs "$_RECENT_STREAM_COLLAPSE_JQ" 2>/dev/null
+        | jq -cs "$_RECENT_STREAM_COLLAPSE_JQ" 2>/dev/null \
+        | jq -c '.ts |= (tostring | .[0:16])
+            | .step_id |= (tostring | .[0:8])
+            | if .run_id then .run_id |= (tostring | .[0:8]) else . end' 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------

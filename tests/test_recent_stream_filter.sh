@@ -129,6 +129,18 @@ else
     bad "output is one JSON object per line"
 fi
 
+# Responder observations carry metrics (context_steps, compose_ms, model, ...)
+# for the metrics scripts, not for the mind: they are dropped. Ids are cut
+# to 8 characters; trigger_step and resolves stay whole.
+step ro observation "Replied to nick" 3 ',"decision":"replied","trigger_step":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","context_steps":["11111111-2222-3333-4444-555555555555","66666666-7777-8888-9999-000000000000"],"context_msgs":18,"compose_ms":30249,"model":"x-ai/grok-4.6","history_source":"index","run_id":"12345678-abcd-ef01-2345-6789abcdef01"'
+ro=$(stream 30 | jq -c 'select(.content == "Replied to nick")')
+if [[ -n "$ro" ]] && ! printf '%s' "$ro" | grep -q -e context_steps -e compose_ms -e '"model"' -e history_source \
+   && [[ "$(printf '%s' "$ro" | jq -r '.decision + " " + .trigger_step + " " + .run_id + " " + (.ts|length|tostring)')" == "replied aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee 12345678 16" ]]; then
+    ok "responder metrics are dropped; ids are short, trigger_step whole"
+else
+    bad "responder metrics are dropped; ids are short, trigger_step whole" "$ro"
+fi
+
 # A final without a run id (old rows) carries no details command.
 step f2 final "old final, no run id" 4
 printf '%s\n' "$(stream 30)" | jq -e 'select(.step_id == "f2") | has("details") | not' >/dev/null 2>&1 && ok "a final without a run id carries no details" || bad "a final without a run id carries no details"
