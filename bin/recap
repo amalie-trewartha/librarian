@@ -51,7 +51,7 @@ BACKFILL=0                             # --backfill: also summarize pre-enable h
 FANOUT="${ROLLUP_FANOUT:-10}"          # F: children per tier; tier k covers F^k steps
 CTX_BUDGET="${MONOLITH_CONTEXT_BUDGET:-auto}"   # token budget; auto = fraction of model window
 CTX_RAW_TAIL="${ROLLUP_RAW_TAIL:-auto}"         # R: verbatim recent steps; auto = from budget
-ROLLUP_PROMPT_VERSION=2                 # stamped into sealed blocks for honest determinism (v2: first-person voice)
+ROLLUP_PROMPT_VERSION=3                 # stamped into sealed blocks for honest determinism (v2: first-person voice; v3: outcomes, not temperament)
 
 usage() {
     cat <<'EOF'
@@ -292,7 +292,7 @@ _llm_json() {
 
 _WINDOW_SYSTEM='You summarize one window of an AI agent'\''s mind log. Lines look like "[step-id] type(source): content". Reply with ONLY a JSON object, no markdown fences:
 {"title": "short episode title (<=8 words)",
- "summary": "2-4 sentences: what the agent did, thought about, and how it went",
+ "summary": "2-4 sentences on outcomes: what the agent did, decided, learned, and left open, naming people, artifacts, and threads. Events, not character: no words for its habits or temperament (not disciplined, restrained, patient, waiting mode); if it idled, say once what it was waiting for",
  "themes": ["1-4 short kebab-case topics"],
  "notable_steps": [{"step": "8-char id from the window", "note": "why it matters (<=15 words)"}]}
 Pick 3-6 notable steps. Use only step ids that literally appear in the window.'
@@ -503,7 +503,7 @@ _print_json() {
 # See design/tiered_memory.md.
 
 _ROLLUP_SYSTEM='You are the AI agent whose life log this is. Summarize this one slice of your own history in the FIRST PERSON — say "I", never "the agent". The input is a chronological list of lines: either raw steps "[id] type: content", or child rollup summaries (already first person). Reply with ONLY a JSON object, no markdown fences:
-{"summary": "2-3 first-person sentences: what I did, thought about, decided, and how it went",
+{"summary": "2-3 first-person sentences on outcomes: what I did, decided, learned, and left open, naming people, artifacts, and threads. Events, not my character: no words for my habits or temperament (not disciplined, restrained, patient, waiting mode); if I idled, say once what I was waiting for",
  "themes": ["1-4 short kebab-case topics"],
  "step_ids": ["up to 4 of the most important 8-char step ids that literally appear in the input"]}'
 
