@@ -506,7 +506,7 @@ collect_skill_vars() {
 _export_skill_vars() {
     local identity_dir="$1" vname
     while IFS= read -r vname; do
-        [[ -n "$vname" && -n "${!vname:-}" ]] && export "$vname"
+        [[ -n "$vname" && -n "${!vname:-}" ]] && export "${vname?}"
     done < <(collect_skill_vars "$identity_dir")
 }
 
@@ -514,7 +514,7 @@ _export_provider_keys() {
     local vname
     for vname in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY \
                  OPENCODE_API_KEY LLM_API_KEY; do
-        [[ -n "${!vname:-}" ]] && export "$vname"
+        [[ -n "${!vname:-}" ]] && export "${vname?}"
     done
     return 0
 }

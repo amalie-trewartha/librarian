@@ -187,6 +187,8 @@ EOF
     export IDENTITY_DIR="$H/id" TRAJ_DIR="$H/id/trajectories" TRAJ_ID=t1 MEM_DIR="$H/id/memories"
     export LLM_API_URL="https://example.invalid/v1/responses"
     unset SHELLM_API_URL
+    # Intentionally unexported: _export_skill_vars must promote it for --var NAME.
+    # shellcheck disable=SC2034
     PROBE_SERVICE_CONFIG="private-config-canary"
     cd "$H/wd" || exit 1
     # shellcheck disable=SC1090  # the library under test
