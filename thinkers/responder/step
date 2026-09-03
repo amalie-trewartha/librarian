@@ -306,7 +306,7 @@ is handed to the mind, which follows up with the result.
 
 Not every message needs a reply. If their newest message is already answered
 (a reply of yours addressing it is visible above), is a bare acknowledgment
-like \"thanks\" or \"ok\", is a Slack reaction (a `:emoji:` body, optionally with `(on <ts>)`), or anything you could say would only repeat you,
+like \"thanks\" or \"ok\", is a Slack reaction (a \`:emoji:\` body, optionally with \`(on <ts>)\`), or anything you could say would only repeat you,
 output exactly NO_REPLY on its own line and nothing else. Staying quiet is
 better than a duplicate or a contentless reply.
 
