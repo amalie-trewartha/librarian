@@ -118,11 +118,13 @@ class _FakeApp:
 
 
 class _FakeClient:
-    def __init__(self, message=None, raise_exc=False, delay=0.0):
+    def __init__(self, message=None, raise_exc=False, delay=0.0, permalink_delay=0.0):
         self.message = message
         self.raise_exc = raise_exc
         self.delay = delay
+        self.permalink_delay = permalink_delay
         self.reactions_get_calls = []
+        self.permalink_calls = []
         self._live = 0
         self.max_live = 0
         self._lock = __import__("threading").Lock()
@@ -143,10 +145,6 @@ class _FakeClient:
             with self._lock:
                 self._live -= 1
 
-    def chat_getPermalink(self, channel, message_ts):
-        compact = message_ts.replace(".", "")
-        return {"permalink": f"https://example.slack.com/archives/{channel}/p{compact}"}
-
     def users_info(self, user):
         return {
             "user": {
@@ -155,6 +153,12 @@ class _FakeClient:
                 "name": "nick",
             }
         }
+
+    def chat_getPermalink(self, *, channel, message_ts):
+        self.permalink_calls.append((channel, message_ts))
+        if self.permalink_delay:
+            time.sleep(self.permalink_delay)
+        return {"permalink": f"https://slack.test/{channel}/p{message_ts}"}
 
     def conversations_info(self, channel):
         if channel.startswith("D"):
@@ -271,11 +275,11 @@ def test_reaction_lookup_raising_falls_back_without_exception(tmp_path, posted):
 
 
 def test_reaction_lookup_timeouts_share_one_worker(tmp_path, posted, monkeypatch):
-    """Nick #88: shutdown(wait=False) leaked one live worker per timeout.
+    """Nick #88: do not queue stale lookups after a timeout.
 
-    Eight delayed lookups on a shared max_workers=1 pool must never run
-    more than one Slack call at a time, and each must fail open so the
-    drain thread keeps delivering.
+    One in-flight reactions.get; later reactions fail open immediately
+    instead of submitting more work. A human message after the burst
+    is delivered after at most one short timeout.
     """
     monkeypatch.setattr(inbound, "ITEM_LOOKUP_TIMEOUT", 0.05)
     client = _FakeClient(delay=0.8)
@@ -284,17 +288,72 @@ def test_reaction_lookup_timeouts_share_one_worker(tmp_path, posted, monkeypatch
     ib = Inbound(cfg, _FakeApp(client), BOT, threads)
     logger = logging.getLogger("test")
     try:
+        t0 = time.time()
         for i in range(8):
             ib._on_reaction(_reaction_event(event_ts=f"999.{i:03d}"), logger)
-        deadline = time.time() + 3
-        while time.time() < deadline and len(posted.items) < 8:
+        ib._on_event(
+            {
+                "type": "message",
+                "user": NICK,
+                "text": "hello after burst",
+                "channel": DM,
+                "ts": "200.000",
+                "channel_type": "im",
+            },
+            logger,
+        )
+        deadline = t0 + 3
+        while time.time() < deadline and len(posted.items) < 9:
             time.sleep(0.02)
-        assert len(posted.items) == 8, posted.items
+        elapsed = time.time() - t0
+        assert len(posted.items) == 9, posted.items
         assert client.max_live == 1
-        # drain thread was not stalled: all 8 failed open to item_ts
-        for item in posted.items:
+        # Only the first lookup is submitted; the rest skip while it runs.
+        assert len(client.reactions_get_calls) == 1
+        # Eight 2s waits would be 16s; one 50ms timeout plus delivery is far less.
+        assert elapsed < 1.0, elapsed
+        assert "hello after burst" in posted.items[-1]["json"]["content"]
+        for item in posted.items[:-1]:
             assert item["json"]["from_name"] == f"slack-{NICK}-{CHAN}-{PARENT}"
             assert ":thumbsup:" in item["json"]["content"]
+    finally:
+        ib.stop()
+        ib._worker.join(timeout=1)
+
+
+def test_reaction_permalink_does_not_stall_later_message(tmp_path, posted):
+    """Nick #88: reaction permalink must not run on the drain thread."""
+    client = _FakeClient(permalink_delay=0.8)
+    cfg = _cfg(tmp_path)
+    threads = ActiveThreads(cfg.state_dir / "threads.json")
+    ib = Inbound(cfg, _FakeApp(client), BOT, threads)
+    logger = logging.getLogger("test")
+    try:
+        ib._on_reaction(_reaction_event(channel=DM, item_ts=PARENT), logger)
+        ib._on_event(
+            {
+                "type": "message",
+                "user": NICK,
+                "text": "human after reaction",
+                "channel": DM,
+                "ts": "200.001",
+                "channel_type": "im",
+            },
+            logger,
+        )
+        t0 = time.time()
+        deadline = t0 + 3
+        while time.time() < deadline and len(posted.items) < 2:
+            time.sleep(0.02)
+        elapsed = time.time() - t0
+        assert len(posted.items) == 2, posted.items
+        # Reaction skipped permalink; only the human waits 0.8s.
+        assert elapsed < 1.2, elapsed
+        assert client.permalink_calls == [(DM, "200.001")]
+        assert "source_url" not in posted.items[0]["json"]
+        assert posted.items[1]["json"].get("source_url")
+        assert "human after reaction" in posted.items[1]["json"]["content"]
+        assert ":thumbsup:" in posted.items[0]["json"]["content"]
     finally:
         ib.stop()
         ib._worker.join(timeout=1)

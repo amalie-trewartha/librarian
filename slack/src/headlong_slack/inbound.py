@@ -58,6 +58,10 @@ class InboundMessage:
     # True for channel reactions: resolve parent thread_ts in the worker
     # so the bolt handler never blocks on reactions.get.
     resolve_parent: bool = False
+    # Reactions skip chat_getPermalink on the drain thread. The Slack
+    # client's default timeout is 30s; a burst of reaction permalink
+    # lookups would otherwise stall later human messages.
+    is_reaction: bool = False
 
 
 class SlackNames:
@@ -156,6 +160,10 @@ class Inbound:
         self._lookup_pool = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="slack-item-lookup"
         )
+        # At most one reactions.get in flight. Timed-out reactions use the
+        # fallback immediately instead of queueing another stale call.
+        self._lookup_lock = threading.Lock()
+        self._lookup_future: concurrent.futures.Future[dict[str, Any] | None] | None = None
         self._worker = threading.Thread(
             target=self._drain, name="slack-inbound", daemon=True
         )
@@ -195,6 +203,7 @@ class Inbound:
                 item_ts,
                 f":{reaction}:",
                 resolve_parent=want_thread,
+                is_reaction=True,
             )
         )
 
@@ -221,11 +230,17 @@ class Inbound:
             msg = resp.get("message") or {}
             return msg or None
 
-        # Shared pool: do not construct a ThreadPoolExecutor per reaction.
-        # shutdown(wait=False) cannot stop a running Slack call, so a new
-        # pool each time leaked one live worker per timeout.
+        # At most one in-flight reactions.get. If a previous call is still
+        # running after a timeout, do not queue another stale lookup —
+        # fail open immediately so the drain thread can take the next item.
+        with self._lookup_lock:
+            fut = self._lookup_future
+            if fut is not None and not fut.done():
+                return None
+            fut = self._lookup_pool.submit(_call)
+            self._lookup_future = fut
         try:
-            return self._lookup_pool.submit(_call).result(timeout=ITEM_LOOKUP_TIMEOUT)
+            return fut.result(timeout=ITEM_LOOKUP_TIMEOUT)
         except Exception:
             log.warning(
                 "reactions.get failed for %s ts=%s", channel, ts, exc_info=True
@@ -297,6 +312,7 @@ class Inbound:
                     msg.message_ts,
                     text,
                     resolve_parent=False,
+                    is_reaction=True,
                 )
             # A reaction is not request intent. Do not create or resurrect an
             # active thread — that would open the un-mentioned-reply gate.
@@ -311,16 +327,17 @@ class Inbound:
             f" — reply with: chat reply {msg.from_name})"
         )
         body = {"content": f"{header} {content}", "from_name": msg.from_name}
-        try:
-            permalink = self.app.client.chat_getPermalink(
-                channel=msg.channel, message_ts=msg.message_ts
-            ).get("permalink")
-            if permalink:
-                body["source_url"] = permalink
-        except Exception:
-            # Permalink lookup is best-effort: a Slack outage or missing
-            # scope must never keep a human message out of the mind log.
-            log.warning("chat_getPermalink failed for %s", msg.from_name, exc_info=True)
+        if not msg.is_reaction:
+            try:
+                permalink = self.app.client.chat_getPermalink(
+                    channel=msg.channel, message_ts=msg.message_ts
+                ).get("permalink")
+                if permalink:
+                    body["source_url"] = permalink
+            except Exception:
+                # Permalink lookup is best-effort: a Slack outage or missing
+                # scope must never keep a human message out of the mind log.
+                log.warning("chat_getPermalink failed for %s", msg.from_name, exc_info=True)
         for attempt in range(1, DELIVERY_ATTEMPTS + 1):
             try:
                 response = httpx.post(self._chat_url, json=body, timeout=30)
