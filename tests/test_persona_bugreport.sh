@@ -78,6 +78,7 @@ cat >> "$TJ/trajectory.jsonl" <<ROWS
 {"type":"shellm-run","cmd":"shellm --var OPENROUTER_API_KEY think","ts":"2026-08-21T15:00:00Z"}
 {"type":"shellm-run","cmd":"shellm --var GH_TOKEN=ghp_OTHERTOKEN0123456789abcdefghijkl --var PG_PASSWORD=correcthorsebatterystaple --var SHELLM_ENV=local run","ts":"2026-08-21T15:30:00Z"}
 {"type":"shellm-run","cmd":"shellm --var DATABASE_DSN=$DSN --var CURL_OPTS=--retry=2 run","ts":"2026-08-21T15:31:00Z"}
+{"type":"shellm-run","cmd":"shellm --var SERVICE_APIKEY=svc_compact_0123456789abcdef --var APIKEY=api_compact_0123456789abcdef --var ACCESSTOKEN=tok_compact_0123456789abcdef --var PGPASSWORD=correcthorsebatterystaple run","ts":"2026-08-21T15:32:00Z"}
 {"type":"thought","content":"the model is anthropic/claude-sonnet-4.5 and all is well","ts":"2026-08-21T15:00:01Z"}
 ROWS
 mkdir -p "$ID/run/logs" "$ID/memories" "$ID/workdir" "$TJ/blobs"
@@ -127,10 +128,13 @@ check_not "DSN literal nowhere in bundle"     grep -rqF "$DSN" "$TOP"
 check_not "no sk-... shaped string survives"  grep -rqE 'sk-[A-Za-z0-9_-]{8,}' "$TOP"
 check_not "other token value nowhere in bundle" grep -rqF 'ghp_OTHERTOKEN0123456789abcdefghijkl' "$TOP"
 check_not "other password nowhere in bundle"  grep -rqF 'correcthorsebatterystaple' "$TOP"
+check_not "compact API key values nowhere in bundle" grep -rqE '(svc|api)_compact_0123456789abcdef' "$TOP"
+check_not "compact access token nowhere in bundle" grep -rqF 'tok_compact_0123456789abcdef' "$TOP"
 check "legacy --var KEY=value row masked, 4+4 hint kept" grep -q -- '--var OPENROUTER_API_KEY=<redacted sk-o...cdef> think' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "token not in .env still masked by pattern (hint kept)" grep -q -- '--var GH_TOKEN=<redacted ghp_...ijkl> ' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "password on argv masked whole"         grep -q -- '--var PG_PASSWORD=<redacted> --var SHELLM_ENV=local' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "DSN on argv masked whole"              grep -q -- '--var DATABASE_DSN=<redacted> --var CURL_OPTS=--retry=2' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
+check "compact credential names are masked"   grep -q -- '--var SERVICE_APIKEY=<redacted svc_...cdef> --var APIKEY=<redacted api_...cdef> --var ACCESSTOKEN=<redacted tok_...cdef> --var PGPASSWORD=<redacted> run' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "CURL_OPTS is not a URL false positive" grep -q -- '--var CURL_OPTS=--retry=2 run' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check_not "no dangling hint tails"            grep -q -- '<redacted> [^ ]*>' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "bare --var KEY row untouched"          grep -q -- '--var OPENROUTER_API_KEY think' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"

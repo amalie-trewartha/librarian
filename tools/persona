@@ -621,15 +621,17 @@ _redact_tree() (
     done
 
     # --var NAME=VALUE: KEY/TOKEN names keep a 4+4 hint when long enough,
-    # other private names are masked whole. Token boundaries are underscores
-    # or the ends of the name, so CURL_OPTS is not treated as a URL variable.
+    # other private names are masked whole. Credential terms match anywhere
+    # in the name (including APIKEY and PGPASSWORD); endpoint terms require
+    # underscore/name boundaries so CURL_OPTS is not treated as a URL variable.
     # (a value starting with "<" is one an earlier pass already replaced)
     for f in "${files[@]}"; do
         tmp=$(mktemp "$root/.redact-output.XXXXXX") || return 1
         if sed -E -f <(printf '%s\n' \
-                's/--var (([A-Za-z_][A-Za-z0-9_]*_)?(SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?|URL|URI|ENDPOINT|DSN)(_[A-Za-z0-9_]+)*)=[^ "<\\][^ "\\]*/--var \1=<redacted>/g' \
-                's/--var (([A-Za-z_][A-Za-z0-9_]*_)?(KEY|TOKEN)(_[A-Za-z0-9_]+)*)=([^ "<\\]{4})[^ "\\]{12,}([^ "\\]{4})/--var \1=<redacted \5...\6>/g' \
-                's/--var (([A-Za-z_][A-Za-z0-9_]*_)?(KEY|TOKEN)(_[A-Za-z0-9_]+)*)=[^ "<\\][^ "\\]*/--var \1=<redacted>/g' \
+                's/--var ([A-Za-z_][A-Za-z0-9_]*(SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?)[A-Za-z0-9_]*)=[^ "<\\][^ "\\]*/--var \1=<redacted>/g' \
+                's/--var (([A-Za-z_][A-Za-z0-9_]*_)?(URL|URI|ENDPOINT|DSN)(_[A-Za-z0-9_]+)*)=[^ "<\\][^ "\\]*/--var \1=<redacted>/g' \
+                's/--var ([A-Za-z_][A-Za-z0-9_]*(KEY|TOKEN)[A-Za-z0-9_]*)=([^ "<\\]{4})[^ "\\]{12,}([^ "\\]{4})/--var \1=<redacted \3...\4>/g' \
+                's/--var ([A-Za-z_][A-Za-z0-9_]*(KEY|TOKEN)[A-Za-z0-9_]*)=[^ "<\\][^ "\\]*/--var \1=<redacted>/g' \
                 's/sk-([A-Za-z0-9_-]{4})[A-Za-z0-9_-]{12,}([A-Za-z0-9_-]{4})/<redacted sk-\1...\2>/g' \
                 's/sk-[A-Za-z0-9_-]{8,}/<redacted sk-...>/g') \
                 "$f" > "$tmp" 2>/dev/null; then
@@ -651,8 +653,9 @@ _upper() { printf '%s' "$1" | tr '[:lower:]' '[:upper:]'; }
 _redact_hint() {
     local u v="$2"
     u=$(_upper "$1")
-    if [[ "$u" =~ (^|_)(KEY|TOKEN)(_|$) \
-       && ! "$u" =~ (^|_)(SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?|URL|URI|ENDPOINT|DSN)(_|$) \
+    if [[ "$u" =~ (KEY|TOKEN) \
+       && ! "$u" =~ (SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?) \
+       && ! "$u" =~ (^|_)(URL|URI|ENDPOINT|DSN)(_|$) \
        && "${#v}" -ge 20 ]]; then
         printf '<redacted %s...%s>' "${v:0:4}" "${v: -4}"
     else
@@ -663,7 +666,8 @@ _redact_hint() {
 _is_secret_name() {  # same notion as shellm's trajectory masking
     local u
     u=$(_upper "$1")
-    [[ "$u" =~ (^|_)(KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?|URL|URI|ENDPOINT|DSN)(_|$) ]]
+    [[ "$u" =~ (KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?) \
+        || "$u" =~ (^|_)(URL|URI|ENDPOINT|DSN)(_|$) ]]
 }
 
 _sed_escape() {  # escape a literal for use in an ERE sed s/// pattern or replacement
