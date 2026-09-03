@@ -184,6 +184,41 @@ else
     bad "run-scope/pinned-prompt-survives-small-tail" "$(printf '%s' "$rs_pin" | jq -r '.[] | .role + " " + (.content[0:30])' | tr '\n' '|')"
 fi
 
+# 2d. Block eviction. With --tail-block the window's start moves only every
+# B rows, so the rendered prefix is identical between moves (provider prompt
+# caches stay warm) and the window holds N to N+B-1 rows.
+TB="$WORK_BK/tailblock"
+mkdir -p "$TB/tb"
+mk_rows() {  # mk_rows <count>
+    python3 - "$TB/tb/trajectory.jsonl" "$1" <<'PYEOF'
+import json, sys
+out, n = sys.argv[1], int(sys.argv[2])
+with open(out, "w") as f:
+    for i in range(n):
+        f.write(json.dumps({"type": "reasoning", "cmd": "echo row-%03d" % i, "step_id": "tb-%03d" % i}) + "\n")
+PYEOF
+}
+first_row() {  # first rendered command's row number, and the message count
+    # shellcheck disable=SC2086
+    "$CONTEXT" --traj_dir "$TB" tb $PROD --head 0 --tail 20 --tail-block 10 2>/dev/null \
+        | jq -r '(map(select(.role=="assistant")) | map(.content) | join("\n")) as $c | [($c | capture("row-(?<n>[0-9]+)") | .n | tonumber), ($c | [scan("row-")] | length)] | @tsv'
+}
+mk_rows 93; r93=$(first_row)
+mk_rows 95; r95=$(first_row)
+mk_rows 100; r100=$(first_row)
+if [[ "$r93" == $'70\t23' && "$r95" == $'70\t25' && "$r100" == $'80\t20' ]]; then
+    ok "tail-block/window-start-moves-in-blocks (93->row 70/23 rows, 95->row 70/25, 100->row 80/20)"
+else
+    bad "tail-block/window-start-moves-in-blocks" "got 93:[$r93] 95:[$r95] 100:[$r100]"
+fi
+# shellcheck disable=SC2086
+plain=$("$CONTEXT" --traj_dir "$TB" tb $PROD --head 0 --tail 20 2>/dev/null | jq -r '[.[] | select(.role=="assistant")] | .[0].content')
+if [[ "$plain" == *row-080* ]]; then
+    ok "tail-block/default-block-1-is-a-plain-tail"
+else
+    bad "tail-block/default-block-1-is-a-plain-tail" "$plain"
+fi
+
 # 2b. Bookkeeping stamped on steps (token counts, latency, run id) never
 # reaches the model; the thought and the code block do.
 BK="$WORK_BK"

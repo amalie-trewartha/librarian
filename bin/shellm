@@ -91,6 +91,15 @@ SHELLM_STOP_AFTER_CODE_BLOCK="${SHELLM_STOP_AFTER_CODE_BLOCK:-1}"
 # (the monolith: its wakeup prompt has the recent stream and life summary,
 # and earlier runs' raw commands only pull the model toward repeating them).
 SHELLM_CONTEXT_SCOPE="${SHELLM_CONTEXT_SCOPE:-traj}"
+# Run scope window: how many trajectory rows the render reads back (the run's
+# own steps within them), and the block the window's start moves in. Cached
+# input costs a quarter of the full rate, and a call's prefix only matches the
+# previous call's while nothing before the newest step changes, so the window
+# is wide enough that a normal run never slides (400 rows is ~200 iterations)
+# and, when it must, it moves in blocks so the prefix changes once per block
+# rather than on every call.
+SHELLM_CONTEXT_RUN_TAIL="${SHELLM_CONTEXT_RUN_TAIL:-400}"
+SHELLM_CONTEXT_RUN_TAIL_BLOCK="${SHELLM_CONTEXT_RUN_TAIL_BLOCK:-50}"
 # Whether the image was chosen for this run (environment here, --docker-image
 # below) rather than defaulted. A resume inherits the trajectory's image only
 # when it was not, so resuming never silently overrides what the caller asked
@@ -277,6 +286,10 @@ Environment:
                           code block closes; only that block runs anyway.
                           0 reads to the end.
   SHELLM_CONTEXT_SCOPE    traj (default) or run; see --context-scope
+  SHELLM_CONTEXT_RUN_TAIL Rows the run-scope window reads back (default 400)
+  SHELLM_CONTEXT_RUN_TAIL_BLOCK
+                          Rows the run-scope window start moves in (default
+                          50), so the cached prefix survives between moves
   SHELLM_EMPTY_RESPONSE_RETRIES
                           Empty-response retries before the run dies
                           (default 8; set empty for unlimited)
@@ -2425,7 +2438,8 @@ run_loop() {
             --exclude-types "shellm-run,run-summary"
             --full-types prompt)
         if [[ "$SHELLM_CONTEXT_SCOPE" == "run" ]]; then
-            _ctx_args+=(--run "$_run_step_id" --head 0)
+            _ctx_args+=(--run "$_run_step_id" --head 0
+                --tail "$SHELLM_CONTEXT_RUN_TAIL" --tail-block "$SHELLM_CONTEXT_RUN_TAIL_BLOCK")
             [[ -n "$_prompt_step_id" ]] && _ctx_args+=(--pin "$_prompt_step_id")
         fi
         messages_json=$(context "${_ctx_args[@]}" 2>/dev/null) || messages_json='[]'

@@ -1,7 +1,8 @@
 # Wake prompt delivery: the monolith never saw its prompt
 
 Status: 2026-09-03. Part 4 (cached tokens in the ledger) is deployed. Part 1
-(run scope render, prompt never cut) is built and tested, not deployed:
+(run scope render, prompt never cut) is deployed (7a35982, 06:54 UTC) with a
+follow-up for the tail window and block eviction (see Prefix caching):
 `context --run` and `--full-types`, `shellm --context-scope run`, the
 monolith passes it. Part 5 (faithful replay) is done: the old render
 engaged the request in 0 of 18 trials and reproduced the live commands,
@@ -147,6 +148,23 @@ delivering the prompt would add $1.30 per hour assumed the leftovers stayed;
 under this design the token cost is roughly neutral. The larger unknown is
 behaviour. A mind that sees its requests and menu may run longer and do
 more, like the 302 step PR run, and that is the cost we want.
+
+Measured on the first live run under run scope (2026-09-03 07:32 UTC): 96
+to 97 percent of input tokens cached for the run's first 50 steps, then a
+constant 27,776 cached tokens (the system prompt plus the pinned prompt) once
+the 50 row tail window began to slide, about 57 percent. The slide is the
+window, not the pin: after 25 iterations a run has more than 50 rows, so the
+window drops the run's oldest step on every call and the prefix after the
+prompt changes every call. Cached input costs a quarter of the full rate, so
+not sliding is cheaper for any run under roughly 115 iterations, and only a
+third of a cent per iteration dearer past that. Two knobs fix it. Run scope
+now reads a 400 row window (`SHELLM_CONTEXT_RUN_TAIL`, about 200
+iterations), so a normal run never slides. And `context --tail-block B`
+moves the window's start only every B rows (`SHELLM_CONTEXT_RUN_TAIL_BLOCK`,
+default 50), so when a run does outgrow the window the prefix changes once
+per 25 iterations instead of on every call. The cap stays a row count and
+never a byte budget, because a byte budget rewrites earlier messages and
+busts the cache on every call.
 
 Prefix caching. Providers bill the leading part of a request that matches an
 earlier request byte for byte at the cached rate. The old render defeated
