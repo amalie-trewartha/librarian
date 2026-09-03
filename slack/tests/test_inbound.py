@@ -118,16 +118,30 @@ class _FakeApp:
 
 
 class _FakeClient:
-    def __init__(self, message=None, raise_exc=False):
+    def __init__(self, message=None, raise_exc=False, delay=0.0):
         self.message = message
         self.raise_exc = raise_exc
+        self.delay = delay
         self.reactions_get_calls = []
+        self._live = 0
+        self.max_live = 0
+        self._lock = __import__("threading").Lock()
 
     def reactions_get(self, *, channel, timestamp):
         self.reactions_get_calls.append((channel, timestamp))
-        if self.raise_exc:
-            raise RuntimeError("lookup failed")
-        return {"ok": True, "message": dict(self.message or {})}
+        with self._lock:
+            self._live += 1
+            if self._live > self.max_live:
+                self.max_live = self._live
+        try:
+            if self.delay:
+                time.sleep(self.delay)
+            if self.raise_exc:
+                raise RuntimeError("lookup failed")
+            return {"ok": True, "message": dict(self.message or {})}
+        finally:
+            with self._lock:
+                self._live -= 1
 
     def chat_getPermalink(self, channel, message_ts):
         compact = message_ts.replace(".", "")
@@ -254,6 +268,36 @@ def test_reaction_lookup_raising_falls_back_without_exception(tmp_path, posted):
     body = posted.items[0]["json"]
     assert body["from_name"] == f"slack-{NICK}-{CHAN}-{PARENT}"
     assert ":thumbsup:" in body["content"]
+
+
+def test_reaction_lookup_timeouts_share_one_worker(tmp_path, posted, monkeypatch):
+    """Nick #88: shutdown(wait=False) leaked one live worker per timeout.
+
+    Eight delayed lookups on a shared max_workers=1 pool must never run
+    more than one Slack call at a time, and each must fail open so the
+    drain thread keeps delivering.
+    """
+    monkeypatch.setattr(inbound, "ITEM_LOOKUP_TIMEOUT", 0.05)
+    client = _FakeClient(delay=0.8)
+    cfg = _cfg(tmp_path)
+    threads = ActiveThreads(cfg.state_dir / "threads.json")
+    ib = Inbound(cfg, _FakeApp(client), BOT, threads)
+    logger = logging.getLogger("test")
+    try:
+        for i in range(8):
+            ib._on_reaction(_reaction_event(event_ts=f"999.{i:03d}"), logger)
+        deadline = time.time() + 3
+        while time.time() < deadline and len(posted.items) < 8:
+            time.sleep(0.02)
+        assert len(posted.items) == 8, posted.items
+        assert client.max_live == 1
+        # drain thread was not stalled: all 8 failed open to item_ts
+        for item in posted.items:
+            assert item["json"]["from_name"] == f"slack-{NICK}-{CHAN}-{PARENT}"
+            assert ":thumbsup:" in item["json"]["content"]
+    finally:
+        ib.stop()
+        ib._worker.join(timeout=1)
 
 
 def test_dm_reaction_skips_lookup(tmp_path, posted):

@@ -150,6 +150,12 @@ class Inbound:
         app.event("app_mention")(self._on_event)
         app.event("message")(self._on_event)
         app.event("reaction_added")(self._on_reaction)
+        # One lookup worker for the process, not one executor per reaction.
+        # shutdown(wait=False) cannot kill a hung Slack SDK call; a shared
+        # pool is what bounds live threads when lookups time out.
+        self._lookup_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="slack-item-lookup"
+        )
         self._worker = threading.Thread(
             target=self._drain, name="slack-inbound", daemon=True
         )
@@ -215,18 +221,16 @@ class Inbound:
             msg = resp.get("message") or {}
             return msg or None
 
-        # Do not use `with ThreadPoolExecutor`: shutdown(wait=True) would
-        # re-block the drain thread on a hung reactions.get after timeout.
-        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        # Shared pool: do not construct a ThreadPoolExecutor per reaction.
+        # shutdown(wait=False) cannot stop a running Slack call, so a new
+        # pool each time leaked one live worker per timeout.
         try:
-            return pool.submit(_call).result(timeout=ITEM_LOOKUP_TIMEOUT)
+            return self._lookup_pool.submit(_call).result(timeout=ITEM_LOOKUP_TIMEOUT)
         except Exception:
             log.warning(
                 "reactions.get failed for %s ts=%s", channel, ts, exc_info=True
             )
             return None
-        finally:
-            pool.shutdown(wait=False, cancel_futures=True)
 
     def _on_event(self, event: dict[str, Any], logger: logging.Logger) -> None:
         if event.get("bot_id") or event.get("subtype"):
@@ -342,3 +346,4 @@ class Inbound:
 
     def stop(self) -> None:
         self.queue.put(None)
+        self._lookup_pool.shutdown(wait=False, cancel_futures=True)
