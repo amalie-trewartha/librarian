@@ -291,7 +291,17 @@ _person_aliases() {
 # that writes messages has to know it exists, and a busy identity does not pay
 # a whole-file scan on every reply (a 5,000 line tail was 1.3s and could not
 # see past ~a day; the full file is over 1GB on Audel).
+#
+# deferrals.jsonl beside it is built in the same pass and shares the offset
+# file: the responder's deferral `action` steps (source responder, with a
+# trigger_step, person, request) and every observation that carries
+# `resolves=<trigger>`. `chat pending` reads it so the mind sees every
+# unresolved request however old, not just the ones still inside its
+# recent-stream window (design/conversation_memory.md, part 5: on 2026-09-02
+# a request was masked by a newer one, then aged out of the window unseen).
 _INDEX_CONTENT_CAP=8000
+
+_deferrals_path() { printf '%s/deferrals.jsonl' "$(dirname "$1")"; }
 
 # _index_update <trajectory file> <index file>
 # Brings the index up to date. Only complete lines are consumed: a line still
@@ -305,10 +315,13 @@ _index_update() {
         read -r have_off have_header < "$off" || true
         [[ "$have_off" =~ ^[0-9]+$ ]] || have_off=0
     fi
-    if [[ ! -f "$idx" || "$have_header" != "$header" ]]; then
+    local dfr; dfr=$(_deferrals_path "$idx")
+    if [[ ! -f "$idx" || ! -f "$dfr" || "$have_header" != "$header" ]]; then
         have_off=0
         : > "$idx.rebuild" || return 1
         mv -f "$idx.rebuild" "$idx"
+        : > "$dfr.rebuild" || return 1
+        mv -f "$dfr.rebuild" "$dfr"
     fi
     size=$(wc -c < "$tf" | tr -d ' ')
     (( size > have_off )) || return 0
@@ -341,6 +354,17 @@ _index_apply() {
                    content: ((.content // "") | tostring
                              | if length > $cap then .[0:$cap] + "…[truncated]" else . end)}
                 | with_entries(select(.value != null))' -R >> "$idx" 2>/dev/null || true
+        head -c "$((new_bytes - partial))" "$tmp" \
+            | grep -F -e '"trigger_step"' -e '"resolves":' \
+            | jq -c --argjson cap "$_INDEX_CONTENT_CAP" 'fromjson? // empty
+                | if .type == "action" and .source == "responder" and (.trigger_step // "") != "" then
+                    {kind: "request", step_id, ts, trigger_step, person,
+                     request: ((.request // .content // "") | tostring
+                               | if length > $cap then .[0:$cap] + "…[truncated]" else . end)}
+                  elif .type == "observation" and (.resolves // "") != "" then
+                    {kind: "resolve", step_id, ts, resolves}
+                  else empty end
+                | with_entries(select(.value != null))' -R >> "$(_deferrals_path "$idx")" 2>/dev/null || true
     fi
     printf '%s %s\n' "$((have_off + new_bytes - partial))" "$header" > "$off"
     rm -f "$tmp"
@@ -447,6 +471,47 @@ cmd_history() {
     done
 }
 
+# chat pending [--max-age 14d] [--json]
+# Every deferral the responder handed the mind that no observation has
+# resolved yet, oldest first. Text lines by default; --json is an array of
+# {trigger_step, person, request, ts, age_s}. --max-age drops requests older
+# than that (default: none), so a request never resolved does not nag forever.
+cmd_pending() {
+    local max_age="" as_json=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --max-age) max_age="${2:?--max-age requires a duration like 14d}"; shift 2 ;;
+            --json)    as_json=1; shift ;;
+            *)         die "pending: unknown argument '$1'" ;;
+        esac
+    done
+    local tf idx dfr max_s
+    tf=$(traj path "${ROOT_TRAJ_ID:-$TRAJ_ID}" 2>/dev/null) || tf=""
+    [[ -n "$tf" && -f "$tf" ]] || die "pending: cannot resolve the root trajectory file"
+    idx="$(dirname "$tf")/messages.jsonl"
+    _index_update "$tf" "$idx" || true
+    dfr=$(_deferrals_path "$idx")
+    [[ -f "$dfr" ]] || { [[ $as_json -eq 1 ]] && printf '[]\n'; return 0; }
+    max_s=0
+    [[ -n "$max_age" ]] && max_s=$(_duration_s "$max_age")
+    jq -rcn --argjson max "$max_s" --argjson json "$as_json" '
+        def secs: (.ts // "")[0:19] + "Z" | try fromdateiso8601 catch 0;
+        def age_text: if . < 3600 then "\(. / 60 | floor)m"
+                      elif . < 86400 then "\(. / 3600 | floor)h"
+                      else "\(. / 86400 | floor)d" end;
+        [inputs | fromjson? // empty] as $all
+        | ($all | map(select(.kind == "resolve") | .resolves)) as $done
+        | $all
+        | map(select(.kind == "request" and (.trigger_step as $t | $done | index($t) | not)))
+        | unique_by(.trigger_step)
+        | map(. + {age_s: ((now - secs) | floor)})
+        | map(select($max == 0 or .age_s <= $max))
+        | sort_by(.ts // "")
+        | if $json == 1 then map({trigger_step, person, request, ts, age_s})
+          else .[] | "\(.ts // "?") \(.person // "someone"): \(.request) (pending \(.age_s | age_text), trigger \(.trigger_step))"
+          end' -R < "$dfr"
+}
+
 cmd_person_key() {
     [[ -n "${1:-}" ]] || die "Usage: chat person-key <name>"
     _person_key "$1"; echo
@@ -493,6 +558,14 @@ Usage:
   chat history --thread <name> [--since 1d] [-n N] [--json]
                              Every message in that Slack thread, whoever
                              sent it (combine with --with for the union)
+  chat pending [--max-age 14d] [--json]
+                             Requests the responder deferred to the mind
+                             (DEFER) that no observation has resolved yet,
+                             oldest first, from the deferrals.jsonl index
+                             beside messages.jsonl. The mind delivers one
+                             with `chat reply --follow-up --reply-to
+                             <trigger> <person>` and closes it with an
+                             observation carrying resolves=<trigger>
   chat person-key <name>     Print the stable person key for a routing name
                              (slack-U..-C..-ts -> slack:U..; pwa-x -> pwa:x)
   chat thread-key <name>     Print the thread key (Slack channel threads
@@ -521,6 +594,7 @@ case "${1:-}" in
     send-file) shift; cmd_send_file "$@" ;;
     reply)     shift; cmd_reply "$@" ;;
     history) shift; cmd_history "$@" ;;
+    pending)   shift; cmd_pending "$@" ;;
     person-key) shift; cmd_person_key "$@" ;;
     thread-key) shift; cmd_thread_key "$@" ;;
     repl)    shift; cmd_repl "$@" ;;

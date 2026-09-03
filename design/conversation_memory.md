@@ -369,8 +369,18 @@ responder, `trigger_step`, `person`, `request`, and the exact delivery
 command in its content) before sending the holding message, and marks its
 observation `deferred: true` with the request. The monolith already
 subscribes to actions, so it wakes; its step adds a "PENDING REQUEST"
-routing signal for the newest responder action that no observation has
-resolved, naming the person, the request, and the exact commands. Its
+routing signal for every responder action that no observation has
+resolved, oldest first with its age, naming the person, the request, and
+the exact commands. The list comes from `chat pending`, which reads a
+`deferrals.jsonl` index kept beside `messages.jsonl` in the same pass, so
+a request stays visible however many steps or newer requests land on top
+of it. The first version scanned the 20-step recent stream and showed only
+the newest request; on 2026-09-02 Nick's request was masked by a newer one
+from Braden, then aged out of the window before the mind's runs (which
+were dying on a model timeout that afternoon) delivered it. Requests
+older than a day are marked overdue in the hint; older than 14 days they
+are dropped from it (`MONOLITH_PENDING_MAX_AGE`), though `chat pending`
+still lists them. Its
 prompt gains one exception to the no-reply rule: deliver such a request
 with `chat reply --follow-up --reply-to <trigger> <person>` and append an
 observation with `--field resolves=<trigger>`, one delivery per request.

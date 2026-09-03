@@ -115,6 +115,50 @@ else
     bad "the monolith prompt allows the one reply exception"
 fi
 
+# --- 2b. every open request stays visible: an older one is not masked by a
+# newer one, and none ages out of the recent-stream window (Audel, 2026-09-02:
+# a request was hidden behind a newer one, then scrolled out of the 20-step
+# window and was never delivered) ------------------------------------------
+printf '{"step_id":"trig-1b","type":"message","from":"bob","to":"%s","content":"can you check the deploy?","ts":"%s","source":"chat"}\n' "$ME" "$(now)" >> "$TRAJ"
+env "${ENV_COMMON[@]}" traj append --field type=action --field source=responder --field trigger_step=trig-1b \
+    --field person=bob --field request="check the deploy status" --field content="Pending request from bob: check the deploy status." >/dev/null
+i=0
+while [[ $i -lt 40 ]]; do
+    env "${ENV_COMMON[@]}" traj append --field type=thought --field content="filler thought $i" >/dev/null
+    i=$((i+1))
+done
+# a request from long ago, written straight to the log so its ts is old
+printf '{"step_id":"act-old","type":"action","source":"responder","trigger_step":"trig-old","person":"carol","request":"find that old paper","content":"Pending request from carol: find that old paper.","ts":"2020-01-01T00:00:00.000Z"}\n' >> "$TRAJ"
+rm -f "$STUB_CAPTURE"
+run_monolith '{"type":"monolith-wake","content":"wake","source":"monolith-timer"}'
+andy_line=$(grep -n 'PENDING REQUEST from andy' "$STUB_CAPTURE" 2>/dev/null | head -1 | cut -d: -f1)
+bob_line=$(grep -n 'PENDING REQUEST from bob: check the deploy status' "$STUB_CAPTURE" 2>/dev/null | head -1 | cut -d: -f1)
+if [[ -n "$andy_line" && -n "$bob_line" ]]; then
+    ok "both open requests show after 40 later steps buried them"
+else
+    bad "both open requests show after 40 later steps buried them" "andy=${andy_line:-none} bob=${bob_line:-none}"
+fi
+[[ -n "$andy_line" && -n "$bob_line" && "$andy_line" -lt "$bob_line" ]] && ok "the oldest request is listed first" || bad "the oldest request is listed first"
+grep -q 'PENDING REQUEST from andy: [^(]*(pending for [0-9]* min)' "$STUB_CAPTURE" 2>/dev/null && ok "each request shows its age" || bad "each request shows its age" "$(grep -o 'PENDING REQUEST from andy[^.]*' "$STUB_CAPTURE" | head -1)"
+if ! grep -q 'PENDING REQUEST from carol' "$STUB_CAPTURE" 2>/dev/null; then
+    ok "a request older than the max age is not listed"
+else
+    bad "a request older than the max age is not listed"
+fi
+rm -f "$STUB_CAPTURE"
+printf '{"type":"monolith-wake","content":"wake","source":"monolith-timer"}' | env "${ENV_COMMON[@]}" MONOLITH_SHARE_HINT_EVERY=0 MONOLITH_PENDING_MAX_AGE=3000d "$MONOLITH" >> "$WORK/step.log" 2>&1
+if grep -q 'PENDING REQUEST from carol: find that old paper (pending for [0-9]* d, OVERDUE' "$STUB_CAPTURE" 2>/dev/null; then
+    ok "a request past the overdue line says so"
+else
+    bad "a request past the overdue line says so" "$(grep -o 'PENDING REQUEST from carol[^.]*' "$STUB_CAPTURE" | head -1)"
+fi
+n=$(env "${ENV_COMMON[@]}" chat pending --json | jq 'length')
+[[ "$n" == 3 ]] && ok "chat pending --json lists every unresolved request" || bad "chat pending --json lists every unresolved request" "got $n"
+n=$(env "${ENV_COMMON[@]}" chat pending --max-age 30d --json | jq 'length')
+[[ "$n" == 2 ]] && ok "chat pending --max-age drops old requests" || bad "chat pending --max-age drops old requests" "got $n"
+first=$(env "${ENV_COMMON[@]}" chat pending | head -1)
+[[ "$first" == *"carol: find that old paper (pending "*"trigger trig-old)" ]] && ok "chat pending text lines carry person, request, age, trigger" || bad "chat pending text lines carry person, request, age, trigger" "got '$first'"
+
 # the mind delivers: follow-up reply to an already answered trigger
 if printf 'The bridge work is half done: file sends work, photos next.' \
      | env "${ENV_COMMON[@]}" chat reply --follow-up --reply-to trig-1 "$THEM" 2>>"$WORK/step.log"; then
@@ -132,14 +176,22 @@ else
     [[ "$n2" == 2 ]] && ok "a plain second reply is still refused by the guard" || bad "a plain second reply is still refused by the guard" "now $n2 replies"
 fi
 
-# resolving observation clears the hint
+# resolving observations clear the hint, one request at a time
 env "${ENV_COMMON[@]}" traj append --field type=observation --field content="Delivered the bridge status to andy." --field source=monolith --field resolves=trig-1 >/dev/null
 rm -f "$STUB_CAPTURE"
 run_monolith '{"type":"monolith-wake","content":"wake","source":"monolith-timer"}'
-if ! grep -q 'PENDING REQUEST' "$STUB_CAPTURE" 2>/dev/null; then
-    ok "an observation with resolves=<trigger> clears the hint"
+if ! grep -q 'PENDING REQUEST from andy' "$STUB_CAPTURE" 2>/dev/null && grep -q 'PENDING REQUEST from bob' "$STUB_CAPTURE" 2>/dev/null; then
+    ok "an observation with resolves=<trigger> clears that request and leaves the others"
 else
-    bad "an observation with resolves=<trigger> clears the hint"
+    bad "an observation with resolves=<trigger> clears that request and leaves the others" "$(grep -o 'PENDING REQUEST from [a-z]*' "$STUB_CAPTURE" | sort -u | tr '\n' ' ')"
+fi
+env "${ENV_COMMON[@]}" traj append --field type=observation --field content="Told bob the deploy is green." --field source=monolith --field resolves=trig-1b >/dev/null
+rm -f "$STUB_CAPTURE"
+run_monolith '{"type":"monolith-wake","content":"wake","source":"monolith-timer"}'
+if ! grep -q 'PENDING REQUEST' "$STUB_CAPTURE" 2>/dev/null; then
+    ok "resolving the last open request clears the hint"
+else
+    bad "resolving the last open request clears the hint"
 fi
 
 # --- 3. a normal reply appends no action ------------------------------------
@@ -147,7 +199,7 @@ printf '{"step_id":"trig-2","type":"message","from":"%s","to":"%s","content":"th
 printf 'Any time.\n' > "$STUB_REPLY_FILE"
 run_responder "$(grep -F '"step_id":"trig-2"' "$TRAJ")"
 acts=$(jq -c 'select(.type=="action" and .source=="responder")' "$TRAJ" | wc -l | tr -d ' ')
-[[ "$acts" == 1 ]] && ok "a normal reply appends no action" || bad "a normal reply appends no action" "actions=$acts"
+[[ "$acts" == 3 ]] && ok "a normal reply appends no action"   # the three deferrals above, none new || bad "a normal reply appends no action" "actions=$acts"
 obs=$(jq -c 'select(.type=="observation" and .source=="responder" and .trigger_step=="trig-2")' "$TRAJ" | tail -1)
 [[ "$(printf '%s' "$obs" | jq 'has("deferred")')" == false ]] && ok "a normal reply is not marked deferred" || bad "a normal reply is not marked deferred"
 

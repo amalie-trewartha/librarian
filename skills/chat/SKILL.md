@@ -35,6 +35,7 @@ IMPORTANT: if I use `chat send` it sends a message to myself, so I must NEVER us
     chat history [N]                          # show last N messages (default 20)
     chat history --with <name> [--since 7d]   # my whole conversation with one person
     chat history --with <name> -n 50 --json   # same, as JSON with timestamps
+    chat pending                              # requests the responder deferred to me that I have not delivered yet
 
 `--with` groups a person across every name a bridge has used for them (a
 Slack user's DM and every channel thread, a phone chat name), so it is the
