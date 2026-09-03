@@ -36,12 +36,14 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --thinking) main_loop=1; shift ;;
         --messages-file) mf="$2"; shift 2 ;;
+        --system-prompt) sp="$2"; shift 2 ;;
         *) shift ;;
     esac
 done
 if [[ "$main_loop" -ne 1 ]]; then printf '{}\n'; exit 0; fi
-n=$(ls "$LLM_STUB_DIR" | wc -l | tr -d ' ')
+n=$(ls "$LLM_STUB_DIR" | grep -c "^call-.*json$")
 cp "$mf" "$LLM_STUB_DIR/call-$((n + 1)).json"
+[[ -n "${sp:-}" ]] && printf '%s' "$sp" > "$LLM_STUB_DIR/call-$((n + 1)).system"
 printf '```bash\nFINAL=done\n```\n'
 STUB
 chmod +x "$WORK/toolbin/llm"
@@ -100,6 +102,24 @@ if [[ "$rc" -eq 0 && "$m3" != "$m2" ]] && grep -q 'THIRD-RUN-MARKER' "$m3" && gr
     ok "traj scope: a resumed run still carries the earlier runs, prompts whole"
 else
     bad "traj scope: a resumed run still carries the earlier runs" "rc=$rc"
+fi
+
+# --- 3b. the system prompt's context guideline only when a context was given --
+# A caller with neither stdin context nor -f files (the monolith) saw the mind
+# spend first commands probing an empty $CONTEXT.
+sp3="${m3%.json}.system"
+if [[ -f "$sp3" ]] && ! grep -q 'Always start by inspecting' "$sp3"; then
+    ok "no context given: the system prompt omits the \$CONTEXT guideline"
+else
+    bad "no context given: the system prompt omits the \$CONTEXT guideline"
+fi
+printf 'some context\n' > "$WORK/ctx.txt"
+run_shellm -f "$WORK/ctx.txt" --prompt-file "$WORK/p3.txt"; rc=$?
+spf="$(last_msgs)"; spf="${spf%.json}.system"
+if [[ "$rc" -eq 0 && -f "$spf" ]] && grep -q 'Always start by inspecting' "$spf"; then
+    ok "a -f context brings the guideline back"
+else
+    bad "a -f context brings the guideline back" "rc=$rc"
 fi
 
 # --- 4. env form and a bad value ---------------------------------------------

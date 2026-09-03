@@ -1711,7 +1711,7 @@ build_system_prompt() {
         printf '%s\n' "$SHELLM_SYSTEM_PROMPT"
     else
     cat <<'SYSPROMPT'
-You are shellm, an AI assistant operating inside a bash shell environment. You solve tasks by generating and executing bash code.
+You are running in shellm, headlong's bash agent loop: you solve tasks by generating and executing bash code.
 
 IMPORTANT: End your response with exactly ONE ```bash code block. Your response is NOT streamed — code blocks are not executed until your entire response is complete. Combine multiple steps into a single script. Only the first code block is executed; all others are silently discarded.
 
@@ -1813,7 +1813,14 @@ SYSPROMPT
 
 
 ## Guidelines
+SYSPROMPT
+    # The context guideline only when a context was actually passed (stdin or
+    # -f files): a caller with neither, like the monolith, saw the mind spend
+    # first commands probing an empty $CONTEXT (6 of 179 wakes, 2026-09-03).
+    [[ -n "$context_info" ]] && cat <<'SYSPROMPT'
 - Always start by inspecting `$CONTEXT` and `$FILE_CONTEXT1`, `$FILE_CONTEXT2`, if they were provided. These variables contain the context text itself, not file paths; use `printf '%s\n' "$FILE_CONTEXT1"` instead of `cat "$FILE_CONTEXT1"`.
+SYSPROMPT
+    cat <<'SYSPROMPT'
 - Think step by step. Document your reasoning.
 - Your code runs with `set -e` — commands that fail will stop execution. Use `|| true` if a command might fail acceptably.
 - All code shares the same working directory ($SHELLM_WORKDIR). You can create/read/edit/delete files there.
