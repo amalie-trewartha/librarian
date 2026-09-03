@@ -226,9 +226,16 @@ def truncate_field($limit; $sid):
      + (btrunc_tail($half) | rtrim))
   end;
 
-# Metadata keys skipped when rendering step content.
+# Metadata keys skipped when rendering step content. The bookkeeping bin/llm
+# and bin/shellm stamp on steps (token counts, latency, run id) is never shown
+# to the model: rendered as "[in_tok]\n31864" after its own code block, the
+# model learned the shape and wrote it back after its next command, followed
+# by an invented next thought and block, sometimes hundreds of times until the
+# stream timed out (Audel on grok, 2026-09).
 def is_meta($k):
   ($k == "step_id" or $k == "ts" or $k == "type" or $k == "fork_parent")
+  or ($k == "run_id" or $k == "llm_s" or $k == "in_tok" or $k == "out_tok"
+      or $k == "think_tok" or $k == "estimated")
   or ($k | endswith("_ref"))
   or ($k | endswith("_bytes"))
   or ($k | endswith("_truncated"));

@@ -24,6 +24,8 @@ unset TRAJ_DIR TRAJ_ID 2>/dev/null || true
 
 REGEN=0
 [[ "${1:-}" == "--regen" ]] && REGEN=1
+WORK_BK=$(mktemp -d)
+trap 'rm -rf "$WORK_BK"' EXIT
 
 PROD='--assistant-types reasoning,final --user-types prompt,shell-output,feedback --exclude-types sub-run,shellm-run,run-summary'
 
@@ -118,6 +120,26 @@ if run_case multibyte --prompt-limit 100 $PROD 2>/dev/null | iconv -f UTF-8 -t U
     ok "invariant/valid-utf8-truncation"
 else
     bad "invariant/valid-utf8-truncation"
+fi
+
+# 2b. Bookkeeping stamped on steps (token counts, latency, run id) never
+# reaches the model; the thought and the code block do.
+BK="$WORK_BK"
+mkdir -p "$BK/bk"
+cat > "$BK/bk/trajectory.jsonl" <<'EOF'
+{"type": "prompt", "content": "Do the thing.", "step_id": "k-000", "ts": "2026-09-03T00:00:00Z"}
+{"type": "reasoning", "thought": "Checking the log first.", "cmd": "tail -n 3 log.txt", "run_id": "run-1", "llm_s": 12, "in_tok": 31864, "out_tok": 337, "think_tok": 50, "estimated": true, "step_id": "k-001", "ts": "2026-09-03T00:00:01Z"}
+{"type": "shell-output", "stdout": "line a\nline b\n", "exit": 0, "exec_s": 1, "run_id": "run-1", "step_id": "k-002", "ts": "2026-09-03T00:00:02Z"}
+EOF
+# shellcheck disable=SC2086
+bk_out=$("$CONTEXT" --traj_dir "$BK" bk $PROD 2>/dev/null)
+if printf '%s' "$bk_out" | grep -q -e '\[in_tok\]' -e '\[out_tok\]' -e '\[think_tok\]' -e '\[llm_s\]' -e '\[run_id\]' -e '\[estimated\]'; then
+    bad "invariant/bookkeeping-hidden" "$(printf '%s' "$bk_out" | grep -o '\[[a-z_]*\]' | sort -u | tr '\n' ' ')"
+elif printf '%s' "$bk_out" | grep -q 'Checking the log first' && printf '%s' "$bk_out" | grep -q 'tail -n 3 log.txt' \
+     && printf '%s' "$bk_out" | grep -q '\[exit\]'; then
+    ok "invariant/bookkeeping-hidden"
+else
+    bad "invariant/bookkeeping-hidden" "thought, cmd, or exit missing"
 fi
 
 # 3. Empty trajectory renders an empty array.
