@@ -979,15 +979,21 @@ warn_truncated() {
 }
 
 # Write the LLM_USAGE_FILE record. Args: input tokens, output tokens,
-# reasoning/thinking tokens — non-numeric args are omitted from the record.
-# A fourth arg "estimated" marks a record derived from bytes rather than the
+# reasoning/thinking tokens, cached input tokens — non-numeric args are
+# omitted from the record. cache_tok is the part of in_tok the provider
+# served from its prompt cache (OpenAI/OpenRouter prompt_tokens_details.
+# cached_tokens, Anthropic cache_read_input_tokens, Gemini
+# cachedContentTokenCount); it is billed at the cached rate, so the prefix
+# cache hit rate is cache_tok / in_tok.
+# A fifth arg "estimated" marks a record derived from bytes rather than the
 # provider's count (the stream was cut before the usage event arrived).
 write_usage() {
-    jq -nc --arg i "${1:-}" --arg o "${2:-}" --arg t "${3:-}" --arg e "${4:-}" '
+    jq -nc --arg i "${1:-}" --arg o "${2:-}" --arg t "${3:-}" --arg c "${4:-}" --arg e "${5:-}" '
         {}
         + (if ($i | test("^[0-9]+$")) then {in_tok: ($i | tonumber)} else {} end)
         + (if ($o | test("^[0-9]+$")) then {out_tok: ($o | tonumber)} else {} end)
         + (if ($t | test("^[0-9]+$")) then {think_tok: ($t | tonumber)} else {} end)
+        + (if ($c | test("^[0-9]+$")) then {cache_tok: ($c | tonumber)} else {} end)
         + (if $e == "estimated" then {estimated: true} else {} end)' \
         > "$LLM_USAGE_FILE" 2>/dev/null || true
 }
@@ -998,8 +1004,9 @@ write_usage() {
 #   $_llm_home/usage/llm.jsonl      otherwise (hand calls)
 # LLM_USAGE_LEDGER overrides the path (/dev/null disables).
 #   {"ts":...,"provider":...,"model":...,"in_tok":N,"out_tok":N,"think_tok":N,
-#    "identity":...,"run_id":...}
-# identity/run_id are present only when known. The dash usage page and
+#    "cache_tok":N,"identity":...,"run_id":...}
+# identity/run_id are present only when known; cache_tok only when the
+# provider reported cached input tokens. The dash usage page and
 # deploy/scripts/audel-metrics count this file, so every llm call counts
 # toward spend, not only the ones bin/shellm stamps on reasoning steps.
 _llm_ledger="${LLM_USAGE_LEDGER:-}"
@@ -1074,6 +1081,7 @@ stream_anthropic() {
                 *'"message_start"'*)
                     # Prompt size arrives up front on the start event.
                     _u_in=$(printf '%s' "$json" | jq -r '.message.usage.input_tokens // empty' 2>/dev/null) || _u_in=""
+                    _u_cache=$(printf '%s' "$json" | jq -r '.message.usage.cache_read_input_tokens // empty' 2>/dev/null) || _u_cache=""
                     ;;
                 *'"message_delta"'*)
                     if [[ "$(printf '%s' "$json" | jq -r '.delta.stop_reason // empty' 2>/dev/null)" == "max_tokens" ]]; then
@@ -1083,7 +1091,7 @@ stream_anthropic() {
                     # the previous, so the last delta wins.
                     if [[ "$json" == *'"output_tokens"'* ]]; then
                         _u_out=$(printf '%s' "$json" | jq -r '.usage.output_tokens // empty' 2>/dev/null) || _u_out=""
-                        [[ -n "$_u_out" ]] && write_usage "$_u_in" "$_u_out" ""
+                        [[ -n "$_u_out" ]] && write_usage "$_u_in" "$_u_out" "" "$_u_cache"
                     fi
                     ;;
                 *'"type":"error"'*)
@@ -1133,12 +1141,13 @@ stream_openai() {
                 local _u=""
                 _u=$(printf '%s' "$json" | jq -r 'select(.usage != null) | [
                         (.usage.prompt_tokens // ""), (.usage.completion_tokens // ""),
-                        (.usage.completion_tokens_details.reasoning_tokens // "")
+                        (.usage.completion_tokens_details.reasoning_tokens // ""),
+                        (.usage.prompt_tokens_details.cached_tokens // "")
                     ] | @tsv' 2>/dev/null) || _u=""
                 if [[ -n "$_u" ]]; then
-                    local _u_in _u_out _u_think
-                    IFS=$'\t' read -r _u_in _u_out _u_think <<<"$_u"
-                    write_usage "$_u_in" "$_u_out" "$_u_think"
+                    local _u_in _u_out _u_think _u_cache
+                    IFS=$'\t' read -r _u_in _u_out _u_think _u_cache <<<"$_u"
+                    write_usage "$_u_in" "$_u_out" "$_u_think" "$_u_cache"
                 fi
             fi
         elif [[ "$_saw_data" -eq 0 ]]; then
@@ -1176,12 +1185,13 @@ stream_gemini() {
                 _u=$(printf '%s' "$json" | jq -r '[
                         (.usageMetadata.promptTokenCount // ""),
                         (.usageMetadata.candidatesTokenCount // ""),
-                        (.usageMetadata.thoughtsTokenCount // "")
+                        (.usageMetadata.thoughtsTokenCount // ""),
+                        (.usageMetadata.cachedContentTokenCount // "")
                     ] | @tsv' 2>/dev/null) || _u=""
                 if [[ -n "$_u" ]]; then
-                    local _u_in _u_out _u_think
-                    IFS=$'\t' read -r _u_in _u_out _u_think <<<"$_u"
-                    write_usage "$_u_in" "$_u_out" "$_u_think"
+                    local _u_in _u_out _u_think _u_cache
+                    IFS=$'\t' read -r _u_in _u_out _u_think _u_cache <<<"$_u"
+                    write_usage "$_u_in" "$_u_out" "$_u_think" "$_u_cache"
                 fi
             fi
         elif [[ "$_saw_data" -eq 0 ]]; then
@@ -1383,7 +1393,7 @@ if [[ "$LLM_STREAM" -eq 1 ]]; then
         rm -f "$_curl_err" "$LLM_RETRY_ERR" "$LLM_DATA_MARKER" "$LLM_STOP_MARKER"
 
         if [[ -n "$_stopped" && "$_rc" -eq 0 && "$_emitted" -eq 1 ]]; then
-            [[ "$_stopped" =~ ^[0-9]+$ ]] && write_usage "" "$(( (_stopped + 3) / 4 ))" "" estimated
+            [[ "$_stopped" =~ ^[0-9]+$ ]] && write_usage "" "$(( (_stopped + 3) / 4 ))" "" "" estimated
             _llm_note ok
             _llm_ledger_append
             break   # cut on purpose after the first code block
@@ -1471,13 +1481,13 @@ else
 
     case "$LLM_PROVIDER" in
         # opencode (Zen) speaks the Anthropic wire protocol, usage shape included.
-        anthropic|opencode) _u=$(jq -r '[(.usage.input_tokens // ""), (.usage.output_tokens // ""), ""] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
-        gemini)    _u=$(jq -r '[(.usageMetadata.promptTokenCount // ""), (.usageMetadata.candidatesTokenCount // ""), (.usageMetadata.thoughtsTokenCount // "")] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
-        *)         _u=$(jq -r '[(.usage.prompt_tokens // ""), (.usage.completion_tokens // ""), (.usage.completion_tokens_details.reasoning_tokens // "")] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
+        anthropic|opencode) _u=$(jq -r '[(.usage.input_tokens // ""), (.usage.output_tokens // ""), "", (.usage.cache_read_input_tokens // "")] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
+        gemini)    _u=$(jq -r '[(.usageMetadata.promptTokenCount // ""), (.usageMetadata.candidatesTokenCount // ""), (.usageMetadata.thoughtsTokenCount // ""), (.usageMetadata.cachedContentTokenCount // "")] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
+        *)         _u=$(jq -r '[(.usage.prompt_tokens // ""), (.usage.completion_tokens // ""), (.usage.completion_tokens_details.reasoning_tokens // ""), (.usage.prompt_tokens_details.cached_tokens // "")] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
     esac
     if [[ -n "$_u" ]]; then
-        IFS=$'\t' read -r _u_in _u_out _u_think <<<"$_u"
-        write_usage "$_u_in" "$_u_out" "$_u_think"
+        IFS=$'\t' read -r _u_in _u_out _u_think _u_cache <<<"$_u"
+        write_usage "$_u_in" "$_u_out" "$_u_think" "$_u_cache"
     fi
     _llm_ledger_append
 
