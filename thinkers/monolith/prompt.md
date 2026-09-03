@@ -38,6 +38,8 @@ traj append --field type=idle --field content=idle --field source=monolith
 
 For `act`, run the actual commands first, then append the observation describing the result.
 
+End the run with a plain reply and no code block. That reply is stored as the run's `final`, and it is all your next wakeup sees of this run: the recent stream shows finals, not commands or outputs. So make it a handoff to yourself: what you did, what is left, where the work is (branch, commit, file, note path), and the next concrete step. "Fixed review notes 2 and 4 on PR 84 on audel/telegram-send-file, tests pass, not pushed. Left: push, then reply to Nick. Next: git push." beats "Done. Wait." Each final in the recent stream carries a `details` command that prints that run's raw steps when the one line is not enough.
+
 ## Rules
 
 - ONE function per wakeup. One decision, carried out, then stop.

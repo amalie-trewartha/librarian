@@ -54,7 +54,7 @@ printf '{"step_id":"hdr","type":"trajectory","ts":"%s"}\n' "$(ts 9999)" >> "$TRA
 step t1  thought   "first thought"                       300
 step r1  reasoning "Chat-first this tick: last-word..."  299
 step so1 shell-output "output"                           298
-step f1  final     "run concluded: nothing to do"        297
+step f1  final     "run concluded: nothing to do"        297 ',"run_id":"run-0001"'
 step i1  idle idle 290
 step i2  idle idle 200
 step i3  idle idle 170   # i1..i3: 2h over 290 -> 170 min ago
@@ -79,6 +79,11 @@ else
     bad "machinery steps stay out"
 fi
 printf '%s\n' "$out" | jq -e 'select(.step_id == "f1")' >/dev/null 2>&1 && ok "final steps are kept" || bad "final steps are kept" "$types"
+# A final is all the next wake sees of its run, so it carries a command that
+# prints the run's raw steps; a final without a run id (old rows) carries none.
+details=$(printf '%s\n' "$out" | jq -r 'select(.step_id == "f1") | .details // "none"')
+[[ "$details" == "traj tail -n 400 --filter run_id=run-0001" ]] && ok "finals carry a details command for their run" || bad "finals carry a details command for their run" "got: $details"
+
 
 idle_lines=$(printf '%s\n' "$out" | jq -c 'select(.type == "idle")')
 n_idle=$(printf '%s\n' "$idle_lines" | grep -c . || true)
@@ -123,6 +128,10 @@ if printf '%s\n' "$out" | jq -e . >/dev/null 2>&1; then
 else
     bad "output is one JSON object per line"
 fi
+
+# A final without a run id (old rows) carries no details command.
+step f2 final "old final, no run id" 4
+printf '%s\n' "$(stream 30)" | jq -e 'select(.step_id == "f2") | has("details") | not' >/dev/null 2>&1 && ok "a final without a run id carries no details" || bad "a final without a run id carries no details"
 
 echo
 echo "$pass passed, $fail failed"

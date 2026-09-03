@@ -282,6 +282,9 @@ _RECENT_STREAM_COLLAPSE_JQ='
         | del(.n, .first_ts, .last_ts))
   | .[]'
 
+# A run's final is all the next wake sees of that run (the mind's render is
+# run scoped, so earlier runs' commands and outputs are not in its context),
+# so each final carries a `details` command that prints the run's raw steps.
 _recent_stream() {
     local n="${1:-${THINK_CONTEXT_TAIL:-20}}"
     # Tolerant parse (fromjson?): skip corrupt lines rather than dying —
@@ -292,7 +295,9 @@ _recent_stream() {
                      or .type == "message" or .type == "idle" or .type == "merge"
                      or .type == "final" or .type == "error")
             | .content = ((.content // "") | tostring
-                | if length > 1500 then .[0:1500] + "…[truncated]" else . end)' \
+                | if length > 1500 then .[0:1500] + "…[truncated]" else . end)
+            | if .type == "final" and ((.run_id // "") | tostring) != ""
+              then .details = "traj tail -n 400 --filter run_id=" + (.run_id | tostring) else . end' \
         2>/dev/null \
         | tail -n "$n" \
         | jq -cs "$_RECENT_STREAM_COLLAPSE_JQ" 2>/dev/null

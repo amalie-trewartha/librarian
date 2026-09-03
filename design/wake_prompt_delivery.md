@@ -193,6 +193,13 @@ What could go wrong, and how to check.
 
 ### 2. A richer final step, with a command to dig further
 
+Built 2026-09-03: the prompt's "How to write steps" section asks for a
+final that says what was done, what is left, where the work is, and the next
+step, and `_recent_stream` stamps every final that has a run id with a
+`details` field holding `traj tail -n 400 --filter run_id=<id>`. Once the
+mind could read its prompt its finals had already started stating
+outcomes on their own; the instruction pins that down.
+
 Under part 1 the final step is the only thing the next wake sees about a
 run. Shellm stores the model's last reply, the one with no code block, as
 the `final` step, so its content is up to the model and steerable from the
