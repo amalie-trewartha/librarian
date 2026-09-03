@@ -685,6 +685,9 @@ _ctx_assemble() {
         done
     done
     (( _CTX_EMITTED )) && printf '\n'
+    # --raw-tail 0 means no verbatim block at all, not "the unsealed
+    # remainder": the caller (the monolith) shows recent steps itself.
+    [[ "$CTX_RAW_TAIL" == "0" ]] && return 0
     printf '=== RIGHT NOW — the last %s steps, verbatim ===\n' "$(( n - cut0 ))"
     sed -n "$(( cut0 + 1 )),${n}p" "$RENDERED_TSV" | cut -f4
 }
