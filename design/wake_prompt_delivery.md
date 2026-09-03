@@ -1,7 +1,12 @@
 # Wake prompt delivery: the monolith never saw its prompt
 
-Status: proposal, 2026-09-03. Part 4 (cached tokens in the ledger) is built
-and tested, nothing else is.
+Status: 2026-09-03. Part 4 (cached tokens in the ledger) is deployed. Part 1
+(run scope render, prompt never cut) is built and tested, not deployed:
+`context --run` and `--full-types`, `shellm --context-scope run`, the
+monolith passes it. Part 5 (faithful replay) is done: the old render
+engaged the request in 0 of 18 trials and reproduced the live commands,
+the run scope render engaged in 12 of 12 at 17K input tokens per call
+(`headlong-experiments/pending-request-placement/results.md`).
 Relates to: [monolith_thinker.md](monolith_thinker.md),
 [monolith_run_health.md](monolith_run_health.md),
 [conversation_memory.md](conversation_memory.md),
@@ -114,12 +119,17 @@ current run in order. Steps from earlier runs are dropped. In a run longer
 than the tail window the prompt stays in as a pinned step and the window
 applies to the run's own steps.
 
-Mechanically this is a run filter in `bin/context` plus an exemption from
-the per field limit for the pinned prompt. Every step shellm writes already
-carries `run_id`, shellm already knows the prompt step id when it appends
-it, and context already has `--pin`. Old prompt steps from earlier runs are
-never in the window under the run filter, and they keep the limit if they
-are ever pinned. The limit on shell output stays as it is.
+Mechanically this is a run filter in `bin/context` (`--run RUN_ID`, pins
+always stay, other runs' rows are dropped without an elision marker) plus a
+per type exemption from the field limit (`--full-types prompt`). Every step
+shellm writes already carries `run_id`, shellm keeps the prompt step id
+when it appends it, and context already had `--pin`. Shellm always passes
+`--full-types prompt`, so a prompt is never cut in either scope; in the
+default trajectory scope that means a resumed conversation's earlier
+prompts render whole too, which is what a conversation is. Run scope is
+opt in (`--context-scope run`, or `SHELLM_CONTEXT_SCOPE=run`) because a
+`--resume` run wants the earlier conversation; the monolith passes it. The
+limit on shell output stays as it is.
 
 Why dropping the earlier runs is right. The wake prompt already carries the
 last 30 durable steps as its recent stream (in a sampled prompt, 12 finals,
@@ -241,10 +251,17 @@ Rerun the placement replay on the same six snapshots with three conditions.
 - The full prompt plus the current run's steps only, which is part 1.
 
 Score the first decision (engaged, declined with a reason, research, idle)
-and whether the first command is well formed. About 45 calls, under two
-dollars. To build the faithful render, copy the trajectory up to the
-snapshot's prompt step on the box, run `bin/context` with the production
-flags against the copy, and pull the message list.
+and whether the first command is well formed. To build the faithful render,
+copy the trajectory up to the snapshot's prompt step on the box, run
+`bin/context` with the production flags against the copy, and pull the
+message list.
+
+Done 2026-09-03, 48 calls, about $3.70. The old render engaged in 0 of 18
+and produced the same first commands as the live runs, including the
+Python script that searches the prompt files on disk. Prompt whole plus
+history engaged in 18 of 18 at 61K input tokens per call. Prompt whole in
+run scope engaged in 12 of 12 at 17K. Results in
+`headlong-experiments/pending-request-placement/results.md`.
 
 ## Rollout
 
