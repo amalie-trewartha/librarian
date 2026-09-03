@@ -20,13 +20,22 @@ JPEG_MAGIC = b"\xff\xd8\xff"
 CAPTION_MAX = 1024  # Telegram media-caption limit
 
 
+class DecodeError(Exception):
+    """content_b64 was present but empty or not strict standard base64."""
+
+
 def _content(step: dict[str, Any]) -> bytes | str | None:
-    b64 = step.get("content_b64")
-    if isinstance(b64, str) and b64:
+    if "content_b64" in step:
+        b64 = step.get("content_b64")
+        if not isinstance(b64, str) or not b64:
+            raise DecodeError("empty content_b64")
         try:
-            return base64.b64decode(b64, validate=True)
-        except (binascii.Error, ValueError):
-            return None
+            raw = base64.b64decode(b64, validate=True)
+        except (binascii.Error, ValueError) as e:
+            raise DecodeError(str(e)) from e
+        if not raw:
+            raise DecodeError("empty content_b64")
+        return raw
     content = step.get("content")
     if content is None or content == "":
         return None
@@ -47,19 +56,28 @@ def file_payload(step: dict[str, Any]) -> dict[str, Any] | None:
 
     A file step is one with an explicit `filename` field. The `file`
     alias is not accepted: an ordinary message that happens to carry
-    that key must stay a sendMessage. Content-sniffing without a name
-    is not used either: a text reply that starts with `<svg` must
-    stay a sendMessage.
+    that key must stay a sendMessage. Content is leak-filtered so a
+    stray `chat reply` in a caption cannot re-trigger the agent.
+
+    If `content_b64` is present but not strict base64 (or decodes to
+    empty), the returned dict has `content` None and `decode_error`
+    True so outbound can fail loudly instead of falling through to
+    sendMessage.
     """
-    raw_name = step.get("filename") or ""
+    raw_name = step.get("filename")
     if not isinstance(raw_name, str) or not raw_name.strip():
         return None
     filename = Path(raw_name).name
     if not filename or filename in {".", ".."}:
         return None
 
-    content = _content(step)
-    if content is None:
+    decode_error = False
+    try:
+        content = _content(step)
+    except DecodeError:
+        content = None
+        decode_error = True
+    if content is None and not decode_error:
         return None
 
     caption = step.get("caption")
@@ -73,4 +91,5 @@ def file_payload(step: dict[str, Any]) -> dict[str, Any] | None:
         "content": content,
         "caption": caption_out,
         "as_photo": _as_photo(content),
+        "decode_error": decode_error,
     }

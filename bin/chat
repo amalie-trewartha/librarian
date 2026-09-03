@@ -210,6 +210,18 @@ cmd_send_file() {
     [[ -z "$filepath" ]] && die "Usage: chat send-file [--from <name>] [--to <name>] <filename>"
     [[ -f "$filepath" ]] || die "File not found: $filepath"
 
+    local size max
+    size=$(stat -c%s "$filepath" 2>/dev/null || wc -c < "$filepath")
+    size=${size//[[:space:]]/}
+    max="${CHAT_SEND_FILE_MAX_BYTES:-10485760}"
+    [[ "$max" =~ ^[0-9]+$ ]] || die "CHAT_SEND_FILE_MAX_BYTES must be an integer"
+    if (( size == 0 )); then
+        die "empty file: $filepath"
+    fi
+    if (( size > max )); then
+        die "file too large: $filepath ($size bytes; max $max)"
+    fi
+
     _resolve_from_to
 
     local filename
@@ -592,6 +604,8 @@ Environment:
   MEM_DIR         Memories dir; `type: person` memories with `person_key`
                   and `aliases` merge several keys into one person for
                   history --with
+  CHAT_SEND_FILE_MAX_BYTES
+                  Max file size for `chat send-file` (default 10485760)
 EOF
     exit 0
 }

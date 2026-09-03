@@ -37,7 +37,10 @@ def test_path_is_reduced_to_basename():
 
 
 def test_invalid_b64_is_not_a_file():
-    assert file_payload({"filename": "a.bin", "content_b64": "!!!!"}) is None
+    payload = file_payload({"filename": "a.bin", "content_b64": "!!!!"})
+    assert payload is not None
+    assert payload["content"] is None
+    assert payload["decode_error"] is True
 
 
 def test_caption_is_truncated():
@@ -83,3 +86,26 @@ def test_text_content_is_never_a_photo():
     payload = file_payload({"filename": "fig.png", "content": "not-bytes"})
     assert payload is not None
     assert payload["as_photo"] is False
+
+
+def test_invalid_content_b64_is_decode_error():
+    payload = file_payload({
+        "filename": "note.txt",
+        "content_b64": "@@@not-base64@@@",
+        "content": "[file: note.txt]",
+    })
+    assert payload is not None
+    assert payload["content"] is None
+    assert payload["decode_error"] is True
+
+
+def test_empty_content_b64_is_decode_error():
+    payload = file_payload({
+        "filename": "note.txt",
+        "content_b64": "",
+        "content": "[file: note.txt]",
+    })
+    assert payload is not None
+    assert payload["content"] is None
+    assert payload["decode_error"] is True
+

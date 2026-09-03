@@ -273,3 +273,37 @@ def test_file_send_failure_falls_back_to_notice(tmp_path, monkeypatch):
 
     outbound.run(_cfg(tmp_path), FakeBot(), ApproveAll(), threading.Event())
     assert sent == ["(failed to deliver file note.txt)"]
+
+
+def test_undecodable_file_falls_back_to_notice(tmp_path, monkeypatch):
+    import threading
+
+    from headlong_telegram import outbound
+
+    steps = [
+        {"type": "message", "from": "audel", "to": "telegram-1-1",
+         "source": "chat", "filename": "note.txt",
+         "content": "[file: note.txt]", "content_b64": "@@@bad@@@",
+         "step_id": "badb64"},
+    ]
+    monkeypatch.setattr(outbound.mindlog, "find_trajectory", lambda d: tmp_path / "t.jsonl")
+    monkeypatch.setattr(outbound.mindlog, "follow", lambda *a, **k: iter(steps))
+
+    sent = []
+    docs = []
+
+    class FakeBot:
+        def send_message(self, chat, text, html=False):
+            sent.append(text)
+
+        def send_document(self, chat, content, filename, caption=None):
+            docs.append(filename)
+
+    class ApproveAll:
+        def is_approved(self, user):
+            return True
+
+    outbound.run(_cfg(tmp_path), FakeBot(), ApproveAll(), threading.Event())
+    assert docs == []
+    assert sent == ["(failed to deliver file note.txt)"]
+
