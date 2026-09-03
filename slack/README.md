@@ -11,6 +11,8 @@ are posted back to the right conversation.
 Slack <=(Socket Mode websocket)=> headlong-slack-bridge
     inbound:  event -> from_name "slack-<user>-<channel>[-<thread_ts>]"
               -> POST <web>/api/identities/<id>/chat
+              reaction_added on the bot's messages (and any DM reaction)
+              lands as a `:emoji:` body (same from_name / thread)
     outbound: tail trajectory.jsonl -> message steps where from=<identity>
               and to=slack-* -> chat.postMessage(channel, thread_ts)
 ```

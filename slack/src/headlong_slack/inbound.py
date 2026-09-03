@@ -7,6 +7,7 @@ API, which appends it to the identity's trajectory via `bin/chat`.
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import queue
 import threading
@@ -28,6 +29,22 @@ DELIVERY_ATTEMPTS = 3
 DELIVERY_ERROR_TEXT = (
     "(bridge error: I couldn't reach my mind just now — please try again in a bit)"
 )
+# Bound reaction parent-lookups so a hung reactions.get cannot stall
+# the single inbound drain thread. Fail open rather than wait.
+ITEM_LOOKUP_TIMEOUT = 2
+
+
+def reaction_text(reaction: str, item_ts: str, thread_ts: str | None) -> str:
+    """Body for a reaction inbound.
+
+    Routing uses the parent thread so a reply lands in the right Slack
+    thread. When the reacted-to message is a reply inside that thread,
+    keep `item_ts` in the body so the mind log still names the line.
+    """
+    body = f":{reaction}:"
+    if thread_ts and item_ts != thread_ts:
+        body = f"{body} (on {item_ts})"
+    return body
 
 
 @dataclass
@@ -38,6 +55,13 @@ class InboundMessage:
     thread_ts: str | None  # where an error notice would go; None = top level
     message_ts: str
     text: str
+    # True for channel reactions: resolve parent thread_ts in the worker
+    # so the bolt handler never blocks on reactions.get.
+    resolve_parent: bool = False
+    # Reactions skip chat_getPermalink on the drain thread. The Slack
+    # client's default timeout is 30s; a burst of reaction permalink
+    # lookups would otherwise stall later human messages.
+    is_reaction: bool = False
 
 
 class SlackNames:
@@ -77,6 +101,37 @@ class SlackNames:
         return self._channels[channel_id]
 
 
+def reaction_to_inbound(
+    event: dict[str, Any], *, bot_user_id: str
+) -> tuple[str, str, str, str, bool] | None:
+    """Decide whether a reaction_added event should reach the mind log.
+
+    Returns (user, channel, item_ts, reaction, want_thread) or None to drop.
+    want_thread is True for channels (lookup parent thread_ts); False for DMs.
+    """
+    if event.get("bot_id"):
+        return None
+    user = event.get("user")
+    if not user or user == bot_user_id:
+        return None
+    reaction = event.get("reaction")
+    if not reaction:
+        return None
+    item = event.get("item") or {}
+    if item.get("type") != "message":
+        return None
+    channel = item.get("channel")
+    item_ts = item.get("ts")
+    if not channel or not item_ts:
+        return None
+    is_im = channel.startswith("D")
+    item_user = event.get("item_user")
+    # DMs: every reaction is for us. Channels: only reactions on our messages.
+    if not is_im and item_user != bot_user_id:
+        return None
+    return (user, channel, item_ts, reaction, not is_im)
+
+
 class Inbound:
     def __init__(
         self,
@@ -98,12 +153,99 @@ class Inbound:
         )
         app.event("app_mention")(self._on_event)
         app.event("message")(self._on_event)
+        app.event("reaction_added")(self._on_reaction)
+        # One lookup worker for the process, not one executor per reaction.
+        # shutdown(wait=False) cannot kill a hung Slack SDK call; a shared
+        # pool is what bounds live threads when lookups time out.
+        self._lookup_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="slack-item-lookup"
+        )
+        # At most one reactions.get in flight. Timed-out reactions use the
+        # fallback immediately instead of queueing another stale call.
+        self._lookup_lock = threading.Lock()
+        self._lookup_future: concurrent.futures.Future[dict[str, Any] | None] | None = None
         self._worker = threading.Thread(
             target=self._drain, name="slack-inbound", daemon=True
         )
         self._worker.start()
 
     # -- event intake (bolt handler thread; must return fast) ----------------
+
+    def _on_reaction(self, event: dict[str, Any], logger: logging.Logger) -> None:
+        """Land emoji reactions on our messages (and all DM reactions) in the mind log.
+
+        Channel reactions on other people's messages are dropped — same gate as
+        un-mentioned channel traffic. Body is `:name:`, plus `(on <item_ts>)`
+        when the reacted-to line is a reply inside a thread.
+
+        Thread parent lookup happens in the delivery worker, not here: bolt
+        must ack the envelope without waiting on the Web API.
+        """
+        msg = reaction_to_inbound(event, bot_user_id=self.bot_user_id)
+        if msg is None:
+            return
+        user, channel, item_ts, reaction, want_thread = msg
+        event_ts = event.get("event_ts") or ""
+        if not self.dedupe.add(f"reaction:{channel}:{item_ts}:{user}:{reaction}:{event_ts}"):
+            return
+        if want_thread:
+            thread_ts = item_ts
+            from_name = naming.encode(user, channel, thread_ts)
+        else:
+            thread_ts = None
+            from_name = naming.encode(user, channel)
+        self.queue.put(
+            InboundMessage(
+                from_name,
+                user,
+                channel,
+                thread_ts,
+                item_ts,
+                f":{reaction}:",
+                resolve_parent=want_thread,
+                is_reaction=True,
+            )
+        )
+
+    def _item_thread_ts(self, channel: str, ts: str) -> str | None:
+        """Parent thread_ts for the reacted-to message, if it is in a thread.
+
+        conversations.history only returns parent-channel messages, so a
+        reaction on a reply looks up empty there. conversations.replies is
+        keyed by the thread parent, not the item. reactions.get returns the
+        item itself (including thread_ts) for both roots and replies.
+
+        Bound to ITEM_LOOKUP_TIMEOUT so a hung Web API call cannot stall
+        the single drain thread. Fail open to None so the caller uses
+        item_ts as the thread root.
+        """
+        found = self._lookup_item_message(channel, ts)
+        if not found:
+            return None
+        return found.get("thread_ts") or None
+
+    def _lookup_item_message(self, channel: str, ts: str) -> dict[str, Any] | None:
+        def _call() -> dict[str, Any] | None:
+            resp = self.app.client.reactions_get(channel=channel, timestamp=ts)
+            msg = resp.get("message") or {}
+            return msg or None
+
+        # At most one in-flight reactions.get. If a previous call is still
+        # running after a timeout, do not queue another stale lookup —
+        # fail open immediately so the drain thread can take the next item.
+        with self._lookup_lock:
+            fut = self._lookup_future
+            if fut is not None and not fut.done():
+                return None
+            fut = self._lookup_pool.submit(_call)
+            self._lookup_future = fut
+        try:
+            return fut.result(timeout=ITEM_LOOKUP_TIMEOUT)
+        except Exception:
+            log.warning(
+                "reactions.get failed for %s ts=%s", channel, ts, exc_info=True
+            )
+            return None
 
     def _on_event(self, event: dict[str, Any], logger: logging.Logger) -> None:
         if event.get("bot_id") or event.get("subtype"):
@@ -153,6 +295,27 @@ class Inbound:
                 log.exception("failed delivering %s", msg.from_name)
 
     def _deliver(self, msg: InboundMessage) -> None:
+        if msg.resolve_parent and msg.thread_ts:
+            item_ts = msg.thread_ts
+            parent = self._item_thread_ts(msg.channel, item_ts)
+            thread_ts = parent or item_ts
+            # Body starts as ":emoji:". Nested replies keep item_ts in the
+            # body so the mind log names the line, not just the thread.
+            reaction = msg.text[1:-1] if msg.text.startswith(":") and msg.text.endswith(":") else msg.text
+            text = reaction_text(reaction, item_ts, thread_ts)
+            if thread_ts != item_ts or text != msg.text:
+                msg = InboundMessage(
+                    naming.encode(msg.user, msg.channel, thread_ts),
+                    msg.user,
+                    msg.channel,
+                    thread_ts,
+                    msg.message_ts,
+                    text,
+                    resolve_parent=False,
+                    is_reaction=True,
+                )
+            # A reaction is not request intent. Do not create or resurrect an
+            # active thread — that would open the un-mentioned-reply gate.
         content = clean_inbound(msg.text, self.bot_user_id)
         if not content:
             return
@@ -164,16 +327,17 @@ class Inbound:
             f" — reply with: chat reply {msg.from_name})"
         )
         body = {"content": f"{header} {content}", "from_name": msg.from_name}
-        try:
-            permalink = self.app.client.chat_getPermalink(
-                channel=msg.channel, message_ts=msg.message_ts
-            ).get("permalink")
-            if permalink:
-                body["source_url"] = permalink
-        except Exception:
-            # A link is useful metadata, but its lookup must never keep a
-            # human message out of the mind log.
-            log.warning("chat_getPermalink failed for %s", msg.from_name, exc_info=True)
+        if not msg.is_reaction:
+            try:
+                permalink = self.app.client.chat_getPermalink(
+                    channel=msg.channel, message_ts=msg.message_ts
+                ).get("permalink")
+                if permalink:
+                    body["source_url"] = permalink
+            except Exception:
+                # Permalink lookup is best-effort: a Slack outage or missing
+                # scope must never keep a human message out of the mind log.
+                log.warning("chat_getPermalink failed for %s", msg.from_name, exc_info=True)
         for attempt in range(1, DELIVERY_ATTEMPTS + 1):
             try:
                 response = httpx.post(self._chat_url, json=body, timeout=30)
@@ -199,3 +363,4 @@ class Inbound:
 
     def stop(self) -> None:
         self.queue.put(None)
+        self._lookup_pool.shutdown(wait=False, cancel_futures=True)
