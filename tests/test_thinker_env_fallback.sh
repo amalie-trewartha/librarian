@@ -181,7 +181,7 @@ description: Test fixture.
 metadata:
   shelllm:
     requires:
-      env: ["PROBE_SERVICE_CONFIG"]
+      env: ["PROBE_SERVICE_CONFIG", "LLM_API_URL", "SHELLM_API_URL"]
 ---
 EOF
     export IDENTITY_DIR="$H/id" TRAJ_DIR="$H/id/trajectories" TRAJ_ID=t1 MEM_DIR="$H/id/memories"

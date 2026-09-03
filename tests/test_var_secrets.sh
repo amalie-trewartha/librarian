@@ -93,6 +93,7 @@ ps -axo args= > '$WORK/ps.txt' 2>/dev/null || ps -eo args= > '$WORK/ps.txt'" > "
 fence 'FINAL=done' > "$WORK/script/last"
 run_shellm --var SECRET_PROBE --var PLAIN=1 --var "OPENROUTER_API_KEY=$LEGACY" \
     --var "SERVICE_URL=$PRIVATE_URL" --var "DATABASE_DSN=$PRIVATE_DSN" \
+    --var "SHELLM_API_URL=$FILE_URL" \
     --var "SERVICE_APIKEY=$COMPACT_APIKEY" --var "APIKEY=$COMPACT_BARE_KEY" \
     --var "ACCESSTOKEN=$COMPACT_TOKEN" \
     --var "PGPASSWORD=$COMPACT_PASSWORD" \
@@ -103,9 +104,9 @@ else
     bad "bare --var NAME forwards the value into the generated code" "probe: $(cat "$WORK/probe.txt" 2>/dev/null) err: $(tail -2 "$WORK/err")"
 fi
 if grep -q " api=$INHERITED_URL shellm=$INHERITED_URL$" "$WORK/probe.txt" 2>/dev/null; then
-    ok "process LLM_API_URL wins over file SHELLM_API_URL for both aliases"
+    ok "process LLM_API_URL wins over file and duplicate extra endpoint aliases"
 else
-    bad "process LLM_API_URL wins over file SHELLM_API_URL for both aliases" "probe: $(cat "$WORK/probe.txt" 2>/dev/null)"
+    bad "process LLM_API_URL wins over file and duplicate extra endpoint aliases" "probe: $(cat "$WORK/probe.txt" 2>/dev/null)"
 fi
 if [[ -z "${SHELLM_API_URL+x}" ]]; then
     ok "the shellm run started with LLM_API_URL only"

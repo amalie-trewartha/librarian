@@ -579,6 +579,9 @@ _build_shellm_flags() {
     # Skill-declared vars
     while IFS= read -r vname; do
         [[ -z "$vname" ]] && continue
+        # shellm owns endpoint alias resolution and Docker rewriting. Emitting
+        # either alias again as an extra var would overwrite its canonical URL.
+        case "$vname" in LLM_API_URL|SHELLM_API_URL) continue ;; esac
         local vval="${!vname:-}"
         if [[ -n "$vval" ]]; then
             # Skills commonly declare credentials and service endpoints. Keep

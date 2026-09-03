@@ -2691,6 +2691,12 @@ exit \$__shellm_rc
         for _ev in "${_SHELLM_EXTRA_VARS[@]+"${_SHELLM_EXTRA_VARS[@]}"}"; do
             env_vars+=("$_ev")
         done
+        # Endpoint aliases are canonical shellm state, not ordinary extras.
+        # Keep the Docker-rewritten value last so a duplicate --var cannot
+        # restore a host-only URL inside generated code.
+        if [[ -n "$execution_api_url" ]]; then
+            env_vars+=(SHELLM_API_URL="$execution_api_url" LLM_API_URL="$execution_api_url")
+        fi
         if [[ "$SHELLM_DOCKER_ACCESS" == "broker" && -n "${_SHELLM_DOCKER_BROKER_DIR:-}" ]]; then
             env_vars+=(SHELLM_DOCKER_BROKER="$_SHELLM_DOCKER_BROKER_DIR")
             env_vars+=(SHELLM_DOCKER_TRANSPORT="$_SHELLM_DOCKER_BROKER_TRANSPORT")

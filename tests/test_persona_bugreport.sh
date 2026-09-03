@@ -51,9 +51,6 @@ export PATH="$REPO/bin:$REPO/tools:$PATH"
 KEY="sk-or-v1-0123456789abcdef0123456789abcdef0123456789abcdef"
 PW="hunter2hunter2-very-secret"
 DSN="postgresql://bugreport-user:bugreport-pass@example.invalid/private-db"
-# This produces a malformed one-line sed program. Its isolated literal pass
-# may fail, but it must not prevent the other literals or fixed patterns from
-# being scrubbed.
 export BROKEN_SECRET=$'first-line\nsecond-line'
 cat > "$HEADLONG_HOME/.env" <<ENV
 OPENROUTER_API_KEY=$KEY
@@ -79,10 +76,11 @@ cat >> "$TJ/trajectory.jsonl" <<ROWS
 {"type":"shellm-run","cmd":"shellm --var GH_TOKEN=ghp_OTHERTOKEN0123456789abcdefghijkl --var PG_PASSWORD=correcthorsebatterystaple --var SHELLM_ENV=local run","ts":"2026-08-21T15:30:00Z"}
 {"type":"shellm-run","cmd":"shellm --var DATABASE_DSN=$DSN --var CURL_OPTS=--retry=2 run","ts":"2026-08-21T15:31:00Z"}
 {"type":"shellm-run","cmd":"shellm --var SERVICE_APIKEY=svc_compact_0123456789abcdef --var APIKEY=api_compact_0123456789abcdef --var ACCESSTOKEN=tok_compact_0123456789abcdef --var PGPASSWORD=correcthorsebatterystaple run","ts":"2026-08-21T15:32:00Z"}
+{"type":"shellm-run","cmd":"shellm --var DB_PASSWORD=correct horse battery staple run","ts":"2026-08-21T15:33:00Z"}
 {"type":"thought","content":"the model is anthropic/claude-sonnet-4.5 and all is well","ts":"2026-08-21T15:00:01Z"}
 ROWS
 mkdir -p "$ID/run/logs" "$ID/memories" "$ID/workdir" "$TJ/blobs"
-printf 'env: OPENROUTER_API_KEY=%s\n' "$KEY" > "$ID/run/logs/monolith.log"
+printf 'env: OPENROUTER_API_KEY=%s\nmultiline: %s\n' "$KEY" "$BROKEN_SECRET" > "$ID/run/logs/monolith.log"
 printf -- '---\ntitle: db\n---\nthe db password is %s\nthe dsn is %s\n' "$PW" "$DSN" > "$ID/memories/db.md"
 printf 'scratch file\n' > "$ID/workdir/scratch.txt"
 head -c 2048 /dev/urandom > "$TJ/blobs/bin.dat"
@@ -130,11 +128,13 @@ check_not "other token value nowhere in bundle" grep -rqF 'ghp_OTHERTOKEN0123456
 check_not "other password nowhere in bundle"  grep -rqF 'correcthorsebatterystaple' "$TOP"
 check_not "compact API key values nowhere in bundle" grep -rqE '(svc|api)_compact_0123456789abcdef' "$TOP"
 check_not "compact access token nowhere in bundle" grep -rqF 'tok_compact_0123456789abcdef' "$TOP"
+check_not "multiline literal nowhere in bundle"     grep -rqF "$BROKEN_SECRET" "$TOP"
+check_not "spaced password suffix nowhere in bundle" grep -rqF 'horse battery staple' "$TOP"
 check "legacy --var KEY=value row masked, 4+4 hint kept" grep -q -- '--var OPENROUTER_API_KEY=<redacted sk-o...cdef> think' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "token not in .env still masked by pattern (hint kept)" grep -q -- '--var GH_TOKEN=<redacted ghp_...ijkl> ' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "password on argv masked whole"         grep -q -- '--var PG_PASSWORD=<redacted> --var SHELLM_ENV=local' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "DSN on argv masked whole"              grep -q -- '--var DATABASE_DSN=<redacted> --var CURL_OPTS=--retry=2' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
-check "compact credential names are masked"   grep -q -- '--var SERVICE_APIKEY=<redacted svc_...cdef> --var APIKEY=<redacted api_...cdef> --var ACCESSTOKEN=<redacted tok_...cdef> --var PGPASSWORD=<redacted> run' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
+check "compact credential names are masked"   grep -q -- '--var SERVICE_APIKEY=<redacted svc_...cdef> --var APIKEY=<redacted api_...cdef> --var ACCESSTOKEN=<redacted tok_...cdef> --var PGPASSWORD=<redacted>' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "CURL_OPTS is not a URL false positive" grep -q -- '--var CURL_OPTS=--retry=2 run' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check_not "no dangling hint tails"            grep -q -- '<redacted> [^ ]*>' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "bare --var KEY row untouched"          grep -q -- '--var OPENROUTER_API_KEY think' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
@@ -145,72 +145,37 @@ check "memory DSN literal scrubbed"           grep -q 'dsn is <redacted>' "$TOP/
 check "plain thought text kept"               grep -q 'all is well' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "source trajectory untouched"           grep -qF "$KEY" "$TJ/trajectory.jsonl"
 
-# 3. anonymous sed programs and output-temp cleanup
-REAL_SED=$(command -v sed)
+# 3. helper failure is fail-closed; literals stay out of argv and temp files
+REAL_PYTHON=$(command -v python3)
 mkdir -p "$WORK/failbin" "$WORK/redact-state"
-cat > "$WORK/failbin/sed" <<EOF
+cat > "$WORK/failbin/python3" <<EOF
 #!/usr/bin/env bash
-real_sed='$REAL_SED'
-uses_program=0
-program_arg=""
-prev=""
-for arg in "\$@"; do
-    if [[ "\$prev" == -f ]]; then uses_program=1; program_arg="\$arg"; break; fi
-    prev="\$arg"
-done
-if [[ "\$uses_program" -eq 1 ]]; then
-    printf '%s\n' "\$program_arg" >> "\$REDACT_STATE/program-args"
-    if [[ -f "\$REDACT_STATE/previous-temp" ]]; then
-        old=\$(cat "\$REDACT_STATE/previous-temp")
-        [[ ! -e "\$old" ]] || touch "\$REDACT_STATE/leaked-temp"
-    fi
-    current=\$(find "\$TMPDIR" -name '.redact-output.*' -print -quit 2>/dev/null)
-    [[ -z "\$current" ]] || printf '%s\n' "\$current" > "\$REDACT_STATE/previous-temp"
-    if [[ "\${REDACT_SED_MODE:-}" == error && ! -f "\$REDACT_STATE/failed-once" ]]; then
-        touch "\$REDACT_STATE/failed-once"
-        exit 42
-    fi
-    if [[ "\${REDACT_SED_MODE:-}" == signal && ! -f "\$REDACT_STATE/signalled" ]]; then
-        touch "\$REDACT_STATE/signalled"
-        kill -TERM "\$PPID"
-        sleep 1
-        exit 143
-    fi
-fi
-exec "\$real_sed" "\$@"
+printf '%s\n' "\$@" >> "\$REDACT_STATE/python-args"
+[[ "\${REDACT_PYTHON_MODE:-}" != error ]] || exit 42
+exec '$REAL_PYTHON' "\$@"
 EOF
-chmod +x "$WORK/failbin/sed"
+chmod +x "$WORK/failbin/python3"
 
 rm -rf "$WORK/redact-state"; mkdir "$WORK/redact-state"
-if PATH="$WORK/failbin:$PATH" REDACT_STATE="$WORK/redact-state" REDACT_SED_MODE=error \
-        persona alpha bugreport --out "$WORK/error-pass.tgz" >/dev/null 2>&1; then
-    ok "one sed error does not abort later redaction passes"
+if PATH="$WORK/failbin:$PATH" REDACT_STATE="$WORK/redact-state" REDACT_PYTHON_MODE=error \
+        persona alpha bugreport --out "$WORK/error-pass.tgz" >/dev/null 2>"$WORK/error-stderr"; then
+    bad "redactor failure aborts the bugreport"
 else
-    bad "one sed error does not abort later redaction passes"
+    ok "redactor failure aborts the bugreport"
 fi
-check_not "failed sed output temp is removed before the next pass" test -e "$WORK/redact-state/leaked-temp"
-if [[ -s "$WORK/redact-state/program-args" ]] \
-   && ! grep -qF "$KEY" "$WORK/redact-state/program-args" \
-   && ! grep -qF "$PW" "$WORK/redact-state/program-args" \
-   && ! grep -qF "$DSN" "$WORK/redact-state/program-args"; then
-    ok "sed program argv contains no private literals"
-else
-    bad "sed program argv contains no private literals"
-fi
-check_not "implementation has no secret sed script path" grep -q 'headlong-redact' "$REPO/tools/persona"
-rm -f "$WORK/error-pass.tgz"
-
-rm -rf "$WORK/redact-state"; mkdir "$WORK/redact-state"
-if PATH="$WORK/failbin:$PATH" REDACT_STATE="$WORK/redact-state" REDACT_SED_MODE=signal \
-        persona alpha bugreport --out "$WORK/signal-pass.tgz" >/dev/null 2>&1; then
-    bad "TERM interrupts redaction"
-else
-    ok "TERM interrupts redaction"
-fi
-check_not "signal leaves no output redaction temp" bash -c \
+check_not "redactor failure writes no archive" test -e "$WORK/error-pass.tgz"
+check "redactor failure is explained" grep -q 'secret scrubbing failed; no archive was written' "$WORK/error-stderr"
+check_not "failed helper output temp is removed" bash -c \
     'find "$1" -name ".redact-output.*" -print -quit | grep -q .' _ "$WORK"
-check_not "signal leaves no secret-bearing sed script" bash -c \
-    'find "$1" -name "headlong-redact.*" -print -quit | grep -q .' _ "$WORK"
+if [[ -s "$WORK/redact-state/python-args" ]] \
+   && ! grep -qF "$KEY" "$WORK/redact-state/python-args" \
+   && ! grep -qF "$PW" "$WORK/redact-state/python-args" \
+   && ! grep -qF "$DSN" "$WORK/redact-state/python-args"; then
+    ok "redactor argv contains no private literals"
+else
+    bad "redactor argv contains no private literals"
+fi
+check_not "implementation writes no secret helper script" grep -q 'headlong-redact' "$REPO/tools/persona"
 
 # 4. options
 check "--include-workdir adds workdir" bash -c '

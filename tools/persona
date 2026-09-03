@@ -467,7 +467,7 @@ EOF
     ( set +e; set +o pipefail; _bugreport_text "$iddir" "${big[@]+"${big[@]}"}" ) > "$top/report.txt" 2>&1 || true
 
     echo "Scrubbing secrets..." >&2
-    _redact_tree "$top"
+    _redact_tree "$top" || die "bugreport: secret scrubbing failed; no archive was written"
 
     tar "${tarq[@]+"${tarq[@]}"}" -czf "$out" -C "$stage" "$(basename "$top")"
     cat >&2 <<EOF
@@ -597,49 +597,71 @@ _redact_tree() (
                 -o -name '*.txt' -o -name '*.md' -o -name '*.sh' -o -name '*.yaml' -o -name '*.yml' \
                 -o -name '*.toml' -o -name '*.env' -o -name '*.cfg' -o -name '*.ini' \) -print0 2>/dev/null)
     [[ "${#files[@]}" -gt 0 ]] || return 0
-    # Keep literals out of sed's argv and isolate each one in its own pass, so
-    # an unusual ambient value that sed cannot parse does not disable every
-    # other replacement. Process substitution gives sed an anonymous program
-    # FD: no literal enters argv or a filesystem script. Output temps live only
-    # under the staging root and the subshell-local traps clean them without
-    # disturbing cmd_bugreport's traps.
-    local f i escaped_value escaped_replacement
-    for ((i=0; i<${#values[@]}; i++)); do
-        escaped_value=$(_sed_escape "${values[$i]}")
-        escaped_replacement=$(_sed_escape "${replacements[$i]}")
-        for f in "${files[@]}"; do
-            tmp=$(mktemp "$root/.redact-output.XXXXXX") || return 1
-            if sed -E -f <(printf 's/%s/%s/g\n' "$escaped_value" "$escaped_replacement") \
-                    "$f" > "$tmp" 2>/dev/null; then
-                mv -f "$tmp" "$f"
-                tmp=""
-            else
-                rm -f "$tmp"
-                tmp=""
-            fi
-        done
-    done
-
-    # --var NAME=VALUE: KEY/TOKEN names keep a 4+4 hint when long enough,
-    # other private names are masked whole. Credential terms match anywhere
-    # in the name (including APIKEY and PGPASSWORD); endpoint terms require
-    # underscore/name boundaries so CURL_OPTS is not treated as a URL variable.
-    # (a value starting with "<" is one an earlier pass already replaced)
+    # A length-framed stdin stream keeps literals out of argv and the
+    # filesystem. Python's byte replacement handles embedded newlines and
+    # regex metacharacters literally; any helper failure aborts the report.
+    # The --var pass masks through the next --var (or JSON quote/end of line),
+    # because old unquoted command records cannot distinguish a value with
+    # spaces from the command words after it. Hiding too much is safer than
+    # retaining a password suffix.
+    local f i
     for f in "${files[@]}"; do
         tmp=$(mktemp "$root/.redact-output.XXXXXX") || return 1
-        if sed -E -f <(printf '%s\n' \
-                's/--var ([A-Za-z_][A-Za-z0-9_]*(SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?)[A-Za-z0-9_]*)=[^ "<\\][^ "\\]*/--var \1=<redacted>/g' \
-                's/--var (([A-Za-z_][A-Za-z0-9_]*_)?(URL|URI|ENDPOINT|DSN)(_[A-Za-z0-9_]+)*)=[^ "<\\][^ "\\]*/--var \1=<redacted>/g' \
-                's/--var ([A-Za-z_][A-Za-z0-9_]*(KEY|TOKEN)[A-Za-z0-9_]*)=([^ "<\\]{4})[^ "\\]{12,}([^ "\\]{4})/--var \1=<redacted \3...\4>/g' \
-                's/--var ([A-Za-z_][A-Za-z0-9_]*(KEY|TOKEN)[A-Za-z0-9_]*)=[^ "<\\][^ "\\]*/--var \1=<redacted>/g' \
-                's/sk-([A-Za-z0-9_-]{4})[A-Za-z0-9_-]{12,}([A-Za-z0-9_-]{4})/<redacted sk-\1...\2>/g' \
-                's/sk-[A-Za-z0-9_-]{8,}/<redacted sk-...>/g') \
-                "$f" > "$tmp" 2>/dev/null; then
+        if {
+            printf '%s\n' "${#values[@]}"
+            for ((i=0; i<${#values[@]}; i++)); do
+                LC_ALL=C
+                printf '%s\n' "${#values[$i]}"
+                printf '%s\n' "${values[$i]}"
+                printf '%s\n' "${#replacements[$i]}"
+                printf '%s\n' "${replacements[$i]}"
+            done
+            cat "$f"
+        } | python3 -c '
+import re, sys
+
+source = sys.stdin.buffer
+def framed():
+    size = int(source.readline())
+    value = source.read(size)
+    if source.read(1) != b"\n":
+        raise ValueError("invalid redaction input")
+    return value
+
+pairs = [(framed(), framed()) for _ in range(int(source.readline()))]
+data = source.read()
+for needle, replacement in pairs:
+    if needle:
+        data = data.replace(needle, replacement)
+
+credential = re.compile(br"(?:SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?|KEY|TOKEN)")
+endpoint = re.compile(br"(?:^|_)(?:URL|URI|ENDPOINT|DSN)(?:_|$)")
+var = re.compile(br"(--var ([A-Za-z_][A-Za-z0-9_]*)=)(.*?)(?= --var |\"|$)", re.M)
+def mask(match):
+    name = match.group(2).upper()
+    value = match.group(3)
+    if value.startswith(b"<") or not (credential.search(name) or endpoint.search(name)):
+        return match.group(0)
+    token = value.split(None, 1)[0]
+    if (b"KEY" in name or b"TOKEN" in name) and not re.search(
+            br"SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?", name) \
+            and not endpoint.search(name) and len(token) >= 20:
+        replacement = b"<redacted " + token[:4] + b"..." + token[-4:] + b">"
+    else:
+        replacement = b"<redacted>"
+    return match.group(1) + replacement
+
+data = var.sub(mask, data)
+data = re.sub(br"sk-([A-Za-z0-9_-]{4})[A-Za-z0-9_-]{12,}([A-Za-z0-9_-]{4})", br"<redacted sk-\1...\2>", data)
+data = re.sub(br"sk-[A-Za-z0-9_-]{8,}", b"<redacted sk-...>", data)
+sys.stdout.buffer.write(data)
+' > "$tmp" 2>/dev/null; then
             mv -f "$tmp" "$f"
             tmp=""
         else
             rm -f "$tmp"
             tmp=""
+            return 1
         fi
     done
 )
@@ -668,10 +690,6 @@ _is_secret_name() {  # same notion as shellm's trajectory masking
     u=$(_upper "$1")
     [[ "$u" =~ (KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?) \
         || "$u" =~ (^|_)(URL|URI|ENDPOINT|DSN)(_|$) ]]
-}
-
-_sed_escape() {  # escape a literal for use in an ERE sed s/// pattern or replacement
-    printf '%s' "$1" | sed -e 's/[][\/.*^$&+?(){}|\\]/\\&/g'
 }
 
 usage() {
