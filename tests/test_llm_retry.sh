@@ -58,7 +58,7 @@ case "$mode" in
         ;;
     sse-ok-usage)   # streamed success with the trailing usage chunk
         printf 'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n'
-        printf 'data: {"choices":[],"usage":{"prompt_tokens":120,"completion_tokens":7,"completion_tokens_details":{"reasoning_tokens":3}}}\n\ndata: [DONE]\n'
+        printf 'data: {"choices":[],"usage":{"prompt_tokens":120,"completion_tokens":7,"completion_tokens_details":{"reasoning_tokens":3},"prompt_tokens_details":{"cached_tokens":100}}}\n\ndata: [DONE]\n'
         ;;
     http-200-usage)
         printf '{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":50,"completion_tokens":4}}' > "$out_file"
@@ -319,12 +319,12 @@ rm -f "$LEDGER"
 reset "sse-ok-usage"
 out=$(LLM_RETRIES=0 run_llm)
 check "ledger: streamed call appends"   test "$(wc -l < "$LEDGER" 2>/dev/null | tr -d ' ')" = "1"
-check "ledger: tokens + model + provider" bash -c 'tail -1 "$1" | jq -e ".in_tok == 120 and .out_tok == 7 and .think_tok == 3 and .model == \"openai/gpt-oss-120b\" and .provider == \"openrouter\" and (.ts | test(\"^20[0-9][0-9]-\")) and (has(\"identity\") | not)" >/dev/null' _ "$LEDGER"
+check "ledger: tokens + model + provider" bash -c 'tail -1 "$1" | jq -e ".in_tok == 120 and .out_tok == 7 and .think_tok == 3 and .cache_tok == 100 and .model == \"openai/gpt-oss-120b\" and .provider == \"openrouter\" and (.ts | test(\"^20[0-9][0-9]-\")) and (has(\"identity\") | not)" >/dev/null' _ "$LEDGER"
 check "ledger: own usage temp removed"  test -z "$(ls "${TMPDIR:-/tmp}"/llm-usage.* 2>/dev/null)"
 
 reset "http-200-usage"
 out=$(LLM_RETRIES=0 LLM_USAGE_FILE="$WORK/usage.json" IDENTITY_DIR="$WORK/ident" IDENTITY_NAME=ada run_llm --no-stream)
-check "ledger: caller usage file still written" bash -c 'jq -e ".in_tok == 50 and .out_tok == 4" "$1" >/dev/null' _ "$WORK/usage.json"
+check "ledger: caller usage file still written" bash -c 'jq -e ".in_tok == 50 and .out_tok == 4 and (has(\"cache_tok\") | not)" "$1" >/dev/null' _ "$WORK/usage.json"
 check "ledger: identity dir gets its own ledger" test "$(wc -l < "$WORK/ident/usage/llm.jsonl" | tr -d ' ')" = "1"
 check "ledger: identity stamped"        bash -c 'tail -1 "$1" | jq -e ".identity == \"ada\" and .in_tok == 50 and (has(\"run_id\") | not)" >/dev/null' _ "$WORK/ident/usage/llm.jsonl"
 check "ledger: home ledger untouched"   test "$(wc -l < "$LEDGER" | tr -d ' ')" = "1"

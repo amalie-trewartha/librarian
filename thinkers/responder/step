@@ -22,6 +22,14 @@ THINK_MODEL="${THINK_MODEL:-${SHELLM_MODEL:-claude-opus-4-7}}"
 THINK_CONTEXT_TAIL="${THINK_CONTEXT_TAIL:-20}"
 REPLY_MODEL="${MONOLITH_REPLY_MODEL:-$THINK_MODEL}"
 
+# Wall-clock milliseconds, for compose_ms. Same perl path bin/traj uses for
+# its timestamps; the fallback is whole seconds, still a valid number.
+_now_ms() {
+    perl -MTime::HiRes=time -e 'printf "%d\n", time*1000' 2>/dev/null \
+        || printf '%s000\n' "$(date +%s)"
+}
+t_start_ms=$(_now_ms)
+
 # Read the triggering step from stdin.
 step_json=$(cat)
 [[ -z "$step_json" ]] && exit 0
@@ -38,13 +46,18 @@ msg_from=$(printf '%s' "$step_json" | jq -r '.from // "human"' 2>/dev/null) || t
 [[ "$msg_to" == "$IDENTITY_NAME" ]] || exit 0
 
 # Append an observation step crediting this thinker, tagged with the
-# trigger step when known. $1 = content, $2 (optional) = decision field.
+# trigger step when known. $1 = content, $2 (optional) = decision field,
+# $3 (optional) = a JSON object of extra fields (the context metrics below).
 _obs() {
+    local extra="${3:-}"
+    [[ -n "$extra" ]] || extra='{}'
     jq -nc --arg content "$1" --arg source "$THINKER_NAME" \
         --arg trigger "$trigger_step_id" --arg decision "${2:-}" \
+        --argjson extra "$extra" \
         '{type:"observation", content:$content, source:$source}
          + (if $decision == "" then {} else {decision: $decision} end)
-         + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
+         + (if $trigger == "" then {} else {trigger_step: $trigger} end)
+         + $extra' \
         | traj append >/dev/null || true
 }
 
@@ -109,30 +122,187 @@ if traj exists 2>/dev/null; then
     recent_context=$(_recent_stream "$THINK_CONTEXT_TAIL") || recent_context=""
 fi
 
-convo_json=$(printf '%s\n' "$recent_context" | jq -cRn \
-    --arg me "$IDENTITY_NAME" --arg them "$msg_from" '
-    [inputs | fromjson? // empty
-     | select(.type == "message")
-     | if .from == $them and .to == $me then {role:"user", content:(.content|tostring)}
-       elif .from == $me and .to == $them then {role:"assistant", content:(.content|tostring)}
-       else empty end]
-    | .[-12:]' 2>/dev/null) || convo_json="[]"
-convo_json=$(printf '%s' "$convo_json" | jq -c --arg c "$trigger_content" '
-    (if length == 0 or .[-1].role != "user" then . + [{role:"user", content:$c}] else . end)
-    | (if (.[0].role // "user") == "assistant" then .[1:] else . end)')
+# The conversation: this person's messages with us over the last
+# RESPONDER_HISTORY_SINCE (7d), grouped by person key across every routing name
+# they use (Slack thread names, DM name, phone chat), read from the derived
+# message index via `chat history --with` (design/conversation_memory.md,
+# parts 1+2). Each of their messages is stamped with its age so the model can
+# tell "this morning" from "six days ago" (Experiment C found both new prompts
+# misread time without it). Falls back to the recent-stream window when the
+# index cannot be read. The step id of each message is kept alongside so the
+# observation below can record exactly which steps were in the prompt.
+HISTORY_SINCE="${RESPONDER_HISTORY_SINCE:-7d}"
+HISTORY_MAX="${RESPONDER_HISTORY_MAX:-20}"
+_age_jq='def age: ((now - ((.ts // "")[0:19] + "Z" | try fromdateiso8601 catch now)) | floor) as $s
+    | if $s < 90 then "just now"
+      elif $s < 5400 then "\(($s / 60) | floor) min ago"
+      elif $s < 172800 then "\(($s / 3600) | floor) h ago"
+      else "\(($s / 86400) | floor) days ago" end;'
+# Thread context: in a Slack channel thread other people talk too, and their
+# messages are the conversation the sender is replying into. Add the thread's
+# last RESPONDER_THREAD_SINCE (1d) of messages from anyone; the union is
+# de-duplicated by step id below. DMs, the phone chat and Telegram have no
+# thread, so this adds nothing there.
+THREAD_SINCE="${RESPONDER_THREAD_SINCE:-1d}"
+THREAD_MAX="${RESPONDER_THREAD_MAX:-20}"
+thread_key=$(chat thread-key "$msg_from" 2>/dev/null) || thread_key=""
+history_json=$(chat history --with "$msg_from" --since "$HISTORY_SINCE" -n "$HISTORY_MAX" --json 2>/dev/null) || history_json=""
+thread_json="[]"
+if [[ -n "$thread_key" ]]; then
+    thread_json=$(chat history --thread "$msg_from" --since "$THREAD_SINCE" -n "$THREAD_MAX" --json 2>/dev/null) || thread_json="[]"
+    [[ -n "$thread_json" ]] || thread_json="[]"
+fi
+history_source="index"
+if [[ -z "$history_json" || "$history_json" == "[]" ]]; then
+    # Nothing indexed for this person (or the index is unreadable): fall back
+    # to the messages in the recent-stream window, as before parts 1+2.
+    history_source="window"
+    history_json=$(printf '%s\n' "$recent_context" | jq -cRn \
+        --arg me "$IDENTITY_NAME" --arg them "$msg_from" '
+        [inputs | fromjson? // empty
+         | select(.type == "message"
+                  and ((.from == $them and .to == $me) or (.from == $me and .to == $them)))]' 2>/dev/null) \
+        || history_json="[]"
+fi
+# Roles by direction: anything we sent is an assistant turn, anything sent to
+# us (by the sender or by someone else in the thread; the bridge header in the
+# text names the speaker) is a user turn stamped with its age. Union of person
+# history and thread context, de-duplicated by step id, in time order. The
+# trigger always ends the list exactly once (it is usually already indexed,
+# but may not be if the index update lost a race).
+convo_sel=$(jq -nc --argjson person "$history_json" --argjson thread "$thread_json" \
+    --arg me "$IDENTITY_NAME" --arg c "$trigger_content" --arg t "$trigger_step_id" "$_age_jq"'
+    ($person | map(.step_id // "")) as $pids
+    | ($person + $thread)
+    | unique_by(.step_id) | sort_by(.ts // "")
+    | map((.step_id // "") as $sid
+          | if .to == $me then {role:"user", content:("[\(age)] " + (.content|tostring)), step_id:$sid, thread_only: (($pids | index($sid)) == null)}
+            elif .from == $me then {role:"assistant", content:(.content|tostring), step_id:$sid, thread_only: (($pids | index($sid)) == null)}
+            else empty end)
+    | map(select(.step_id != $t)) + [{role:"user", content:$c, step_id:$t, thread_only:false}]
+    | (if (.[0].role // "user") == "assistant" then .[1:] else . end)' 2>/dev/null) \
+    || convo_sel=$(jq -nc --arg c "$trigger_content" --arg t "$trigger_step_id" '[{role:"user", content:$c, step_id:$t, thread_only:false}]')
+convo_json=$(printf '%s' "$convo_sel" | jq -c 'map({role, content})')
+now_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-inner_context=$(printf '%s\n' "$recent_context" | jq -Rr \
-    'fromjson? // empty | select(.type != "message")
-     | "[\(.type)] \(.content|tostring)"' 2>/dev/null | tail -n 8) || inner_context=""
+inner_sel=$(printf '%s\n' "$recent_context" | jq -cR \
+    'fromjson? // empty | select(.type != "message")' 2>/dev/null | tail -n 8) || inner_sel=""
+inner_context=$(printf '%s\n' "$inner_sel" | jq -r \
+    '"[\(.type)] \(.content|tostring)"' 2>/dev/null) || inner_context=""
+
+# Context metrics, recorded on the decision observation so "how much of the
+# conversation did the responder actually have?" is a fact in the log rather
+# than a reconstruction (design/conversation_memory.md, part 6):
+#   context_msgs   earlier messages with this person in the prompt (the
+#                  trigger itself excluded)
+#   context_steps  step ids of everything in the prompt (conversation + the
+#                  inner-life excerpt); enough to rebuild the exact prompt
+#   thread_msgs    how many of those came only from the thread (other
+#                  people's messages, and ours to them)
+#   history_source "index" (chat history --with) or "window" (the
+#                  recent-stream fallback)
+#   model          the reply model
+#   compose_ms     wake to decision (added below)
+#   gap_s          seconds since the previous message exchanged with this
+#                  person, read from the raw tail (added below; absent when
+#                  none is in the tail)
+metrics_json=$(jq -nc --arg t "$trigger_step_id" --arg model "$REPLY_MODEL" \
+    --argjson convo "$convo_sel" \
+    --argjson inner "$(printf '%s\n' "$inner_sel" | jq -cs 'map(.step_id // empty)' 2>/dev/null || echo '[]')" \
+    --arg hs "$history_source" '
+    {context_msgs: ([$convo[] | select(.step_id != $t)] | length),
+     thread_msgs: ([$convo[] | select(.step_id != $t and .thread_only == true)] | length),
+     context_steps: (([$convo[].step_id] + $inner) | map(select(. != ""))),
+     history_source: $hs,
+     model: $model}')
+
+# Seconds between the trigger and the previous message exchanged with this
+# person. Read from the raw tail, not the filtered window: the window is the
+# thing that forgets, and this number has to be right exactly when it does.
+_gap_s() {
+    local trig_ts
+    trig_ts=$(printf '%s' "$step_json" | jq -r '.ts // empty' 2>/dev/null) || trig_ts=""
+    [[ -n "$trig_ts" ]] || return 0
+    _root_traj_raw_tail | jq -Rrn --arg me "$IDENTITY_NAME" --arg them "$msg_from" \
+        --arg t "$trigger_step_id" --arg tts "$trig_ts" '
+        def secs: .[0:19] + "Z" | try fromdateiso8601 catch empty;
+        [inputs | fromjson? // empty
+         | select(.type == "message" and (.step_id // "") != $t
+                  and (.reply_to // "") != $t
+                  and (.ts // "") != "" and .ts < $tts
+                  and ((.from == $them and .to == $me) or (.from == $me and .to == $them)))
+         | .ts] | last // empty
+        | (($tts | secs) - (. | secs))' 2>/dev/null
+}
+
+# Finish the metrics right before the decision observation is written, so
+# compose_ms covers everything up to (and including) the send.
+_finish_metrics() {
+    local ms gap
+    ms=$(( $(_now_ms) - t_start_ms ))
+    gap=$(_gap_s) || gap=""
+    printf '%s' "$metrics_json" | jq -c --argjson ms "$ms" --arg g "$gap" \
+        '. + {compose_ms: $ms} + (if $g == "" then {} else {gap_s: ($g | tonumber)} end)' \
+        2>/dev/null || printf '%s' "$metrics_json"
+}
+
+# ---------------------------------------------------------------------------
+# Person notes (design/conversation_memory.md, part 4): a `type: person` memory
+# per person key, written by _update_person_notes after each reply and read
+# here into the system prompt. Aliases in its frontmatter are what
+# `chat history --with` merges. mem's own frontmatter is kept (id, summary,
+# type, created, updated) plus person_key and aliases; written directly, not
+# via `mem update`, which would drop the extra fields.
+# ---------------------------------------------------------------------------
+person_key=$(chat person-key "$msg_from" 2>/dev/null) || person_key="$msg_from"
+
+# _person_notes_file <key> — path of the person memory for <key>, or nothing.
+_person_notes_file() {
+    local key="$1" f
+    [[ -n "${MEM_DIR:-}" && -d "$MEM_DIR" ]] || return 0
+    for f in "$MEM_DIR"/*.md; do
+        [[ -f "$f" ]] || continue
+        awk -v key="$key" '
+            NR==1 && /^---$/ {fm=1; next}
+            fm && /^---$/ {exit}
+            fm && /^type:[[:space:]]*person[[:space:]]*$/ {t=1}
+            fm && /^person_key:/ {sub(/^person_key:[[:space:]]*/, ""); k=$0}
+            fm && /^aliases:[[:space:]]*\[/ {a=$0; sub(/^aliases:[[:space:]]*\[/, "", a); sub(/\].*$/, "", a); gsub(/[[:space:]"]/, "", a); n=split(a, parts, ","); for (i=1;i<=n;i++) if (parts[i]==key) k2=1}
+            fm && /^[[:space:]]*-[[:space:]]*/ {v=$0; sub(/^[[:space:]]*-[[:space:]]*/, "", v); gsub(/"/, "", v); if (v==key) k2=1}
+            END {exit !(t && (k==key || k2))}' "$f" 2>/dev/null && { printf '%s\n' "$f"; return 0; }
+    done
+    return 0
+}
+_notes_body() {  # body after the frontmatter
+    awk 'NR==1 && /^---$/ {fm=1; next} fm && /^---$/ {fm=0; body=1; next} body {print}' "$1" | sed '/./,$!d'
+}
+person_notes_block=""
+if [[ "${RESPONDER_PERSON_NOTES:-1}" == "1" ]]; then
+    _pnf=$(_person_notes_file "$person_key") || _pnf=""
+    if [[ -n "$_pnf" ]]; then
+        _pnb=$(_notes_body "$_pnf" | head -n 20)
+        [[ -n "$_pnb" ]] && person_notes_block="What you know about $msg_from (your own notes; keep them in mind, do not
+recite them, and do not treat one past incident as a rule):
+$_pnb
+
+"
+    fi
+fi
 
 reply_system="$system_prompt
 
-You are in a live chat conversation with $msg_from. The messages are the real
-back-and-forth so far; reply to their newest message — first person, natural,
-conversational, concise. Never repeat or rephrase an earlier reply of yours.
-Answer completely from what you already know; only if it genuinely requires
-running tools or looking something up should you instead briefly say you're on
-it (the work happens separately) — in that case do not guess.
+The current time is $now_utc. You are in a live chat conversation with
+$msg_from. The messages are the real back-and-forth so far, spanning up to
+$HISTORY_SINCE; each of their messages is prefixed with how long ago it was sent,
+so mind the gaps (an answer from days ago is not \"this morning\"). In a group
+thread some earlier messages are from other people (the header in each message
+names the speaker); they are context, and you are answering $msg_from. Reply to
+their newest message — first person, natural, conversational, concise. Never repeat or rephrase an earlier reply of yours.
+Answer completely from what you already know. If a real answer needs tools,
+files, or looking something up, do not guess and do not promise to check
+yourself: put \`DEFER: <the work, one line>\` on the first line, then the short
+message to send (e.g. \"Let me look into that and get back to you.\"). The work
+is handed to the mind, which follows up with the result.
 
 Not every message needs a reply. If their newest message is already answered
 (a reply of yours addressing it is visible above), is a bare acknowledgment
@@ -140,11 +310,109 @@ like \"thanks\" or \"ok\", is a Slack reaction (a `:emoji:` body, optionally wit
 output exactly NO_REPLY on its own line and nothing else. Staying quiet is
 better than a duplicate or a contentless reply.
 
-Your recent inner life (context only, not part of the conversation):
+${person_notes_block}Your recent inner life (context only, not part of the conversation):
 $inner_context
 
 Output ONLY the reply message text — no preamble, no quotes, no commands.
 Delivery is automatic: never write 'chat reply' or the recipient's address."
+
+# ---------------------------------------------------------------------------
+# Person notes writer (part 4). After a reply is sent, rewrite this person's
+# notes from the previous notes plus the last 30 days of conversation, on a
+# cheap model, in the background so the human never waits for it. Facts and
+# stated preferences only: Experiment C showed a summary that led with one old
+# refusal turned into a standing stance in 2 of 22 replies.
+# ---------------------------------------------------------------------------
+NOTES_MODEL="${RESPONDER_NOTES_MODEL:-${RECAP_MAP_MODEL:-$REPLY_MODEL}}"
+_person_notes_system() {
+    cat <<NOTES
+You maintain $IDENTITY_NAME's private notes about one person they talk with,
+$msg_from. Rewrite the notes from the previous notes plus the recent
+conversation. Include only: who they are (name, role, how they reach
+$IDENTITY_NAME), how they prefer to be talked to, ongoing threads and open
+commitments with dates, and facts they stated. Rules: facts and stated
+preferences only. Never turn one incident into a rule, a stance, or a policy
+about the person, and do not record refusals or things $IDENTITY_NAME declined,
+not even in neutral words: leave any declined request out entirely.
+No secrets, keys, or credentials. Keep what is still true from the previous
+notes and drop what the conversation shows is stale. At most 12 short lines of
+plain text, no headers, no bullet syntax. Output only the notes.
+NOTES
+}
+_redact_keys() { sed -E 's/(sk|xox[abp]|ghp|gho|AKIA)[-_A-Za-z0-9]{12,}/[redacted]/g'; }
+_update_person_notes() {
+    local key="$1" person="$2" hist prev_body prev_file system user new_body
+    local lockdir="${MEM_DIR:-/tmp}/.person-notes.lock"
+    mkdir -p "${MEM_DIR:-/tmp}" 2>/dev/null || return 0
+    mkdir "$lockdir" 2>/dev/null || return 0   # another writer is on it
+    # shellcheck disable=SC2064
+    trap "rmdir '$lockdir' 2>/dev/null" EXIT
+    hist=$(chat history --with "$person" --since "${RESPONDER_NOTES_SINCE:-30d}" -n "${RESPONDER_NOTES_MAX:-40}" --json 2>/dev/null) || hist="[]"
+    [[ -n "$hist" && "$hist" != "[]" ]] || return 0
+    prev_file=$(_person_notes_file "$key") || prev_file=""
+    prev_body=""; [[ -n "$prev_file" ]] && prev_body=$(_notes_body "$prev_file")
+    system=$(_person_notes_system)
+    user=$(printf '%s' "$hist" | jq -r --arg me "$IDENTITY_NAME" '
+        .[] | "\(.ts // "?" | .[0:16]) \(if .from == $me then $me else "them" end): \(.content | tostring | .[0:600])"')
+    user="Previous notes:
+${prev_body:-(none yet)}
+
+Recent conversation (UTC, oldest first; \"them\" is $person):
+$user
+
+Now: $(date -u +%Y-%m-%dT%H:%MZ). Output the rewritten notes."
+    new_body=$(llm -m "$NOTES_MODEL" -s "$system" -M "$(jq -nc --arg u "$user" '[{role:"user", content:$u}]')" 2>/dev/null | _redact_keys | head -n 20) || new_body=""
+    new_body=$(printf '%s' "$new_body" | sed '/./,$!d')
+    [[ -n "$new_body" ]] || return 0
+    local now summary
+    now=$(date +"%Y-%m-%d %H:%M:%S")
+    summary="Notes on $person: $(printf '%s' "$new_body" | head -1 | cut -c1-60)"
+    if [[ -n "$prev_file" ]]; then
+        # Rewrite in place, keeping id/created/person_key/aliases as they are.
+        local fm id created aliases_block
+        fm=$(awk 'NR==1 && /^---$/ {fm=1; next} fm && /^---$/ {exit} fm {print}' "$prev_file")
+        id=$(printf '%s\n' "$fm" | sed -n 's/^id:[[:space:]]*//p' | head -1)
+        created=$(printf '%s\n' "$fm" | sed -n 's/^created:[[:space:]]*//p' | head -1)
+        aliases_block=$(printf '%s\n' "$fm" | awk '/^aliases:/{p=1; print; next} p && /^[[:space:]]*-[[:space:]]/{print; next} p{p=0}')
+        [[ -z "$aliases_block" ]] && aliases_block="aliases: []"
+        {
+            printf -- '---\n'
+            [[ -n "$id" ]] && printf 'id: %s\n' "$id"
+            printf 'summary: %s\ntype: person\nperson_key: %s\n%s\ncreated: %s\nupdated: %s\n---\n\n%s\n' \
+                "$summary" "$key" "$aliases_block" "${created:-$now}" "$now" "$new_body"
+        } > "$prev_file.tmp" && mv -f "$prev_file.tmp" "$prev_file"
+    else
+        local hex slug
+        hex=$(head -c4 /dev/urandom | od -An -tx1 | tr -d ' \n')
+        slug=$(printf 'person-%s' "$key" | tr -c 'A-Za-z0-9\n' '-' | tr -s '-' | sed 's/^-//;s/-$//' | cut -c1-60)
+        printf -- '---\nid: %s\nsummary: %s\ntype: person\nperson_key: %s\naliases: []\ncreated: %s\n---\n\n%s\n' \
+            "$hex" "$summary" "$key" "$now" "$new_body" \
+            > "$MEM_DIR/$(date +%Y-%m-%d-%H-%M-%S)_${hex}_${slug}.md"
+    fi
+}
+_update_person_notes_async() {
+    [[ "${RESPONDER_PERSON_NOTES:-1}" == "1" ]] || return 0
+    if [[ "${RESPONDER_PERSON_NOTES_SYNC:-0}" == "1" ]]; then
+        ( _update_person_notes "$person_key" "$msg_from" ) || true
+    else
+        local _nlog="${IDENTITY_DIR:-.}/run/logs/responder-notes.log"
+        mkdir -p "$(dirname "$_nlog")" 2>/dev/null || true
+        ( _update_person_notes "$person_key" "$msg_from" ) >>"$_nlog" 2>&1 </dev/null &
+    fi
+}
+
+# Debug aid: RESPONDER_LOG_PROMPT=1 writes the exact prompt to a rotated file
+# under run/logs/, never to the mind log (the system half is identical on
+# every call, and the trajectory is already mostly repeated prompt text).
+if [[ "${RESPONDER_LOG_PROMPT:-0}" == "1" && -n "${IDENTITY_DIR:-}" ]]; then
+    _plog_dir="$IDENTITY_DIR/run/logs/responder-prompts"
+    if mkdir -p "$_plog_dir" 2>/dev/null; then
+        _plog="$_plog_dir/$(date -u +%Y%m%dT%H%M%SZ)_${trigger_step_id:-notrigger}.txt"
+        printf '# system\n%s\n\n# messages\n%s\n' "$reply_system" "$convo_json" > "$_plog" 2>/dev/null || true
+        ls -1t "$_plog_dir" 2>/dev/null | tail -n +"$(( ${RESPONDER_LOG_PROMPT_KEEP:-50} + 1 ))" \
+            | while IFS= read -r _old; do rm -f "$_plog_dir/$_old"; done
+    fi
+fi
 
 printf '  replying to %s...\n' "$msg_from" >&2
 reply=$(llm -m "$REPLY_MODEL" -M "$convo_json" -s "$reply_system") || true
@@ -156,18 +424,49 @@ reply=$(printf '%s' "$reply" | sed -E '1s/^[[:space:]]*chat reply [A-Za-z0-9._-]
 first_line=$(printf '%s' "$reply" | head -n 1 | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')
 if [[ "$first_line" == "NO_REPLY" ]]; then
     printf '  model declined to reply (NO_REPLY)\n' >&2
-    _obs "Chose not to reply to $msg_from — their message needed no reply (already answered, or a bare acknowledgment). Their message was: $(printf '%.200s' "$trigger_content")" no-reply
+    _obs "Chose not to reply to $msg_from — their message needed no reply (already answered, or a bare acknowledgment). Their message was: $(printf '%.200s' "$trigger_content")" no-reply "$(_finish_metrics)"
     exit 0
+fi
+
+# Deferral (design/conversation_memory.md, part 5): "DEFER: <work>" on the
+# first line means the reply below it is a holding message and the real work
+# goes to the mind as an `action` step. The monolith subscribes to actions,
+# shows a PENDING REQUEST routing hint until an observation resolves it, and
+# delivers the result with `chat reply --follow-up`. Without this the
+# responder's "let me check" bound nobody (Experiment C: 6 to 9 of 22 replies
+# promised work that never happened).
+deferred_request=""
+if [[ "$first_line" == DEFER:* ]]; then
+    deferred_request=$(printf '%s' "$first_line" | sed -E 's/^DEFER:[[:space:]]*//')
+    reply=$(printf '%s' "$reply" | sed '1d' | sed '/./,$!d')
+    [[ -z "$reply" ]] && reply="Let me look into that and get back to you."
+    printf '  deferring to the mind: %s\n' "$deferred_request" >&2
+    jq -nc --arg source "$THINKER_NAME" --arg trigger "$trigger_step_id" \
+        --arg person "$msg_from" --arg request "$deferred_request" \
+        '{type:"action",
+          content:("Pending request from " + $person + ": " + $request
+                   + ". The responder told them I would get back to them. Do the work, then deliver with: chat reply --follow-up --reply-to "
+                   + $trigger + " " + $person + " \"<result>\" and append an observation with --field resolves=" + $trigger),
+          source:$source, person:$person, request:$request}
+         + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
+        | traj append >/dev/null || true
 fi
 
 reply_args=()
 [[ -n "$trigger_step_id" ]] && reply_args+=(--reply-to "$trigger_step_id")
 if [[ -n "$reply" ]] && printf '%s' "$reply" | chat reply ${reply_args[@]+"${reply_args[@]}"} "$msg_from"; then
-    _obs "Replied to $msg_from: $(printf '%.200s' "$reply")" replied
+    _extra=$(_finish_metrics)
+    if [[ -n "$deferred_request" ]]; then
+        _extra=$(printf '%s' "$_extra" | jq -c --arg r "$deferred_request" '. + {deferred: true, request: $r}')
+        _obs "Replied to $msg_from with a holding message and handed the mind a pending request: $(printf '%.200s' "$deferred_request")" replied "$_extra"
+    else
+        _obs "Replied to $msg_from: $(printf '%.200s' "$reply")" replied "$_extra"
+    fi
     printf '  [reply -> %s] %s\n' "$msg_from" "$(printf '%s' "$reply" | head -1)"
+    _update_person_notes_async
     exit 0
 fi
 
 # Reply failed — surface it so the monolith can pick it up.
 printf '  reply failed — appending failure observation\n' >&2
-_obs "reply failed: could not send a reply to $msg_from (empty model output or chat error — see responder log). Their message was: $(printf '%.200s' "$trigger_content")" reply-failed
+_obs "reply failed: could not send a reply to $msg_from (empty model output or chat error — see responder log). Their message was: $(printf '%.200s' "$trigger_content")" reply-failed "$(_finish_metrics)"

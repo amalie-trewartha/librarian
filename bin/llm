@@ -50,6 +50,33 @@ LLM_THINKING_LEVEL=""
 LLM_EFFORT=""
 LLM_RAW=0
 LLM_PROMPT=""
+# OpenRouter provider routing. OpenRouter fans a single model id out over
+# several hosts (one openai/* id can be served by OpenAI, Azure and Amazon
+# Bedrock) and picks one per request, so where a prompt is sent is a routing
+# decision rather than a model choice, and without these it is not expressible
+# from here:
+#   LLM_OR_ONLY             comma-separated provider slugs. Emits
+#                           provider.only, which OpenRouter treats as a hard
+#                           allowlist: a host outside it is never used, and an
+#                           unsatisfiable pin returns 404 rather than quietly
+#                           rerouting. Availability *within* the list is a
+#                           separate question — allow_fallbacks is OpenRouter's
+#                           retry setting, not part of the allowlist, so it is
+#                           left at its default here.
+#   LLM_OR_DATA_COLLECTION  "allow" or "deny" hosts that may store the prompt.
+#   LLM_OR_ZDR              zero-data-retention endpoints only. Intersected
+#                           with the pin rather than layered on it: a model
+#                           whose only ZDR endpoint is a host the pin excludes
+#                           has no endpoints left and 404s.
+# All three apply when the effective provider is openrouter, whether named
+# with --provider/LLM_PROVIDER or inferred from the model name.
+LLM_OR_ONLY="${LLM_OR_ONLY:-}"
+LLM_OR_DATA_COLLECTION="${LLM_OR_DATA_COLLECTION:-}"
+LLM_OR_ZDR="${LLM_OR_ZDR:-}"
+# Whether any of the three arrived from the environment or a .env layer. A
+# routing constraint nobody typed on this command line still changes where the
+# prompt may go, so it is announced once rather than applied invisibly.
+_llm_or_env="$LLM_OR_ONLY$LLM_OR_DATA_COLLECTION$LLM_OR_ZDR"
 # Token usage is captured on every call. A caller that wants this call's
 # numbers sets LLM_USAGE_FILE and gets a one-line JSON record
 # ({in_tok, out_tok, think_tok}) written there after the call (bin/shellm
@@ -73,6 +100,10 @@ LLM_RETRY_BACKOFF="${LLM_RETRY_BACKOFF:-1}"   # seconds; grows linearly per atte
 # for a whole minute is stuck. Each is 0 to disable.
 LLM_CONNECT_TIMEOUT="${LLM_CONNECT_TIMEOUT:-10}"
 LLM_MAX_TIME="${LLM_MAX_TIME:-600}"
+# Stop reading the stream once the first fenced code block closes (see
+# _fs_line below). Off by default: only callers that execute the first block
+# and discard the rest (bin/shellm) should set it.
+LLM_STOP_AFTER_CODE_BLOCK="${LLM_STOP_AFTER_CODE_BLOCK:-0}"
 LLM_SPEED_LIMIT="${LLM_SPEED_LIMIT:-100}"
 LLM_SPEED_TIME="${LLM_SPEED_TIME:-60}"
 
@@ -137,6 +168,75 @@ mark_emitted() {
     { [[ -n "${LLM_DATA_MARKER:-}" ]] && : > "$LLM_DATA_MARKER" 2>/dev/null; } || true
 }
 
+# --- first-code-block stop (LLM_STOP_AFTER_CODE_BLOCK) ---------------------
+# bin/shellm executes the first fenced block of a response and discards the
+# rest. Some models keep writing after their command: on Audel (grok, 2026-09)
+# 7% of responses continued with fake step metadata, another thought and
+# another block, and a few looped that way for ten minutes until the transfer
+# timed out and the whole run died. Watching the emitted text line by line
+# with shellm's own fence rules (a tagged ```bash may hang off the end of a
+# prose line; a bare ``` closes only outside a heredoc), the stream is cut the
+# moment the first block closes. Everything a caller in that mode keeps has
+# been emitted by then.
+_fs_buf="" _fs_in=0 _fs_hd=() _fs_bytes=0
+_fs_ident='^[A-Za-z_][A-Za-z_0-9]*'
+_fs_open_re='<<-?'
+_fs_tagged_re='```(bash|shell|sh)[[:space:]]*$'
+_fs_close_re='^```[[:space:]]*$'
+_fs_try_open_heredoc() {
+    local line="$1" rest
+    [[ "$line" =~ $_fs_open_re ]] || return 0
+    rest="${line#*<<}"; rest="${rest#-}"
+    rest="${rest#"${rest%%[![:space:]]*}"}"
+    case "$rest" in
+        \"*)  rest="${rest#\"}"; rest="${rest%%\"*}"; [[ -n "$rest" ]] && _fs_hd+=("$rest") ;;
+        \'*)  rest="${rest#\'}"; rest="${rest%%\'*}"; [[ -n "$rest" ]] && _fs_hd+=("$rest") ;;
+        \\*) rest="${rest#\\}"; [[ "$rest" =~ $_fs_ident ]] && _fs_hd+=("${BASH_REMATCH[0]}") ;;
+        *)    [[ "$rest" =~ $_fs_ident ]] && _fs_hd+=("${BASH_REMATCH[0]}") ;;
+    esac
+    return 0
+}
+_fs_line() {   # one complete line of emitted text; returns 0 when the first block just closed
+    local line="$1" stripped n
+    if [[ "$_fs_in" -eq 0 ]]; then
+        if [[ "$line" == '```'* || "$line" =~ $_fs_tagged_re ]]; then _fs_in=1; fi
+        return 1
+    fi
+    n=${#_fs_hd[@]}
+    if [[ "$n" -gt 0 ]]; then
+        stripped="${line#"${line%%[![:space:]]*}"}"; stripped="${stripped%"${stripped##*[![:space:]]}"}"
+        if [[ "$stripped" == "${_fs_hd[n-1]}" ]]; then
+            unset "_fs_hd[n-1]"
+            n=$((n - 1))
+        fi
+    fi
+    if [[ "$n" -eq 0 && "$line" =~ $_fs_close_re ]]; then return 0; fi
+    _fs_try_open_heredoc "$line"
+    return 1
+}
+_fs_feed() {   # text just emitted; returns 0 once the first block has closed
+    local line
+    _fs_buf+="$1"
+    _fs_bytes=$(( _fs_bytes + ${#1} ))
+    while [[ "$_fs_buf" == *$'\n'* ]]; do
+        line="${_fs_buf%%$'\n'*}"; _fs_buf="${_fs_buf#*$'\n'}"
+        if _fs_line "${line%$'\r'}"; then return 0; fi
+    done
+    return 1
+}
+# Print a visible-text delta. In stop mode, returns 1 once the first code
+# block has closed: the handler breaks out of its read loop, the pipe from
+# curl closes, curl dies on its next write, and the retry loop treats the
+# marker as a clean finish.
+_emit_text() {
+    printf '%s' "$1"
+    [[ "$LLM_STOP_AFTER_CODE_BLOCK" == 1 ]] || return 0
+    _fs_feed "$1" || return 0
+    { [[ -n "${LLM_STOP_MARKER:-}" ]] && printf '%s' "$_fs_bytes" > "$LLM_STOP_MARKER" 2>/dev/null; } || true
+    echo "llm: stopped reading after the first code block closed (LLM_STOP_AFTER_CODE_BLOCK)" >&2
+    return 1
+}
+
 usage() {
     cat <<'EOF'
 Usage:
@@ -151,10 +251,16 @@ Options:
   --system-prompt-file F   Read system prompt from file
   -t, --max-tokens N       Max output tokens. Default: model-specific cap
   -M, --messages JSON      Messages array JSON, e.g. [{"role":"user","content":"hi"}]
+  --messages-file F        Read messages array JSON from file
   --no-stream              Disable streaming (streaming is on by default)
   --provider NAME          Provider: anthropic, openai, gemini, openrouter,
                            opencode, opencode-go, openai-compatible, or
                            adapter (needs LLM_ADAPTER)
+  --or-only SLUGS          Pin routing to these provider slugs
+  --or-data-collection X   "allow" or "deny" hosts that may store the prompt
+  --or-zdr                 Zero-data-retention endpoints only
+                           (the three apply when the effective provider is
+                           openrouter, named or inferred from the model)
   --thinking [LEVEL]       Enable thinking (Anthropic: adaptive; Gemini: minimal/low/medium/high)
   --effort LEVEL           Thinking effort/provider output effort
   --raw                    Print raw non-streaming API response JSON
@@ -208,6 +314,10 @@ Environment:
   OPENAI_API_KEY           Required for OpenAI models
   GEMINI_API_KEY           Required for Gemini models
   OPENROUTER_API_KEY       Required for OpenRouter models
+  LLM_OR_ONLY, LLM_OR_DATA_COLLECTION, LLM_OR_ZDR
+                           Defaults for the matching --or-* flags. Applied
+                           when the effective provider is openrouter; setting
+                           one here prints the effective routing on stderr
   OPENCODE_API_KEY         Required for OpenCode models — both plans use it;
                            opencode-go/* bills the Go subscription, opencode/*
                            bills Zen. Keys: `opencode auth login`
@@ -233,6 +343,15 @@ Environment:
   LLM_SPEED_LIMIT          Abort a transfer slower than this many bytes/s...
   LLM_SPEED_TIME           ...for this many consecutive seconds (defaults:
                            100 bytes/s over 60s; 0 on either disables)
+  LLM_STOP_AFTER_CODE_BLOCK
+                           1 (or --stop-after-code-block): stop reading the
+                           stream once the first fenced code block closes
+                           (heredoc-aware, same rules as bin/shellm) and
+                           return what was emitted. For callers that run the
+                           first block and drop the rest: a model that keeps
+                           writing after its command no longer costs tokens
+                           or wall time. Usage is then estimated
+                           (out_tok from bytes, estimated:true).
 
 Examples:
   llm -m claude-sonnet-4-5-20250929 "explain quicksort"
@@ -258,9 +377,13 @@ while [[ $# -gt 0 ]]; do
         --system-prompt-file) _spf="${2:?--system-prompt-file requires a path}"; [[ -f "$_spf" ]] || die "System prompt file not found: $_spf"; LLM_SYSTEM=$(cat "$_spf"); shift 2 ;;
         -t|--max-tokens) LLM_MAX_TOKENS="${2:?--max-tokens requires a value}"; shift 2 ;;
         -M|--messages)   LLM_MESSAGES="${2:?--messages requires a value}"; shift 2 ;;
+        --messages-file) _mf="${2:?--messages-file requires a path}"; [[ -f "$_mf" ]] || die "Messages file not found: $_mf"; LLM_MESSAGES=$(cat "$_mf"); shift 2 ;;
         --stream)        LLM_STREAM=1; shift ;;
         --no-stream)     LLM_STREAM=0; shift ;;
         --provider)      LLM_PROVIDER="${2:?--provider requires a value}"; shift 2 ;;
+        --or-only)       LLM_OR_ONLY="${2:?--or-only requires a value}"; shift 2 ;;
+        --or-data-collection) LLM_OR_DATA_COLLECTION="${2:?--or-data-collection requires a value}"; shift 2 ;;
+        --or-zdr)        LLM_OR_ZDR=1; shift ;;
         --thinking)
             LLM_THINKING=1
             if [[ -n "${2:-}" && "$2" != -* ]]; then
@@ -269,6 +392,7 @@ while [[ $# -gt 0 ]]; do
             shift ;;
         --effort)        LLM_EFFORT="${2:?--effort requires a value}"; shift 2 ;;
         --raw)           LLM_RAW=1; shift ;;
+        --stop-after-code-block) LLM_STOP_AFTER_CODE_BLOCK=1; shift ;;
         -*)              die "Unknown option: $1 (try llm --help)" ;;
         *)               LLM_PROMPT="$*"; break ;;
     esac
@@ -367,6 +491,44 @@ fi
 # strip once, up front, so the payload builders AND get_model_max_tokens see
 # the actual model name and its caps.
 case "$LLM_PROVIDER" in opencode) LLM_MODEL="${LLM_MODEL#opencode/}" ;; opencode-go) LLM_MODEL="${LLM_MODEL#opencode-go/}" ;; esac
+
+# The --or-* knobs are OpenRouter routing controls and mean nothing to the
+# other providers, which are each a single host already. Clear them out loud
+# rather than silently: a stray LLM_OR_ZDR in a shell profile must not quietly
+# read as a residency guarantee on an Anthropic call, and must not kill it
+# either.
+if [[ "$LLM_PROVIDER" != "openrouter" ]]; then
+    if [[ -n "$LLM_OR_ONLY$LLM_OR_DATA_COLLECTION$LLM_OR_ZDR" ]]; then
+        echo "llm: warning: --or-*/LLM_OR_* are OpenRouter-only and ignored for provider '$LLM_PROVIDER'" >&2
+        LLM_OR_ONLY=""; LLM_OR_DATA_COLLECTION=""; LLM_OR_ZDR=""
+    fi
+else
+    # Normalise once, here, rather than at each use. A settings file saying
+    # LLM_OR_ZDR=true that read as false further down would drop a retention
+    # requirement without saying so, which is the one failure mode these knobs
+    # exist to prevent.
+    case "$(printf '%s' "$LLM_OR_ZDR" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|on) LLM_OR_ZDR=1 ;;
+        0|false|no|"") LLM_OR_ZDR="" ;;
+        *) die "--or-zdr/LLM_OR_ZDR must be 1/true/yes/on or 0/false/no/empty (got '$LLM_OR_ZDR')" ;;
+    esac
+    case "$LLM_OR_DATA_COLLECTION" in
+        ""|allow|deny) ;;
+        *) die "--or-data-collection/LLM_OR_DATA_COLLECTION must be allow or deny (got '$LLM_OR_DATA_COLLECTION')" ;;
+    esac
+    if [[ -n "$LLM_OR_ONLY" ]]; then
+        # OpenRouter matches slugs exactly, and case, padding and empty
+        # elements all come out of real .env files and shell profiles.
+        LLM_OR_ONLY=$(printf '%s' "$LLM_OR_ONLY" | tr '[:upper:]' '[:lower:]' \
+            | tr -d '[:space:]' | sed 's/,\{1,\}/,/g; s/^,//; s/,$//')
+        # A pin that normalises away is a typo, and treating it as "no pin"
+        # would route anywhere — the opposite of what was asked for.
+        [[ -n "$LLM_OR_ONLY" ]] || die "--or-only/LLM_OR_ONLY had no provider slugs left after normalization"
+    fi
+    if [[ -n "$_llm_or_env" && -n "$LLM_OR_ONLY$LLM_OR_DATA_COLLECTION$LLM_OR_ZDR" ]]; then
+        echo "llm: routing: openrouter${LLM_OR_ONLY:+ only=$LLM_OR_ONLY}${LLM_OR_DATA_COLLECTION:+ data_collection=$LLM_OR_DATA_COLLECTION}${LLM_OR_ZDR:+ zdr=true}" >&2
+    fi
+fi
 
 # Per-model max output token caps (synchronous APIs, no beta headers).
 # Used as the default when -t/--max-tokens is not given.
@@ -592,7 +754,28 @@ build_payload_gemini() {
 }
 
 # OpenRouter is OpenAI-compatible (chat/completions wire format)
-build_payload_openrouter() { build_payload_openai; }
+# OpenRouter is OpenAI-compatible (chat/completions wire format), plus an
+# optional "provider" object carrying the routing preferences above. Without
+# that object OpenRouter is free to pick any host serving the model.
+build_payload_openrouter() {
+    # Unpinned callers pay nothing: no extra jq pass, byte-identical to before.
+    if [[ -z "$LLM_OR_ONLY$LLM_OR_DATA_COLLECTION$LLM_OR_ZDR" ]]; then
+        build_payload_openai
+        return
+    fi
+    # Values are already normalised above, so this only assembles them. The sum
+    # is bound with `as $p` rather than written inline as the object's value:
+    # jq 1.7 (what ubuntu-latest, and therefore CI, runs) rejects a `+` chain of
+    # parenthesised ifs in that position, and only 1.8 relaxed the grammar.
+    build_payload_openai | jq -c \
+        --arg only "$LLM_OR_ONLY" \
+        --arg dc "$LLM_OR_DATA_COLLECTION" \
+        --arg zdr "$LLM_OR_ZDR" \
+        '((if $only != "" then {only: ($only | split(","))} else {} end)
+          + (if $dc != "" then {data_collection: $dc} else {} end)
+          + (if $zdr != "" then {zdr: true} else {} end)) as $p
+         | . + {provider: $p}'
+}
 
 # Generic openai-compatible endpoint (Ollama, vLLM, LM Studio, proxies):
 # the OpenAI wire format against a configured LLM_API_URL, key optional.
@@ -796,13 +979,22 @@ warn_truncated() {
 }
 
 # Write the LLM_USAGE_FILE record. Args: input tokens, output tokens,
-# reasoning/thinking tokens — non-numeric args are omitted from the record.
+# reasoning/thinking tokens, cached input tokens — non-numeric args are
+# omitted from the record. cache_tok is the part of in_tok the provider
+# served from its prompt cache (OpenAI/OpenRouter prompt_tokens_details.
+# cached_tokens, Anthropic cache_read_input_tokens, Gemini
+# cachedContentTokenCount); it is billed at the cached rate, so the prefix
+# cache hit rate is cache_tok / in_tok.
+# A fifth arg "estimated" marks a record derived from bytes rather than the
+# provider's count (the stream was cut before the usage event arrived).
 write_usage() {
-    jq -nc --arg i "${1:-}" --arg o "${2:-}" --arg t "${3:-}" '
+    jq -nc --arg i "${1:-}" --arg o "${2:-}" --arg t "${3:-}" --arg c "${4:-}" --arg e "${5:-}" '
         {}
         + (if ($i | test("^[0-9]+$")) then {in_tok: ($i | tonumber)} else {} end)
         + (if ($o | test("^[0-9]+$")) then {out_tok: ($o | tonumber)} else {} end)
-        + (if ($t | test("^[0-9]+$")) then {think_tok: ($t | tonumber)} else {} end)' \
+        + (if ($t | test("^[0-9]+$")) then {think_tok: ($t | tonumber)} else {} end)
+        + (if ($c | test("^[0-9]+$")) then {cache_tok: ($c | tonumber)} else {} end)
+        + (if $e == "estimated" then {estimated: true} else {} end)' \
         > "$LLM_USAGE_FILE" 2>/dev/null || true
 }
 
@@ -812,8 +1004,9 @@ write_usage() {
 #   $_llm_home/usage/llm.jsonl      otherwise (hand calls)
 # LLM_USAGE_LEDGER overrides the path (/dev/null disables).
 #   {"ts":...,"provider":...,"model":...,"in_tok":N,"out_tok":N,"think_tok":N,
-#    "identity":...,"run_id":...}
-# identity/run_id are present only when known. The dash usage page and
+#    "cache_tok":N,"identity":...,"run_id":...}
+# identity/run_id are present only when known; cache_tok only when the
+# provider reported cached input tokens. The dash usage page and
 # deploy/scripts/audel-metrics count this file, so every llm call counts
 # toward spend, not only the ones bin/shellm stamps on reasoning steps.
 _llm_ledger="${LLM_USAGE_LEDGER:-}"
@@ -876,7 +1069,10 @@ stream_anthropic() {
                         printf '%s' "$json" | jq -j '.delta.thinking // empty' >&2
                     elif [[ "$_block" == "text" ]]; then
                         mark_emitted
-                        printf '%s' "$json" | jq -j '.delta.text // empty'
+                        # Trailing X keeps newline-only deltas; see stream_openai.
+                        _chunk=$(printf '%s' "$json" | jq -j '.delta.text // empty'; printf X)
+                        _chunk="${_chunk%X}"
+                        _emit_text "$_chunk" || break
                     fi
                     ;;
                 *'"content_block_stop"'*)
@@ -885,6 +1081,7 @@ stream_anthropic() {
                 *'"message_start"'*)
                     # Prompt size arrives up front on the start event.
                     _u_in=$(printf '%s' "$json" | jq -r '.message.usage.input_tokens // empty' 2>/dev/null) || _u_in=""
+                    _u_cache=$(printf '%s' "$json" | jq -r '.message.usage.cache_read_input_tokens // empty' 2>/dev/null) || _u_cache=""
                     ;;
                 *'"message_delta"'*)
                     if [[ "$(printf '%s' "$json" | jq -r '.delta.stop_reason // empty' 2>/dev/null)" == "max_tokens" ]]; then
@@ -894,7 +1091,7 @@ stream_anthropic() {
                     # the previous, so the last delta wins.
                     if [[ "$json" == *'"output_tokens"'* ]]; then
                         _u_out=$(printf '%s' "$json" | jq -r '.usage.output_tokens // empty' 2>/dev/null) || _u_out=""
-                        [[ -n "$_u_out" ]] && write_usage "$_u_in" "$_u_out" ""
+                        [[ -n "$_u_out" ]] && write_usage "$_u_in" "$_u_out" "" "$_u_cache"
                     fi
                     ;;
                 *'"type":"error"'*)
@@ -929,7 +1126,7 @@ stream_openai() {
             _chunk="${_chunk%X}"
             if [[ -n "$_chunk" ]]; then
                 mark_emitted
-                printf '%s' "$_chunk"
+                _emit_text "$_chunk" || break
             fi
             # Only the final chunk carries a non-null finish_reason; the glob
             # keeps jq off the hot per-delta path.
@@ -944,12 +1141,13 @@ stream_openai() {
                 local _u=""
                 _u=$(printf '%s' "$json" | jq -r 'select(.usage != null) | [
                         (.usage.prompt_tokens // ""), (.usage.completion_tokens // ""),
-                        (.usage.completion_tokens_details.reasoning_tokens // "")
+                        (.usage.completion_tokens_details.reasoning_tokens // ""),
+                        (.usage.prompt_tokens_details.cached_tokens // "")
                     ] | @tsv' 2>/dev/null) || _u=""
                 if [[ -n "$_u" ]]; then
-                    local _u_in _u_out _u_think
-                    IFS=$'\t' read -r _u_in _u_out _u_think <<<"$_u"
-                    write_usage "$_u_in" "$_u_out" "$_u_think"
+                    local _u_in _u_out _u_think _u_cache
+                    IFS=$'\t' read -r _u_in _u_out _u_think _u_cache <<<"$_u"
+                    write_usage "$_u_in" "$_u_out" "$_u_think" "$_u_cache"
                 fi
             fi
         elif [[ "$_saw_data" -eq 0 ]]; then
@@ -973,7 +1171,7 @@ stream_gemini() {
             _chunk="${_chunk%X}"
             if [[ -n "$_chunk" ]]; then
                 mark_emitted
-                printf '%s' "$_chunk"
+                _emit_text "$_chunk" || break
             fi
             # finishReason appears only on the final chunk.
             if [[ "$json" == *'"finishReason"'* ]]; then
@@ -987,12 +1185,13 @@ stream_gemini() {
                 _u=$(printf '%s' "$json" | jq -r '[
                         (.usageMetadata.promptTokenCount // ""),
                         (.usageMetadata.candidatesTokenCount // ""),
-                        (.usageMetadata.thoughtsTokenCount // "")
+                        (.usageMetadata.thoughtsTokenCount // ""),
+                        (.usageMetadata.cachedContentTokenCount // "")
                     ] | @tsv' 2>/dev/null) || _u=""
                 if [[ -n "$_u" ]]; then
-                    local _u_in _u_out _u_think
-                    IFS=$'\t' read -r _u_in _u_out _u_think <<<"$_u"
-                    write_usage "$_u_in" "$_u_out" "$_u_think"
+                    local _u_in _u_out _u_think _u_cache
+                    IFS=$'\t' read -r _u_in _u_out _u_think _u_cache <<<"$_u"
+                    write_usage "$_u_in" "$_u_out" "$_u_think" "$_u_cache"
                 fi
             fi
         elif [[ "$_saw_data" -eq 0 ]]; then
@@ -1176,17 +1375,29 @@ if [[ "$LLM_STREAM" -eq 1 ]]; then
         _curl_err=$(mktemp)
         LLM_RETRY_ERR=$(mktemp)
         LLM_DATA_MARKER="${LLM_RETRY_ERR}.emitted"
+        LLM_STOP_MARKER="${LLM_RETRY_ERR}.stopped"
         _rc=0
         ( "stream_${LLM_PROVIDER}" < <(curl -sS -N ${_net_args[@]+"${_net_args[@]}"} "${headers[@]}" -d @"$payload_file" "$url" 2>"$_curl_err") ) || _rc=$?
 
         _emitted=0
         [[ -e "$LLM_DATA_MARKER" ]] && _emitted=1
+        # Cut after the first code block: the handler left the pipe, so curl
+        # dies on its next write ("Failed writing body") and its usage event
+        # never arrives. That is a clean finish, not a transfer error.
+        _stopped=""
+        [[ -e "$LLM_STOP_MARKER" ]] && _stopped=$(cat "$LLM_STOP_MARKER" 2>/dev/null)
         _ce=""
         [[ -s "$_curl_err" ]] && _ce=$(cat "$_curl_err")
         _retry_msg=""
         [[ -s "$LLM_RETRY_ERR" ]] && _retry_msg=$(cat "$LLM_RETRY_ERR")
-        rm -f "$_curl_err" "$LLM_RETRY_ERR" "$LLM_DATA_MARKER"
+        rm -f "$_curl_err" "$LLM_RETRY_ERR" "$LLM_DATA_MARKER" "$LLM_STOP_MARKER"
 
+        if [[ -n "$_stopped" && "$_rc" -eq 0 && "$_emitted" -eq 1 ]]; then
+            [[ "$_stopped" =~ ^[0-9]+$ ]] && write_usage "" "$(( (_stopped + 3) / 4 ))" "" "" estimated
+            _llm_note ok
+            _llm_ledger_append
+            break   # cut on purpose after the first code block
+        fi
         if [[ "$_rc" -eq 0 && -z "$_ce" && "$_emitted" -eq 1 ]]; then
             _llm_note ok
             _llm_ledger_append
@@ -1270,13 +1481,13 @@ else
 
     case "$LLM_PROVIDER" in
         # opencode (Zen) speaks the Anthropic wire protocol, usage shape included.
-        anthropic|opencode) _u=$(jq -r '[(.usage.input_tokens // ""), (.usage.output_tokens // ""), ""] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
-        gemini)    _u=$(jq -r '[(.usageMetadata.promptTokenCount // ""), (.usageMetadata.candidatesTokenCount // ""), (.usageMetadata.thoughtsTokenCount // "")] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
-        *)         _u=$(jq -r '[(.usage.prompt_tokens // ""), (.usage.completion_tokens // ""), (.usage.completion_tokens_details.reasoning_tokens // "")] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
+        anthropic|opencode) _u=$(jq -r '[(.usage.input_tokens // ""), (.usage.output_tokens // ""), "", (.usage.cache_read_input_tokens // "")] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
+        gemini)    _u=$(jq -r '[(.usageMetadata.promptTokenCount // ""), (.usageMetadata.candidatesTokenCount // ""), (.usageMetadata.thoughtsTokenCount // ""), (.usageMetadata.cachedContentTokenCount // "")] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
+        *)         _u=$(jq -r '[(.usage.prompt_tokens // ""), (.usage.completion_tokens // ""), (.usage.completion_tokens_details.reasoning_tokens // ""), (.usage.prompt_tokens_details.cached_tokens // "")] | @tsv' "$local_resp" 2>/dev/null) || _u="" ;;
     esac
     if [[ -n "$_u" ]]; then
-        IFS=$'\t' read -r _u_in _u_out _u_think <<<"$_u"
-        write_usage "$_u_in" "$_u_out" "$_u_think"
+        IFS=$'\t' read -r _u_in _u_out _u_think _u_cache <<<"$_u"
+        write_usage "$_u_in" "$_u_out" "$_u_think" "$_u_cache"
     fi
     _llm_ledger_append
 

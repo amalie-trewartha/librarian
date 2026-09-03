@@ -51,6 +51,8 @@ T="$WORK/.identities/alpha/thinkers"
 check "fresh identity has monolith"     test -d "$T/monolith"
 check "fresh identity has responder"    test -d "$T/responder"
 check_not "fresh identity lacks actor"  test -d "$T/actor"
+check "copy mode keeps disabled default identity-local" \
+    bash -c 'test -f "$1" && test ! -L "$1"' _ "$T/retrieval/disabled"
 
 check "fresh identity ledger seeded"    grep -qx actor "$T/.retired_done"
 
@@ -120,6 +122,40 @@ check_not "later user thinker survives on pre-ledger identity" \
 rm -f "$WORK/.identities/default"
 identity sync-thinkers alpha >/dev/null 2>&1
 check "works without a default identity" test $? -eq 0
+
+# In --symlinks installs, code stays linked to the checkout but disabled is
+# identity state. Linking that marker too makes a dashboard/CLI opt-in last
+# only until the next sync, which silently re-links the bundled default.
+mkdir -p "$HOME/.headlong-thinkers"
+touch "$HOME/.headlong-thinkers/.use-symlinks"
+identity new delta >/dev/null 2>&1 || { bad "identity new delta (symlink mode)"; exit 1; }
+TD="$WORK/.identities/delta/thinkers"
+check "symlink mode links retrieval code" test -L "$TD/retrieval/step"
+check "disabled default is identity-local" \
+    bash -c 'test -f "$1" && test ! -L "$1"' _ "$TD/retrieval/disabled"
+
+# Upgrade the exact legacy layout: disabled used to point into the bundle.
+# Sync must preserve its effective disabled state while localizing the file.
+rm "$TD/retrieval/disabled"
+ln -s "$REPO/thinkers/retrieval/disabled" "$TD/retrieval/disabled"
+identity sync-thinkers delta >/dev/null 2>&1
+check "legacy live disabled link becomes identity-local" \
+    bash -c 'test -f "$1" && test ! -L "$1"' _ "$TD/retrieval/disabled"
+
+# Once the localized marker is removed, later syncs preserve the opt-in.
+rm "$TD/retrieval/disabled"
+identity sync-thinkers delta >/dev/null 2>&1
+check_not "retrieval opt-in survives symlink sync" \
+    test -e "$TD/retrieval/disabled"
+
+# Some old installs were enabled by removing the bundled target and leaving
+# the identity link dangling. Localize that effective enabled state too.
+ln -s "$WORK/missing-disabled-marker" "$TD/retrieval/disabled"
+identity sync-thinkers delta >/dev/null 2>&1
+check_not "dangling legacy disabled link stays enabled" \
+    test -e "$TD/retrieval/disabled"
+check_not "dangling legacy disabled link is removed" \
+    test -L "$TD/retrieval/disabled"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 exit $((fail > 0))

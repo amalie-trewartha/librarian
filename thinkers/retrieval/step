@@ -14,10 +14,9 @@ set -euo pipefail
 # whenever a memory is newer than the index) and no LLM call, unless
 # RETRIEVAL_SEMANTIC=1 adds a `mem search` (one llm call) on each hit.
 #
-# Ships DISABLED (the `disabled` marker next to this file). To turn it on
-# for an identity, delete <identity>/thinkers/retrieval/disabled; on a
-# --symlinks install delete the marker in the checkout too, or
-# `identity sync-thinkers` links it back.
+# Ships DISABLED. To turn it on for one identity, use the dashboard or delete
+# <identity>/thinkers/retrieval/disabled. The marker is per-identity state,
+# including on --symlinks installs, so syncs and updates preserve that choice.
 #
 # Knobs: RETRIEVAL_MIN_HITS (default 2 shared words), RETRIEVAL_SEEN
 # (default 20: a memory is not resurfaced within that many surfacings),

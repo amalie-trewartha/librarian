@@ -49,9 +49,10 @@ function Snippet({ text, q }: { text: string; q: string }) {
   );
 }
 
-/** Modal for a hit older than the loaded window: fetch and show the one
- * step without dragging thousands of intermediate steps into the page. */
-function StepModal({
+/** Modal for a step older than the loaded window (a search hit or a
+ * deeplink): fetch and show the one step without dragging thousands of
+ * intermediate steps into the page. */
+export function StepModal({
   identityId,
   stepId,
   stepCount,
@@ -59,7 +60,7 @@ function StepModal({
 }: {
   identityId: string;
   stepId: string;
-  stepCount: number;
+  stepCount?: number;
   onClose: () => void;
 }) {
   const { data, isError } = useQuery({
@@ -101,8 +102,9 @@ function StepModal({
         ) : (
           <>
             <div className="mb-2 pr-8 font-mono text-[10px] text-muted-foreground">
-              step {data.index + 1} of {stepCount} — older than the loaded
-              window
+              step {data.index + 1}
+              {stepCount !== undefined && <> of {stepCount}</>} — older than
+              the loaded window
             </div>
             <StepCard step={data.step} expandAll />
           </>

@@ -8,11 +8,13 @@ drift by file-content comparison: in_sync / outdated / not_installed, plus
 local_only for identity thinkers with no bundled counterpart.
 
 Per-identity state is never overwritten: `subscriptions.jsonl` (carries the
-injected traj_id) and the `disabled` marker survive a pull. The shared
-`_lib` dir is compared and synced like a thinker — step scripts source it
-at wakeup, so a stale _lib is as real a drift as a stale step. File writes
-are atomic (temp + rename), so a thinker mid-step keeps executing its old
-inode and picks the new code up next wakeup.
+injected traj_id) and the `disabled` marker survive a pull. A bundled
+`disabled` marker is inherited on first install only; removing it is an
+identity opt-in that later pulls preserve. The shared `_lib` dir is compared
+and synced like a thinker — step scripts source it at wakeup, so a stale _lib
+is as real a drift as a stale step. File writes are atomic (temp + rename), so
+a thinker mid-step keeps executing its old inode and picks the new code up
+next wakeup.
 """
 
 import json
@@ -218,6 +220,9 @@ def sync(identity_dir: Path, names: list[str]) -> dict:
                 copied.append(str(rel))
         if fresh:
             _install_subscriptions(bundled_dir, installed_dir, identity_dir)
+            disabled_default = bundled_dir / "disabled"
+            if disabled_default.is_file():
+                _atomic_copy(disabled_default, installed_dir / "disabled")
         results.append(
             {
                 "name": name,

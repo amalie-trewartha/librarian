@@ -70,18 +70,18 @@ check_not "no docker, no consent: never reaches the key step" grep -qi "API key"
 run_init "$WORK/h2" DOCKER_STUB_INFO_RC=1 HEADLONG_UNSANDBOXED=1; rc=$?
 check "consented: passes the gate (fails later, at the key step)" grep -q "no API key" "$WORK/out"
 check "consented: prints the unsandboxed warning"        grep -qi "directly on this machine" "$WORK/out"
-check "consented: SHELLM_REQUIRE_DOCKER=0 in state .env" grep -qx "SHELLM_REQUIRE_DOCKER=0" "$WORK/h2/.headlong/.env"
+check "consented: SHELLM_REQUIRE_DOCKER=0 in state .env" grep -qx "SHELLM_REQUIRE_DOCKER='0'" "$WORK/h2/.headlong/.env"
 
 # --- headlong-init: docker up -> sandbox promised and enforced ---------------
 run_init "$WORK/h3" DOCKER_STUB_INFO_RC=0; rc=$?
 check "docker up: announces the sandbox"                 grep -q "sandboxed in Docker" "$WORK/out"
-check "docker up: SHELLM_REQUIRE_DOCKER=1 in state .env" grep -qx "SHELLM_REQUIRE_DOCKER=1" "$WORK/h3/.headlong/.env"
+check "docker up: SHELLM_REQUIRE_DOCKER=1 in state .env" grep -qx "SHELLM_REQUIRE_DOCKER='1'" "$WORK/h3/.headlong/.env"
 check "docker up: gate passes (fails later, at the key step)" grep -q "no API key" "$WORK/out"
 
 # --- explicit unsandboxed choice beats a live daemon (installer menu 3) ------
 run_init "$WORK/h7" DOCKER_STUB_INFO_RC=0 HEADLONG_UNSANDBOXED=1; rc=$?
-check "menu 3: unsandboxed sticks even with docker up"   grep -qx "SHELLM_REQUIRE_DOCKER=0" "$WORK/h7/.headlong/.env"
-check "menu 3: choice persisted for re-runs"             grep -qx "HEADLONG_UNSANDBOXED=1" "$WORK/h7/.headlong/.env"
+check "menu 3: unsandboxed sticks even with docker up"   grep -qx "SHELLM_REQUIRE_DOCKER='0'" "$WORK/h7/.headlong/.env"
+check "menu 3: choice persisted for re-runs"             grep -qx "HEADLONG_UNSANDBOXED='1'" "$WORK/h7/.headlong/.env"
 check_not "menu 3: sandbox not announced"                grep -q "sandboxed in Docker" "$WORK/out"
 
 # --- the HEADLONG_FAKE_DOCKER knob overrides real detection ------------------
@@ -90,7 +90,7 @@ run_init "$WORK/h4" DOCKER_STUB_INFO_RC=0 HEADLONG_FAKE_DOCKER=missing; rc=$?
 check "fake missing: gate stops despite a live daemon"   test "$rc" -ne 0
 check "fake missing: names HEADLONG_UNSANDBOXED"         grep -q "HEADLONG_UNSANDBOXED" "$WORK/out"
 run_init "$WORK/h5" DOCKER_STUB_INFO_RC=1 HEADLONG_FAKE_DOCKER=ok; rc=$?
-check "fake ok: sandbox promised despite a down daemon"  grep -qx "SHELLM_REQUIRE_DOCKER=1" "$WORK/h5/.headlong/.env"
+check "fake ok: sandbox promised despite a down daemon"  grep -qx "SHELLM_REQUIRE_DOCKER='1'" "$WORK/h5/.headlong/.env"
 
 # --- --dry-run: walks the gate, writes nothing, exits 0 ----------------------
 mkdir -p "$WORK/h6"

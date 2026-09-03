@@ -78,6 +78,34 @@ if [[ -n "$SHELLM_API_URL" ]]; then
 fi
 SHELLM_MAX_TOKENS="${SHELLM_MAX_TOKENS:-}"
 SHELLM_EFFORT="${SHELLM_EFFORT:-high}"
+# The loop runs the first fenced block of a response and drops the rest, so
+# llm may stop reading the stream the moment that block closes
+# (LLM_STOP_AFTER_CODE_BLOCK in bin/llm). A model that keeps writing after
+# its command, or loops that way until the transfer times out, then costs
+# nothing past the block. 0 reads every response to the end as before.
+SHELLM_STOP_AFTER_CODE_BLOCK="${SHELLM_STOP_AFTER_CODE_BLOCK:-1}"
+# What the model sees of the trajectory on each call. "traj" (default): the
+# trajectory's head and tail, so a --traj/--resume run continues the earlier
+# conversation. "run": only this run's own steps, with its prompt pinned
+# whole, for a caller whose prompt already carries the history it wants
+# (the monolith: its wakeup prompt has the recent stream and life summary,
+# and earlier runs' raw commands only pull the model toward repeating them).
+SHELLM_CONTEXT_SCOPE="${SHELLM_CONTEXT_SCOPE:-traj}"
+# Run scope window: how many trajectory rows the render reads back (the run's
+# own steps within them), and the block the window's start moves in. Cached
+# input costs a quarter of the full rate, and a call's prefix only matches the
+# previous call's while nothing before the newest step changes, so the window
+# is wide enough that a normal run never slides (400 rows is ~200 iterations)
+# and, when it must, it moves in blocks so the prefix changes once per block
+# rather than on every call.
+SHELLM_CONTEXT_RUN_TAIL="${SHELLM_CONTEXT_RUN_TAIL:-400}"
+SHELLM_CONTEXT_RUN_TAIL_BLOCK="${SHELLM_CONTEXT_RUN_TAIL_BLOCK:-50}"
+# Whether the image was chosen for this run (environment here, --docker-image
+# below) rather than defaulted. A resume inherits the trajectory's image only
+# when it was not, so resuming never silently overrides what the caller asked
+# for, and never silently defaults away from what the run actually used.
+_SHELLM_DOCKER_IMAGE_EXPLICIT=0
+[[ -n "${SHELLM_DOCKER_IMAGE:-}" ]] && _SHELLM_DOCKER_IMAGE_EXPLICIT=1
 SHELLM_DOCKER_IMAGE="${SHELLM_DOCKER_IMAGE:-ubuntu:latest}"
 SHELLM_DOCKER_ACCESS="${SHELLM_DOCKER_ACCESS:-none}"
 SHELLM_DOCKER_BROKER_TRANSPORT="${SHELLM_DOCKER_BROKER_TRANSPORT:-auto}"
@@ -106,6 +134,62 @@ _SHELLM_EXTRA_BINS=()
 # ---------------------------------------------------------------------------
 
 die() { echo "shellm: error: $*" >&2; exit 1; }
+
+# A local model bound to the Docker host is usually configured as localhost
+# for thinkers and other llm calls that run on that host. Code executed in a
+# shellm sandbox needs Docker's hostname for the same server. The rewrite
+# touches ONLY a loopback authority host — a substring replace would mangle
+# hosts like mylocalhost.dev or path segments containing the name, and
+# redirect a Bearer-keyed request to a host nobody configured. The same
+# helpers exist in tools/headlong-init (this repo duplicates small helpers
+# rather than sharing a lib; keep the copies identical).
+
+# _shellm_url_host <url> — the authority's host, IPv6 brackets stripped.
+_shellm_url_host() {
+    local rest="${1#*://}"
+    local authority="${rest%%[/?#]*}"
+    local hostport="${authority##*@}"
+    case "$hostport" in
+        \[*\]*) hostport="${hostport#\[}"; printf '%s' "${hostport%%]*}" ;;
+        *)      printf '%s' "${hostport%%:*}" ;;
+    esac
+}
+
+# _shellm_url_host_swap <url> <newhost> — replace only the authority's host.
+_shellm_url_host_swap() {
+    local url="$1" newhost="$2"
+    local rest="${url#*://}" scheme=""
+    [[ "$rest" == "$url" ]] || scheme="${url%%://*}://"
+    local authority="${rest%%[/?#]*}"
+    local tail="${rest#"$authority"}"
+    local userinfo=""
+    case "$authority" in
+        *@*) userinfo="${authority%@*}@" ;;
+    esac
+    local hostport="${authority##*@}" port=""
+    case "$hostport" in
+        \[*\]:*) port=":${hostport##*:}" ;;
+        \[*\])   port="" ;;
+        *:*)     port=":${hostport##*:}" ;;
+    esac
+    printf '%s%s%s%s%s' "$scheme" "$userinfo" "$newhost" "$port" "$tail"
+}
+
+# _shellm_url_is_loopback <url> — does the host name this machine's loopback?
+_shellm_url_is_loopback() {
+    case "$(_shellm_url_host "$1")" in
+        localhost|127.*|0.0.0.0|::1) return 0 ;;
+    esac
+    return 1
+}
+
+_shellm_container_api_url() {
+    local url="$1"
+    if _shellm_url_is_loopback "$url"; then
+        url=$(_shellm_url_host_swap "$url" host.docker.internal)
+    fi
+    printf '%s' "$url"
+}
 
 banner() {
     [[ "$QUIET" -eq 1 ]] && return
@@ -178,6 +262,9 @@ Options:
   --docker-access MODE Docker access for generated code: none, broker, socket, dind
   --traj TRAJ_ID         Write steps to an existing trajectory (no child traj or fork)
   --resume               Shorthand for --traj with the most recent trajectory
+  --context-scope SCOPE  What the model sees of the trajectory: "traj" (default,
+                         earlier steps included) or "run" (only this run's
+                         steps, prompt pinned whole)
   --traj-dir DIR         Trajectory directory (default: <state-home>/trajectories,
                          where the state home is ~/.headlong)
   --var NAME=VALUE       Set env var for generated code (repeatable)
@@ -194,6 +281,18 @@ Environment:
                           mem search); defaults to SHELLM_MODEL's provider
   SHELLM_MAX_ITERATIONS   Max loop iterations
   SHELLM_MAX_TOKENS       Max tokens per response
+  SHELLM_STOP_AFTER_CODE_BLOCK
+                          1 (default): stop reading a response once its first
+                          code block closes; only that block runs anyway.
+                          0 reads to the end.
+  SHELLM_CONTEXT_SCOPE    traj (default) or run; see --context-scope
+  SHELLM_CONTEXT_RUN_TAIL Rows the run-scope window reads back (default 400)
+  SHELLM_CONTEXT_RUN_TAIL_BLOCK
+                          Rows the run-scope window start moves in (default
+                          50), so the cached prefix survives between moves
+  SHELLM_EMPTY_RESPONSE_RETRIES
+                          Empty-response retries before the run dies
+                          (default 8; set empty for unlimited)
   SHELLM_EFFORT           Thinking effort level (low/medium/high/xhigh/max)
   SHELLM_SYSTEM_PROMPT    Override the default system prompt text
   SHELLM_TRAJ_DIR         Trajectory directory
@@ -713,6 +812,16 @@ env_metadata_matches() {
         local stored_tool_mounts_version
         stored_tool_mounts_version=$(docker_metadata_value "$env_name" tool_mounts_version)
         [[ "$stored_tool_mounts_version" == "$_SHELLM_TOOL_MOUNTS_VERSION" ]] || return 1
+        # The image is part of an env's identity, not just provenance. Without
+        # this, a second run asking for a different --docker-image reuses the
+        # container built from the first one: the flag reads as accepted, the
+        # run happens on the old image, and the run record names the image that
+        # was asked for rather than the one that served it. An env from before
+        # the image was recorded has nothing to compare, and reusing it stays
+        # allowed rather than forcing everyone's running envs to be rebuilt.
+        local stored_image
+        stored_image=$(docker_metadata_value "$env_name" image)
+        [[ -z "$stored_image" || "$stored_image" == "$SHELLM_DOCKER_IMAGE" ]] || return 1
     fi
 
     # Compare --var directory mounts
@@ -746,6 +855,15 @@ env_metadata_mismatch_message() {
         if [[ "$stored_tool_mounts_version" != "$_SHELLM_TOOL_MOUNTS_VERSION" ]]; then
             printf 'Env %s was created before current shellm tool mounts. Use a different --env or remove %s/%s so shellm can recreate it with llm, shellm-explore, and sibling tools mounted.' \
                 "$env_name" "$SHELLM_ENVS_DIR" "$env_name"
+            return
+        fi
+    fi
+    if [[ "$stored_type" == "docker" ]]; then
+        local stored_image
+        stored_image=$(docker_metadata_value "$env_name" image)
+        if [[ -n "$stored_image" && "$stored_image" != "$SHELLM_DOCKER_IMAGE" ]]; then
+            printf 'Env %s was created from image %s, but this run requested %s. Use --new-env, a different --env, or remove %s/%s so shellm can recreate it from the requested image.' \
+                "$env_name" "$stored_image" "$SHELLM_DOCKER_IMAGE" "$SHELLM_ENVS_DIR" "$env_name"
             return
         fi
     fi
@@ -868,6 +986,16 @@ docker_setup() {
         -w "$workspace"
         -e "HOME=$workspace"
     )
+    # Add the Docker host mapping when a loopback model URL will be
+    # translated for the sandbox below — the SAME predicate the rewrite in
+    # _shellm_container_api_url uses, so the two can never disagree. Docker
+    # Desktop already defines the name; this keeps Linux equivalent. Note
+    # the mapping routes to the host, so sandboxed code can reach any
+    # service bound to the host's loopback, not just the model server —
+    # documented in docs/install.md (local model server).
+    if _shellm_url_is_loopback "$SHELLM_API_URL"; then
+        docker_run_flags+=(--add-host "host.docker.internal:host-gateway")
+    fi
     local -a extra_mounts=()
     local -a seen_dirs=("$runs_mount")
     local -a install_packages=(jq curl python3 tmux sudo)
@@ -1192,6 +1320,29 @@ docker_container_can_reach_path() {
     return 1
 }
 
+# The image a resumed run should use. A run that used a custom image records it
+# in its trajectory; resuming without saying anything would otherwise ask for
+# the default, fail the image check, and build a second container beside the
+# one being resumed. An image the caller did choose always wins, so an explicit
+# --docker-image that disagrees still fails rather than being quietly replaced.
+_resume_docker_image() {   # _resume_docker_image EXPLICIT CHOSEN RECORDED
+    if [[ "$1" -eq 0 && -n "$3" ]]; then printf '%s' "$3"; else printf '%s' "$2"; fi
+}
+
+# Say why a running env was passed over when the reason is the image. Without
+# this, pointing SHELLM_DOCKER_IMAGE somewhere new leaves the old container
+# running and silently creates a second one beside it, with nothing on screen
+# connecting the two. Only reached when the image actually differs, so the
+# docker inspect is not on the common path.
+_env_note_image_skip() {   # _env_note_image_skip NAME ENV_DIR
+    local stored cid
+    stored=$(docker_metadata_value "$1" image)
+    [[ -n "$stored" && "$stored" != "$SHELLM_DOCKER_IMAGE" ]] || return 0
+    cid=$(cat "$2/container_id" 2>/dev/null) || return 0
+    [[ "$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null)" == "running" ]] || return 0
+    progress "Skipping running env $1: built from $stored, this run wants $SHELLM_DOCKER_IMAGE"
+}
+
 env_find_running() {
     local want_workdir="${1:-}"
     [[ -d "$SHELLM_ENVS_DIR" ]] || return 1
@@ -1199,7 +1350,10 @@ env_find_running() {
     for d in "$SHELLM_ENVS_DIR"/*/; do
         [[ -d "$d" ]] || continue
         name=$(basename "$d")
-        env_metadata_matches "$name" || continue
+        if ! env_metadata_matches "$name"; then
+            _env_note_image_skip "$name" "$d"
+            continue
+        fi
         [[ -f "$d/container_id" ]] || continue
         local cid
         cid=$(cat "$d/container_id" 2>/dev/null) || continue
@@ -1361,9 +1515,17 @@ call_llm() {
     local messages_json="$2"
     local thinking_output_file="${3:-}"
 
+    # The message array rides a file, not argv: a long conversation (or the
+    # empty-response retry's fed-back thinking) can exceed the OS's per-argument
+    # cap (128KB on Linux), and exec would die with E2BIG before the call.
+    local messages_file
+    messages_file=$(mktemp)
+    printf '%s' "$messages_json" > "$messages_file"
+
     local -a args=(-m "$SHELLM_MODEL"
-        --effort "$SHELLM_EFFORT" --thinking --system-prompt "$system_prompt" -M "$messages_json")
+        --effort "$SHELLM_EFFORT" --thinking --system-prompt "$system_prompt" --messages-file "$messages_file")
     [[ -n "$SHELLM_MAX_TOKENS" ]] && args+=(-t "$SHELLM_MAX_TOKENS")
+    [[ "${SHELLM_STOP_AFTER_CODE_BLOCK:-1}" == 1 ]] && args+=(--stop-after-code-block)
 
     local text_file stderr_file
     text_file=$(mktemp)
@@ -1394,20 +1556,20 @@ call_llm() {
     if [[ "$llm_exit" -ne 0 ]]; then
         local _llm_err=""
         [[ -s "$stderr_file" ]] && _llm_err=$(tail -c 500 "$stderr_file")
-        rm -f "$text_file" "$stderr_file"
+        rm -f "$text_file" "$stderr_file" "$messages_file"
         die "llm failed (exit $llm_exit): $_llm_err"
     fi
 
-    # If llm produced no output, surface any error from stderr
-    if [[ ! -s "$text_file" && -s "$stderr_file" ]]; then
-        local _llm_err
-        _llm_err=$(cat "$stderr_file")
-        rm -f "$text_file" "$stderr_file"
-        die "llm failed: $_llm_err"
-    fi
+    # No visible text is not a failure. `llm --thinking` streams reasoning to
+    # stderr, and a run that spends its whole token budget there returns 200,
+    # exits 0 and emits nothing on stdout, which is exactly what run_loop's
+    # empty-response retry feeds back as assistant context. Dying on a
+    # non-empty stderr here made that retry unreachable and printed the
+    # model's reasoning as an error. Real failures exit non-zero and are
+    # caught above.
 
     cat "$text_file"
-    rm -f "$text_file" "$stderr_file"
+    rm -f "$text_file" "$stderr_file" "$messages_file"
 }
 
 # ---------------------------------------------------------------------------
@@ -1927,11 +2089,14 @@ run_loop() {
         _orig_meta=$(traj tail -n 50 --raw --traj_dir "$_run_traj_dir" "$_use_traj" \
             | jq -cR 'fromjson? | select(.type=="shellm-run")' 2>/dev/null | tail -1) || true
         if [[ -n "$_orig_meta" ]]; then
-            local _orig_workdir _orig_env
+            local _orig_workdir _orig_env _orig_image
             _orig_workdir=$(printf '%s' "$_orig_meta" | jq -r '.workdir // empty')
             _orig_env=$(printf '%s' "$_orig_meta" | jq -r '.env.name // empty')
+            _orig_image=$(printf '%s' "$_orig_meta" | jq -r '.env.docker_image // empty')
             [[ -z "$_SHELLM_WORKDIR_USER" && -n "$_orig_workdir" ]] && _SHELLM_WORKDIR_USER="$_orig_workdir"
             [[ -z "$_SHELLM_ENV_NAME" && -n "$_orig_env" ]] && _SHELLM_ENV_NAME="$_orig_env"
+            SHELLM_DOCKER_IMAGE=$(_resume_docker_image \
+                "$_SHELLM_DOCKER_IMAGE_EXPLICIT" "$SHELLM_DOCKER_IMAGE" "$_orig_image")
         fi
 
         # Resolve run_name from trajectory dir
@@ -2163,7 +2328,7 @@ run_loop() {
     # traj append prints the assigned step_id; keep it so every machinery step
     # this run writes can carry run_id (crucial with --traj, where many runs
     # interleave in one shared trajectory)
-    local _run_step_id
+    local _run_step_id _prompt_step_id=""
     _run_step_id=$(printf '%s' "$_shellm_run_json" | traj append --traj_dir "$_run_traj_dir" "$_run_traj_id")
     # Launcher opt-in: report this run's header step_id to the given file so
     # the caller can pair its own steps with this exact run — the trajectory
@@ -2188,8 +2353,8 @@ run_loop() {
         local _p_tmp
         _p_tmp=$(mktemp)
         printf '%s' "$prompt" > "$_p_tmp"
-        printf '%s' "$(jq -n --rawfile p "$_p_tmp" --arg run_id "$_run_step_id" '{type:"prompt",content:$p,run_id:$run_id}')" \
-            | traj append --traj_dir "$_run_traj_dir" "$_run_traj_id" >/dev/null
+        _prompt_step_id=$(printf '%s' "$(jq -n --rawfile p "$_p_tmp" --arg run_id "$_run_step_id" '{type:"prompt",content:$p,run_id:$run_id}')" \
+            | traj append --traj_dir "$_run_traj_dir" "$_run_traj_id")
         rm -f "$_p_tmp"
     fi
 
@@ -2261,11 +2426,23 @@ run_loop() {
         [[ "$QUIET" -eq 0 ]] && echo >&2
         progress "Iteration $iter_label — calling $SHELLM_MODEL..."
 
-        # Build model context from trajectory as multi-turn messages
-        messages_json=$(context --traj_dir "$_run_traj_dir" "$_run_traj_id" \
-            --assistant-types reasoning,final \
-            --user-types prompt,shell-output,feedback \
-            --exclude-types shellm-run,run-summary 2>/dev/null) || messages_json='[]'
+        # Build model context from trajectory as multi-turn messages. The
+        # prompt is never truncated: a cut prompt hands the model a stub
+        # pointing at its own instructions on disk (Audel ran for months on
+        # the first and last KB of its wakeup prompt, 2026-09). In run scope
+        # only this run's steps render, with the prompt pinned so a long run
+        # keeps its instructions past the tail window.
+        local -a _ctx_args=(--traj_dir "$_run_traj_dir" "$_run_traj_id"
+            --assistant-types "reasoning,final"
+            --user-types "prompt,shell-output,feedback"
+            --exclude-types "shellm-run,run-summary"
+            --full-types prompt)
+        if [[ "$SHELLM_CONTEXT_SCOPE" == "run" ]]; then
+            _ctx_args+=(--run "$_run_step_id" --head 0
+                --tail "$SHELLM_CONTEXT_RUN_TAIL" --tail-block "$SHELLM_CONTEXT_RUN_TAIL_BLOCK")
+            [[ -n "$_prompt_step_id" ]] && _ctx_args+=(--pin "$_prompt_step_id")
+        fi
+        messages_json=$(context "${_ctx_args[@]}" 2>/dev/null) || messages_json='[]'
 
         # Call Claude (capture thinking/reasoning to file)
         local thinking_file="$rundir/.last_thinking"
@@ -2294,21 +2471,34 @@ run_loop() {
         # Retry on empty response: feed captured thinking back as assistant
         # context so the model continues from where it left off (max_tokens
         # gets hit during thinking before any visible output is emitted).
-        # Default: unlimited retries; set SHELLM_EMPTY_RESPONSE_RETRIES to cap.
+        # Default: 8 retries; SHELLM_EMPTY_RESPONSE_RETRIES overrides (set it
+        # to the empty string for unlimited).
         local empty_retries=0
-        local max_empty_retries="${SHELLM_EMPTY_RESPONSE_RETRIES:-}"
+        local max_empty_retries="${SHELLM_EMPTY_RESPONSE_RETRIES-8}"
         local retry_messages_json="$messages_json"
         while [[ -z "$response" ]]; do
             if [[ -n "$max_empty_retries" && "$empty_retries" -ge "$max_empty_retries" ]]; then
                 break
             fi
             empty_retries=$((empty_retries + 1))
-            if [[ -n "$thinking" ]]; then
+            # llm's own stderr lines ("llm: warning: output truncated...")
+            # arrive mixed into the captured thinking; they are harness noise,
+            # not the model's reasoning, and must not become assistant content.
+            local feedback
+            feedback=$(printf '%s\n' "$thinking" | grep -Ev '^llm: (warning|note): ') || feedback=""
+            if [[ -n "$feedback" ]]; then
                 progress "Empty response — feeding thinking back to continue (retry $empty_retries${max_empty_retries:+/$max_empty_retries})..."
-                debug "empty_response_retry: fed back ${#thinking} chars of thinking"
+                debug "empty_response_retry: fed back ${#feedback} chars of thinking"
+                # --rawfile, not --arg: a full-budget thinking block can exceed
+                # the OS's 128KB per-argument cap.
+                local feedback_file
+                feedback_file=$(mktemp)
+                printf '%s' "$feedback" > "$feedback_file"
                 retry_messages_json=$(printf '%s' "$retry_messages_json" | jq \
-                    --arg t "$thinking" \
+                    --rawfile t "$feedback_file" \
                     '. + [{"role":"assistant","content":$t},{"role":"user","content":"Your previous response ran out of output tokens during the reasoning above before you could emit any visible text. Continue from where you left off and produce the bash code for the next step now."}]')
+                rm -f "$feedback_file"
+                sleep 1
             else
                 progress "Empty response from API (retry $empty_retries${max_empty_retries:+/$max_empty_retries})..."
                 sleep 1
@@ -2389,7 +2579,13 @@ set +e
 exit \$__shellm_rc
 "
 
-        # Build env var array for subprocess
+        # Build the environment for generated code. The main shellm process
+        # keeps the host URL, while a Docker sandbox gets the equivalent
+        # host.docker.internal URL.
+        local execution_api_url="$SHELLM_API_URL"
+        if [[ "${_SHELLM_DOCKER_MODE:-0}" -eq 1 ]]; then
+            execution_api_url=$(_shellm_container_api_url "$execution_api_url")
+        fi
         local -a env_vars=(
             SHELLM_WORKDIR="$workdir"
             SHELLM_ENV="$(if [[ "${_SHELLM_DOCKER_MODE:-0}" -eq 1 && "$SHELLM_ALLOW_NESTED_DOCKER" != "1" ]]; then echo "local"; else echo "${_SHELLM_ACTIVE_ENV:-}"; fi)"
@@ -2405,8 +2601,8 @@ exit \$__shellm_rc
             SHELLM_MAX_ITERATIONS="$SHELLM_MAX_ITERATIONS"
             SHELLM_EFFORT="$SHELLM_EFFORT"
             SHELLM_TRUNCATE="$SHELLM_TRUNCATE"
-            SHELLM_API_URL="$SHELLM_API_URL"
-            LLM_API_URL="$SHELLM_API_URL"
+            SHELLM_API_URL="$execution_api_url"
+            LLM_API_URL="$execution_api_url"
             SHELLM_DOCKER_IMAGE="$SHELLM_DOCKER_IMAGE"
             SHELLM_DOCKER_ACCESS="$SHELLM_DOCKER_ACCESS"
             SHELLM_DOCKER_BROKER_TRANSPORT="${_SHELLM_DOCKER_BROKER_TRANSPORT:-$SHELLM_DOCKER_BROKER_TRANSPORT}"
@@ -2813,6 +3009,10 @@ main() {
                 SHELLM_MAX_TOKENS="${2:?--max-tokens requires a value}"
                 shift 2
                 ;;
+            --context-scope)
+                SHELLM_CONTEXT_SCOPE="${2:?--context-scope requires a value}"
+                shift 2
+                ;;
             --effort)
                 SHELLM_EFFORT="${2:?--effort requires a value}"
                 shift 2
@@ -2853,6 +3053,7 @@ main() {
                 ;;
             --docker-image)
                 SHELLM_DOCKER_IMAGE="${2:?--docker-image requires a value}"
+                _SHELLM_DOCKER_IMAGE_EXPLICIT=1
                 shift 2
                 ;;
             --docker-access)
@@ -2914,6 +3115,10 @@ main() {
     fi
 
     validate_docker_config
+    case "$SHELLM_CONTEXT_SCOPE" in
+        traj|run) ;;
+        *) die "--context-scope must be traj or run (got '$SHELLM_CONTEXT_SCOPE')" ;;
+    esac
 
     if [[ "$print_prompt" -eq 1 ]]; then
         build_system_prompt "" 0

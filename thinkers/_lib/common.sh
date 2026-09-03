@@ -241,6 +241,47 @@ _responder_scan() {
 # shell-output, shellm-run, ...) keeps thinker prompts small AND prevents
 # recursive inflation: a thinker's own prompt step must never be re-embedded
 # in the context of its next run.
+#
+# Since 2026-09-02 (design/conversation_memory.md, part 3; controlled replay
+# in Experiment B passed):
+#   - `reasoning` steps are OUT. They are the model's prose between bash blocks
+#     inside a shellm run, about 5.6 per run, and they were half of every
+#     window; the replay showed the mind copied them back as ritual and never
+#     used them as information. `final` (one per run, what the run concluded)
+#     stays.
+#   - runs of consecutive `idle` steps collapse into one synthetic line
+#     ("idle x22 over 2h10m", with `collapsed: 22`), so a quiet night still
+#     reads as elapsed time without eating the whole window.
+#   - `error` steps (a run that died with no durable step) are IN, collapsed
+#     the same way, so the mind can see its own failed runs.
+# The window is the last N kept steps BEFORE collapsing, so N still bounds the
+# raw steps considered; the output is at most N lines and usually fewer.
+_RECENT_STREAM_COLLAPSE_JQ='
+  def secs: ((. // "")[0:19] + "Z") | try fromdateiso8601 catch null;
+  def dur($a; $b):
+    (($b | secs) as $e | ($a | secs) as $s
+     | if $e == null or $s == null then "" else ($e - $s) end) as $d
+    | if $d == "" then ""
+      elif $d < 60 then "\($d)s"
+      elif $d < 3600 then "\(($d / 60) | floor)m"
+      elif $d < 86400 then "\(($d / 3600) | floor)h\((($d % 3600) / 60) | floor)m"
+      else "\(($d / 86400) | floor)d\((($d % 86400) / 3600) | floor)h" end;
+  def collapsible: .type == "idle" or .type == "error";
+  reduce .[] as $s ([];
+    if ($s | collapsible) and length > 0 and .[-1].type == $s.type
+    then .[:-1] + [ .[-1] | .n += 1 | .last_ts = ($s.ts // .last_ts)
+                    | .step_id = ($s.step_id // .step_id) | .rc = ($s.rc // .rc) ]
+    else . + [ $s + {n: 1, first_ts: ($s.ts // ""), last_ts: ($s.ts // "")} ] end)
+  | map(if (. | collapsible) and .n > 1
+        then (dur(.first_ts; .last_ts)) as $d
+             | .content = (if .type == "idle" then "idle" else "run failed" end)
+                          + " x\(.n)" + (if $d == "" then "" else " over \($d)" end)
+                          + (if .type == "error" and .rc != null then " (rc=\(.rc))" else "" end)
+             | .collapsed = .n
+        else . end
+        | del(.n, .first_ts, .last_ts))
+  | .[]'
+
 _recent_stream() {
     local n="${1:-${THINK_CONTEXT_TAIL:-20}}"
     # Tolerant parse (fromjson?): skip corrupt lines rather than dying —
@@ -249,11 +290,12 @@ _recent_stream() {
         | jq -cR 'fromjson? // empty
             | select(.type == "thought" or .type == "action" or .type == "observation"
                      or .type == "message" or .type == "idle" or .type == "merge"
-                     or .type == "final" or .type == "reasoning")
+                     or .type == "final" or .type == "error")
             | .content = ((.content // "") | tostring
                 | if length > 1500 then .[0:1500] + "…[truncated]" else . end)' \
         2>/dev/null \
-        | tail -n "$n"
+        | tail -n "$n" \
+        | jq -cs "$_RECENT_STREAM_COLLAPSE_JQ" 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
@@ -338,6 +380,10 @@ _build_shellm_flags() {
     printf '%s\n' "--var" "SKILLS_KERNEL_DIR=$abs_kernel_dir"
     printf '%s\n' "--var" "TRAJ_DIR=$abs_traj_dir"
     printf '%s\n' "--var" "TRAJ_ID=$TRAJ_ID"
+    # chat reads the identity-specific sender config through CHATRC. The
+    # identity directory is already mounted into Docker; only the path was
+    # missing from generated-code runs.
+    printf '%s\n' "--var" "CHATRC=${CHATRC:-$identity_dir/chat/.chatrc}"
 
     # Propagate model + API keys to nested shellm calls. Inside Docker, .env
     # isn't mounted, so without these the nested call hits the final else in
@@ -364,9 +410,11 @@ _build_shellm_flags() {
         [[ -n "$vval" ]] && printf '%s\n' "--var" "$vname=$vval"
     done < <(collect_skill_vars "$identity_dir")
 
-    # Standard binaries
+    # Standard binaries. Keep this in sync with the tools promised to the
+    # running mind in README.md and the stock identity prompt: a host-only tool
+    # silently disappears when shellm switches to Docker.
     local cmd
-    for cmd in mem traj skills context llm shellm chat glob view put sub; do
+    for cmd in mem traj skills context llm shellm chat focus recap glob view put sub; do
         local path
         path=$(command -v "$cmd" 2>/dev/null) || continue
         printf '%s\n' "--bin" "$path"

@@ -47,7 +47,11 @@ setup_identity() {
 #!/usr/bin/env bash
 json=$(cat)
 printf '%s\n' "$json" >> "$IDENTITY_DIR/record"
-sleep 3
+if [[ -f "$IDENTITY_DIR/hold_slowpoke" ]]; then
+    while [[ -f "$IDENTITY_DIR/hold_slowpoke" ]]; do sleep 0.1; done
+else
+    sleep 3
+fi
 EOF
     chmod +x "$TMP/id/thinkers/slowpoke/step"
     printf '{"types":["action","message","observation"]}\n' > "$TMP/id/thinkers/slowpoke/subscriptions.jsonl"
@@ -241,6 +245,10 @@ test_selfwake_coalesce() {
 # ---------------------------------------------------------------------------
 test_queue_cap() {
     setup_identity
+    # Keep the worker busy until the feeder has filled the queue. Letting the
+    # three-second fake worker drain entries here makes reaching the cap depend
+    # on runner speed.
+    : > "$TMP/id/hold_slowpoke"
     start_thinkers
 
     append_step '{"type":"action","content":"A","source":"test"}'
@@ -249,18 +257,20 @@ test_queue_cap() {
     for i in $(seq 1 18); do
         append_step "{\"type\":\"action\",\"content\":\"Q$i\",\"source\":\"test\"}"
     done
-    # Wait for the cap to be hit rather than a fixed sleep: the dispatcher
-    # queues one step per feeder line, and on a slow runner (the CI macOS
-    # box) 18 arrivals take longer than 2s to land, so a fixed sleep saw a
-    # short queue and no drop.
+    # Wait for the queue to settle, not just for the cap to be hit: the
+    # dispatcher logs "queue full", removes the oldest file, and only then
+    # writes the new one, so between the log line and that write the
+    # directory holds 15 files. Q17 and Q18 both overflow, so settled means
+    # two drop lines and 16 files (the worker is held, so nothing drains).
+    local count=0
     i=0
-    while ! grep -q 'queue full' "$TMP/id/run/logs/dispatcher.log" 2>/dev/null && [[ "$i" -lt 200 ]]; do
+    while [[ "$(grep -c 'queue full' "$TMP/id/run/logs/dispatcher.log" 2>/dev/null)" -lt 2 || "$count" -ne 16 ]] \
+          && [[ "$i" -lt 300 ]]; do
         sleep 0.1; i=$((i+1))
+        count=$(compgen -G "$TMP/id/run/pending/slowpoke.action.*" | wc -l | tr -d ' ')
     done
 
-    local count
-    count=$(compgen -G "$TMP/id/run/pending/slowpoke.action.*" | wc -l | tr -d ' ')
-    if [[ "$count" -le 16 ]]; then
+    if [[ "$count" -eq 16 ]]; then
         ok "pending queue capped at 16 (got $count)"
     else
         bad "pending queue capped at 16" "count: $count"
@@ -272,6 +282,7 @@ test_queue_cap() {
         bad "queue-full drop logged"
     fi
 
+    rm -f "$TMP/id/hold_slowpoke"
     stop_thinkers
 }
 

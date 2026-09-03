@@ -1,4 +1,4 @@
-import { GitFork, Undo2 } from "lucide-react";
+import { ExternalLink, GitFork, Undo2 } from "lucide-react";
 import { memo, useEffect, useState } from "react";
 import { Link } from "react-router";
 
@@ -9,6 +9,7 @@ import { Badge } from "~/components/ui/badge";
 import { CodeBlock } from "~/components/ui/code-block";
 import { Markdown } from "~/components/ui/markdown";
 import { stepColor } from "~/lib/step-colors";
+import { slackConversationUrl, slackSourceUrl } from "~/lib/source-links";
 import { useTrajContext } from "~/lib/traj-context";
 import type { NormalizedStep } from "~/lib/types";
 import { cn } from "~/lib/utils";
@@ -234,6 +235,11 @@ export function StepContent({
     case "message": {
       const from = str(raw.from);
       const to = str(raw.to);
+      const sourceUrl =
+        slackSourceUrl(step.source_url) ||
+        slackSourceUrl(raw.source_url) ||
+        slackConversationUrl(from) ||
+        slackConversationUrl(to);
       return (
         <div className="space-y-1">
           {(from || to) && (
@@ -243,6 +249,16 @@ export function StepContent({
             </div>
           )}
           <ExpandableText text={str(raw.content)} expandAll={expandAll} />
+          {sourceUrl && (
+            <a
+              href={sourceUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground hover:underline"
+            >
+              Open in Slack <ExternalLink className="h-3 w-3" />
+            </a>
+          )}
         </div>
       );
     }

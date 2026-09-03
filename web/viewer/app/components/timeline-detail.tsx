@@ -6,7 +6,15 @@
 // never reflows.
 
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, CornerDownRight, Play, X } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CornerDownRight,
+  Link,
+  Play,
+  X,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ExpandableText } from "~/components/expandable-text";
@@ -40,7 +48,70 @@ export type TimelineSelection =
   | { kind: "step"; step: NormalizedStep }
   | { kind: "run"; block: TimelineBlock };
 
-function Modal({
+/** Copy `getUrl()` to the clipboard and flash `copied` for 1.5s; a denied
+ * clipboard (permissions, non-secure context) is silently ignored. */
+function useCopyLink(getUrl: () => string) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    void navigator.clipboard
+      ?.writeText(getUrl())
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch(() => {});
+  };
+  return { copied, copy };
+}
+
+/** While the modal is open the URL carries ?step=/?run= for the selected
+ * item, so the copy just lifts the address bar. */
+function CopyLinkButton() {
+  const { copied, copy } = useCopyLink(() => window.location.href);
+  return (
+    <button
+      type="button"
+      aria-label="Copy link"
+      title="Copy link to this item"
+      className="absolute right-10 top-3 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+      onClick={copy}
+    >
+      {copied ? (
+        <Check className="h-4 w-4 text-green-500" />
+      ) : (
+        <Link className="h-4 w-4" />
+      )}
+    </button>
+  );
+}
+
+/** Copy a deeplink to one run substep. While the run modal is open the
+ * URL carries ?run=, not the substep, so the link is built by hand. */
+function SubstepLink({ stepId }: { stepId: string }) {
+  const { copied, copy } = useCopyLink(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("step", stepId);
+    url.searchParams.delete("run");
+    return url.toString();
+  });
+  return (
+    <button
+      type="button"
+      aria-label="Copy link to this step"
+      title="Copy link to this step"
+      className="absolute right-1 top-1.5 z-10 rounded-md p-1 text-muted-foreground opacity-0 hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/substep:opacity-100"
+      onClick={copy}
+    >
+      {copied ? (
+        <Check className="h-3.5 w-3.5 text-green-500" />
+      ) : (
+        <Link className="h-3.5 w-3.5" />
+      )}
+    </button>
+  );
+}
+
+export function Modal({
   onClose,
   children,
 }: {
@@ -64,6 +135,7 @@ function Modal({
         className="relative max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-lg border bg-background p-4 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
+        <CopyLinkButton />
         <button
           type="button"
           onClick={onClose}
@@ -186,7 +258,7 @@ export function TimelineDetailModal({
     const hasContext = trigger || runBlock || triggeredRuns.length > 0;
     return (
       <Modal onClose={onClose}>
-        <div className="pr-8">
+        <div className="pr-14">
           <StepCard step={step} expandAll />
           {hasContext && (
             <div className="mt-3 space-y-0.5 border-t pt-2">
@@ -243,7 +315,7 @@ function RunModal({
   const result = typeof final?.raw.content === "string" ? final.raw.content : null;
   return (
     <Modal onClose={onClose}>
-      <div className="pr-8">
+      <div className="pr-14">
         <div className="mb-1 flex flex-wrap items-center gap-2">
           <Badge variant="outline" className="text-[10px]">
             run
@@ -299,7 +371,10 @@ function RunModal({
           {showSteps && (
             <div className="mt-1 space-y-0.5">
               {block.members.map((step) => (
-                <StepCard key={step.step_id} step={step} expandAll={false} />
+                <div key={step.step_id} className="group/substep relative">
+                  <SubstepLink stepId={step.step_id} />
+                  <StepCard step={step} expandAll={false} />
+                </div>
               ))}
             </div>
           )}

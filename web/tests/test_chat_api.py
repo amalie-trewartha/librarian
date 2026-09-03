@@ -37,7 +37,13 @@ def chat_identity(tmp_path: Path) -> Path:
         {"type": "trajectory", "step_id": ROOT_TRAJ, "ts": "t0"},
         _msg("m1", "pwa-nick", "chatty", "hello from phone"),
         _msg("m2", "chatty", "pwa-nick", "hi nick", reply_to="m1"),
-        _msg("m3", "slack-U1-C1", "chatty", "slack says hi"),
+        _msg(
+            "m3",
+            "slack-U1-C1",
+            "chatty",
+            "slack says hi",
+            source_url="https://laudesters.slack.com/archives/C1/p1788451200123456",
+        ),
         _msg("m4", "chatty", "slack-U1-C1", "hi slack", reply_to="m3"),
         _msg("m5", "pwa-boss", "chatty", "boss checking in"),
         _msg("m6", "chatty", "pwa-boss", "hello boss", reply_to="m5"),
@@ -107,6 +113,15 @@ def test_chat_reply_to_surfaced(client: TestClient):
     by_id = {m["step_id"]: m for m in body["messages"]}
     assert by_id["m1"]["reply_to"] is None
     assert by_id["m2"]["reply_to"] == "m1"
+
+
+def test_chat_slack_source_url_is_inherited_by_reply(client: TestClient):
+    body = client.get("/api/identities/.identities~chatty/chat").json()
+    by_id = {m["step_id"]: m for m in body["messages"]}
+    expected = "https://laudesters.slack.com/archives/C1/p1788451200123456"
+    assert by_id["m3"]["source_url"] == expected
+    assert by_id["m4"]["source_url"] == expected
+    assert by_id["m1"]["source_url"] is None
 
 
 def test_chat_outcomes(client: TestClient):

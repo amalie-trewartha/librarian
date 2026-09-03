@@ -26,9 +26,15 @@ import {
   Pause,
 } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { TimelineDetailModal, type TimelineSelection } from "~/components/timeline-detail";
+import { StepModal } from "~/components/mindlog-search";
+import {
+  Modal,
+  TimelineDetailModal,
+  type TimelineSelection,
+} from "~/components/timeline-detail";
+import { useTrajContext } from "~/lib/traj-context";
 import { timelineColor } from "~/lib/step-colors";
 import {
   GUTTER_W,
@@ -153,12 +159,47 @@ export function TimelineView({
    * wrapper object per request so repeat clicks reopen the modal. */
   openStep?: { step: NormalizedStep } | null;
 }) {
+  const traj = useTrajContext();
   const [hovered, setHovered] = useState<string | null>(null);
   const [selected, setSelected] = useState<TimelineSelection | null>(null);
 
+  // Deeplinks: ?step= / ?run= mirror the open detail modal, so the address
+  // bar is always a shareable link to what's on screen. The params present
+  // at mount are resolved once the layout is up (below).
+  const [stepParam, setStepParam] = useQueryState("step", parseAsString);
+  const [runParam, setRunParam] = useQueryState("run", parseAsString);
+  const [flashId, setFlashId] = useState<string | null>(null);
+  const [missing, setMissing] = useState<{
+    kind: "step" | "run";
+    id: string;
+  } | null>(null);
+  const pendingDeeplink = useRef<{
+    step: string | null;
+    run: string | null;
+  } | null>({ step: stepParam, run: runParam });
+  // The params the current selection already reflects. applySelection and
+  // the resolver write it; the reconcile effect below reads it so their own
+  // URL echoes don't re-trigger a resolve.
+  const appliedParams = useRef<{ step: string | null; run: string | null }>({
+    step: stepParam,
+    run: runParam,
+  });
+
+  const applySelection = useCallback(
+    (sel: TimelineSelection | null) => {
+      const step = sel?.kind === "step" ? sel.step.step_id : null;
+      const run = sel?.kind === "run" ? sel.block.run.run_id : null;
+      appliedParams.current = { step, run };
+      setSelected(sel);
+      void setStepParam(step);
+      void setRunParam(run);
+    },
+    [setStepParam, setRunParam]
+  );
+
   useEffect(() => {
-    if (openStep) setSelected({ kind: "step", step: openStep.step });
-  }, [openStep]);
+    if (openStep) applySelection({ kind: "step", step: openStep.step });
+  }, [openStep, applySelection]);
 
   // Lane display state (all URL-persisted, comma-separated lane ids)
   const [collapsedParam, setCollapsedParam] = useQueryState(
@@ -264,7 +305,11 @@ export function TimelineView({
   // Follow mode: the timeline scrolls inside its own container (so the lane
   // header can stick); while pinned to the bottom, new rows scroll into view.
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [pinned, setPinned] = useState(true);
+  // Arriving via a deeplink starts unpinned so follow mode doesn't yank
+  // the view to the bottom before the target is seen.
+  const [pinned, setPinned] = useState(
+    () => !(pendingDeeplink.current?.step || pendingDeeplink.current?.run)
+  );
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -324,6 +369,99 @@ export function TimelineView({
     }
     return m;
   }, [layout.cells, layout.blocks]);
+
+  // --- deeplink resolution --------------------------------------------------
+
+  // Find the linked element, scroll its row into view, pulse it, and open
+  // its detail modal. A step outside the loaded window (or one that no
+  // longer exists) falls back to a fetch-one modal, like an old search
+  // hit — deliberately NOT auto-paging history in, which could mean tens
+  // of MB on a grown mind log. Step wins when both params are set; the
+  // losing param is cleared so the URL always names exactly one item.
+  const resolveDeeplink = useCallback(
+    (want: { step: string | null; run: string | null }) => {
+      const scrollToRow = (row: number) => {
+        const el = scrollRef.current;
+        if (el) {
+          el.scrollTop = Math.max(0, layout.rowY[row] - el.clientHeight / 3);
+        }
+      };
+
+      if (want.step) {
+        const step = stepById.get(want.step);
+        if (!step) {
+          appliedParams.current = { step: want.step, run: null };
+          setSelected(null);
+          setMissing({ kind: "step", id: want.step });
+          void setRunParam(null);
+          return;
+        }
+        // Run machinery steps have no cell of their own; land on their block.
+        const cell = cellById.get(want.step);
+        const runId = typeof step.raw.run_id === "string" ? step.raw.run_id : null;
+        const block = !cell && runId ? blockById.get(runId) : undefined;
+        const row = cell?.row ?? block?.startRow;
+        if (row !== undefined) {
+          scrollToRow(row);
+          setFlashId(cell ? want.step : block!.run.run_id);
+        }
+        setMissing(null);
+        applySelection({ kind: "step", step });
+      } else if (want.run) {
+        const block = blockById.get(want.run);
+        if (!block) {
+          appliedParams.current = { step: null, run: want.run };
+          setSelected(null);
+          setMissing({ kind: "run", id: want.run });
+          void setStepParam(null);
+          return;
+        }
+        scrollToRow(block.startRow);
+        setFlashId(want.run);
+        setMissing(null);
+        applySelection({ kind: "run", block });
+      }
+    },
+    [layout, cellById, blockById, stepById, applySelection, setStepParam, setRunParam]
+  );
+
+  // Mount-time pass: resolve the params present at arrival once a real
+  // layout is up.
+  useEffect(() => {
+    const want = pendingDeeplink.current;
+    if (!want) return;
+    if (!want.step && !want.run) {
+      pendingDeeplink.current = null;
+      return;
+    }
+    // Nothing to match against yet: keep the deeplink pending so a
+    // still-loading first layout doesn't produce a false "missing".
+    if (layout.cells.length === 0 && layout.blocks.length === 0) return;
+    pendingDeeplink.current = null;
+    resolveDeeplink(want);
+  }, [layout, resolveDeeplink]);
+
+  // Reconcile the modal with URL changes after mount (Back/Forward, soft
+  // navigation): re-run the resolve path when the params stop matching the
+  // selection they last produced, and close everything when both clear.
+  useEffect(() => {
+    if (pendingDeeplink.current) return; // mount pass owns the first resolve
+    const applied = appliedParams.current;
+    if (stepParam === applied.step && runParam === applied.run) return;
+    appliedParams.current = { step: stepParam, run: runParam };
+    if (!stepParam && !runParam) {
+      setSelected(null);
+      setMissing(null);
+      return;
+    }
+    resolveDeeplink({ step: stepParam, run: runParam });
+  }, [stepParam, runParam, resolveDeeplink]);
+
+  useEffect(() => {
+    if (!flashId) return;
+    const timer = setTimeout(() => setFlashId(null), 3500);
+    return () => clearTimeout(timer);
+  }, [flashId]);
 
   // --- orthogonal edge routing ----------------------------------------------
 
@@ -625,7 +763,7 @@ export function TimelineView({
                 <button
                   key={block.run.run_id}
                   type="button"
-                  onClick={() => setSelected({ kind: "run", block })}
+                  onClick={() => applySelection({ kind: "run", block })}
                   onMouseEnter={() => setHovered(block.run.run_id)}
                   onMouseLeave={() => setHovered(null)}
                   className={cn(
@@ -633,7 +771,8 @@ export function TimelineView({
                     "border-cyan-400/50 bg-cyan-400/[0.06] hover:bg-cyan-400/[0.12]",
                     running && "animate-pulse",
                     hot && "ring-2 ring-cyan-300/70",
-                    freshIds.has(block.run.run_id) && "tl-pop"
+                    freshIds.has(block.run.run_id) && "tl-pop",
+                    flashId === block.run.run_id && "tl-flash"
                   )}
                   style={{
                     left: r.left,
@@ -668,7 +807,7 @@ export function TimelineView({
                 <button
                   key={cell.step.step_id}
                   type="button"
-                  onClick={() => setSelected({ kind: "step", step: cell.step })}
+                  onClick={() => applySelection({ kind: "step", step: cell.step })}
                   onMouseEnter={() => setHovered(cell.step.step_id)}
                   onMouseLeave={() => setHovered(null)}
                   className={cn(
@@ -704,7 +843,8 @@ export function TimelineView({
                     className={cn(
                       "shrink-0 rounded-sm",
                       timelineColor(cell.step.type),
-                      hot && "ring-2 ring-cyan-200/60"
+                      hot && "ring-2 ring-cyan-200/60",
+                      flashId === cell.step.step_id && "tl-flash"
                     )}
                     style={{
                       width: CELL,
@@ -761,7 +901,7 @@ export function TimelineView({
                   {/* sticky so long blocks keep their summary in view mid-scroll */}
                   <button
                     type="button"
-                    onClick={() => setSelected({ kind: "run", block })}
+                    onClick={() => applySelection({ kind: "run", block })}
                     onMouseEnter={() => setHovered(block.run.run_id)}
                     onMouseLeave={() => setHovered(null)}
                     className="pointer-events-auto sticky flex w-full flex-col rounded border border-cyan-400/40 px-1.5 py-0.5 text-left"
@@ -843,11 +983,49 @@ export function TimelineView({
       {selected && (
         <TimelineDetailModal
           selected={selected}
-          onClose={() => setSelected(null)}
-          onSelect={setSelected}
+          onClose={() => applySelection(null)}
+          onSelect={applySelection}
           stepById={stepById}
           blockByRun={blockById}
         />
+      )}
+
+      {/* deeplink targets outside the loaded window */}
+      {missing?.kind === "step" && traj && (
+        <StepModal
+          identityId={traj.identityId}
+          stepId={missing.id}
+          onClose={() => {
+            setMissing(null);
+            void setStepParam(null);
+          }}
+        />
+      )}
+      {missing?.kind === "step" && !traj && (
+        <Modal
+          onClose={() => {
+            setMissing(null);
+            void setStepParam(null);
+          }}
+        >
+          <div className="py-4 pr-8 text-sm text-muted-foreground">
+            This step is not in the loaded part of the timeline. Use “load
+            older” to page more history in, then open the link again.
+          </div>
+        </Modal>
+      )}
+      {missing?.kind === "run" && (
+        <Modal
+          onClose={() => {
+            setMissing(null);
+            void setRunParam(null);
+          }}
+        >
+          <div className="py-4 pr-8 text-sm text-muted-foreground">
+            This run is older than the loaded part of the timeline. Use
+            “load older” to page more history in, then open the link again.
+          </div>
+        </Modal>
       )}
     </div>
   );

@@ -16,6 +16,7 @@ set -euo pipefail
 
 CTX_HEAD="${CTX_HEAD:-1}"
 CTX_TAIL="${CTX_TAIL:-50}"
+CTX_TAIL_BLOCK="${CTX_TAIL_BLOCK:-1}"
 CTX_PROMPT_LIMIT="${SHELLM_STDOUT_PROMPT_LIMIT:-2048}"
 CTX_MAX_BYTES=""
 CTX_ELISION_STYLE="count"  # none|count
@@ -24,6 +25,8 @@ CTX_PINS=()
 CTX_ASSISTANT_TYPES=""
 CTX_USER_TYPES=""
 CTX_EXCLUDE_TYPES=""
+CTX_FULL_TYPES=""
+CTX_RUN=""
 CTX_TRAJ_DIR_OPT=""
 CTX_TRAJ_ID_OPT=""
 
@@ -48,10 +51,22 @@ Role assignment:
 Step selection:
   --head N              Keep first N steps. Default: 1.
   --tail N              Keep last N steps. Default: 50.
+  --tail-block B        Move the tail window's start only in steps of B rows,
+                        so it holds N to N+B-1 rows and the rendered prefix
+                        changes once per B appended rows instead of on every
+                        call (keeps provider prompt caches warm). Default: 1.
   --pin <step_id>       Always include this step. Repeatable.
+  --run RUN_ID          Keep only steps whose run_id is RUN_ID (pins always
+                        stay). Steps of other runs never render and never
+                        count as elided; a gap inside the run renders as
+                        "[earlier steps elided]" with no count.
 
 Per-step content:
   --prompt-limit BYTES  Per-step field truncation for large values. Default: 2048.
+  --full-types LIST     Step types whose fields are never truncated, e.g.
+                        "prompt": instructions arrive whole or not at all (a
+                        cut prompt leaves the model a stub pointing at its
+                        own instructions on disk).
 
 Elision:
   --elision-style S     none|count. Default: count.
@@ -78,6 +93,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --head)             CTX_HEAD="${2:?--head requires N}"; shift 2 ;;
         --tail)             CTX_TAIL="${2:?--tail requires N}"; shift 2 ;;
+        --tail-block)       CTX_TAIL_BLOCK="${2:?--tail-block requires B}"; shift 2 ;;
         --pin)              CTX_PINS+=("${2:?--pin requires step_id}"); shift 2 ;;
         --prompt-limit)     CTX_PROMPT_LIMIT="${2:?--prompt-limit requires BYTES}"; shift 2 ;;
         --elision-style)    CTX_ELISION_STYLE="${2:?--elision-style requires a value}"; shift 2 ;;
@@ -85,6 +101,8 @@ while [[ $# -gt 0 ]]; do
         --assistant-types)  CTX_ASSISTANT_TYPES="${2:?--assistant-types requires LIST}"; shift 2 ;;
         --user-types)       CTX_USER_TYPES="${2:?--user-types requires LIST}"; shift 2 ;;
         --exclude-types)    CTX_EXCLUDE_TYPES="${2:?--exclude-types requires LIST}"; shift 2 ;;
+        --full-types)       CTX_FULL_TYPES="${2:?--full-types requires LIST}"; shift 2 ;;
+        --run)              CTX_RUN="${2:?--run requires RUN_ID}"; shift 2 ;;
         --traj_dir)         CTX_TRAJ_DIR_OPT="${2:?--traj_dir requires DIR}"; shift 2 ;;
         -h|--help)          usage 0 ;;
         -*)                 die "unknown option: $1" ;;
@@ -226,9 +244,17 @@ def truncate_field($limit; $sid):
      + (btrunc_tail($half) | rtrim))
   end;
 
-# Metadata keys skipped when rendering step content.
+# Metadata keys skipped when rendering step content. The bookkeeping bin/llm
+# and bin/shellm stamp on steps (token counts, latency, run id) is never shown
+# to the model: rendered as "[in_tok]\n31864" after its own code block, the
+# model learned the shape and wrote it back after its next command, followed
+# by an invented next thought and block, sometimes hundreds of times until the
+# stream timed out (Audel on grok, 2026-09).
 def is_meta($k):
   ($k == "step_id" or $k == "ts" or $k == "type" or $k == "fork_parent")
+  or ($k == "run_id" or $k == "llm_s" or $k == "in_tok" or $k == "out_tok"
+      or $k == "think_tok" or $k == "cache_tok" or $k == "estimated"
+      or $k == "source_url")
   or ($k | endswith("_ref"))
   or ($k | endswith("_bytes"))
   or ($k | endswith("_truncated"));
@@ -240,14 +266,23 @@ def role_for($t; $A; $U; $E):
   else "user"
   end;
 
+# The tail window starts at $N - $tail, rounded down to a multiple of
+# $block: with --tail-block the start moves only every $block rows, so the
+# window holds $tail to $tail+$block-1 rows and calls in between render an
+# identical prefix (the loader reads $tail+$block rows to cover that).
+def window_start($N; $tail; $block):
+  ([$N - $tail, 0] | max) as $raw |
+  if $block > 1 then (($raw / $block) | floor) * $block else $raw end;
 def selected($i; $sid; $N; $head; $tail; $pins):
-  ($i < $head) or ($i >= ($N - $tail)) or (($pins | index($sid)) != null);
+  ($i < $head) or ($i >= window_start($N; $tail; $block)) or (($pins | index($sid)) != null);
 
-# Render one step row into message text content.
-def render_step($limit; $blobs):
+# Render one step row into message text content. Types in $full (e.g. a
+# prompt) are never truncated, whatever $limit0 says.
+def render_step($limit0; $blobs; $full):
   . as $row |
   ($row.step_id | tostring) as $sid |
   (($row.type // "") | tostring) as $t |
+  (if ($full | index($t)) != null then 1000000000000 else $limit0 end) as $limit |
   if $t == "fork" then "[Forked child: \($row.child | jqr_empty)]"
   elif $t == "trajectory" then ""
   elif $t == "merge" then
@@ -286,20 +321,28 @@ def render_step($limit; $blobs):
 # excluded/malformed rows we DID read). Dropped rows in the unread middle
 # can't be subtracted, so middle markers may overcount by a little — the old
 # whole-file pass excluded them exactly, at the price of parsing everything.
-def build_messages($kept; $limit; $blobs; $elision; $total; $skip):
+# In run scope ($run != "") rows of other runs are dropped silently: a gap
+# before the first kept row is never marked (everything earlier is another
+# run's by definition), and a gap inside the run cannot be counted without
+# reading the unread middle, so it renders without a number.
+def build_messages($kept; $limit; $blobs; $elision; $total; $skip; $full; $run):
   def gap_between($a; $b):
     ($b - $a - 1) - ([$skip[] | select(. > $a and . < $b)] | length);
+  def marker($gap; $first):
+    if $run == "" then [{role: "user", content: "[\($gap) steps elided]"}]
+    elif $first then []
+    else [{role: "user", content: "[earlier steps elided]"}] end;
   reduce $kept[] as $it ({msgs: [], last: -1};
       gap_between(.last; $it.i) as $gap |
       (if $elision != "none" and $gap > 0
-       then .msgs + [{role: "user", content: "[\($gap) steps elided]"}]
+       then .msgs + marker($gap; .last == -1)
        else .msgs end) as $m |
-      ($it.row | render_step($limit; $blobs) | rtrim) as $c |
+      ($it.row | render_step($limit; $blobs; $full) | rtrim) as $c |
       {msgs: (if $c == "" then $m else $m + [{role: $it.role, content: $c}] end),
        last: $it.i}
   ) |
   (gap_between(.last; $total) as $gap |
-   if $elision != "none" and $gap > 0
+   if $elision != "none" and $gap > 0 and $run == ""
    then .msgs + [{role: "user", content: "[\($gap) steps elided]"}]
    else .msgs end);
 
@@ -316,6 +359,7 @@ def merge_roles:
 ($astr | if . == "" then [] else split(",") end) as $A |
 ($ustr | if . == "" then [] else split(",") end) as $U |
 ($estr | if . == "" then [] else split(",") end) as $E |
+($fullstr | if . == "" then [] else split(",") end) as $FULL |
 ($blobsraw[0] // {}) as $blobs |
 # Input lines are "<original line index>\t<raw JSONL line>" — only the head,
 # tail, and pin-candidate lines of the file (see the loader below). $total
@@ -328,9 +372,13 @@ def merge_roles:
 ([$fed[] | select(.row != null)
          | . + {role: role_for(((.row.type // "") | tostring); $A; $U; $E)}]) as $items |
 ($items | length) as $N |
-([$items[] | select(.role != "exclude")
+# Run scope: a row belongs when its run_id matches or it is pinned.
+def in_run: (.row.step_id | tostring) as $sid |
+            $run == "" or ((.row.run_id // "") | tostring) == $run
+            or (($pins | index($sid)) != null);
+([$items[] | select(.role != "exclude") | select(in_run)
            | select(selected(.i; (.row.step_id | tostring); $total; $head; $tail; $pins))]) as $kept |
-([$fed[] | select(.row == null)] + [$items[] | select(.role == "exclude")]
+([$fed[] | select(.row == null)] + [$items[] | select(.role == "exclude" or (in_run | not))]
  | map(.i) | sort) as $skip |
 if $mode == "refs" then
     [ $kept[].row |
@@ -339,7 +387,7 @@ if $mode == "refs" then
     ] | unique | .[]
 else
     $N,
-    (build_messages($kept; $limit; $blobs; $elision; $total; $skip) | merge_roles)
+    (build_messages($kept; $limit; $blobs; $elision; $total; $skip; $FULL; $run) | merge_roles)
 end
 JQEOF
 )
@@ -362,7 +410,8 @@ if [[ -s "$RESOLVED_TRAJ_FILE" ]] \
     TOTAL_LINES=$(( TOTAL_LINES + 1 ))
 fi
 
-if [[ "$TOTAL_LINES" -le $(( CTX_HEAD + CTX_TAIL )) ]]; then
+_tail_read=$(( CTX_TAIL + CTX_TAIL_BLOCK - 1 ))
+if [[ "$TOTAL_LINES" -le $(( CTX_HEAD + _tail_read )) ]]; then
     RAW_ROWS=$(awk '{printf "%d\t%s\n", NR-1, $0}' "$RESOLVED_TRAJ_FILE")
 else
     _head_rows=""
@@ -371,8 +420,8 @@ else
             | awk '{printf "%d\t%s\n", NR-1, $0}')
     _tail_rows=""
     if [[ "$CTX_TAIL" -gt 0 ]]; then
-        _tail_start=$(( TOTAL_LINES - CTX_TAIL ))
-        _tail_rows=$(tail -n "$CTX_TAIL" "$RESOLVED_TRAJ_FILE" \
+        _tail_start=$(( TOTAL_LINES - _tail_read ))
+        _tail_rows=$(tail -n "$_tail_read" "$RESOLVED_TRAJ_FILE" \
             | awk -v s="$_tail_start" '{printf "%d\t%s\n", s+NR-1, $0}')
     fi
     _pin_rows=""
@@ -401,12 +450,15 @@ _ctx_jq() {
         --arg mode "$1" \
         --argjson head "$CTX_HEAD" \
         --argjson tail "$CTX_TAIL" \
+        --argjson block "$CTX_TAIL_BLOCK" \
         --argjson total "$TOTAL_LINES" \
         --argjson limit "$2" \
         --argjson pins "$PINS_JSON" \
         --arg astr "$CTX_ASSISTANT_TYPES" \
         --arg ustr "$CTX_USER_TYPES" \
         --arg estr "$CTX_EXCLUDE_TYPES" \
+        --arg fullstr "$CTX_FULL_TYPES" \
+        --arg run "$CTX_RUN" \
         --arg elision "$CTX_ELISION_STYLE" \
         --slurpfile blobsraw "$3" \
         "$JQ_PROG"

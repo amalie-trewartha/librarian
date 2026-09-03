@@ -280,16 +280,25 @@ def test_chat_index_survives_eviction(traj_dir: Path):
     from headlong_web import chat
 
     jsonl = traj_dir / "trajectory.jsonl"
+    source_url = "https://laudesters.slack.com/archives/C1/p1788451200123456"
     _write(jsonl, [
         {"type": "message", "step_id": "m1", "content": "hello audel",
-         "from": "slack-nick", "to": "audel", "ts": "t1"},
+         "from": "slack-nick", "to": "audel", "ts": "t1",
+         "source_url": source_url},
+        {"type": "message", "step_id": "m2", "content": "hello nick",
+         "from": "audel", "to": "slack-nick", "ts": "t2", "reply_to": "m1"},
     ], append=True)
     _write(jsonl, [_step(i) for i in range(1, 40)], append=True)
     cache = trajectory.TrajectoryCache(raw_budget=400)
-    assert cache.load(traj_dir)["steps"][1]["raw"] is None  # message raw evicted
+    loaded = cache.load(traj_dir)
+    by_id = {step["step_id"]: step for step in loaded["steps"]}
+    assert by_id["m1"]["raw"] is None  # message raw evicted
+    assert by_id["m2"]["raw"] is None
+    assert by_id["m2"]["source_url"] == source_url
     view = chat.chat_view(cache.chat_steps(traj_dir), "audel")
     assert view["messages"][0]["content"] == "hello audel"
     assert view["messages"][0]["from"] == "slack-nick"
+    assert view["messages"][1]["source_url"] == source_url
 
 
 def test_step_endpoint_hydrates_evicted(ident_root: Path, monkeypatch):

@@ -8,6 +8,7 @@ meant ~3.5GB of transient dicts per poll and was a main driver of the
 
 from typing import Any
 
+from headlong_web.chat_links import resolve_source_url
 from headlong_web.trajectory import CHAT_MESSAGE_TYPES as MESSAGE_TYPES
 
 
@@ -30,6 +31,7 @@ def chat_view(
     """
     messages = []
     outcomes: dict[str, str] = {}
+    source_urls: dict[str, str] = {}
     for raw in steps:
         step_type = raw.get("type")
         if step_type == "observation":
@@ -57,6 +59,7 @@ def chat_view(
         reply_to = raw.get("reply_to")
         if reply_to:
             outcomes[reply_to] = "replied"
+        source_url = resolve_source_url(raw, source_urls)
         if with_name is not None and with_name not in (from_name, to_name):
             continue
         messages.append(
@@ -68,6 +71,7 @@ def chat_view(
                 "content": content,
                 "reply_to": reply_to,
                 "filename": raw.get("filename"),
+                "source_url": source_url,
             }
         )
     return {"messages": messages[-tail:], "outcomes": outcomes}

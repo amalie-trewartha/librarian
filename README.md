@@ -8,10 +8,18 @@
 
 [![CI](https://github.com/laude-institute/headlong/actions/workflows/ci.yml/badge.svg)](https://github.com/laude-institute/headlong/actions/workflows/ci.yml)
 
+**Headlong** is an open source agent microharness, a complete agent harness
+with a core of about 10K lines of Bash.
 
-[**Headlong**](https://www.laude.org/updates/headlong-a-microharness-for-persistent-agents)
-is an open source agent microharness, a complete agent harness with a core of
-about 10K lines of Bash. Headlong's defining feature is **persistent
+[Launch post](https://www.laude.org/updates/headlong-a-microharness-for-persistent-agents) |
+[Announcement](https://x.com/andykonwinski/status/2091990178638496195)
+
+> [!IMPORTANT]
+> Headlong is alpha research software. Expect frequent changes. Run it in a
+> sandbox because Headlong agents run shell commands. Use a dedicated,
+> spend-capped API key, and do not give your agent sensitive secrets.
+
+Headlong's defining feature is **persistent
 agency**. Your agent keeps thinking between external interactions in a
 self-guided loop inspired by human inner monologue. A message from a human
 doesn't start a session. It lands in the agent's thought stream as one more
@@ -41,9 +49,11 @@ curl -fsSL https://headlong.ai/install.sh | bash
 ```
 
 You'll need bash 3.2+, git, curl, jq, and an LLM API key (Anthropic,
-OpenAI, Gemini, or OpenRouter); the dashboard also needs
-[uv](https://docs.astral.sh/uv/) and bun or node, and the installer offers
-to fetch those. 
+OpenAI, Gemini, or OpenRouter) — or a local model on any
+OpenAI-compatible server (llama.cpp, Ollama, vLLM, LM Studio; see
+[Local models](#local-models) below, no key needed); the dashboard also
+needs [uv](https://docs.astral.sh/uv/) and bun or node, and the installer
+offers to fetch those.
 
 Headlong is alpha research software. Use a dedicated, spend-capped key, because
 your agent runs real shell commands and thinks around the clock. With Docker
@@ -79,7 +89,8 @@ The container flow the installer offers is this, and you can also run it
 yourself:
 
 ```bash
-docker run -it --name headlong --restart unless-stopped -p 8080:8080 buildpack-deps:curl \
+docker run -it --name headlong --restart unless-stopped -p 8080:8080 \
+  --add-host host.docker.internal:host-gateway buildpack-deps:curl \
   bash -c 'curl -fsSL https://headlong.ai/install.sh | bash; exec bash'
 ```
 
@@ -154,7 +165,7 @@ experiment with.
 | Tool | What it does |
 |------|-------------|
 | **shellm** | The RLM core. It sends context to an LLM, runs the bash the LLM writes back, and repeats |
-| **llm** | Multi-provider LLM CLI. Anthropic, OpenAI, Gemini, and OpenRouter behind one interface |
+| **llm** | Multi-provider LLM CLI. Anthropic, OpenAI, Gemini, OpenRouter, and any local OpenAI-compatible server (llama.cpp, Ollama, vLLM, ...) behind one interface |
 | **traj** | Trajectory operations on append-only jsonl DAGs with fork and merge |
 | **context** | Renders a trajectory into an LLM messages array with tiered compaction |
 | **thinkers** | The mind. Reactive thought processes run by a dispatcher |
@@ -177,6 +188,102 @@ Everything you run *around* the mind lives in `tools/`:
 | **headlong-slack-bridge** / **headlong-telegram-bridge** | Slack and Telegram connectors into the same inner experience |
 | **headlong-killall** | Panic button that stops every Headlong-related process |
 | **pr-committee** | Multi-model pull request review, used on this repo |
+
+## Local models
+
+Headlong can use any server that supports the OpenAI chat completions API,
+including llama.cpp, Ollama, vLLM, and LM Studio. A local server does not
+need an API key unless you configured the server to require one.
+
+For llama.cpp, start the server with an alias that Headlong can use as the
+model name:
+
+```bash
+llama-server \
+  -m qwen3-8b-instruct.gguf \
+  --alias qwen3-8b-instruct \
+  -c 32768
+```
+
+Then check the connection:
+
+```bash
+LLM_PROVIDER=openai-compatible \
+LLM_API_URL=http://127.0.0.1:8080/v1/chat/completions \
+llm -m qwen3-8b-instruct "hello"
+```
+
+For Ollama, start the server if it is not already running:
+
+```bash
+ollama serve
+```
+
+With the server running, download a model and check the connection:
+
+```bash
+ollama pull qwen3:8b
+LLM_PROVIDER=openai-compatible \
+LLM_API_URL=http://127.0.0.1:11434/v1/chat/completions \
+llm -m qwen3:8b "hello"
+```
+
+To configure an existing Headlong agent without running the installer again,
+add the provider, server address, and model to `~/.headlong/.env`:
+
+```bash
+LLM_PROVIDER='openai-compatible'
+SHELLM_API_URL='http://127.0.0.1:11434/v1/chat/completions'
+SHELLM_MODEL='qwen3:8b'
+```
+
+The example uses Ollama. For the llama.cpp example above, use port 8080 and
+the `qwen3-8b-instruct` model alias instead. If the server requires a bearer
+token, add `LLM_API_KEY` to the same file.
+
+Restart the agent after changing an existing configuration. Replace `ada`
+with your agent's name:
+
+```bash
+ada stop
+ada start
+```
+
+To let the installer write the same settings, run it and choose the local
+model server when asked:
+
+```bash
+curl -fsSL https://headlong.ai/install.sh | bash
+```
+
+A local server can also be selected without a terminal:
+
+```bash
+export HEADLONG_PROVIDER=local
+export HEADLONG_LOCAL_URL=http://127.0.0.1:11434/v1
+export HEADLONG_LOCAL_MODEL=qwen3:8b
+curl -fsSL https://headlong.ai/install.sh | bash
+```
+
+For a host installation, keep a local server address such as `127.0.0.1`
+or `localhost`. Headlong changes the address only when `shellm` runs code
+inside its Docker sandbox. A full Headlong container uses
+`host.docker.internal` to reach a server on the Docker host.
+
+On Linux, the model server must listen on an address that Docker can reach.
+For example, llama.cpp can use `--host 0.0.0.0`, and Ollama can use
+`OLLAMA_HOST=0.0.0.0:11434`. Use the machine firewall to keep the model
+server off untrusted networks.
+
+Be aware that `host.docker.internal` gives agent code access to other
+services running on the host. Do not rely on loopback binding alone to
+protect a sensitive service when this route is enabled. See
+[the installation guide](docs/install.md#the-one-liner) for the full
+networking and security details.
+
+For direct `llm` configuration, thinking options, and provider behavior,
+see [the shellm guide](docs/shellm.md#the-llm-tool). The provider policy is
+in [design/providers.md](design/providers.md).
 
 ## Learn more
 

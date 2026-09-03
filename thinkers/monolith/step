@@ -189,6 +189,41 @@ if [[ $(printf '%s\n' "$last_three" | jq -r '.type' 2>/dev/null | sort -u | tr '
     hints="${hints}- The last few steps are all thoughts — the stream may be circling; consider acting, recalling, or advancing decisively.
 "
 fi
+# Pending requests from the responder (design/conversation_memory.md, part 5):
+# the responder told someone "let me look into that" and appended an `action`
+# (source responder, trigger_step = their message) describing the work. It is
+# pending until an observation carries resolves=<that trigger_step>. `chat
+# pending` reads the deferrals index over the whole trajectory, so a request
+# stays visible however many steps or newer requests pile on top of it (the
+# old recent-stream scan showed only the newest one, inside a 20-step window:
+# on 2026-09-02 a request was masked by a newer one, then aged out unseen).
+# Every open request is listed, oldest first, with its age; past
+# PENDING_OVERDUE_S (4h) the hint says so. The hint gives the exact delivery
+# command so the reply lands on the right message. The wording is a strong
+# preference with a stated escape hatch, not an order: on 2026-09-03 two
+# timer wakes in a row read the hint and filed research notes instead,
+# under Audel's own "timer wakeups are for inner life" rule, and said
+# nothing about why. A declined request must now leave a thought behind.
+PENDING_MAX_AGE="${MONOLITH_PENDING_MAX_AGE:-14d}"
+PENDING_OVERDUE_S="${MONOLITH_PENDING_OVERDUE_S:-14400}"
+PENDING_LIST_MAX="${MONOLITH_PENDING_LIST_MAX:-5}"
+pending_req=""
+if command -v chat >/dev/null 2>&1; then
+    pending_req=$(chat pending --json --max-age "$PENDING_MAX_AGE" 2>/dev/null | jq -r \
+        --argjson overdue "$PENDING_OVERDUE_S" --argjson max "$PENDING_LIST_MAX" '
+        def age_text: if . < 3600 then "\(. / 60 | floor) min"
+                      elif . < 86400 then "\(. / 3600 | floor) h"
+                      else "\(. / 86400 | floor) d" end;
+        (length) as $n
+        | .[0:$max]
+        | (.[] | "- PENDING REQUEST from \(.person // "someone"): \(.request)"
+            + " (pending for \(.age_s | age_text)"
+            + (if .age_s > $overdue then ", OVERDUE: deliver what you have, or that it cannot be done, this wake" else "" end)
+            + "). The responder already told them you would get back to them, so they are waiting. Strongly prefer doing this work now (act), timer wake or not, over inner-life work; then deliver the result with exactly: chat reply --follow-up --reply-to \(.trigger_step) \(.person // "<their-name>") \"<result>\"  — and append an observation with --field resolves=\(.trigger_step) so this request stops showing here. If you have a good reason not to this wake, append a thought saying why and what would unblock it."),
+          (if $n > $max then "- \($n - $max) more pending requests: run `chat pending` to see them all." else empty end)' 2>/dev/null) || pending_req=""
+fi
+[[ -n "$pending_req" ]] && hints="${hints}${pending_req}
+"
 # Share nudge: outward initiative needs a periodic prompt-side invitation, or
 # restraint rules learned from feedback ratchet the mind into pure listening
 # (observed on Audel 2026-08-21: a self-imposed "last-word-ours -> do not
@@ -313,7 +348,7 @@ run_response=$(SHELLM_NO_BANNER=1 \
     SHELLM_TRIGGER_STEP_ID="$trigger_step_id" \
     SHELLM_WAKE="$wake_reason" \
     SHELLM_RUN_ID_OUT="$run_id_file" \
-    shellm --model "$THINK_MODEL" --traj "$TRAJ_ID" \
+    shellm --model "$THINK_MODEL" --traj "$TRAJ_ID" --context-scope run \
     "${shellm_flags[@]}" \
     --prompt-file "$prompt_file_tmp") || run_rc=$?
 rm -f "$prompt_file_tmp"

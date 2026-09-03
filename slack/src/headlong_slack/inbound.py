@@ -53,6 +53,7 @@ class InboundMessage:
     user: str
     channel: str
     thread_ts: str | None  # where an error notice would go; None = top level
+    message_ts: str
     text: str
     # True for channel reactions: resolve parent thread_ts in the worker
     # so the bolt handler never blocks on reactions.get.
@@ -185,6 +186,7 @@ class Inbound:
                 user,
                 channel,
                 thread_ts,
+                item_ts,
                 f":{reaction}:",
                 resolve_parent=want_thread,
             )
@@ -259,7 +261,7 @@ class Inbound:
             from_name = naming.encode(user, channel, thread_ts)
             self.threads.touch(channel, thread_ts)
 
-        self.queue.put(InboundMessage(from_name, user, channel, thread_ts, text))
+        self.queue.put(InboundMessage(from_name, user, channel, thread_ts, ts, text))
 
     # -- delivery worker -----------------------------------------------------
 
@@ -288,6 +290,7 @@ class Inbound:
                     msg.user,
                     msg.channel,
                     thread_ts,
+                    msg.message_ts,
                     text,
                     resolve_parent=False,
                 )
@@ -304,6 +307,16 @@ class Inbound:
             f" — reply with: chat reply {msg.from_name})"
         )
         body = {"content": f"{header} {content}", "from_name": msg.from_name}
+        try:
+            permalink = self.app.client.chat_getPermalink(
+                channel=msg.channel, message_ts=msg.message_ts
+            ).get("permalink")
+            if permalink:
+                body["source_url"] = permalink
+        except Exception:
+            # Permalink lookup is best-effort: a Slack outage or missing
+            # scope must never keep a human message out of the mind log.
+            log.warning("chat_getPermalink failed for %s", msg.from_name, exc_info=True)
         for attempt in range(1, DELIVERY_ATTEMPTS + 1):
             try:
                 response = httpx.post(self._chat_url, json=body, timeout=30)

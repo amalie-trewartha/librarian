@@ -65,11 +65,12 @@ Create a .chatrc file with:
 }
 
 cmd_send() {
-    local message="" from="" to="${IDENTITY_NAME:-}"
+    local message="" from="" to="${IDENTITY_NAME:-}" source_url=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --from) from="${2:?--from requires a name}"; shift 2 ;;
             --to)   to="${2:?--to requires a name}"; shift 2 ;;
+            --source-url) source_url="${2:?--source-url requires a URL}"; shift 2 ;;
             *)      message="${message:+$message }$1"; shift ;;
         esac
     done
@@ -90,21 +91,31 @@ cmd_send() {
 To message someone else: chat reply <their-name> <message>
 To keep a note for yourself, append a thought step instead of a message."
 
-    # Append message step to trajectory
-    printf '{"type":"message","content":%s,"from":%s,"to":%s,"source":"chat"}' \
-        "$(printf '%s' "$message" | jq -Rsa .)" \
-        "$(printf '%s' "$from" | jq -Rsa .)" \
-        "$(printf '%s' "$to" | jq -Rsa .)" \
+    # source_url records where a bridged message came from. It is optional
+    # metadata for operators and never affects routing or model context.
+    printf '%s' "$message" \
+        | jq -Rsc \
+        --arg from "$from" \
+        --arg to "$to" \
+        --arg source_url "$source_url" \
+        '{type:"message", content:., from:$from, to:$to, source:"chat"}
+         + (if $source_url == "" then {} else {source_url:$source_url} end)' \
         | _chat_append
 
     printf 'Message sent.\n' >&2
 }
 
 cmd_reply() {
-    local reply_to=""
+    local reply_to="" follow_up=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --reply-to) reply_to="${2:?--reply-to requires a step id}"; shift 2 ;;
+            # A deliberate second reply to a message we already answered: the
+            # responder said "let me look into that", the mind did the work,
+            # and this delivers the result. Stamps reply_to like any reply
+            # but skips the answered guard below, which exists for races,
+            # not for follow-ups (design/conversation_memory.md, part 5).
+            --follow-up) follow_up=1; shift ;;
             *) break ;;
         esac
     done
@@ -152,7 +163,7 @@ Use the name of the person you mean to reach: chat reply <their-name> <message>"
     # steps, so concurrent wakes for one inbound can each try to answer it
     # (2026-08-17: one "you there?" got three replies). First send wins;
     # bounded to the recent log — duplicates happen within seconds.
-    if [[ -n "$reply_to" ]]; then
+    if [[ -n "$reply_to" && "$follow_up" -eq 0 ]]; then
         local _guard_tf _dup
         _guard_tf=$(traj path "${ROOT_TRAJ_ID:-$TRAJ_ID}" 2>/dev/null) || _guard_tf=""
         if [[ -n "$_guard_tf" && -f "$_guard_tf" ]]; then
@@ -173,13 +184,15 @@ Use the name of the person you mean to reach: chat reply <their-name> <message>"
     # reply_to stamps which message step this reply answers, making "has this
     # message been answered" a fact in the log rather than an ordering
     # heuristic. Additive — readers that don't know it ignore it.
-    jq -nc \
-        --arg content "$message" \
+    printf '%s' "$message" \
+        | jq -Rsc \
         --arg from "$from" \
         --arg to "$to_name" \
         --arg reply_to "$reply_to" \
-        '{type:"message", content:$content, from:$from, to:$to, source:"chat"}
-         + (if $reply_to == "" then {} else {reply_to:$reply_to} end)' \
+        --argjson follow_up "$follow_up" \
+        '{type:"message", content:., from:$from, to:$to, source:"chat"}
+         + (if $reply_to == "" then {} else {reply_to:$reply_to} end)
+         + (if $follow_up == 1 then {follow_up:true} else {} end)' \
         | _chat_append
 
     printf 'Reply sent.\n' >&2
@@ -214,11 +227,229 @@ cmd_send_file() {
     printf 'File sent: %s\n' "$filename" >&2
 }
 
+# ---------------------------------------------------------------------------
+# Person keys (design/conversation_memory.md, part 2)
+# ---------------------------------------------------------------------------
+# The chat `from` name is a ROUTING name: a bridge packs everything it needs
+# to deliver the reply into it, so one human is many names (a Slack user is a
+# new name in every channel thread). The person key is what stays stable:
+#   slack-U07AB-C09XYZ-1722400000.123456  ->  slack:U07AB
+#   slack-U07AB-D09XYZ                    ->  slack:U07AB
+#   telegram-8525624593-8525624593        ->  telegram:8525624593
+#   pwa-andy                              ->  pwa:andy
+#   Andy                                  ->  Andy
+# The same rule lives in jq below (_PERSON_KEY_JQ) so the index filter can
+# apply it per line; keep the two in step.
+# The thread key is the other axis: which conversation a message sits in,
+# whoever sent it. Only Slack channel threads have one (channel + thread ts);
+# a DM, the phone chat, and Telegram are one person deep, so they get none.
+#   slack-U07AB-C09XYZ-1722400000.123456  ->  slack-thread:C09XYZ-1722400000.123456
+_PERSON_KEY_JQ='def person_key:
+    if test("^slack-[A-Za-z0-9]+-[A-Za-z0-9]+(-[0-9.]+)?$") then "slack:" + (split("-")[1])
+    elif test("^telegram-[0-9]+-[0-9]+$") then "telegram:" + (split("-")[1])
+    elif test("^pwa-.") then "pwa:" + .[4:]
+    else . end;
+  def thread_key:
+    if test("^slack-[A-Za-z0-9]+-[A-Za-z0-9]+-[0-9.]+$") then "slack-thread:" + (split("-")[2:] | join("-"))
+    else "" end;'
+
+_person_key() {
+    printf '%s' "$1" | jq -Rr "$_PERSON_KEY_JQ person_key"
+}
+_thread_key() {
+    printf '%s' "$1" | jq -Rr "$_PERSON_KEY_JQ thread_key"
+}
+
+# All keys that mean the same person: the key itself plus any `aliases` listed
+# in a `type: person` memory whose `person_key` matches (or whose own key is
+# listed as an alias). Reads $MEM_DIR; silent when unset. One key per line.
+_person_aliases() {
+    local key="$1" f ftype fkey aliases
+    printf '%s\n' "$key"
+    [[ -n "${MEM_DIR:-}" && -d "$MEM_DIR" ]] || return 0
+    for f in "$MEM_DIR"/*.md; do
+        [[ -f "$f" ]] || continue
+        ftype=$(awk 'NR==1 && /^---$/{f=1; next} f && /^---$/{exit} f && /^type:/{sub(/^type:[[:space:]]*/, ""); print; exit}' "$f")
+        [[ "$ftype" == person ]] || continue
+        fkey=$(awk 'NR==1 && /^---$/{f=1; next} f && /^---$/{exit} f && /^person_key:/{sub(/^person_key:[[:space:]]*/, ""); print; exit}' "$f")
+        # aliases: [a, b]  or  aliases:\n  - a\n  - b
+        aliases=$(awk 'NR==1 && /^---$/{f=1; next} f && /^---$/{exit}
+            f && /^aliases:[[:space:]]*\[/ {s=$0; sub(/^aliases:[[:space:]]*\[/, "", s); sub(/\].*$/, "", s); gsub(/,/, "\n", s); print s; next}
+            f && /^aliases:[[:space:]]*$/ {a=1; next}
+            f && a && /^[[:space:]]*-[[:space:]]*/ {sub(/^[[:space:]]*-[[:space:]]*/, ""); print; next}
+            f && a {a=0}' "$f" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^"//;s/"$//' | sed '/^$/d')
+        if [[ "$fkey" == "$key" ]] || printf '%s\n' "$aliases" | grep -qx -- "$key"; then
+            [[ -n "$fkey" ]] && printf '%s\n' "$fkey"
+            [[ -n "$aliases" ]] && printf '%s\n' "$aliases"
+        fi
+    done | sort -u
+}
+
+# ---------------------------------------------------------------------------
+# Message index (design/conversation_memory.md, part 1)
+# ---------------------------------------------------------------------------
+# messages.jsonl next to the trajectory holds every message step, one slim
+# line each. It is DERIVED: the trajectory stays the only truth, and the index
+# is rebuilt from it whenever it is missing or does not match. It maintains
+# itself on read: each call appends the message lines from the bytes the
+# trajectory gained since the recorded offset (usually a few MB), so nothing
+# that writes messages has to know it exists, and a busy identity does not pay
+# a whole-file scan on every reply (a 5,000 line tail was 1.3s and could not
+# see past ~a day; the full file is over 1GB on Audel).
+#
+# deferrals.jsonl beside it is built in the same pass and shares the offset
+# file: the responder's deferral `action` steps (source responder, with a
+# trigger_step, person, request) and every observation that carries
+# `resolves=<trigger>`. `chat pending` reads it so the mind sees every
+# unresolved request however old, not just the ones still inside its
+# recent-stream window (design/conversation_memory.md, part 5: on 2026-09-02
+# a request was masked by a newer one, then aged out of the window unseen).
+_INDEX_CONTENT_CAP=8000
+
+_deferrals_path() { printf '%s/deferrals.jsonl' "$(dirname "$1")"; }
+
+# _index_update <trajectory file> <index file>
+# Brings the index up to date. Only complete lines are consumed: a line still
+# being appended is left for the next call, so a message is never skipped.
+_index_update() {
+    local tf="$1" idx="$2" off="$2.offset" lock="$2.lock"
+    local header have_off have_header size
+    header=$(head -n 1 -- "$tf" 2>/dev/null | jq -r '.step_id // .traj_id // ""' 2>/dev/null) || header=""
+    have_off=0; have_header=""
+    if [[ -f "$off" ]]; then
+        read -r have_off have_header < "$off" || true
+        [[ "$have_off" =~ ^[0-9]+$ ]] || have_off=0
+    fi
+    local dfr; dfr=$(_deferrals_path "$idx")
+    if [[ ! -f "$idx" || ! -f "$dfr" || "$have_header" != "$header" ]]; then
+        have_off=0
+        : > "$idx.rebuild" || return 1
+        mv -f "$idx.rebuild" "$idx"
+        : > "$dfr.rebuild" || return 1
+        mv -f "$dfr.rebuild" "$dfr"
+    fi
+    size=$(wc -c < "$tf" | tr -d ' ')
+    (( size > have_off )) || return 0
+    # One updater at a time; a concurrent reader just uses what is there.
+    mkdir "$lock" 2>/dev/null || return 0
+    _index_apply "$tf" "$idx" "$off" "$header" "$have_off"
+    local rc=$?
+    rmdir "$lock" 2>/dev/null
+    return $rc
+}
+
+# The locked part of _index_update: read the new bytes, index the complete
+# message lines among them, advance the offset.
+_index_apply() {
+    local tf="$1" idx="$2" off="$3" header="$4" have_off="$5"
+    local new_bytes tmp partial
+    tmp=$(mktemp) || return 1
+    tail -c +"$((have_off + 1))" -- "$tf" > "$tmp"
+    new_bytes=$(wc -c < "$tmp" | tr -d ' ')
+    partial=0
+    if [[ "$new_bytes" -gt 0 && "$(tail -c 1 "$tmp" | wc -l | tr -d ' ')" -eq 0 ]]; then
+        partial=$(tail -n 1 "$tmp" | wc -c | tr -d ' ')
+    fi
+    if (( new_bytes - partial > 0 )); then
+        head -c "$((new_bytes - partial))" "$tmp" \
+            | grep -F '"type":"message"' \
+            | jq -c --argjson cap "$_INDEX_CONTENT_CAP" 'fromjson? // empty
+                | select(.type == "message" and (.from // "") != "" and (.to // "") != "")
+                | {step_id, ts, from, to, reply_to, filename,
+                   content: ((.content // "") | tostring
+                             | if length > $cap then .[0:$cap] + "…[truncated]" else . end)}
+                | with_entries(select(.value != null))' -R >> "$idx" 2>/dev/null || true
+        head -c "$((new_bytes - partial))" "$tmp" \
+            | grep -F -e '"trigger_step"' -e '"resolves":' \
+            | jq -c --argjson cap "$_INDEX_CONTENT_CAP" 'fromjson? // empty
+                | if .type == "action" and .source == "responder" and (.trigger_step // "") != "" then
+                    {kind: "request", step_id, ts, trigger_step, person,
+                     request: ((.request // .content // "") | tostring
+                               | if length > $cap then .[0:$cap] + "…[truncated]" else . end)}
+                  elif .type == "observation" and (.resolves // "") != "" then
+                    {kind: "resolve", step_id, ts, resolves}
+                  else empty end
+                | with_entries(select(.value != null))' -R >> "$(_deferrals_path "$idx")" 2>/dev/null || true
+    fi
+    printf '%s %s\n' "$((have_off + new_bytes - partial))" "$header" > "$off"
+    rm -f "$tmp"
+}
+
+# Parse "7d" / "36h" / "90m" / "3600" (seconds) into seconds.
+_duration_s() {
+    case "$1" in
+        *d) printf '%s' "$(( ${1%d} * 86400 ))" ;;
+        *h) printf '%s' "$(( ${1%h} * 3600 ))" ;;
+        *m) printf '%s' "$(( ${1%m} * 60 ))" ;;
+        *s) printf '%s' "${1%s}" ;;
+        *)  printf '%s' "$1" ;;
+    esac
+}
+
 cmd_history() {
-    local n=20
-    [[ -n "${1:-}" ]] && n="$1"
+    local n=20 with="" thread="" since="" as_json=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --with)  with="${2:?--with requires a name or person key}"; shift 2 ;;
+            --thread) thread="${2:?--thread requires a routing name or thread key}"; shift 2 ;;
+            --since) since="${2:?--since requires a duration like 7d}"; shift 2 ;;
+            -n)      n="${2:?-n requires a count}"; shift 2 ;;
+            --json)  as_json=1; shift ;;
+            *)       n="$1"; shift ;;
+        esac
+    done
+    [[ "$n" =~ ^[0-9]+$ ]] || die "history: count must be a number, got '$n'"
 
     local identity_name="${IDENTITY_NAME:-agent}"
+
+    if [[ -n "$with" || -n "$thread" ]]; then
+        # Indexed path. --with: this person's conversation with us, grouped by
+        # person key across every routing name they have used. --thread: every
+        # message in one Slack thread, whoever sent it (their messages to us
+        # and our replies to anyone there). Both: the union. Newest last.
+        local tf idx key keys_json tkey since_s
+        tf=$(traj path "${ROOT_TRAJ_ID:-$TRAJ_ID}" 2>/dev/null) || tf=""
+        [[ -n "$tf" && -f "$tf" ]] || die "history: cannot resolve the root trajectory file"
+        idx="$(dirname "$tf")/messages.jsonl"
+        _index_update "$tf" "$idx" || true
+        [[ -f "$idx" ]] || { [[ $as_json -eq 1 ]] && printf '[]\n'; return 0; }
+        keys_json='[]'
+        if [[ -n "$with" ]]; then
+            key=$(_person_key "$with")
+            keys_json=$(_person_aliases "$key" | jq -Rn '[inputs | select(length > 0)]')
+        fi
+        tkey=""
+        if [[ -n "$thread" ]]; then
+            case "$thread" in
+                slack-thread:*) tkey="$thread" ;;
+                *) tkey=$(_thread_key "$thread") ;;
+            esac
+            if [[ -z "$tkey" && -z "$with" ]]; then
+                [[ $as_json -eq 1 ]] && printf '[]\n'
+                return 0   # not a threaded conversation: nothing to add
+            fi
+        fi
+        since_s=0
+        [[ -n "$since" ]] && since_s=$(_duration_s "$since")
+        jq -cn --arg me "$identity_name" --argjson keys "$keys_json" --arg tkey "$tkey" \
+               --argjson since "$since_s" --argjson n "$n" --argjson json "$as_json" "$_PERSON_KEY_JQ"'
+            def secs: (.ts // "")[0:19] + "Z" | try fromdateiso8601 catch 0;
+            def with_person:
+                (.from == $me and ((.to | person_key) as $k | $keys | index($k)) != null)
+                or (.to == $me and ((.from | person_key) as $k | $keys | index($k)) != null);
+            def in_thread:
+                $tkey != "" and ((.from | thread_key) == $tkey or (.to | thread_key) == $tkey);
+            [inputs | fromjson? // empty]
+            | unique_by(.step_id)
+            | map(select((with_person or in_thread)
+                         and ($since == 0 or (secs >= (now - $since)))))
+            | sort_by(.ts // "")
+            | .[-$n:]
+            | if $json == 1 then . else
+                .[] | "\(.ts // "?") \(.from) → \(.to): \(.content)"
+              end' -R < "$idx"
+        return 0
+    fi
 
     # Support both new "message" type and legacy "human-msg"/"agent-msg" types
     traj cat "${ROOT_TRAJ_ID:-$TRAJ_ID}" --filter type=message,human-msg,agent-msg --raw 2>/dev/null \
@@ -245,6 +476,56 @@ cmd_history() {
     done
 }
 
+# chat pending [--max-age 14d] [--json]
+# Every deferral the responder handed the mind that no observation has
+# resolved yet, oldest first. Text lines by default; --json is an array of
+# {trigger_step, person, request, ts, age_s}. --max-age drops requests older
+# than that (default: none), so a request never resolved does not nag forever.
+cmd_pending() {
+    local max_age="" as_json=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --max-age) max_age="${2:?--max-age requires a duration like 14d}"; shift 2 ;;
+            --json)    as_json=1; shift ;;
+            *)         die "pending: unknown argument '$1'" ;;
+        esac
+    done
+    local tf idx dfr max_s
+    tf=$(traj path "${ROOT_TRAJ_ID:-$TRAJ_ID}" 2>/dev/null) || tf=""
+    [[ -n "$tf" && -f "$tf" ]] || die "pending: cannot resolve the root trajectory file"
+    idx="$(dirname "$tf")/messages.jsonl"
+    _index_update "$tf" "$idx" || true
+    dfr=$(_deferrals_path "$idx")
+    [[ -f "$dfr" ]] || { [[ $as_json -eq 1 ]] && printf '[]\n'; return 0; }
+    max_s=0
+    [[ -n "$max_age" ]] && max_s=$(_duration_s "$max_age")
+    jq -rcn --argjson max "$max_s" --argjson json "$as_json" '
+        def secs: (.ts // "")[0:19] + "Z" | try fromdateiso8601 catch 0;
+        def age_text: if . < 3600 then "\(. / 60 | floor)m"
+                      elif . < 86400 then "\(. / 3600 | floor)h"
+                      else "\(. / 86400 | floor)d" end;
+        [inputs | fromjson? // empty] as $all
+        | ($all | map(select(.kind == "resolve") | .resolves)) as $done
+        | $all
+        | map(select(.kind == "request" and (.trigger_step as $t | $done | index($t) | not)))
+        | unique_by(.trigger_step)
+        | map(. + {age_s: ((now - secs) | floor)})
+        | map(select($max == 0 or .age_s <= $max))
+        | sort_by(.ts // "")
+        | if $json == 1 then map({trigger_step, person, request, ts, age_s})
+          else .[] | "\(.ts // "?") \(.person // "someone"): \(.request) (pending \(.age_s | age_text), trigger \(.trigger_step))"
+          end' -R < "$dfr"
+}
+
+cmd_person_key() {
+    [[ -n "${1:-}" ]] || die "Usage: chat person-key <name>"
+    _person_key "$1"; echo
+}
+cmd_thread_key() {
+    [[ -n "${1:-}" ]] || die "Usage: chat thread-key <name>"
+    _thread_key "$1"; echo
+}
+
 cmd_repl() {
     # Prefer the renamed TUI binary; fall back to a pre-rename build.
     if command -v headlong-tui >/dev/null 2>&1; then
@@ -258,17 +539,42 @@ usage() {
 chat — Messaging for an activated identity
 
 Usage:
-  chat send [--from <name>] [--to <name>] <message>
+  chat send [--from <name>] [--to <name>] [--source-url <url>] <message>
                              Send a message (from defaults to .chatrc
                              default_send_from, to defaults to $IDENTITY_NAME)
   chat send-file [--from <name>] [--to <name>] <file>
                              Send a file's contents as a message
-  chat reply [--reply-to <step_id>] <to_name> <message>
+  chat reply [--reply-to <step_id>] [--follow-up] <to_name> <message>
                              Agent sends a reply (from is $IDENTITY_NAME).
                              Stamps reply_to with the step it answers —
                              inferred (latest unanswered message from
                              <to_name>) unless --reply-to overrides.
+                             --follow-up: a deliberate second reply to an
+                             already answered message (delivering work the
+                             first reply promised); skips the duplicate
+                             guard and marks the step follow_up:true.
   chat history [N]           Show last N messages (default 20)
+  chat history --with <name> [--since 7d] [-n N] [--json]
+                             This person's conversation with the identity,
+                             grouped by person key across all their routing
+                             names, from the messages.jsonl index next to the
+                             trajectory (derived, self-maintaining; the
+                             trajectory stays the source of truth)
+  chat history --thread <name> [--since 1d] [-n N] [--json]
+                             Every message in that Slack thread, whoever
+                             sent it (combine with --with for the union)
+  chat pending [--max-age 14d] [--json]
+                             Requests the responder deferred to the mind
+                             (DEFER) that no observation has resolved yet,
+                             oldest first, from the deferrals.jsonl index
+                             beside messages.jsonl. The mind delivers one
+                             with `chat reply --follow-up --reply-to
+                             <trigger> <person>` and closes it with an
+                             observation carrying resolves=<trigger>
+  chat person-key <name>     Print the stable person key for a routing name
+                             (slack-U..-C..-ts -> slack:U..; pwa-x -> pwa:x)
+  chat thread-key <name>     Print the thread key (Slack channel threads
+                             only; empty for DMs, phone chat, Telegram)
   chat repl                  Interactive chat (shows agent replies inline)
 
 Config file ($CHATRC, default ./.chatrc):
@@ -280,6 +586,9 @@ Environment:
   TRAJ_ID         Trajectory ID (set by `identity shell`)
   IDENTITY_NAME   Identity name (for reply attribution and --to default)
   IDENTITY_DIR    Identity directory (for repl history)
+  MEM_DIR         Memories dir; `type: person` memories with `person_key`
+                  and `aliases` merge several keys into one person for
+                  history --with
 EOF
     exit 0
 }
@@ -290,6 +599,9 @@ case "${1:-}" in
     send-file) shift; cmd_send_file "$@" ;;
     reply)     shift; cmd_reply "$@" ;;
     history) shift; cmd_history "$@" ;;
+    pending)   shift; cmd_pending "$@" ;;
+    person-key) shift; cmd_person_key "$@" ;;
+    thread-key) shift; cmd_thread_key "$@" ;;
     repl)    shift; cmd_repl "$@" ;;
     -h|--help|help) usage ;;
     "")     usage ;;

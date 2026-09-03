@@ -72,7 +72,10 @@ else
         for k in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY; do
             grep -q "^$k=" "$HEADLONG_HOME/.env" 2>/dev/null && keys="$keys $k"
         done
+        # .env values are single-quoted (headlong-init _env_set); strip a
+        # matching pair of surrounding quotes for display.
         model=$(sed -n 's/^SHELLM_MODEL=//p' "$HEADLONG_HOME/.env" 2>/dev/null | tail -1)
+        model="${model#\'}"; model="${model%\'}"
         say "  state home: $HEADLONG_HOME   (.env has:${keys:- no API key}${model:+; model $model})"
     else
         say "  state home: $HEADLONG_HOME   (missing)"

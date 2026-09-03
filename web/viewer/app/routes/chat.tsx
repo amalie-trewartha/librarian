@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { SendHorizontal } from "lucide-react";
+import { ExternalLink, SendHorizontal } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router";
 import { toast } from "sonner";
@@ -12,6 +12,8 @@ import {
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { LoadingDots } from "~/components/ui/loading-dots";
+import { Textarea } from "~/components/ui/textarea";
+import { useAutosizeTextarea } from "~/hooks/use-autosize-textarea";
 import {
   fetchChat,
   fetchConfig,
@@ -20,6 +22,7 @@ import {
   sendChat,
 } from "~/lib/api";
 import type { ChatMessage } from "~/lib/types";
+import { slackConversationUrl, slackSourceUrl } from "~/lib/source-links";
 import { cn } from "~/lib/utils";
 
 export function meta() {
@@ -51,6 +54,10 @@ function messageTime(ts: string | null): string {
 }
 
 function Bubble({ message, mine }: { message: ChatMessage; mine: boolean }) {
+  const sourceUrl =
+    slackSourceUrl(message.source_url) ||
+    slackConversationUrl(message.from) ||
+    slackConversationUrl(message.to);
   return (
     <div className={cn("flex", mine ? "justify-end" : "justify-start")}>
       <div
@@ -78,6 +85,16 @@ function Bubble({ message, mine }: { message: ChatMessage; mine: boolean }) {
         <div className="whitespace-pre-wrap break-words text-sm">
           {message.content}
         </div>
+        {sourceUrl && (
+          <a
+            href={sourceUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-1 inline-flex items-center gap-1 font-mono text-[10px] opacity-70 hover:underline"
+          >
+            Open in Slack <ExternalLink className="h-3 w-3" />
+          </a>
+        )}
       </div>
     </div>
   );
@@ -90,6 +107,7 @@ export default function ChatPage() {
   const [draft, setDraft] = useState("");
   const [myName, setMyName] = useState(storedName);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const draftRef = useAutosizeTextarea(draft);
 
   // Seed the from-field default from the CLI (chatrc default_send_from) unless
   // the user has ever touched the name field (tracked in localStorage, so the
@@ -182,7 +200,7 @@ export default function ChatPage() {
 
       {controlsEnabled && (
         <form
-          className="mt-3 flex items-center gap-2"
+          className="mt-3 flex items-end gap-2"
           onSubmit={(event) => {
             event.preventDefault();
             const content = draft.trim();
@@ -196,14 +214,28 @@ export default function ChatPage() {
               window.localStorage.setItem(MY_NAME_KEY, event.target.value);
             }}
             title="Your name (the from field on messages)"
-            className="h-9 w-24 font-mono text-xs"
+            className="h-9 w-24 shrink-0 font-mono text-xs"
           />
-          <Input
+          <Textarea
+            ref={draftRef}
             autoFocus
+            rows={1}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
+            enterKeyHint="send"
+            onKeyDown={(event) => {
+              if (
+                event.key === "Enter" &&
+                !event.shiftKey &&
+                !event.nativeEvent.isComposing &&
+                event.keyCode !== 229
+              ) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
             placeholder={`Message ${identityName}…`}
-            className="h-9 flex-1"
+            className="max-h-40 flex-1 py-2"
           />
           <Button
             type="submit"

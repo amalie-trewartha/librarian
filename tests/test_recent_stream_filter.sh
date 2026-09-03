@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# tests/test_recent_stream_filter.sh — the recent-stream filter thinkers read
+# (design/conversation_memory.md, part 3; Experiment B).
+#
+# Usage: tests/test_recent_stream_filter.sh
+#
+# Builds a trajectory by hand and calls _recent_stream from thinkers/_lib.
+# Pins: reasoning steps are dropped, final steps kept, runs of consecutive idle
+# (and error) steps collapse into one line with a count and duration, idles
+# separated by another step are not merged, order is preserved, content is
+# still truncated at 1500 characters, and the window (N) bounds the raw steps
+# considered before collapsing. No LLM calls, no docker.
+
+set -uo pipefail
+unset IDENTITY_DIR IDENTITY_NAME MEM_DIR TRAJ_DIR TRAJ_ID ROOT_TRAJ_ID THINK_CONTEXT_TAIL 2>/dev/null
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(dirname "$HERE")"
+export PATH="$REPO/bin:$PATH"
+
+pass=0
+fail=0
+ok()  { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
+bad() { fail=$((fail+1)); printf 'FAIL %s%s\n' "$1" "${2:+ — $2}"; }
+
+command -v jq >/dev/null 2>&1 || { echo "FAIL jq not found"; exit 1; }
+
+WORK=$(mktemp -d)
+trap 'cd /; rm -rf "$WORK"' EXIT
+
+ID="$WORK/ident"
+TRAJ_ID="cafe0000-0000-0000-0000-0000000000ef"
+mkdir -p "$ID/trajectories/$TRAJ_ID"
+TRAJ="$ID/trajectories/$TRAJ_ID/trajectory.jsonl"
+export IDENTITY_NAME=ada TRAJ_DIR="$ID/trajectories" TRAJ_ID="$TRAJ_ID" IDENTITY_DIR="$ID" MEM_DIR="$ID/memories"
+
+# ts <minutes ago> — fixed base so durations are deterministic
+ts() { python3 -c "import datetime as d; print((d.datetime(2026,9,2,12,0,tzinfo=d.timezone.utc)-d.timedelta(minutes=$1)).strftime('%Y-%m-%dT%H:%M:%S.000Z'))"; }
+step() {  # step <id> <type> <content> <minutes-ago> [extra json fields]
+    printf '{"step_id":"%s","type":"%s","content":%s,"ts":"%s","source":"monolith"%s}\n' \
+        "$1" "$2" "$(printf '%s' "$3" | jq -Rsa .)" "$(ts "$4")" "${5:-}" >> "$TRAJ"
+}
+
+stream() {  # stream <N> — run _recent_stream in a subshell with the lib sourced
+    (
+        # shellcheck disable=SC1091
+        source "$REPO/thinkers/_lib/common.sh"
+        _recent_stream "$1"
+    )
+}
+
+: > "$TRAJ"
+printf '{"step_id":"hdr","type":"trajectory","ts":"%s"}\n' "$(ts 9999)" >> "$TRAJ"
+step t1  thought   "first thought"                       300
+step r1  reasoning "Chat-first this tick: last-word..."  299
+step so1 shell-output "output"                           298
+step f1  final     "run concluded: nothing to do"        297
+step i1  idle idle 290
+step i2  idle idle 200
+step i3  idle idle 170   # i1..i3: 2h over 290 -> 170 min ago
+step m1  message   "hey"                                 100 ',"from":"nick","to":"ada"'
+step i4  idle idle 90    # separated from i1..i3 by the message: its own run
+step e1  error "monolith run failed (rc=1) with no durable step" 60 ',"rc":1,"reason":"run-failed"'
+step e2  error "monolith run failed (rc=1) with no durable step" 20 ',"rc":1,"reason":"run-failed"'
+step r2  reasoning "more prose"                          10
+step t2  thought   "$(head -c 2000 /dev/zero | tr '\0' x)" 5
+
+out=$(stream 30)
+types=$(printf '%s\n' "$out" | jq -r .type | tr '\n' ' ')
+
+if ! printf '%s\n' "$out" | jq -e 'select(.type == "reasoning")' >/dev/null 2>&1; then
+    ok "reasoning steps are dropped"
+else
+    bad "reasoning steps are dropped" "$types"
+fi
+if ! printf '%s\n' "$out" | jq -e 'select(.type == "shell-output")' >/dev/null 2>&1; then
+    ok "machinery steps stay out"
+else
+    bad "machinery steps stay out"
+fi
+printf '%s\n' "$out" | jq -e 'select(.step_id == "f1")' >/dev/null 2>&1 && ok "final steps are kept" || bad "final steps are kept" "$types"
+
+idle_lines=$(printf '%s\n' "$out" | jq -c 'select(.type == "idle")')
+n_idle=$(printf '%s\n' "$idle_lines" | grep -c . || true)
+[[ "$n_idle" == 2 ]] && ok "two idle runs become two lines (the message splits them)" || bad "two idle runs become two lines" "got $n_idle: $idle_lines"
+first_idle=$(printf '%s\n' "$idle_lines" | head -1)
+if [[ "$(printf '%s' "$first_idle" | jq -r .content)" == "idle x3 over 2h0m" \
+      && "$(printf '%s' "$first_idle" | jq -r .collapsed)" == 3 \
+      && "$(printf '%s' "$first_idle" | jq -r .step_id)" == i3 ]]; then
+    ok "a run of 3 idles collapses to 'idle x3 over 2h0m', carrying the last step id"
+else
+    bad "a run of 3 idles collapses with count and duration" "got $first_idle"
+fi
+second_idle=$(printf '%s\n' "$idle_lines" | tail -1)
+if [[ "$(printf '%s' "$second_idle" | jq -r .content)" == idle && "$(printf '%s' "$second_idle" | jq 'has("collapsed")')" == false ]]; then
+    ok "a lone idle is left as it was"
+else
+    bad "a lone idle is left as it was" "got $second_idle"
+fi
+
+err=$(printf '%s\n' "$out" | jq -c 'select(.type == "error")')
+n_err=$(printf '%s\n' "$err" | grep -c . || true)
+if [[ "$n_err" == 1 && "$(printf '%s' "$err" | jq -r .content)" == "run failed x2 over 40m (rc=1)" ]]; then
+    ok "error steps are in, and a run of them collapses with the rc"
+else
+    bad "error steps are in and collapse" "got $err"
+fi
+
+order=$(printf '%s\n' "$out" | jq -r .step_id | tr '\n' ' ')
+[[ "$order" == "t1 f1 i3 m1 i4 e2 t2 " ]] && ok "order is preserved" || bad "order is preserved" "got $order"
+
+len=$(printf '%s\n' "$out" | jq -r 'select(.step_id == "t2") | .content | length')
+[[ "$len" -le 1520 ]] && ok "long content is still truncated" || bad "long content is still truncated" "got $len"
+
+# The window bounds raw kept steps before collapsing: N=3 sees e1 e2 t2 only
+out3=$(stream 3)
+order3=$(printf '%s\n' "$out3" | jq -r .step_id | tr '\n' ' ')
+[[ "$order3" == "e2 t2 " ]] && ok "N bounds the raw steps considered (3 kept -> 2 lines after collapsing)" || bad "N bounds the raw steps considered" "got $order3"
+
+# Every output line is still one JSON object callers can parse
+if printf '%s\n' "$out" | jq -e . >/dev/null 2>&1; then
+    ok "output is one JSON object per line"
+else
+    bad "output is one JSON object per line"
+fi
+
+echo
+echo "$pass passed, $fail failed"
+[[ $fail -eq 0 ]]
