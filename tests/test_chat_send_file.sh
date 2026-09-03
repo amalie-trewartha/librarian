@@ -28,13 +28,12 @@ mkdir -p "$TRAJ_DIR"
 
 new_out=$(traj new --traj_dir "$TRAJ_DIR" --slug send-file-test)
 tid=$(printf '%s\n' "$new_out" | head -1)
-rel=$(printf '%s\n' "$new_out" | sed -n '2p')
 export TRAJ_ID="$tid"
 export ROOT_TRAJ_ID="$tid"
 export IDENTITY_NAME="tester"
 export CHATRC="$WORK/.chatrc"
 printf 'default_send_from=tester\n' > "$CHATRC"
-cd "$WORK"
+cd "$WORK" || exit 1
 
 # --- happy path: text file lands as content_b64 + readable marker ---
 printf 'hello file\n' > "$WORK/note.txt"
