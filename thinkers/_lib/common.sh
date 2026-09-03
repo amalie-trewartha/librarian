@@ -293,7 +293,7 @@ _recent_stream() {
         | jq -cR 'fromjson? // empty
             | select(.type == "thought" or .type == "action" or .type == "observation"
                      or .type == "message" or .type == "idle" or .type == "merge"
-                     or .type == "final" or .type == "error" or .type == "reasoning")
+                     or .type == "final" or .type == "error")
             | del(.content_b64)
             | .content = (
                 (if ((.content // "") == "") and ((.filename // "") != "")
