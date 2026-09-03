@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Maximize2, Minimize2 } from "lucide-react";
+import { ExternalLink, Maximize2, Minimize2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router";
 
@@ -109,6 +109,17 @@ function StreamCard({ card, animate }: { card: Ml2Card; animate: boolean }) {
         <span className={cn("font-mono text-sm tracking-wide", style.label)}>
           {card.label}
         </span>
+        {card.source_url && (
+          <a
+            href={card.source_url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 font-mono text-xs text-zinc-400 hover:text-zinc-100 hover:underline"
+            onClick={(event) => event.stopPropagation()}
+          >
+            Open in Slack <ExternalLink className="h-3 w-3" />
+          </a>
+        )}
         <span className="ml-auto font-mono text-sm tabular-nums text-zinc-500">
           {fmtTime(card.ts)}
         </span>

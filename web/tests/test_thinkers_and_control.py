@@ -379,6 +379,24 @@ def test_chat_send_pipes_stdin(client: TestClient, stub_bin: Path):
     assert "STDIN=hello there" in calls
 
 
+def test_chat_send_passes_slack_source_url(client: TestClient, stub_bin: Path):
+    _write_stub(stub_bin, "chat")
+    source_url = "https://laudesters.slack.com/archives/C123/p1788451200123456"
+    resp = client.post(
+        "/api/identities/.identities~ctl/chat",
+        json={
+            "content": "from Slack",
+            "from_name": "slack-U1-C123",
+            "source_url": source_url,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert (
+        f"ARGS=send --from slack-U1-C123 --to ctl --source-url {source_url}"
+        in _calls(stub_bin)
+    )
+
+
 def test_chat_send_validation(client: TestClient, stub_bin: Path):
     _write_stub(stub_bin, "chat")
     resp = client.post(
@@ -389,6 +407,15 @@ def test_chat_send_validation(client: TestClient, stub_bin: Path):
     resp = client.post(
         "/api/identities/.identities~ctl/chat",
         json={"content": "hi", "from_name": "nick; rm -rf"},
+    )
+    assert resp.status_code == 422
+    resp = client.post(
+        "/api/identities/.identities~ctl/chat",
+        json={
+            "content": "hi",
+            "from_name": "nick",
+            "source_url": "javascript:alert(1)",
+        },
     )
     assert resp.status_code == 422
 

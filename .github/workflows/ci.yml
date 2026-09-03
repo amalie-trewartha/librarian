@@ -8,7 +8,7 @@
 # Jobs (all run in parallel, ~3 min wall clock):
 #   harness        tests/run-all.sh            bash tests for bin/ and tools/
 #   python         pytest                       web, slack, telegram (matrix)
-#   viewer         bun typecheck + build        web/viewer (what the box builds)
+#   viewer         bun test + typecheck + build web/viewer (what the box builds)
 #   tui            cargo fmt/clippy/check       tui/headlong
 #   shellcheck     shellcheck -S warning        every shell script in the tree
 #   macos          bash 3.2 lint + harness      the product scripts must run on
@@ -33,7 +33,7 @@
 #                                               on PRs
 #
 # Run the same things locally: tests/run-all.sh, uv run --project web pytest
-# web/tests (and slack, telegram), bun run typecheck/build in web/viewer,
+# web/tests (and slack, telegram), bun run test/typecheck/build in web/viewer,
 # cargo fmt --check / clippy / check in tui/headlong, tests/smoke_install.sh,
 # gitleaks git . -c .gitleaks.toml, cloc bin/ thinkers/. For the macOS gate on
 # a Mac: PATH=/bin:/usr/bin:$PATH tests/run-all.sh (so `bash` is 3.2).
@@ -95,7 +95,7 @@ jobs:
         run: uv run --project ${{ matrix.project }} pytest ${{ matrix.project }}/tests -q
 
   viewer:
-    name: viewer typecheck + build
+    name: viewer test + typecheck + build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -105,6 +105,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
+      - run: bun run test
       - run: bun run typecheck
       - run: bun run build
 

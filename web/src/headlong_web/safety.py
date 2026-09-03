@@ -2,6 +2,7 @@
 
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 
@@ -15,6 +16,22 @@ THINKER_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 IDENTITY_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 CHAT_FROM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 ICON_NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]+\.png$")
+
+
+def is_slack_permalink(value: str) -> bool:
+    """Accept only Slack HTTPS archive links as chat source metadata."""
+    if not value or len(value) > 2048:
+        return False
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower()
+    return (
+        parsed.scheme == "https"
+        and (host == "slack.com" or host.endswith(".slack.com"))
+        and parsed.path.startswith("/archives/")
+    )
 
 
 def contained_path(base: Path, *parts: str) -> Path:

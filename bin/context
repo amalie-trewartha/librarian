@@ -247,7 +247,8 @@ def truncate_field($limit; $sid):
 def is_meta($k):
   ($k == "step_id" or $k == "ts" or $k == "type" or $k == "fork_parent")
   or ($k == "run_id" or $k == "llm_s" or $k == "in_tok" or $k == "out_tok"
-      or $k == "think_tok" or $k == "cache_tok" or $k == "estimated")
+      or $k == "think_tok" or $k == "cache_tok" or $k == "estimated"
+      or $k == "source_url")
   or ($k | endswith("_ref"))
   or ($k | endswith("_bytes"))
   or ($k | endswith("_truncated"));

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { SendHorizontal } from "lucide-react";
+import { ExternalLink, SendHorizontal } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router";
 import { toast } from "sonner";
@@ -22,6 +22,7 @@ import {
   sendChat,
 } from "~/lib/api";
 import type { ChatMessage } from "~/lib/types";
+import { slackConversationUrl, slackSourceUrl } from "~/lib/source-links";
 import { cn } from "~/lib/utils";
 
 export function meta() {
@@ -53,6 +54,10 @@ function messageTime(ts: string | null): string {
 }
 
 function Bubble({ message, mine }: { message: ChatMessage; mine: boolean }) {
+  const sourceUrl =
+    slackSourceUrl(message.source_url) ||
+    slackConversationUrl(message.from) ||
+    slackConversationUrl(message.to);
   return (
     <div className={cn("flex", mine ? "justify-end" : "justify-start")}>
       <div
@@ -80,6 +85,16 @@ function Bubble({ message, mine }: { message: ChatMessage; mine: boolean }) {
         <div className="whitespace-pre-wrap break-words text-sm">
           {message.content}
         </div>
+        {sourceUrl && (
+          <a
+            href={sourceUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-1 inline-flex items-center gap-1 font-mono text-[10px] opacity-70 hover:underline"
+          >
+            Open in Slack <ExternalLink className="h-3 w-3" />
+          </a>
+        )}
       </div>
     </div>
   );

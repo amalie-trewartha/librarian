@@ -179,6 +179,36 @@ n=$(chat history --with "$ANDY_T2" --json | jq 'length')
 n=$(chat history --with Braden --json | jq 'length')
 [[ "$n" == 0 ]] && ok "an unrelated name gets nothing" || bad "an unrelated name gets nothing" "got $n"
 
+# --- source links ------------------------------------------------------------
+SOURCE_URL="https://laudesters.slack.com/archives/D0BNW58GP5W/p1788451200123456"
+chat send --from "$ANDY_DM" --to "$ME" --source-url "$SOURCE_URL" "linked message" 2>/dev/null
+if tail -n 1 "$TRAJ" | jq -e --arg url "$SOURCE_URL" \
+    '.type == "message" and .content == "linked message" and .source_url == $url' >/dev/null; then
+    ok "chat send keeps an optional source URL on the message step"
+else
+    bad "chat send keeps an optional source URL on the message step"
+fi
+
+# Message content travels through stdin, not an argv string. Linux rejects a
+# single argument above 128 KiB, so these checks guard both write paths.
+LARGE_MESSAGE="$WORK/large-message.txt"
+dd if=/dev/zero bs=1024 count=150 2>/dev/null | tr '\0' x > "$LARGE_MESSAGE"
+large_bytes=$(wc -c < "$LARGE_MESSAGE" | tr -d ' ')
+chat send --from "$ANDY_DM" --to "$ME" < "$LARGE_MESSAGE" 2>/dev/null
+got_bytes=$(tail -n 1 "$TRAJ" | jq -r '.content | length')
+if [[ "$got_bytes" == "$large_bytes" ]]; then
+    ok "chat send preserves a message larger than Linux's argument limit"
+else
+    bad "chat send preserves a message larger than Linux's argument limit" "got $got_bytes bytes"
+fi
+chat reply --reply-to large-test --follow-up "$ANDY_DM" < "$LARGE_MESSAGE" 2>/dev/null
+got_bytes=$(tail -n 1 "$TRAJ" | jq -r '.content | length')
+if [[ "$got_bytes" == "$large_bytes" ]]; then
+    ok "chat reply preserves a message larger than Linux's argument limit"
+else
+    bad "chat reply preserves a message larger than Linux's argument limit" "got $got_bytes bytes"
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

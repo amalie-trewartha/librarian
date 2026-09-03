@@ -6,6 +6,7 @@
 // operator mind log and the presentation stream want opposite things.
 
 import type { NormalizedStep } from "~/lib/types";
+import { slackConversationUrl, slackSourceUrl } from "~/lib/source-links";
 
 export type CardKind = "thought" | "observation" | "outbound" | "inbound";
 
@@ -20,6 +21,7 @@ export interface Ml2Card {
   body: string;
   ts: string;
   step_id: string;
+  source_url: string | null;
 }
 
 function str(v: unknown): string {
@@ -72,7 +74,9 @@ export function toCard(
   identityName: string
 ): Ml2Card | null {
   const raw = step.raw;
-  const base = { ts: step.ts, step_id: step.step_id };
+  const sourceUrl =
+    slackSourceUrl(step.source_url) || slackSourceUrl(raw.source_url);
+  const base = { ts: step.ts, step_id: step.step_id, source_url: sourceUrl };
   switch (step.type) {
     case "thought":
     case "tp-thought": {
@@ -95,11 +99,13 @@ export function toCard(
       const outbound =
         step.type === "agent-msg" || (from !== "" && from === identityName);
       const direction = outbound ? ("outbound" as const) : ("inbound" as const);
+      const other = outbound ? to : from;
       return {
         ...base,
+        source_url: base.source_url || slackConversationUrl(other),
         kind: direction,
         group: "message",
-        label: messageLabel(direction, outbound ? to : from),
+        label: messageLabel(direction, other),
         body,
       };
     }

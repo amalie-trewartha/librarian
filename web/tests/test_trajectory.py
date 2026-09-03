@@ -144,6 +144,41 @@ def test_previews():
     assert step_preview({"type": "merge", "from_traj": "abc"}) == "<- abc"
 
 
+def test_reply_inherits_message_source_url():
+    from headlong_web.trajectory import normalize
+
+    source_url = "https://laudesters.slack.com/archives/C1/p1788451200123456"
+    raw = [
+        _step(
+            "message",
+            "m1",
+            source="chat",
+            content="please check this",
+            **{"from": "slack-U1-C1", "to": "audel", "source_url": source_url},
+        ),
+        _step(
+            "message",
+            "m2",
+            source="chat",
+            content="done",
+            **{"from": "audel", "to": "slack-U1-C1", "reply_to": "m1"},
+        ),
+        _step(
+            "message",
+            "m3",
+            source="chat",
+            content="unrelated",
+            **{"from": "audel", "to": "pwa-nick"},
+        ),
+    ]
+
+    normalized = normalize(raw, Path("/nonexistent"))
+    steps = {step["step_id"]: step for step in normalized["steps"]}
+    assert steps["m1"]["source_url"] == source_url
+    assert steps["m2"]["source_url"] == source_url
+    assert steps["m3"]["source_url"] is None
+
+
 def test_launched_by_and_nonaction_triggers():
     """launched_by is surfaced on the run group, and trigger_step joins any
     step type (a monologue thought triggering a generic thinker's run), with
