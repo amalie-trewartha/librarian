@@ -7,6 +7,7 @@ API, which appends it to the identity's trajectory via `bin/chat`.
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import queue
 import threading
@@ -28,6 +29,9 @@ DELIVERY_ATTEMPTS = 3
 DELIVERY_ERROR_TEXT = (
     "(bridge error: I couldn't reach my mind just now — please try again in a bit)"
 )
+# Bound reaction parent-lookups so a hung reactions.get cannot stall
+# the single inbound drain thread. Fail open rather than wait.
+ITEM_LOOKUP_TIMEOUT = 2
 
 
 def reaction_text(reaction: str, item_ts: str, thread_ts: str | None) -> str:
@@ -51,7 +55,7 @@ class InboundMessage:
     thread_ts: str | None  # where an error notice would go; None = top level
     text: str
     # True for channel reactions: resolve parent thread_ts in the worker
-    # so the bolt handler never blocks on conversations.history.
+    # so the bolt handler never blocks on reactions.get.
     resolve_parent: bool = False
 
 
@@ -156,11 +160,11 @@ class Inbound:
         """Land emoji reactions on our messages (and all DM reactions) in the mind log.
 
         Channel reactions on other people's messages are dropped — same gate as
-        un-mentioned channel traffic. Body is `:name:` so last-word can treat it
-        as reaction-only, not a request.
+        un-mentioned channel traffic. Body is `:name:`, plus `(on <item_ts>)`
+        when the reacted-to line is a reply inside a thread.
 
         Thread parent lookup happens in the delivery worker, not here: bolt
-        must ack the envelope without waiting on conversations.history.
+        must ack the envelope without waiting on the Web API.
         """
         msg = reaction_to_inbound(event, bot_user_id=self.bot_user_id)
         if msg is None:
@@ -187,22 +191,40 @@ class Inbound:
         )
 
     def _item_thread_ts(self, channel: str, ts: str) -> str | None:
-        """Parent thread_ts for the reacted-to message, if it is in a thread."""
-        try:
-            resp = self.app.client.conversations_history(
-                channel=channel,
-                latest=ts,
-                oldest=ts,
-                inclusive=True,
-                limit=1,
-            )
-            messages = resp.get("messages") or []
-            if not messages:
-                return None
-            return messages[0].get("thread_ts") or None
-        except Exception:
-            log.warning("conversations_history failed for %s ts=%s", channel, ts, exc_info=True)
+        """Parent thread_ts for the reacted-to message, if it is in a thread.
+
+        conversations.history only returns parent-channel messages, so a
+        reaction on a reply looks up empty there. conversations.replies is
+        keyed by the thread parent, not the item. reactions.get returns the
+        item itself (including thread_ts) for both roots and replies.
+
+        Bound to ITEM_LOOKUP_TIMEOUT so a hung Web API call cannot stall
+        the single drain thread. Fail open to None so the caller uses
+        item_ts as the thread root.
+        """
+        found = self._lookup_item_message(channel, ts)
+        if not found:
             return None
+        return found.get("thread_ts") or None
+
+    def _lookup_item_message(self, channel: str, ts: str) -> dict[str, Any] | None:
+        def _call() -> dict[str, Any] | None:
+            resp = self.app.client.reactions_get(channel=channel, timestamp=ts)
+            msg = resp.get("message") or {}
+            return msg or None
+
+        # Do not use `with ThreadPoolExecutor`: shutdown(wait=True) would
+        # re-block the drain thread on a hung reactions.get after timeout.
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            return pool.submit(_call).result(timeout=ITEM_LOOKUP_TIMEOUT)
+        except Exception:
+            log.warning(
+                "reactions.get failed for %s ts=%s", channel, ts, exc_info=True
+            )
+            return None
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
     def _on_event(self, event: dict[str, Any], logger: logging.Logger) -> None:
         if event.get("bot_id") or event.get("subtype"):
@@ -269,7 +291,8 @@ class Inbound:
                     text,
                     resolve_parent=False,
                 )
-            self.threads.touch(msg.channel, msg.thread_ts)
+            # A reaction is not request intent. Do not create or resurrect an
+            # active thread — that would open the un-mentioned-reply gate.
         content = clean_inbound(msg.text, self.bot_user_id)
         if not content:
             return
