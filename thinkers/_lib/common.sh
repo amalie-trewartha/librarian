@@ -307,9 +307,14 @@ _recent_stream() {
 # life at level-of-detail instead of just the last N steps. Falls back to empty
 # (caller keeps _recent_stream) on any error, so the loop never breaks.
 # See design/tiered_memory.md.
+# Rollup model: the explicit knobs win over the generic cheap class.
+# ROLLUP_MODEL, then recap's own RECAP_MAP_MODEL, then SHELLM_FAST_MODEL.
+# Passing the fast class as --map-model would override a RECAP_MAP_MODEL the
+# operator pinned (Audel's rollups are on sonnet while its fast class is a
+# flash model), and the life summary is the mind's long-term memory.
 _life_context() {
     command -v recap >/dev/null 2>&1 || return 0
-    local mm=() m="${ROLLUP_MODEL:-${SHELLM_FAST_MODEL:-}}"
+    local mm=() m="${ROLLUP_MODEL:-${RECAP_MAP_MODEL:-${SHELLM_FAST_MODEL:-}}}"
     [[ -n "$m" ]] && mm=(--map-model "$m")
     recap "${ROOT_TRAJ_ID:-$TRAJ_ID}" --context \
         --budget "${MONOLITH_CONTEXT_BUDGET:-auto}" \
