@@ -321,8 +321,13 @@ _life_context() {
     command -v recap >/dev/null 2>&1 || return 0
     local mm=() m="${ROLLUP_MODEL:-${RECAP_MAP_MODEL:-${SHELLM_FAST_MODEL:-}}}"
     [[ -n "$m" ]] && mm=(--map-model "$m")
+    # No verbatim raw tail by default: the monolith renders its own recent
+    # stream (the last durable steps, with a traj tail pointer), so recap's
+    # raw tail only repeated it (127 lines of wake and final rows on Audel,
+    # 2026-09-03). ROLLUP_RAW_TAIL still overrides.
     recap "${ROOT_TRAJ_ID:-$TRAJ_ID}" --context \
         --budget "${MONOLITH_CONTEXT_BUDGET:-auto}" \
+        --raw-tail "${ROLLUP_RAW_TAIL:-0}" \
         ${mm[@]+"${mm[@]}"} -q 2>/dev/null || true
 }
 

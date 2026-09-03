@@ -53,5 +53,12 @@ got=$(env -u ROLLUP_MODEL RECAP_MAP_MODEL=anthropic/claude-sonnet-5 SHELLM_FAST_
 got=$(ROLLUP_MODEL=explicit/rollup RECAP_MAP_MODEL=anthropic/claude-sonnet-5 SHELLM_FAST_MODEL=cheap/flash bash -c "$(declare -f _life_context map_model); map_model")
 [[ "$got" == "explicit/rollup" ]] && ok "ROLLUP_MODEL beats both" || bad "ROLLUP_MODEL beats both" "got $got"
 
+# The monolith asks recap for no verbatim raw tail unless ROLLUP_RAW_TAIL says
+# otherwise: its own recent stream already shows the last durable steps.
+raw=$(env -u ROLLUP_RAW_TAIL bash -c "$(declare -f _life_context); TRAJ_ID=t _life_context" | sed 's/.*--raw-tail \([^ ]*\).*/\1/')
+[[ "$raw" == "0" ]] && ok "raw tail defaults to 0 for the monolith" || bad "raw tail defaults to 0 for the monolith" "got $raw"
+raw=$(ROLLUP_RAW_TAIL=40 bash -c "$(declare -f _life_context); TRAJ_ID=t _life_context" | sed 's/.*--raw-tail \([^ ]*\).*/\1/')
+[[ "$raw" == "40" ]] && ok "ROLLUP_RAW_TAIL still overrides" || bad "ROLLUP_RAW_TAIL still overrides" "got $raw"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
