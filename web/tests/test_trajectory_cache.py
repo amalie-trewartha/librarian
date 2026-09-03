@@ -322,3 +322,65 @@ def test_step_endpoint_hydrates_evicted(ident_root: Path, monkeypatch):
     assert [s["raw"]["content"] for s in window["steps"]] == [
         "idea 1", "idea 2", "idea 3",
     ]
+
+
+def test_mindlog_strips_content_b64(ident_root: Path):
+    """File bytes stay off the dashboard wire; filename and content remain."""
+    jsonl = (
+        ident_root / ".identities" / "scaly" / "trajectories"
+        / "fbfbfbfb-root" / "trajectory.jsonl"
+    )
+    payload = "x" * 64
+    import base64
+    b64 = base64.b64encode(payload.encode()).decode("ascii")
+    _write(
+        jsonl,
+        [{
+            "type": "message",
+            "step_id": "file1",
+            "ts": "2026-09-03T00:00:00Z",
+            "from": "audel",
+            "to": "slack-U1-C1",
+            "source": "chat",
+            "filename": "note.txt",
+            "content": "hello file",
+            "content_b64": b64,
+        }],
+        append=True,
+    )
+    client = TestClient(create_app(ident_root))
+    body = client.get("/api/identities/.identities~scaly/mindlog").json()
+    step = next(s for s in body["steps"] if s.get("step_id") == "file1")
+    raw = step["raw"]
+    assert raw["filename"] == "note.txt"
+    assert raw["content"] == "hello file"
+    assert "content_b64" not in raw
+    blob = json.dumps(body)
+    assert "content_b64" not in blob
+    assert b64 not in blob
+
+
+def test_window_rehydrate_strips_content_b64(traj_dir: Path):
+    jsonl = traj_dir / "trajectory.jsonl"
+    import base64
+    b64 = base64.b64encode(b"hello file").decode("ascii")
+    _write(
+        jsonl,
+        [_step(i) for i in range(1, 40)]
+        + [{
+            "type": "message",
+            "step_id": "sfile",
+            "ts": "tfile",
+            "filename": "note.txt",
+            "content": "hello file",
+            "content_b64": b64,
+        }],
+        append=True,
+    )
+    cache = trajectory.TrajectoryCache(raw_budget=600)
+    cache.load(traj_dir)
+    window = cache.window(traj_dir, 0, None)
+    file_step = next(s for s in window["steps"] if s.get("step_id") == "sfile")
+    assert file_step["raw"]["filename"] == "note.txt"
+    assert file_step["raw"]["content"] == "hello file"
+    assert "content_b64" not in file_step["raw"]

@@ -35,9 +35,9 @@ export CHATRC="$WORK/.chatrc"
 printf 'default_send_from=tester\n' > "$CHATRC"
 cd "$WORK" || exit 1
 
-# --- happy path: text file lands as content_b64 + readable marker ---
+# --- happy path: text file keeps body in content (Slack/web still read it) ---
 printf 'hello file\n' > "$WORK/note.txt"
-if chat send-file --from tester --to telegram-1-1 "$WORK/note.txt" >/dev/null 2>"$WORK/err"; then
+if chat send-file --from tester --to slack-U1-C1 "$WORK/note.txt" >/dev/null 2>"$WORK/err"; then
     step=$(traj cat "$TRAJ_ID" --filter type=message --raw 2>/dev/null | tail -n 1)
     got_name=$(printf '%s' "$step" | jq -r '.filename')
     got_content=$(printf '%s' "$step" | jq -r '.content')
@@ -46,10 +46,10 @@ if chat send-file --from tester --to telegram-1-1 "$WORK/note.txt" >/dev/null 2>
     got_src=$(printf '%s' "$step" | jq -r '.source')
     b64=$(printf '%s' "$step" | jq -r '.content_b64')
     printf '%s' "$b64" | base64 -d > "$WORK/decoded.txt" 2>/dev/null || true
-    if [[ "$got_name" == "note.txt" && "$got_content" == "[file: note.txt]" \
-          && "$got_from" == "tester" && "$got_to" == "telegram-1-1" \
+    if [[ "$got_name" == "note.txt" && "$got_content" == "hello file" \
+          && "$got_from" == "tester" && "$got_to" == "slack-U1-C1" \
           && "$got_src" == "chat" ]] && cmp -s "$WORK/note.txt" "$WORK/decoded.txt"; then
-        ok "send-file stamps filename, marker, and content_b64"
+        ok "send-file text keeps body in content for non-Telegram routes"
     else
         bad "send-file stamps fields" " step=$step"
     fi
@@ -63,7 +63,9 @@ if chat send-file --from tester --to telegram-1-1 "$WORK/blob.bin" >/dev/null 2>
     step=$(traj cat "$TRAJ_ID" --filter type=message --raw 2>/dev/null | tail -n 1)
     b64=$(printf '%s' "$step" | jq -r '.content_b64')
     printf '%s' "$b64" | base64 -d > "$WORK/blob.out" 2>/dev/null
-    if cmp -s "$WORK/blob.bin" "$WORK/blob.out"; then
+    got_content=$(printf '%s' "$step" | jq -r '.content')
+    if cmp -s "$WORK/blob.bin" "$WORK/blob.out" \
+          && [[ "$got_content" == "[file: blob.bin]" ]]; then
         ok "send-file round-trips binary bytes"
     else
         bad "send-file binary round-trip"

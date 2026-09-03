@@ -18,7 +18,7 @@ import threading
 import time
 
 from . import mindlog, naming
-from .filepayload import file_payload
+from .filepayload import file_payload, file_signature
 from .allowlist import Allowlist
 from .api import ApiError, Bot
 from .config import Config
@@ -88,6 +88,9 @@ def run(cfg: Config, bot: Bot, allowlist: Allowlist, stop_event: threading.Event
             sent_file = False
             if payload.get("decode_error") or data is None:
                 log.error("undecodable file payload for %s (%s)", to, name)
+            elif recent.is_duplicate(to, file_signature(name, data)):
+                log.warning("skipping duplicate file post to %s", to)
+                continue
             else:
                 try:
                     if payload.get("as_photo") and hasattr(bot, "send_photo"):

@@ -1,4 +1,4 @@
-from headlong_telegram.filepayload import CAPTION_MAX, file_payload
+from headlong_telegram.filepayload import CAPTION_MAX, file_payload, file_signature
 
 
 def test_plain_text_is_not_a_file():
@@ -109,3 +109,9 @@ def test_empty_content_b64_is_decode_error():
     assert payload["content"] is None
     assert payload["decode_error"] is True
 
+
+def test_file_signature_is_filename_plus_content_hash():
+    same = file_signature("note.txt", b"aaa")
+    assert same == file_signature("note.txt", "aaa")
+    assert same != file_signature("note.txt", b"bbb")
+    assert same != file_signature("other.txt", b"aaa")

@@ -41,3 +41,34 @@ def test_run_delivers_only_chat_sourced_messages(tmp_path, monkeypatch):
     outbound.run(cfg, FakeClient(), FakeThreads(), threading.Event())
 
     assert sent == ["real reply"]
+
+
+def test_text_file_posts_file_contents(tmp_path, monkeypatch):
+    """chat send-file stores text in content; Slack must deliver that body."""
+    steps = [
+        {"type": "message", "from": "audel", "to": "slack-U1-C1",
+         "source": "chat", "filename": "note.txt",
+         "content": "hello file",
+         "content_b64": "aGVsbG8gZmlsZQo=",
+         "step_id": "fff"},
+    ]
+    monkeypatch.setattr(outbound.mindlog, "find_trajectory", lambda d: tmp_path / "t.jsonl")
+    monkeypatch.setattr(outbound.mindlog, "follow", lambda *a, **k: iter(steps))
+
+    sent = []
+
+    class FakeClient:
+        def chat_postMessage(self, channel, thread_ts, text, unfurl_links=False, **kw):
+            sent.append(text)
+
+    class FakeThreads:
+        def touch(self, channel, thread_ts):
+            pass
+
+    cfg = Config(
+        serve_root=tmp_path, identity="audel", identity_dir=tmp_path,
+        bot_token="x", app_token="x", web_url="http://x", state_dir=tmp_path,
+        thread_followups=True,
+    )
+    outbound.run(cfg, FakeClient(), FakeThreads(), threading.Event())
+    assert sent == ["hello file"]

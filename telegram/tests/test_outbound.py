@@ -307,3 +307,44 @@ def test_undecodable_file_falls_back_to_notice(tmp_path, monkeypatch):
     assert docs == []
     assert sent == ["(failed to deliver file note.txt)"]
 
+
+def test_identical_file_steps_are_suppressed(tmp_path, monkeypatch):
+    import threading
+
+    from headlong_telegram import outbound
+
+    body = b"same-bytes"
+    b64 = base64.b64encode(body).decode("ascii")
+    other = b"different-bytes"
+    steps = [
+        {"type": "message", "from": "audel", "to": "telegram-1-1",
+         "source": "chat", "filename": "note.txt", "content_b64": b64,
+         "step_id": "f1"},
+        {"type": "message", "from": "audel", "to": "telegram-1-1",
+         "source": "chat", "filename": "note.txt", "content_b64": b64,
+         "step_id": "f2"},
+        {"type": "message", "from": "audel", "to": "telegram-1-1",
+         "source": "chat", "filename": "note.txt",
+         "content_b64": base64.b64encode(other).decode("ascii"),
+         "step_id": "f3"},
+    ]
+    monkeypatch.setattr(outbound.mindlog, "find_trajectory", lambda d: tmp_path / "t.jsonl")
+    monkeypatch.setattr(outbound.mindlog, "follow", lambda *a, **k: iter(steps))
+
+    sent = []
+    docs = []
+
+    class FakeBot:
+        def send_message(self, chat, text, html=False):
+            sent.append(text)
+
+        def send_document(self, chat, content, filename, caption=None):
+            docs.append((filename, content, caption))
+
+    class ApproveAll:
+        def is_approved(self, user):
+            return True
+
+    outbound.run(_cfg(tmp_path), FakeBot(), ApproveAll(), threading.Event())
+    assert docs == [("note.txt", body, None), ("note.txt", other, None)]
+    assert sent == []

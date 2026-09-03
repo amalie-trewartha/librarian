@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,12 @@ from .tgfmt import strip_leaked_command
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 JPEG_MAGIC = b"\xff\xd8\xff"
 CAPTION_MAX = 1024  # Telegram media-caption limit
+
+
+def file_signature(filename: str, content: bytes | str) -> str:
+    """Bounded RecentPosts key: basename plus a hash of the decoded bytes."""
+    raw = content.encode("utf-8") if isinstance(content, str) else bytes(content)
+    return f"{filename}:{hashlib.sha256(raw).hexdigest()}"
 
 
 class DecodeError(Exception):

@@ -226,20 +226,56 @@ cmd_send_file() {
 
     local filename
     filename=$(basename "$filepath")
-    # Binary-safe: JSON cannot hold raw bytes, so stamp standard base64.
-    # Read the encoding via jq --rawfile so the bytes never sit on argv
-    # (same class of leak as API keys on curl command lines).
-    base64 -w 0 < "$filepath" | tr -d '\n' | jq -nc \
-        --arg filename "$filename" \
-        --arg content "[file: $filename]" \
-        --arg from "$from" \
-        --arg to "$to" \
-        --rawfile content_b64 /dev/stdin \
-        '{type:"message", content:$content, filename:$filename, content_b64:$content_b64, from:$from, to:$to, source:"chat"}' \
-        | _chat_append \
-        || die "failed to encode/append $filepath"
+    # Binary-safe: JSON cannot hold raw bytes, so stamp standard base64
+    # via a temp file (never argv). Text files also keep their body in
+    # `content` so Slack and web chat still deliver the file text; binary
+    # files use a short marker because `content` cannot hold raw bytes.
+    local b64tmp
+    b64tmp=$(mktemp) || die "mktemp failed"
+    if ! base64 -w 0 < "$filepath" | tr -d '\n' > "$b64tmp"; then
+        rm -f "$b64tmp"
+        die "failed to encode $filepath"
+    fi
+
+    local jq_rc=0
+    if _chat_is_text_file "$filepath"; then
+        jq -nc \
+            --arg filename "$filename" \
+            --arg from "$from" \
+            --arg to "$to" \
+            --rawfile content "$filepath" \
+            --rawfile content_b64 "$b64tmp" \
+            '{type:"message", content:($content | sub("\n+$";"")), filename:$filename, content_b64:$content_b64, from:$from, to:$to, source:"chat"}' \
+            | _chat_append || jq_rc=$?
+    else
+        jq -nc \
+            --arg filename "$filename" \
+            --arg content "[file: $filename]" \
+            --arg from "$from" \
+            --arg to "$to" \
+            --rawfile content_b64 "$b64tmp" \
+            '{type:"message", content:$content, filename:$filename, content_b64:$content_b64, from:$from, to:$to, source:"chat"}' \
+            | _chat_append || jq_rc=$?
+    fi
+    rm -f "$b64tmp"
+    [[ "$jq_rc" -eq 0 ]] || die "failed to encode/append $filepath"
 
     printf 'File sent: %s\n' "$filename" >&2
+}
+
+# UTF-8, no NUL: the historical `content=$(cat ...)` shape Slack/web still read.
+# JSON strings cannot hold NUL; jq --rawfile requires UTF-8.
+_chat_is_text_file() {
+    local f="$1" n stripped
+    n=$(wc -c < "$f")
+    n=${n//[[:space:]]/}
+    stripped=$(tr -d '\0' < "$f" | wc -c)
+    stripped=${stripped//[[:space:]]/}
+    [[ "$n" -eq "$stripped" ]] || return 1
+    if command -v iconv >/dev/null 2>&1; then
+        iconv -f UTF-8 -t UTF-8 "$f" >/dev/null 2>&1 || return 1
+    fi
+    return 0
 }
 
 # ---------------------------------------------------------------------------

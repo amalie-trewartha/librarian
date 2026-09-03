@@ -249,3 +249,24 @@ def test_blob_fields_survive_normalization():
     step = result["steps"][0]
     assert step["raw"]["stdout_truncated"] is True
     assert step["raw"]["stdout_ref"] == "blobs/s1-000000.stdout"
+
+
+def test_file_bytes_stripped_from_dashboard_raw():
+    raw = {
+        "type": "message",
+        "step_id": "s1",
+        "ts": "2026-01-01T00:00:00+0000",
+        "filename": "note.txt",
+        "content": "hello file",
+        "content_b64": "aGVsbG8gZmlsZQo=",
+        "from": "audel",
+        "to": "slack-U1-C1",
+        "source": "chat",
+    }
+    from headlong_web.trajectory import normalize
+
+    result = normalize([raw], Path("/nonexistent"))
+    step = result["steps"][0]
+    assert step["raw"]["filename"] == "note.txt"
+    assert step["raw"]["content"] == "hello file"
+    assert "content_b64" not in step["raw"]
