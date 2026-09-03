@@ -99,7 +99,24 @@ else
     bad "no fast model means the default model; the cap is tunable" "$(cat "$LLM_STUB_ARGS")"
 fi
 
-# --- 5. empty store ----------------------------------------------------------
+# --- 5. heartbeat while the model is slow ------------------------------------
+# shellm kills a command silent for 30s; a reasoning model can think that long.
+cat > "$WORK/bin/llm" <<'STUB'
+#!/usr/bin/env bash
+cat > /dev/null; sleep 1.2; echo "slow reply"
+STUB
+mk "2026-08-24-00-00-05" "Noah again" "Noah asked about the heartbeat."
+hb_out=$(MEM_SEARCH_HEARTBEAT_S=0.3 mem search "Noah" 2>&1 >/dev/null | grep -c "waiting for the model")
+if [[ "$hb_out" -ge 2 ]]; then
+    ok "a slow model gets a heartbeat on stderr ($hb_out lines in 1.2s)"
+else
+    bad "a slow model gets a heartbeat on stderr" "got $hb_out"
+fi
+hb_off=$(MEM_SEARCH_HEARTBEAT_S=0 mem search "Noah" 2>&1 >/dev/null | grep -c "waiting for the model")
+[[ "$hb_off" -eq 0 ]] && ok "heartbeat can be disabled" || bad "heartbeat can be disabled" "got $hb_off"
+if ! pgrep -f "printf 'mem search: waiting" >/dev/null 2>&1; then ok "no heartbeat process left behind"; else bad "no heartbeat process left behind"; fi
+
+# --- 6. empty store ----------------------------------------------------------
 rm -f "$MEM_DIR"/*.md
 out=$(mem search "anything" 2>&1)
 if [[ "$out" == *"No memories stored"* ]]; then ok "empty store says so"; else bad "empty store says so" "$out"; fi

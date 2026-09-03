@@ -157,7 +157,7 @@ mem_prefilter() {
         | awk 'length($0) >= 3' | grep -vxE 'the|and|for|not|from|with|that|this|are|was|what|when|how|about|into' \
         | sort -u | tr '\n' ' ')
     [[ -n "${terms// /}" ]] || return 0
-    awk -v terms="$terms" '
+    LC_ALL=C awk -v terms="$terms" '
         BEGIN { n = split(terms, T, " ") }
         FNR == 1 { nf++; files[nf] = FILENAME }
         { line = tolower($0)
@@ -203,10 +203,19 @@ $(cat "$f")
     # tokens thinking before it answers, so the output cap stays far above
     # what the answer needs (MEM_SEARCH_MAX_TOKENS), or the reply comes back
     # empty. The corpus rides stdin, not argv (ARG_MAX).
+    # A heartbeat on stderr while the model works: shellm kills a command that
+    # is silent for 30 seconds, and a reasoning model can think that long
+    # before its first visible token (glm 5.3 flash: 31s on the box,
+    # 2026-09-03). MEM_SEARCH_HEARTBEAT_S=0 disables it.
+    local hb="${MEM_SEARCH_HEARTBEAT_S:-10}" _hb_pid=""
+    [[ "$hb" != 0 ]] && { ( while :; do sleep "$hb"; printf 'mem search: waiting for the model...\n' >&2; done ) & _hb_pid=$!; }
     # shellcheck disable=SC2086
     printf 'Search these memories for: %s\n\n%s' "$query" "$memories" | \
         llm ${SHELLM_FAST_MODEL:+-m "$SHELLM_FAST_MODEL"} -t "${MEM_SEARCH_MAX_TOKENS:-16000}" \
             -s "You are a semantic search engine for memory files. Each memory has a filename header (=== filename ===), YAML frontmatter (summary, type), and a body. Return ONLY the filenames and summaries of semantically matching memories, one per line. If nothing matches, say 'No matches found.'"
+    local rc=$?
+    if [[ -n "$_hb_pid" ]]; then kill "$_hb_pid" 2>/dev/null || true; wait "$_hb_pid" 2>/dev/null || true; fi
+    return "$rc"
 }
 
 action_list() {
@@ -432,6 +441,8 @@ Environment:
   MEM_SEARCH_TOP         Candidates the keyword prefilter sends the model (40)
   MEM_SEARCH_MAX_TOKENS  Output cap for the search call (16000; a reasoning
                          model thinks against it, so keep it roomy)
+  MEM_SEARCH_HEARTBEAT_S Seconds between "waiting" lines on stderr while the
+                         model works (10; 0 disables)
   SHELLM_FAST_MODEL      Cheap model class for the search call
 EOF
     exit 0
