@@ -145,6 +145,22 @@ fi
 step f2 final "old final, no run id" 4
 printf '%s\n' "$(stream 30)" | jq -e 'select(.step_id == "f2") | has("details") | not' >/dev/null 2>&1 && ok "a final without a run id carries no details" || bad "a final without a run id carries no details"
 
+# Observation/final pairs: a final drops the nearest earlier observation of
+# its run; earlier milestones, orphan observations, and orphan finals stay.
+step o1 observation "milestone 1 of run 2"  3 ',"run_id":"run-0002","source":"monolith"'
+step o2 observation "run 2 done (handoff)"  2 ',"run_id":"run-0002","source":"monolith"'
+step f3 final       "run 2 done (handoff)"  2 ',"run_id":"run-0002"'
+step o3 observation "run 3 never finished"  1 ',"run_id":"run-0003","source":"monolith"'
+ids=$(stream 40 | jq -r .step_id | tr '\n' ' ')
+case "$ids" in *" o2 "*) bad "the observation paired with a final is dropped" "got $ids" ;; *) ok "the observation paired with a final is dropped" ;; esac
+case "$ids" in *" o1 f3 "*) ok "an earlier in-run observation stays as a milestone" ;; *) bad "an earlier in-run observation stays" "got $ids" ;; esac
+case "$ids" in *" o3 "*) ok "an observation whose run had no final stays" ;; *) bad "an orphan observation stays" "got $ids" ;; esac
+case "$ids" in *" f1 "*) ok "a final with no observation stays" ;; *) bad "an orphan final stays" "got $ids" ;; esac
+case "$ids" in *" ro "*) ok "a responder observation (other run id) is untouched" ;; *) bad "responder observation untouched" "got $ids" ;; esac
+# The pairing runs before the tail cut, so N still counts distinct events.
+ids2=$(stream 2 | jq -r .step_id | tr '\n' ' ')
+[[ "$ids2" == "f3 o3 " ]] && ok "pairing happens before the window cut (N=2 -> f3 o3)" || bad "pairing before the window cut" "got $ids2"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

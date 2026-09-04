@@ -740,7 +740,7 @@ Usage:
   skills check <name>                       Check if a skill's requirements are met
   skills init [name]                        Scaffold a new skill in current dir
   skills list-json                          List skills as JSON (for programmatic use)
-  skills promote <name>                     Promote a skill to the kernel
+  skills promote <name>                     Move a skill into the kernel (the identity's built-in set; listed, never inlined)
   skills kernel                             Show kernel skills with token counts
   skills prompt                             Print skills system prompt (for LLM context)
   skills remote                             List configured remotes

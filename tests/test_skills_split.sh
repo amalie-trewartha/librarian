@@ -35,14 +35,25 @@ description: Always loaded
 Kernel body here.
 SK
 
+# A skill with no frontmatter at all (Audel wrote one on 2026-08-15) must not
+# abort the read side: `skills prompt` printed nothing for 20 days because of it.
+mkdir -p "$SKILLS_DIR/bare"
+printf '# Bare\nNo frontmatter here.\n' > "$SKILLS_DIR/bare/SKILL.md"
+
 cd "$H" || exit 1
 out=$("$REPO/bin/skills" list 2>&1)
 check "core list names the skill"          grep -q 'greet' <<<"$out"
 check "core show prints the body"          grep -q 'Say hello' <<<"$("$REPO/bin/skills" show greet 2>&1)"
 check "core list-json is valid JSON with the skill" bash -c '"$0" list-json | jq -e ".[] | select(.name==\"greet\")"' "$REPO/bin/skills"
 p=$("$REPO/bin/skills" prompt 2>&1)
-check "core prompt carries the kernel body"        grep -q 'Kernel body here' <<<"$p"
+check "core prompt lists the kernel skill"         grep -q 'core: Always loaded' <<<"$p"
+check "core prompt does not inline the kernel body" bash -c '! grep -q "Kernel body here" <<<"$1"' _ "$p"
+check "core prompt has no CLI table"               bash -c '! grep -q "skills remote add" <<<"$1"' _ "$p"
+check "core prompt is short (under 1K for two skills)" bash -c 'test "$(printf %s "$1" | wc -c)" -lt 1024' _ "$p"
 check "core prompt lists the installed skill"      grep -q 'greet: Say hello' <<<"$p"
+check "core prompt survives a frontmatter-less skill (exit 0)" "$REPO/bin/skills" prompt
+check "frontmatter-less skill is listed by directory name" grep -q 'bare: (no description' <<<"$p"
+check "core list survives a frontmatter-less skill"  grep -q 'bare' <<<"$out"
 check "core show --requires on a plain skill"      grep -q 'No requirements' <<<"$("$REPO/bin/skills" show greet --requires 2>&1)"
 
 # Forwarding from a checkout: bin/skills finds ../tools/headlong-skills.

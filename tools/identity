@@ -11,7 +11,7 @@ set -euo pipefail
 
 IDENTITY_VERSION="0.1.0"
 VERBOSE=0
-KERNEL_SKILLS=(mem chat goals)
+KERNEL_SKILLS=(mem chat)
 
 # Inside an identity shell, IDENTITY_DIR points to the specific identity
 # (e.g., .identities/andy). This CLI needs the root (e.g., .identities).
@@ -126,7 +126,7 @@ _install_bundled_skills() {
     [[ -d "$bundled_dir" ]] || return 0
 
     # Kernel skills are handled by _ensure_kernel — skip them here
-    local kernel_skills=" mem chat goals "
+    local kernel_skills=" mem chat "
 
     local src_dir
     for src_dir in "$bundled_dir"/*/; do

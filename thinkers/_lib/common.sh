@@ -66,12 +66,53 @@ _require_env() {
 # System prompt assembly
 # ---------------------------------------------------------------------------
 
+# One section of the wake prompt, built by a command. Prints the command's
+# output; on failure prints nothing, returns nonzero, and makes the failure
+# LOUD: a line on stderr (the journal) and an `error` step in the root
+# trajectory, at most one per section per hour so a persistent failure does
+# not flood the stream. The old form, `$(skills prompt 2>/dev/null) || ""`,
+# hid a broken `skills prompt` for 20 days (2026-08-15 to 09-04): every wake
+# prompt lost its kernel skills and nothing anywhere said so.
+_prompt_section() {  # _prompt_section <label> <cmd> [args...]
+    local label="$1"; shift
+    local out errf rc
+    errf=$(mktemp) || errf=/dev/null
+    out=$("$@" 2>"$errf"); rc=$?
+    if [[ "$rc" -eq 0 ]]; then
+        rm -f "$errf"; printf '%s' "$out"; return 0
+    fi
+    local first
+    first=$(head -c 300 "$errf" 2>/dev/null | head -1) || first=""
+    rm -f "$errf"
+    printf '%s: error: wake prompt section "%s" failed: `%s` exited %s%s; the section is left out of this wakeup\n' \
+        "${THINKER_NAME:-thinker}" "$label" "$*" "$rc" "${first:+ ($first)}" >&2
+    if ! _prompt_section_reported "$label"; then
+        jq -nc --arg label "$label" --arg cmd "$*" --argjson rc "$rc" --arg err "$first" \
+            --arg source "${THINKER_NAME:-thinker}" \
+            '{type:"error", content:("wake prompt section \"\($label)\" failed: `\($cmd)` exited \($rc)" + (if $err=="" then "" else ": "+$err end) + ". The section is missing from every wakeup until this is fixed."),
+              source:$source, reason:"prompt-section-failed", section:$label, rc:$rc}' \
+            | traj append >/dev/null 2>&1 || true
+    fi
+    return "$rc"
+}
+
+# Has this section's failure been recorded in the last hour?
+_prompt_section_reported() {
+    local label="$1" cutoff
+    cutoff=$(date -u -d '-1 hour' +%Y-%m-%dT%H:%M:%S 2>/dev/null) \
+        || cutoff=$(date -u -v-1H +%Y-%m-%dT%H:%M:%S 2>/dev/null) || return 1
+    _root_traj_raw_tail 2>/dev/null \
+        | jq -R -r --arg l "$label" --arg c "$cutoff" \
+            'try fromjson | select(.type=="error" and .reason=="prompt-section-failed" and .section==$l and (.ts // "") > $c) | .step_id' 2>/dev/null \
+        | grep -q .
+}
+
 # Build the common system prompt prefix shared by all thinkers.
 # Calls `identity prompt` and `skills prompt` to assemble identity context.
 _build_system_prompt() {
     local identity_text skills_text
-    identity_text=$(identity prompt 2>/dev/null) || identity_text=""
-    skills_text=$(skills prompt 2>/dev/null) || skills_text=""
+    identity_text=$(_prompt_section identity identity prompt) || identity_text=""
+    skills_text=$(_prompt_section skills skills prompt) || skills_text=""
 
     printf 'You are an unconscious thought process of an AI person named %s.\n' "$IDENTITY_NAME"
     printf '\nAbout %s:\n%s' "$IDENTITY_NAME" "$identity_text"
@@ -282,6 +323,23 @@ _RECENT_STREAM_COLLAPSE_JQ='
         | del(.n, .first_ts, .last_ts))
   | .[]'
 
+# An observation followed by its run's final is the same report written
+# twice: the prompt asks for both, and the model writes the handoff into each
+# (7 of 20 stream slots on Audel, 2026-09-04). When a final arrives, the
+# nearest earlier observation with the same run id is dropped; earlier
+# observations in a long run stay as milestones, and an observation whose run
+# never reached a final (killed, errored) stays as its only record. Runs
+# before the tail cut so N still means N distinct events.
+_RECENT_STREAM_PAIR_JQ='
+  reduce .[] as $s ([];
+    if $s.type == "final" and (($s.run_id // "") | tostring) != ""
+    then (to_entries
+          | map(select(.value.type == "observation" and ((.value.run_id // "") | tostring) == ($s.run_id | tostring)))
+          | last | .key) as $j
+         | (if $j == null then . else del(.[$j]) end) + [$s]
+    else . + [$s] end)
+  | .[]'
+
 # A run's final is all the next wake sees of that run (the mind's render is
 # run scoped, so earlier runs' commands and outputs are not in its context),
 # so each final carries a `details` command that prints the run's raw steps.
@@ -311,6 +369,7 @@ _recent_stream() {
               then .details = "traj tail -n 400 --filter run_id=" + (.run_id | tostring) else . end
             | with_entries(select(.key | IN("type", "content", "source", "ts", "from", "to", "run_id", "step_id", "request", "person", "resolves", "trigger_step", "reply_to", "follow_up", "decision", "deferred", "rc", "details")))' \
         2>/dev/null \
+        | jq -cs "$_RECENT_STREAM_PAIR_JQ" 2>/dev/null \
         | tail -n "$n" \
         | jq -cs "$_RECENT_STREAM_COLLAPSE_JQ" 2>/dev/null \
         | jq -c '.ts |= (tostring | .[0:16])
