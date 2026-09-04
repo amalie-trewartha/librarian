@@ -100,6 +100,14 @@ SHELLM_CONTEXT_SCOPE="${SHELLM_CONTEXT_SCOPE:-traj}"
 # rather than on every call.
 SHELLM_CONTEXT_RUN_TAIL="${SHELLM_CONTEXT_RUN_TAIL:-400}"
 SHELLM_CONTEXT_RUN_TAIL_BLOCK="${SHELLM_CONTEXT_RUN_TAIL_BLOCK:-50}"
+# Rows in the newest block(s) of the window render their fields whole up to
+# BLOCK_LIMIT bytes; older rows fall back to SHELLM_STDOUT_PROMPT_LIMIT (2K,
+# head and tail with the middle cut). A 2K cut on every output made the mind
+# re-read files in slices: 273 of 313 outputs in one run were cut and 45% of
+# its reads were repeats (Audel, 2026-09-03). The band follows the block grid
+# so a row shrinks once, when the window start would move anyway.
+SHELLM_CONTEXT_BLOCK_LIMIT="${SHELLM_CONTEXT_BLOCK_LIMIT:-8192}"
+SHELLM_CONTEXT_WHOLE_BLOCKS="${SHELLM_CONTEXT_WHOLE_BLOCKS:-1}"
 # Whether the image was chosen for this run (environment here, --docker-image
 # below) rather than defaulted. A resume inherits the trajectory's image only
 # when it was not, so resuming never silently overrides what the caller asked
@@ -290,6 +298,13 @@ Environment:
   SHELLM_CONTEXT_RUN_TAIL_BLOCK
                           Rows the run-scope window start moves in (default
                           50), so the cached prefix survives between moves
+  SHELLM_CONTEXT_BLOCK_LIMIT
+                          Bytes a field may fill before it is cut, for rows in
+                          the newest block of the window (default 8192); older
+                          rows keep SHELLM_STDOUT_PROMPT_LIMIT (2048)
+  SHELLM_CONTEXT_WHOLE_BLOCKS
+                          How many newest blocks get the larger limit (default
+                          1); in traj scope, the newest N rows
   SHELLM_EMPTY_RESPONSE_RETRIES
                           Empty-response retries before the run dies
                           (default 8; set empty for unlimited)
@@ -1782,14 +1797,30 @@ Don't wait idle for slow commands. Start them, move on to other work, and check 
 - You have all the standard tools available on Linux/Unix based systems
 - Standard shell: cd, ls, grep, cat, rm, cp, mv, mkdir, echo, curl, find, etc.
 - Text processing: grep, awk, sed, wc, sort, uniq, head, tail, cut, tr, jq, etc.
-- File tools: view (read with line numbers), sub (exact-string edit), put (atomic write), glob (git-aware file search)
+- Editing files: check that a replacement matched exactly once before writing it back; write through a temp file and `mv` when a half-written file would matter
 - Recursive self-calling: spawn shellm sub-runs for parallelism and delegation
 
 ## Trajectory and context
-The trajectory is the lossless record of this run stored in `$TRAJ_DIR` (identified by `$TRAJ_ID`). Your conversation history is presented as multi-turn messages (your reasoning as assistant, execution output as user) produced by `context`. Large outputs may be truncated with a stub.
+The trajectory is the lossless record of this run stored in `$TRAJ_DIR` (identified by `$TRAJ_ID`). Your conversation history is presented as multi-turn messages (your reasoning as assistant, execution output as user) produced by `context`.
 
 The trajectory directory is `$TRAJ_DIR`, trajectory ID is `$TRAJ_ID`. Nested `shellm` calls create child trajectory files; use `traj list` to see parents and children.
-
+SYSPROMPT
+    # The output budget in numbers, so the model sizes a read to fit instead of
+    # guessing, and the mechanism (middle cut, ends exact), so it fetches the
+    # hole with one command instead of re-reading the file. Before this the
+    # prompt said only "may be truncated": 273 of 313 outputs in one run were
+    # cut and 45% of its reads were repeats (design/output_budget_and_tool_cull.md).
+    local _bl="$SHELLM_CONTEXT_BLOCK_LIMIT" _pl="${SHELLM_STDOUT_PROMPT_LIMIT:-2048}" _band
+    if [[ "$SHELLM_CONTEXT_SCOPE" == "run" ]]; then
+        _band="the outputs of your newest $(( SHELLM_CONTEXT_WHOLE_BLOCKS * SHELLM_CONTEXT_RUN_TAIL_BLOCK / 2 )) or so steps show"
+    elif [[ "$SHELLM_CONTEXT_WHOLE_BLOCKS" -le 1 ]]; then
+        _band="the output of your newest step shows"
+    else
+        _band="the outputs of your newest $(( (SHELLM_CONTEXT_WHOLE_BLOCKS + 1) / 2 )) steps show"
+    fi
+    printf 'Output budget: %s whole up to %s bytes (about %s lines). Size a read to fit that, and prefer one read that fits over several that do not. Older outputs keep only their first and last %s bytes: the middle is what is cut, both ends are exact, and a stub sits where the hole is, naming the byte count and the command that prints the whole output. Fetch it; do not re-read the file to find what you lost.\n\n' \
+        "$_band" "$_bl" "$(( (_bl / 55 + 5) / 10 * 10 ))" "$(( _pl / 2 ))"
+    cat <<'SYSPROMPT'
 When you see a truncation stub like `[... truncated: N bytes total. ...]`, you can retrieve the full content:
 - `traj show <step_id> --full` — show a step with full untruncated output
 - `traj show <step_id> --field stdout` — emit just the stdout bytes (pipe to head/tail/grep)
@@ -2443,7 +2474,8 @@ run_loop() {
             --assistant-types "reasoning,final"
             --user-types "prompt,shell-output,feedback"
             --exclude-types "shellm-run,run-summary"
-            --full-types prompt)
+            --full-types prompt
+            --block-limit "$SHELLM_CONTEXT_BLOCK_LIMIT" --whole-blocks "$SHELLM_CONTEXT_WHOLE_BLOCKS")
         if [[ "$SHELLM_CONTEXT_SCOPE" == "run" ]]; then
             _ctx_args+=(--run "$_run_step_id" --head 0
                 --tail "$SHELLM_CONTEXT_RUN_TAIL" --tail-block "$SHELLM_CONTEXT_RUN_TAIL_BLOCK")

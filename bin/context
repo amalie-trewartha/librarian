@@ -18,6 +18,8 @@ CTX_HEAD="${CTX_HEAD:-1}"
 CTX_TAIL="${CTX_TAIL:-50}"
 CTX_TAIL_BLOCK="${CTX_TAIL_BLOCK:-1}"
 CTX_PROMPT_LIMIT="${SHELLM_STDOUT_PROMPT_LIMIT:-2048}"
+CTX_BLOCK_LIMIT=""      # empty: same as CTX_PROMPT_LIMIT (no band)
+CTX_WHOLE_BLOCKS=1
 CTX_MAX_BYTES=""
 CTX_ELISION_STYLE="count"  # none|count
 CTX_PINS=()
@@ -67,6 +69,14 @@ Per-step content:
                         "prompt": instructions arrive whole or not at all (a
                         cut prompt leaves the model a stub pointing at its
                         own instructions on disk).
+  --block-limit BYTES   Truncation limit for rows in the newest --tail-block
+                        block(s) of the file; older rows use --prompt-limit.
+                        A row's block never changes, so a row is rewritten
+                        once, when the newest row crosses into the next
+                        block, which is also when the window start moves.
+                        Default: same as --prompt-limit.
+  --whole-blocks W      How many newest blocks render at --block-limit
+                        (with --tail-block 1: the newest W rows). Default: 1.
 
 Elision:
   --elision-style S     none|count. Default: count.
@@ -96,6 +106,8 @@ while [[ $# -gt 0 ]]; do
         --tail-block)       CTX_TAIL_BLOCK="${2:?--tail-block requires B}"; shift 2 ;;
         --pin)              CTX_PINS+=("${2:?--pin requires step_id}"); shift 2 ;;
         --prompt-limit)     CTX_PROMPT_LIMIT="${2:?--prompt-limit requires BYTES}"; shift 2 ;;
+        --block-limit)      CTX_BLOCK_LIMIT="${2:?--block-limit requires BYTES}"; shift 2 ;;
+        --whole-blocks)     CTX_WHOLE_BLOCKS="${2:?--whole-blocks requires W}"; shift 2 ;;
         --elision-style)    CTX_ELISION_STYLE="${2:?--elision-style requires a value}"; shift 2 ;;
         --max-bytes)        CTX_MAX_BYTES="${2:?--max-bytes requires BYTES}"; shift 2 ;;
         --assistant-types)  CTX_ASSISTANT_TYPES="${2:?--assistant-types requires LIST}"; shift 2 ;;
@@ -277,6 +289,18 @@ def window_start($N; $tail; $block):
 def selected($i; $sid; $N; $head; $tail; $pins):
   ($i < $head) or ($i >= window_start($N; $tail; $block)) or (($pins | index($sid)) != null);
 
+# Rows in the newest $W blocks of the same grid render at $blocklimit instead
+# of $limit (the band). The grid is fixed to file row indices, so a row's band
+# membership changes exactly once, when the newest row crosses a block
+# boundary: the same call on which window_start moves, so the two rewrites
+# share one prompt-cache reset. With $block <= 1 the band is the newest $W
+# rows.
+def band_start($N; $block; $W):
+  if $block > 1 then (((($N - 1) / $block) | floor) - ($W - 1)) * $block
+  else $N - $W end;
+def row_limit($i; $N; $limit; $blocklimit):
+  if $i >= band_start($N; $block; $whole) then $blocklimit else $limit end;
+
 # Render one step row into message text content. Types in $full (e.g. a
 # prompt) are never truncated, whatever $limit0 says.
 def render_step($limit0; $blobs; $full):
@@ -338,7 +362,7 @@ def build_messages($kept; $limit; $blobs; $elision; $total; $skip; $full; $run):
       (if $elision != "none" and $gap > 0
        then .msgs + marker($gap; .last == -1)
        else .msgs end) as $m |
-      ($it.row | render_step($limit; $blobs; $full) | rtrim) as $c |
+      ($it.row | render_step(row_limit($it.i; $total; $limit; $blocklimit); $blobs; $full) | rtrim) as $c |
       {msgs: (if $c == "" then $m else $m + [{role: $it.role, content: $c}] end),
        last: $it.i}
   ) |
@@ -446,14 +470,16 @@ if [[ ${#CTX_PINS[@]} -gt 0 ]]; then
 fi
 
 _ctx_jq() {
-    # _ctx_jq <mode> <prompt_limit> <blobs_file>
+    # _ctx_jq <mode> <prompt_limit> <blobs_file> [block_limit]
     printf '%s\n' "$RAW_ROWS" | jq -R -s -r \
         --arg mode "$1" \
         --argjson head "$CTX_HEAD" \
         --argjson tail "$CTX_TAIL" \
         --argjson block "$CTX_TAIL_BLOCK" \
+        --argjson whole "$CTX_WHOLE_BLOCKS" \
         --argjson total "$TOTAL_LINES" \
         --argjson limit "$2" \
+        --argjson blocklimit "${4:-$2}" \
         --argjson pins "$PINS_JSON" \
         --arg astr "$CTX_ASSISTANT_TYPES" \
         --arg ustr "$CTX_USER_TYPES" \
@@ -494,15 +520,17 @@ fi
 # Render (with optional --max-bytes budget enforcement)
 # ---------------------------------------------------------------------------
 
-# render_at <prompt_limit>: sets RENDER_TOTAL and RENDER_MSGS
+# render_at <prompt_limit> [block_limit]: sets RENDER_TOTAL and RENDER_MSGS.
+# The --max-bytes search below passes one limit for both, so the band
+# collapses under budget pressure instead of defeating it.
 render_at() {
     local out
-    out=$(_ctx_jq render "$1" "$BLOBS_FILE")
+    out=$(_ctx_jq render "$1" "$BLOBS_FILE" "${2:-$1}")
     RENDER_TOTAL="${out%%$'\n'*}"
     RENDER_MSGS="${out#*$'\n'}"
 }
 
-render_at "$CTX_PROMPT_LIMIT"
+render_at "$CTX_PROMPT_LIMIT" "${CTX_BLOCK_LIMIT:-$CTX_PROMPT_LIMIT}"
 
 if [[ "$RENDER_TOTAL" -eq 0 ]]; then
     # Empty trajectory: output empty messages array.
