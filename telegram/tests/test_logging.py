@@ -10,7 +10,7 @@ import logging
 
 from headlong_telegram.cli import RedactingFormatter, configure_logging, redact
 
-TOKEN_URL = "https://api.telegram.org/bot8964013900:AAFL02rTD7tsx2aJqUQpixrmCNHLlru90qY/getUpdates"
+TOKEN_URL = "https://api.telegram.org/bot123456789:FAKE-token-for-tests_not-a-real-one/getUpdates"
 
 
 def test_redact_strips_the_token_from_a_url():
@@ -35,7 +35,7 @@ def _formatted(record_fn):
 
 def test_formatter_redacts_the_message_and_its_args():
     out = _formatted(lambda log: log.info('HTTP Request: %s %s "%s"', "POST", TOKEN_URL, "HTTP/1.1 200 OK"))
-    assert "AAFL02rTD7tsx2aJqUQpixrmCNHLlru90qY" not in out
+    assert "FAKE-token-for-tests_not-a-real-one" not in out
     assert "bot<redacted>/getUpdates" in out
 
 
@@ -47,7 +47,7 @@ def test_formatter_redacts_exception_text():
             log.exception("poll failed")
 
     out = _formatted(go)
-    assert "AAFL02rTD7tsx2aJqUQpixrmCNHLlru90qY" not in out
+    assert "FAKE-token-for-tests_not-a-real-one" not in out
     assert "poll failed" in out and "Traceback" in out
 
 
