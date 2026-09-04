@@ -1072,7 +1072,7 @@ _ensure_shellm_bins() {
     [[ "$PATH" == "$bindir:"* ]] || { PATH="$bindir:$PATH"; export PATH; }
 
     local tool resolved want bad=()
-    for tool in chat traj llm mem context skills recap focus identity thinkers; do
+    for tool in chat traj llm mem context skills recap identity thinkers; do
         [[ -x "$bindir/$tool" ]] || continue          # only tools we actually ship
         resolved=$(command -v "$tool" 2>/dev/null) || resolved=""
         want=$(realpath "$bindir/$tool" 2>/dev/null)

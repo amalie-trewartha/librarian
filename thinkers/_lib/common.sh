@@ -444,7 +444,7 @@ _build_shellm_flags() {
     # running mind in README.md and the stock identity prompt: a host-only tool
     # silently disappears when shellm switches to Docker.
     local cmd
-    for cmd in mem traj skills context llm shellm chat focus recap glob view put sub; do
+    for cmd in mem traj skills context llm shellm chat recap; do
         local path
         path=$(command -v "$cmd" 2>/dev/null) || continue
         printf '%s\n' "--bin" "$path"

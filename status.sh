@@ -19,13 +19,13 @@ cmd_for() {        # cmd_for <identity> — how to address it from THIS shell
     if [[ -L "$PREFIX/$1" && "$(readlink "$PREFIX/$1")" == */persona ]]; then printf '%s%s' "$BIN" "$1"
     else printf '%spersona %s' "$BIN" "$1"; fi
 }
-TOOLS=(shellm shellm-docker skills mem llm context traj thinkers chat focus recap glob view put sub
-       shellm-docker-broker identity shellm-explore headlong-init headlong-killall persona headlong-web
+TOOLS=(shellm shellm-docker skills mem llm context traj thinkers chat recap
+       shellm-docker-broker identity shellm-explore headlong-skills headlong-init headlong-killall persona headlong-web
        headlong-slack-bridge headlong-telegram-bridge headlong-tui)
 # Process shapes, same as headlong-killall (the source of truth) and
 # uninstall.sh; tests/test_uninstall.sh checks the three agree.
 PATTERNS=(
-    'bash [^ ]*/(bin|tools)/(shellm|shellm-explore|llm|chat|sub)( |$)'
+    'bash [^ ]*/(bin|tools)/(shellm|shellm-explore|llm|chat)( |$)'
     'bash [^ ]*/bin/thinkers( |$)'
     'bash [^ ]*/thinkers/[^ /]+/step( |$)'
     'bash [^ ]*/bin/traj tail'

@@ -28,8 +28,8 @@ IDENTITIES="ask"      # ask | keep | delete
 # Same list as install.sh (BIN_TOOLS + AUX_TOOLS + the TUI binary). Kept
 # here too so this script works standalone, after the checkout is gone;
 # tests/test_uninstall.sh checks the two lists agree.
-TOOLS=(shellm shellm-docker skills mem llm context traj thinkers chat focus recap glob view put sub
-       shellm-docker-broker identity shellm-explore headlong-init headlong-killall persona headlong-web
+TOOLS=(shellm shellm-docker skills mem llm context traj thinkers chat recap
+       shellm-docker-broker identity shellm-explore headlong-skills headlong-init headlong-killall persona headlong-web
        headlong-slack-bridge headlong-telegram-bridge headlong-tui)
 
 _usage() {
@@ -145,7 +145,7 @@ _killall_bin() {
 # Process shapes, copied from headlong-killall (the source of truth) for the
 # case where the checkout is already gone; tests/test_status.sh checks parity.
 PATTERNS=(
-    'bash [^ ]*/(bin|tools)/(shellm|shellm-explore|llm|chat|sub)( |$)'
+    'bash [^ ]*/(bin|tools)/(shellm|shellm-explore|llm|chat)( |$)'
     'bash [^ ]*/bin/thinkers( |$)'
     'bash [^ ]*/thinkers/[^ /]+/step( |$)'
     'bash [^ ]*/bin/traj tail'

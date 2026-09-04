@@ -42,7 +42,7 @@ done
 # Script processes appear as "<...>/bash <path>/<script> args" via shebang,
 # so anchoring on "bash " + the script path is both precise and complete.
 PATTERNS=(
-    'bash [^ ]*/(bin|tools)/(shellm|shellm-explore|llm|chat|sub)( |$)'
+    'bash [^ ]*/(bin|tools)/(shellm|shellm-explore|llm|chat)( |$)'
     'bash [^ ]*/bin/thinkers( |$)'
     'bash [^ ]*/thinkers/[^ /]+/step( |$)'
     'bash [^ ]*/bin/traj tail'
