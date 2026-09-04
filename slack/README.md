@@ -11,6 +11,8 @@ are posted back to the right conversation.
 Slack <=(Socket Mode websocket)=> headlong-slack-bridge
     inbound:  event -> from_name "slack-<user>-<channel>[-<thread_ts>]"
               -> POST <web>/api/identities/<id>/chat
+              first @mention in an existing thread prepends a capped
+              prior-line digest (conversations.replies, fail-open)
               reaction_added on the bot's messages (and any DM reaction)
               lands as a `:emoji:` body (same from_name / thread)
     outbound: tail trajectory.jsonl -> message steps where from=<identity>
@@ -53,7 +55,9 @@ runs its own Slack-connected agent on.
 Other settings: `HEADLONG_SLACK_STATE_DIR`, legacy `SHELLM_SLACK_STATE_DIR`
 (cursor + thread state, default
 `<identity>/run/slack-bridge/`), `SLACK_THREAD_FOLLOWUPS=1` (answer
-un-mentioned replies in threads the bot is already part of).
+un-mentioned replies in threads the bot is already part of),
+`SLACK_THREAD_JOIN_BACKFILL` (how many messages above a first @mention
+to prepend; default 20, 0 disables, max 50).
 
 For the end-to-end procedure we used to install our agent, Audel, into a
 workspace on that stack (Slack app, tokens, SSM env, rebuild, verification),

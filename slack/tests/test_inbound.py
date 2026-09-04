@@ -125,6 +125,10 @@ class _FakeClient:
         self.permalink_delay = permalink_delay
         self.reactions_get_calls = []
         self.permalink_calls = []
+        self.replies_calls = []
+        self.replies_messages = []
+        self.replies_delay = 0.0
+        self.replies_exc = False
         self._live = 0
         self.max_live = 0
         self._lock = __import__("threading").Lock()
@@ -168,8 +172,20 @@ class _FakeClient:
     def chat_postMessage(self, **kwargs):
         raise AssertionError(f"unexpected chat_postMessage {kwargs}")
 
+    def conversations_replies(self, *, channel, ts, latest=None, inclusive=None,
+                              limit=None, cursor=None, **_kw):
+        self.replies_calls.append(
+            {"channel": channel, "ts": ts, "latest": latest,
+             "inclusive": inclusive, "limit": limit, "cursor": cursor}
+        )
+        if self.replies_delay:
+            time.sleep(self.replies_delay)
+        if self.replies_exc:
+            raise RuntimeError("replies failed")
+        return {"ok": True, "messages": list(self.replies_messages)}
 
-def _cfg(tmp_path, followups=True):
+
+def _cfg(tmp_path, followups=True, join_backfill=20):
     serve = tmp_path / "serve"
     ident = serve / "audel"
     ident.mkdir(parents=True)
@@ -184,6 +200,7 @@ def _cfg(tmp_path, followups=True):
         web_url="http://127.0.0.1:9",
         state_dir=state,
         thread_followups=followups,
+        thread_join_backfill=join_backfill,
     )
 
 
@@ -474,3 +491,132 @@ def test_permalink_failure_does_not_drop_message(monkeypatch):
 
     assert len(posts) == 1
     assert "source_url" not in posts[0]
+
+
+
+def _message_event(*, text, ts="111.500", thread_ts=PARENT, channel=CHAN,
+                   user=NICK, event_type="app_mention", channel_type="channel"):
+    event = {
+        "type": event_type,
+        "user": user,
+        "text": text,
+        "channel": channel,
+        "ts": ts,
+        "channel_type": channel_type,
+    }
+    if thread_ts is not None:
+        event["thread_ts"] = thread_ts
+    return event
+
+
+def _run_message(tmp_path, client, event, posted, followups=True, join_backfill=20,
+                 threads=None):
+    cfg = _cfg(tmp_path, followups=followups, join_backfill=join_backfill)
+    if threads is None:
+        threads = ActiveThreads(cfg.state_dir / "threads.json")
+    ib = Inbound(cfg, _FakeApp(client), BOT, threads)
+    logger = logging.getLogger("test")
+    try:
+        ib._on_event(event, logger)
+        deadline = time.time() + 2
+        while time.time() < deadline and not posted.items:
+            time.sleep(0.02)
+        time.sleep(0.05)
+    finally:
+        ib.stop()
+        ib._worker.join(timeout=1)
+    return threads
+
+
+def test_first_mention_in_thread_prepends_capped_prior_lines(tmp_path, posted):
+    client = _FakeClient()
+    mention_ts = "111.500"
+    client.replies_messages = [
+        {"ts": PARENT, "user": NICK, "text": "context one"},
+        {"ts": "111.300", "user": NICK, "text": "context two"},
+        {"ts": "111.400", "user": NICK, "text": "context three"},
+        {"ts": mention_ts, "user": NICK, "text": f"<@{BOT}> what do you think?"},
+    ]
+    event = _message_event(text=f"<@{BOT}> what do you think?", ts=mention_ts)
+    _run_message(tmp_path, client, event, posted, join_backfill=2)
+
+    assert len(posted.items) == 1
+    body = posted.items[0]["json"]["content"]
+    assert "thread before this mention — 2 earlier messages" in body
+    assert "context one" not in body
+    assert "Nick Jalbert: context two" in body
+    assert "Nick Jalbert: context three" in body
+    assert "what do you think?" in body
+    assert client.replies_calls
+    assert client.replies_calls[0]["ts"] == PARENT
+    assert client.replies_calls[0]["latest"] == mention_ts
+    assert client.replies_calls[0]["inclusive"] is False
+
+
+def test_already_active_thread_does_not_backfill(tmp_path, posted):
+    threads = ActiveThreads(tmp_path / "pre-threads.json")
+    threads.touch(CHAN, PARENT)
+    client = _FakeClient()
+    client.replies_messages = [
+        {"ts": PARENT, "user": NICK, "text": "old context"},
+    ]
+    event = _message_event(text=f"<@{BOT}> ping")
+    _run_message(tmp_path, client, event, posted, threads=threads)
+
+    assert len(posted.items) == 1
+    body = posted.items[0]["json"]["content"]
+    assert "thread before this mention" not in body
+    assert "old context" not in body
+    assert client.replies_calls == []
+
+
+def test_top_level_mention_does_not_backfill(tmp_path, posted):
+    client = _FakeClient()
+    event = _message_event(
+        text=f"<@{BOT}> hello",
+        ts="111.500",
+        thread_ts=None,
+    )
+    _run_message(tmp_path, client, event, posted)
+
+    assert len(posted.items) == 1
+    assert "thread before this mention" not in posted.items[0]["json"]["content"]
+    assert client.replies_calls == []
+
+
+def test_join_backfill_failure_still_delivers_mention(tmp_path, posted):
+    client = _FakeClient()
+    client.replies_exc = True
+    event = _message_event(text=f"<@{BOT}> still there?")
+    _run_message(tmp_path, client, event, posted)
+
+    assert len(posted.items) == 1
+    body = posted.items[0]["json"]["content"]
+    assert "still there?" in body
+    assert "thread before this mention" not in body
+
+
+def test_join_backfill_zero_skips_lookup(tmp_path, posted):
+    client = _FakeClient()
+    event = _message_event(text=f"<@{BOT}> hi")
+    _run_message(tmp_path, client, event, posted, join_backfill=0)
+
+    assert len(posted.items) == 1
+    assert client.replies_calls == []
+    assert "thread before this mention" not in posted.items[0]["json"]["content"]
+
+
+def test_dm_does_not_backfill(tmp_path, posted):
+    client = _FakeClient()
+    event = _message_event(
+        text="hello",
+        ts="111.500",
+        thread_ts=None,
+        channel=DM,
+        event_type="message",
+        channel_type="im",
+    )
+    _run_message(tmp_path, client, event, posted)
+
+    assert len(posted.items) == 1
+    assert client.replies_calls == []

@@ -78,3 +78,32 @@ def test_a_dangling_default_link_names_the_link(tmp_path):
         config.load(tmp_path)
     assert "default identity link" in str(exc.value)
     assert "ghost" in str(exc.value)
+
+
+
+def test_join_backfill_defaults_to_twenty(tmp_path, monkeypatch):
+    _identity(tmp_path, "ada")
+    (tmp_path / ".identities" / "default").symlink_to("ada")
+    monkeypatch.delenv("SLACK_THREAD_JOIN_BACKFILL", raising=False)
+    assert config.load(tmp_path).thread_join_backfill == 20
+
+
+def test_join_backfill_zero_disables(tmp_path, monkeypatch):
+    _identity(tmp_path, "ada")
+    (tmp_path / ".identities" / "default").symlink_to("ada")
+    monkeypatch.setenv("SLACK_THREAD_JOIN_BACKFILL", "0")
+    assert config.load(tmp_path).thread_join_backfill == 0
+
+
+def test_join_backfill_clamps_to_fifty(tmp_path, monkeypatch):
+    _identity(tmp_path, "ada")
+    (tmp_path / ".identities" / "default").symlink_to("ada")
+    monkeypatch.setenv("SLACK_THREAD_JOIN_BACKFILL", "999")
+    assert config.load(tmp_path).thread_join_backfill == 50
+
+
+def test_join_backfill_garbage_falls_back(tmp_path, monkeypatch):
+    _identity(tmp_path, "ada")
+    (tmp_path / ".identities" / "default").symlink_to("ada")
+    monkeypatch.setenv("SLACK_THREAD_JOIN_BACKFILL", "nope")
+    assert config.load(tmp_path).thread_join_backfill == 20
