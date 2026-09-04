@@ -28,7 +28,7 @@ def file_signature(filename: str, content: bytes | str) -> str:
 
 
 class DecodeError(Exception):
-    """content_b64 was present but empty or not strict standard base64."""
+    """File bytes could not be recovered from the step."""
 
 
 def _content(step: dict[str, Any]) -> bytes | str | None:
@@ -48,7 +48,10 @@ def _content(step: dict[str, Any]) -> bytes | str | None:
         return None
     if isinstance(content, str):
         return strip_leaked_command(content)
-    return content
+    # JSON can hold objects/arrays/numbers; file_signature and the
+    # upload path only accept text or bytes. Anything else is a
+    # decode error so outbound can notice-and-continue.
+    raise DecodeError("non-string content")
 
 
 def _as_photo(content: bytes | str | None) -> bool:

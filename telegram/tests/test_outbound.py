@@ -348,3 +348,38 @@ def test_identical_file_steps_are_suppressed(tmp_path, monkeypatch):
     outbound.run(_cfg(tmp_path), FakeBot(), ApproveAll(), threading.Event())
     assert docs == [("note.txt", body, None), ("note.txt", other, None)]
     assert sent == []
+
+
+def test_invalid_file_content_does_not_stop_later_replies(tmp_path, monkeypatch):
+    import threading
+
+    from headlong_telegram import outbound
+
+    steps = [
+        {"type": "message", "from": "audel", "to": "telegram-1-1",
+         "source": "chat", "filename": "bad.bin",
+         "content": {"x": "y"}, "step_id": "badobj"},
+        {"type": "message", "from": "audel", "to": "telegram-1-1",
+         "source": "chat", "content": "later reply", "step_id": "okmsg"},
+    ]
+    monkeypatch.setattr(outbound.mindlog, "find_trajectory", lambda d: tmp_path / "t.jsonl")
+    monkeypatch.setattr(outbound.mindlog, "follow", lambda *a, **k: iter(steps))
+
+    sent = []
+    docs = []
+
+    class FakeBot:
+        def send_message(self, chat, text, html=False):
+            sent.append(text)
+
+        def send_document(self, chat, content, filename, caption=None):
+            docs.append(filename)
+
+    class ApproveAll:
+        def is_approved(self, user):
+            return True
+
+    outbound.run(_cfg(tmp_path), FakeBot(), ApproveAll(), threading.Event())
+    assert docs == []
+    assert sent == ["(failed to deliver file bad.bin)", "later reply"]
+

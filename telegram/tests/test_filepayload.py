@@ -115,3 +115,14 @@ def test_file_signature_is_filename_plus_content_hash():
     assert same == file_signature("note.txt", "aaa")
     assert same != file_signature("note.txt", b"bbb")
     assert same != file_signature("other.txt", b"aaa")
+
+
+def test_non_string_content_is_decode_error():
+    payload = file_payload({
+        "filename": "bad.bin",
+        "content": {"x": "y"},
+    })
+    assert payload is not None
+    assert payload["content"] is None
+    assert payload["decode_error"] is True
+
