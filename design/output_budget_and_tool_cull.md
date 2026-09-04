@@ -155,12 +155,17 @@ steps, string length otherwise), so the history backfills.
 
 - **Seen whole**: share of outputs whose true size fits the band they were
   rendered in. Baseline 21%.
-- **Repeat reads**: share of read-slice steps that re-read a file already
-  read in the same run. Baseline about 45%, upper bound.
+- **Repeat reads**: share of read steps (sed, cat, head, tail, nl on a file
+  path) that name a path already read earlier in the same run. Baseline 37%
+  over the whole log, 55% over the last 7 days.
 - **Rendered bytes per output** and input tokens per call from the llm
   ledger, so the cost side moves with the other two.
 
-Add them as a section of `deploy/scripts/audel-metrics`, weekly. Render-level
+Built 2026-09-04 as the "output budget" section of
+`deploy/scripts/audel-metrics` (per day: outputs, whole at 2K and 8K, mean
+true and rendered bytes, read steps, re-read share by file path). First run:
+last 7 days before the deploy, 6,505 outputs, 15% whole at 2K, 69% at 8K,
+re-reads 55% of read steps. Render-level
 seen-whole for the 313-step run itself, from its recorded output sizes: 12%
 at 2K, 38% at 4K, 63% at 8K, 91% at 16K. A live replay under the new render
 is still the test that matters, since the model will size its reads to the

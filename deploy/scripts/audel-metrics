@@ -62,6 +62,11 @@ if [[ "$cached" -eq 0 ]]; then
     #   - llm_s/exec_s duration percentiles, once bin/shellm stamps them.
 #   - per UTC day: messages in/out, model calls, tokens in/out/thinking,
 #     runs started, reasoning steps, log rows; token totals per model.
+#   - output budget (design/output_budget_and_tool_cull.md): per day, shell
+#     outputs with their true size (stdout_bytes on spilled steps, else the
+#     inline length), how many fit 2K and 8K whole, the bytes a 2K and an 8K
+#     render would show, and read steps (sed/cat/head/tail/nl on a file path)
+#     that re-read a path already read earlier in the same run.
 #     Calls/tokens per day come from the llm ledger when it has at least
 #     as many calls as the stamps that day (a complete ledger is a superset;
 #     model on each line), else from the reasoning-step stamps (model taken
@@ -135,7 +140,14 @@ total = 0
 ledger_rows = 0
 
 DAY_KEYS = ("rows", "in_msg", "out_msg", "runs", "reasoning", "calls", "in", "out", "think",
-            "ctx_n", "ctx_zero")
+            "ctx_n", "ctx_zero",
+            "outs", "whole2k", "whole8k", "out_true", "out_2k", "out_8k", "reads", "rereads")
+# Output budget: a read step is a reasoning step whose command has a line
+# starting with one of READ_CMDS naming a file (a token with an extension);
+# it is a re-read when any of those paths was read earlier in the same run.
+READ_CMDS = ("sed", "cat", "head", "tail", "nl", "view", "less")
+PATH_RE = re.compile(r"(?<![\w@])((?:[\w.~-]+/)*[\w-]+\.[A-Za-z0-9]{1,6})(?![\w/])")
+run_reads = {}          # run_id -> set of paths read so far
 TOK = ("calls", "in", "out", "think")
 
 # Responder context metrics (design/conversation_memory.md, part 6): every
@@ -210,8 +222,31 @@ with open(path, encoding="utf-8", errors="replace") as fh:
         elif t in ("reasoning", "shell-output"):
             if rid:
                 run_appends.append(ts)
+            if t == "shell-output":
+                sz = step.get("stdout_bytes")
+                if not isinstance(sz, int):
+                    sz = len(step.get("stdout") or "")
+                dd["outs"] += 1
+                dd["out_true"] += sz
+                dd["out_2k"] += min(sz, 2048)
+                dd["out_8k"] += min(sz, 8192)
+                if sz <= 2048:
+                    dd["whole2k"] += 1
+                if sz <= 8192:
+                    dd["whole8k"] += 1
             if t == "reasoning":
                 dd["reasoning"] += 1
+                paths = set()
+                for ln in (step.get("cmd") or "").split("\n"):
+                    tok = ln.strip().split(" ", 1)[0] if ln.strip() else ""
+                    if tok in READ_CMDS:
+                        paths.update(PATH_RE.findall(ln))
+                if paths:
+                    dd["reads"] += 1
+                    seen = run_reads.setdefault(rid or step.get("step_id") or "", set())
+                    if paths & seen:
+                        dd["rereads"] += 1
+                    seen |= paths
                 if isinstance(step.get("llm_s"), (int, float)):
                     llm_s.append(step["llm_s"])
                 bm = day_models.setdefault(day_key(ts), {}).setdefault(run_model.get(rid, "?"), dict.fromkeys(TOK, 0))
@@ -545,6 +580,31 @@ if daily:
           % (" (from %s)" % led["since"] if led.get("since") else ""))
     print("   shellm-run stamps only on earlier days; forgot = replies with no earlier conversation")
     print("   in the prompt / replies where a previous exchange within 48h existed)")
+
+ob = [(day, v) for day, v in daily if v.get("outs")]
+if ob:
+    def ob_sum(rows, k):
+        return sum(v.get(k, 0) for _, v in rows)
+    def ob_line(label, rows):
+        outs, reads = ob_sum(rows, "outs"), ob_sum(rows, "reads")
+        if not outs:
+            return "  %-12s %6d" % (label, 0)
+        return "  %-12s %6d %8d%% %8d%% %7d %7d %7d  %6d %7s" % (
+            label, outs,
+            round(100.0 * ob_sum(rows, "whole2k") / outs), round(100.0 * ob_sum(rows, "whole8k") / outs),
+            ob_sum(rows, "out_true") // outs, ob_sum(rows, "out_2k") // outs, ob_sum(rows, "out_8k") // outs,
+            reads, ("%d%%" % round(100.0 * ob_sum(rows, "rereads") / reads)) if reads else "-")
+    print()
+    print("output budget (design/output_budget_and_tool_cull.md)")
+    print("  %-12s %6s %9s %9s %7s %7s %7s  %6s %7s" % (
+        "", "outs", "whole@2K", "whole@8K", "true_B", "at2K_B", "at8K_B", "reads", "reread"))
+    print(ob_line("all days", ob))
+    print(ob_line("last 7 days", ob[-7:]))
+    for day, v in ob[-14:]:
+        print(ob_line(day, [(day, v)]))
+    print("  (outs = shell outputs; whole@N = share whose true size fits N bytes; true_B = mean true")
+    print("   size, atN_B = mean bytes an N-byte render shows; reads = reasoning steps that read a")
+    print("   file with sed/cat/head/tail/nl; reread = share that read a path already read in the run)")
 
 inj = d.get("injections")
 print()
