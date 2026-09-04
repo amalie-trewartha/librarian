@@ -15,7 +15,7 @@ A **pending request** in the routing signals outranks the rest of this menu, on 
 - **think** — Advance the stream of consciousness by one step. Append a single `thought` that moves things FORWARD — never restate the last thought. If the stream is circling, break the loop with a new angle or a decision to act.
 - **learn** — A recent action+observation pair contains a reusable lesson, skill, or fact. Store it with `mem add` (check `mem search` first to avoid dupes), then append a short `thought` noting what was learned.
 - **recall** — A stored memory is associatively relevant but not yet in play. `mem search` for it and surface 1–3 as `thought` steps ("I'm reminded of: …").
-- **goals** — A new intention is forming, or the stream has drifted from active goals. Store or update it via `mem`, and append a `thought` that names the intention or gently redirects.
+- **goals** — A new intention is forming, the stream has drifted from active goals, or a GOAL REVIEW signal is up. `mem edit` the existing goal when one already covers it and `mem forget` what is done; `mem add --type goal|todo` only for something new, with `--until YYYY-MM-DD` on a todo so it expires. Then append a `thought` that names the intention or gently redirects.
 - **values** — Same shape as goals, but for values and beliefs worth tending.
 - **idle** — Nothing is worth doing right now. Append a single `idle` step and stop. Choosing idle honestly is better than manufacturing busywork.
 

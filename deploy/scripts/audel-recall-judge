@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# deploy/scripts/audel-recall-judge — judged relevance of the related-memories
+# section (design/related_memories.md).
+#
+# Usage: deploy/scripts/audel-recall-judge [N]      (default 20 wakes)
+#
+# On the box, takes the last N wake prompts that carried a "Related memories"
+# section, gives the fast model each wake's material (routing signals and the
+# last three stream steps) and the lines the section showed, and asks for a
+# 0-2 relevance score per line (0 unrelated, 1 related, 2 useful for this
+# wake). Prints the mean, the share scoring 0, and the per-wake scores. The
+# mechanical counters in audel-metrics cannot tell a relevant memory the
+# mind ignored from an irrelevant one; this can. Twenty wakes on the fast
+# model is well under a cent. Identity defaults to audel
+# (SHELLM_METRICS_IDENTITY overrides).
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+case "${1:-}" in -h|--help) sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;; esac
+N="${1:-20}"
+[[ "$N" =~ ^[0-9]+$ ]] || die "N must be a number"
+IDENT="${SHELLM_METRICS_IDENTITY:-audel}"
+require_tools terraform aws jq
+require_state
+require_aws
+info "judging the last $N related-memories sections on the box ($IDENT)"
+run_on_box "N=$N; IDENT=$IDENT
+$(cat <<'ONBOX'
+set -uo pipefail
+cd /opt/shellm/app || exit 1
+T=$(ls .identities/$IDENT/trajectories/*-root/trajectory.jsonl | head -1)
+sudo tail -n 20000 "$T" | jq -r 'select(.type=="prompt") | .content' > /tmp/recall-judge-prompts.txt
+sudo -u shellm bash -lc "cd /opt/shellm/app && source .identities/$IDENT/activate >/dev/null 2>&1 && export PATH=/opt/shellm/app/bin:\$PATH && N=$N python3 - <<'PY'
+import os, re, subprocess, json
+allp = open('/tmp/recall-judge-prompts.txt').read()
+wakes = [p for p in allp.split('\n<context>\n')[1:] if '\nRelated memories (' in p]
+wakes = wakes[-int(os.environ['N']):]
+scores = []; zeros = 0; total = 0
+for p in wakes:
+    stream = p.split('Recent stream (last', 1)[1].split('\nRelated memories (', 1)[0] if 'Recent stream (last' in p else ''
+    steps = [json.loads(l) for l in stream.splitlines() if l.startswith('{')]
+    last3 = '\n'.join(s.get('content', '')[:400] for s in steps[-3:])
+    sec = p.split('\nRelated memories (', 1)[1]
+    lines = [l for l in sec.split('\n\n', 1)[0].split('\n')[1:] if l.startswith('- ')]
+    sig = p.split('Routing signals:', 1)[1].split('\n\n', 1)[0] if 'Routing signals:' in p else ''
+    prompt = ('A mind woke with this material.\nRouting signals:\n' + sig[:1200] + '\nLast steps:\n' + last3 +
+              '\n\nIt was shown these memories:\n' + '\n'.join('%d. %s' % (i + 1, l[2:][:300]) for i, l in enumerate(lines)) +
+              '\n\nScore each memory 0, 1 or 2: 0 = unrelated to this wake, 1 = related, 2 = useful for what the mind is doing now. '
+              'Answer with the scores only, one per line, in order.')
+    model = os.environ.get('SHELLM_FAST_MODEL') or os.environ.get('SHELLM_MODEL') or ''
+    args = ['llm', '-t', '50'] + (['-m', model] if model else [])
+    try:
+        out = subprocess.run(args, input=prompt, capture_output=True, text=True, timeout=120).stdout
+    except Exception as e:
+        out = ''
+    got = [int(x) for x in re.findall(r'\b[012]\b', out)][:len(lines)]
+    for g in got:
+        scores.append(g); total += 1; zeros += (g == 0)
+    print('wake scores:', got, '| memories:', [l[2:].split(' [')[0][:40] for l in lines])
+if total:
+    print('judged %d lines over %d wakes: mean %.2f, zero %d%%, two %d%%' % (
+        total, len(wakes), sum(scores) / total, round(100.0 * zeros / total), round(100.0 * sum(1 for s in scores if s == 2) / total)))
+else:
+    print('no related-memories sections found in the last 20000 lines')
+PY"
+ONBOX
+)"

@@ -121,5 +121,17 @@ rm -f "$MEM_DIR"/*.md
 out=$(mem search "anything" 2>&1)
 if [[ "$out" == *"No memories stored"* ]]; then ok "empty store says so"; else bad "empty store says so" "$out"; fi
 
+# BM25 scoring (2026-09-04): a term once in a short file outranks the same
+# term once in a long file, and `mem prefilter` exposes the stage-1 ranking.
+mkdir -p "$WORK/mem2"; export MEM_DIR="$WORK/mem2"
+printf -- '---\nid: a\nsummary: s\ntype: note\ncreated: 2026-08-01 00:00:00\n---\n\nshort note about the dispatcher token\n' > "$MEM_DIR/2026-08-01-00-00-00_a_short.md"
+{ printf -- '---\nid: b\nsummary: l\ntype: note\ncreated: 2026-08-01 00:00:00\n---\n\ndispatcher token appears once here.\n'; for _ in $(seq 60); do printf 'filler words about many things and other items and more of the same\n'; done; } > "$MEM_DIR/2026-08-01-00-00-01_b_long.md"
+top=$(mem prefilter "dispatcher token" --top 1 | xargs -n1 basename)
+[[ "$top" == *_a_short.md ]] && ok "a short file outranks a long one with the same single match (length normalised)" || bad "length normalisation" "got $top"
+n=$(mem prefilter "dispatcher token" | wc -l | tr -d ' ')
+[[ "$n" == 2 ]] && ok "mem prefilter lists every matching file, best first" || bad "mem prefilter lists matches" "got $n"
+z=$(mem prefilter "zzz qqq" | wc -l | tr -d ' ')
+[[ "$z" == 0 ]] && ok "mem prefilter prints nothing with no term overlap" || bad "prefilter no overlap" "got $z"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

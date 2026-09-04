@@ -72,6 +72,12 @@ if [[ "$cached" -eq 0 ]]; then
 #     model on each line), else from the reasoning-step stamps (model taken
 #     from the run's shellm-run row via run_id). Same rule as
 #     web/src/headlong_web/usage.py.
+#   - related memories (design/related_memories.md): per day, wakes whose
+#     prompt carried a "Related memories" section, names shown, distinct
+#     names, repeats from the previous wake, names the run then opened
+#     (any command in that run naming the memory), names edited or
+#     forgotten within a day of being shown, `mem search` commands, and the
+#     section's bytes. The judged relevance sample is deploy/scripts/audel-recall-judge.
     onbox_script="IDENT_DIR=/opt/shellm/app/.identities/$IDENT
 $(cat <<'ONBOX'
 set -euo pipefail
@@ -141,13 +147,36 @@ ledger_rows = 0
 
 DAY_KEYS = ("rows", "in_msg", "out_msg", "runs", "reasoning", "calls", "in", "out", "think",
             "ctx_n", "ctx_zero",
-            "outs", "whole2k", "whole8k", "out_true", "out_2k", "out_8k", "reads", "rereads")
+            "outs", "whole2k", "whole8k", "out_true", "out_2k", "out_8k", "reads", "rereads",
+            "rel_wakes", "rel_shown", "rel_repeat", "rel_fetched", "rel_fixed", "rel_bytes", "mem_searches")
+# Related memories: the wake prompt's section is a header line starting
+# "Related memories (" followed by "- <name> [type, age]: ..." lines up to a
+# blank line. A name is "fetched" when a later command in the same run
+# names it (mem show, cat of the file, anything), "fixed" when a mem edit or
+# mem forget names it (or a prefix of it) within a day of it being shown.
+RE_REL_LINE = re.compile(r"^- (\S+) \[", re.M)
+RE_MEM_SEARCH = re.compile(r"(^|[;&|]\s*)mem search\b", re.M)
+RE_MEM_FIX = re.compile(r"(^|[;&|]\s*)mem (?:edit|forget) (\S+)", re.M)
+RE_MEM_FIX_LINE = re.compile(r"^.*\bmem (?:edit|forget)\b.*$", re.M)
+def related_names(content):
+    i = content.find("\nRelated memories (")
+    if i < 0:
+        return set(), 0
+    block = content[i + 1:]
+    j = block.find("\n\n")
+    block = block if j < 0 else block[:j]
+    return set(RE_REL_LINE.findall(block)), len(block)
 # Output budget: a read step is a reasoning step whose command has a line
 # starting with one of READ_CMDS naming a file (a token with an extension);
 # it is a re-read when any of those paths was read earlier in the same run.
 READ_CMDS = ("sed", "cat", "head", "tail", "nl", "view", "less")
 PATH_RE = re.compile(r"(?<![\w@])((?:[\w.~-]+/)*[\w-]+\.[A-Za-z0-9]{1,6})(?![\w/])")
 run_reads = {}          # run_id -> set of paths read so far
+rel_by_run = {}         # run_id -> names shown in that wake's prompt
+rel_prev = set()        # names shown in the previous wake (repeat rate)
+rel_recent = {}         # name -> ts last shown (for the fixed-within-a-day rate)
+rel_fetched_seen = set(); rel_fixed_seen = set()
+day_distinct = {}       # day -> set of names shown
 TOK = ("calls", "in", "out", "think")
 
 # Responder context metrics (design/conversation_memory.md, part 6): every
@@ -185,6 +214,19 @@ with open(path, encoding="utf-8", errors="replace") as fh:
         rid = step.get("run_id") or ""
         dd = day_of(ts)
         dd["rows"] += 1
+        if t == "prompt":
+            names, nbytes = related_names(step.get("content") or "")
+            if names:
+                dd["rel_wakes"] += 1
+                dd["rel_shown"] += len(names)
+                dd["rel_repeat"] += len(names & rel_prev)
+                dd["rel_bytes"] += nbytes
+                rel_prev = names
+                day_distinct.setdefault(day_key(ts), set()).update(names)
+                if rid:
+                    rel_by_run[rid] = names
+                for nm in names:
+                    rel_recent[nm] = ts
         if t == "shellm-run":
             dd["runs"] += 1
             # the run's step_id is the run_id its reasoning/final steps carry
@@ -236,6 +278,20 @@ with open(path, encoding="utf-8", errors="replace") as fh:
                     dd["whole8k"] += 1
             if t == "reasoning":
                 dd["reasoning"] += 1
+                cmd = step.get("cmd") or ""
+                if RE_MEM_SEARCH.search(cmd):
+                    dd["mem_searches"] += 1
+                read_cmd = RE_MEM_FIX_LINE.sub("", cmd)   # an edit or forget is a fix, not a read
+                for nm in rel_by_run.get(rid, ()):
+                    if nm in read_cmd and (rid, nm) not in rel_fetched_seen:
+                        rel_fetched_seen.add((rid, nm))
+                        dd["rel_fetched"] += 1
+                for m in RE_MEM_FIX.finditer(cmd):
+                    target = m.group(2)
+                    for full, t0 in rel_recent.items():
+                        if full.startswith(target) and ts - t0 < 86400 and full not in rel_fixed_seen:
+                            rel_fixed_seen.add(full)
+                            dd["rel_fixed"] += 1
                 paths = set()
                 for ln in (step.get("cmd") or "").split("\n"):
                     tok = ln.strip().split(" ", 1)[0] if ln.strip() else ""
@@ -420,6 +476,7 @@ out = {
     "injections": injections,
     "context": context,
     "daily": [[d, daily[d]] for d in sorted(daily)],
+    "rel_distinct": {d: len(v) for d, v in day_distinct.items()},
     "by_model": by_model,
     "ledger": {"rows": ledger_rows, "since": ledger_since},
 }
@@ -605,6 +662,30 @@ if ob:
     print("  (outs = shell outputs; whole@N = share whose true size fits N bytes; true_B = mean true")
     print("   size, atN_B = mean bytes an N-byte render shows; reads = reasoning steps that read a")
     print("   file with sed/cat/head/tail/nl; reread = share that read a path already read in the run)")
+
+rl = [(day, v) for day, v in daily if v.get("rel_wakes")]
+if rl:
+    rdist = d.get("rel_distinct") or {}
+    def rl_line(label, rows, distinct):
+        w, shown = sum(v["rel_wakes"] for _, v in rows), sum(v["rel_shown"] for _, v in rows)
+        if not shown:
+            return "  %-12s %6d" % (label, w)
+        pc = lambda k: "%d%%" % round(100.0 * sum(v.get(k, 0) for _, v in rows) / shown)
+        return "  %-12s %6d %6d %8s %7s %8s %6s %8d %7d" % (
+            label, w, shown, (str(distinct) if distinct is not None else "-"),
+            pc("rel_repeat"), pc("rel_fetched"), pc("rel_fixed"),
+            sum(v.get("mem_searches", 0) for _, v in rows), sum(v["rel_bytes"] for _, v in rows) // w)
+    print()
+    print("related memories (design/related_memories.md)")
+    print("  %-12s %6s %6s %8s %7s %8s %6s %8s %7s" % (
+        "", "wakes", "shown", "distinct", "repeat", "fetched", "fixed", "searches", "B/wake"))
+    print(rl_line("all days", rl, None))
+    print(rl_line("last 7 days", rl[-7:], None))
+    for day, v in rl[-14:]:
+        print(rl_line(day, [(day, v)], rdist.get(day)))
+    print("  (wakes = prompts carrying the section; shown = names listed; repeat = share also shown the")
+    print("   wake before; fetched = share the run then opened by name; fixed = share edited or forgotten")
+    print("   within a day; searches = mem search commands that day; B/wake = section bytes)")
 
 inj = d.get("injections")
 print()

@@ -125,37 +125,101 @@ _build_system_prompt() {
 # Goals
 # ---------------------------------------------------------------------------
 
-# Extract goals from identity's memories (type: goal/intention)
+# The active-goals section of the wake prompt. Every goal-family memory
+# (goal, intention, objective, todo) is shown, newest first, with its type
+# and age, capped at GOALS_MAX lines plus a count of the rest. A memory
+# with `until: YYYY-MM-DD` in its frontmatter drops out after that date
+# (`mem add --until`). Before 2026-09-04 only goal and intention were read,
+# so 10 of Audel's 13 goal memories were invisible, three were duplicates
+# of a finished objective, and two todos had expired weeks earlier.
 get_goals() {
-    local mem_dir="${1:-$MEM_DIR}"
+    local mem_dir="${1:-$MEM_DIR}" max="${GOALS_MAX:-8}"
     [[ -d "$mem_dir" ]] || return 0
-    local goals=""
-    local f
-    for f in "$mem_dir"/*.md; do
+    local today now f ftype until created body age shown=0 hidden=0 goals=""
+    today=$(date -u +%Y-%m-%d); now=$(date -u +%s)
+    local -a files=("$mem_dir"/*.md)
+    local i
+    for (( i = ${#files[@]} - 1; i >= 0; i-- )); do
+        f="${files[$i]}"
         [[ -f "$f" ]] || continue
-        local ftype
         ftype=$(awk 'NR==1 && /^---$/{f=1; next} f && /^---$/{exit} f && /^type:/{sub(/^type:[[:space:]]*/, ""); print}' "$f")
-        case "$ftype" in
-            goal|intention)
-                local body
-                body=$(awk 'NR==1 && /^---$/{f=1; next} f && /^---$/{f=0; next} !f{print}' "$f" | sed '/./,$!d' | head -3)
-                [[ -n "$body" ]] && goals="${goals}- ${body}
+        case "$ftype" in goal|intention|objective|todo) ;; *) continue ;; esac
+        until=$(awk 'NR==1 && /^---$/{f=1; next} f && /^---$/{exit} f && /^until:/{sub(/^until:[[:space:]]*/, ""); print}' "$f")
+        [[ -n "$until" && "$until" < "$today" ]] && continue
+        body=$(awk 'NR==1 && /^---$/{f=1; next} f && /^---$/{f=0; next} !f{print}' "$f" | sed '/./,$!d' | head -3)
+        [[ -n "$body" ]] || continue
+        if (( shown >= max )); then hidden=$((hidden + 1)); continue; fi
+        created=$(awk 'NR==1 && /^---$/{f=1; next} f && /^---$/{exit} f && /^created:/{sub(/^created:[[:space:]]*/, ""); print}' "$f")
+        age=$(_mem_age "$created" "$f" "$now")
+        goals="${goals}- [${ftype}${age:+, $age}${until:+, until $until}] ${body}
 "
-                ;;
-        esac
+        shown=$((shown + 1))
     done
     if [[ -z "$goals" ]]; then
         printf '%s' "(no goals set)"
     else
         printf '%s' "$goals"
+        (( hidden > 0 )) && printf '%s' "- and $hidden more: mem list --type goal (also intention, objective, todo)"
     fi
+    return 0   # the step runs under set -e; a false arithmetic test must not be the exit status
 }
 
-# ---------------------------------------------------------------------------
-# Prompt loading
-# ---------------------------------------------------------------------------
+# Age of a memory as "3h", "5d", or "3w": from its created field, else the
+# file's mtime. Empty when neither parses.
+_mem_age() {
+    local created="$1" file="$2" now="$3" t="" d
+    if [[ -n "$created" ]]; then
+        t=$(date -u -d "$created" +%s 2>/dev/null) || t=$(date -j -u -f '%Y-%m-%d %H:%M:%S' "$created" +%s 2>/dev/null) || t=""
+    fi
+    [[ -n "$t" ]] || t=$(stat -c %Y "$file" 2>/dev/null || stat -f %m "$file" 2>/dev/null) || t=""
+    [[ -n "$t" ]] || return 0
+    d=$(( now - t )); (( d < 0 )) && d=0
+    if (( d < 86400 )); then printf '%sh' $(( d / 3600 ))
+    elif (( d < 14 * 86400 )); then printf '%sd' $(( d / 86400 ))
+    else printf '%sw' $(( d / 604800 )); fi
+}
 
-# Load a prompt template, replacing {{goals}} and {{identity_name}}
+# Related memories for the wake prompt. Scores the memory store against the
+# wake's own material (routing signals plus the last few stream steps) with
+# mem's keyword stage (`mem prefilter`, BM25, no model call) and prints up to
+# N lines: name, type, age, first sentence. Skipped: memories written in the
+# last RELATED_FRESH_S (a day; they are already in the stream) and the names
+# in $2 (what the previous wake showed, so an open thread does not repeat
+# the same three lines every wake). Words the prompt template itself
+# contributes are stripped first, or every timer wake matches the same hub
+# notes ("pick what best serves the mind right now"). Empty when nothing
+# scores. Trial on Audel's last eight wakes, 2026-09-04: two of three picks
+# on topic per wake, none repeated across all eight, and for a pending PR
+# request the pick was the note saying the box's GitHub login is pull-only.
+# See design/related_memories.md.
+_RELATED_STOPWORDS='mind|pick|best|serves|right|now|special|signals|pending|request|responder|already|told|would|back|waiting|strongly|prefer|doing|work|timer|wake|inner|life|deliver|result|exactly|chat|reply|follow-up|reply-to|append|observation|field|resolves|filed|note|notes|path|workdir|research-portfolio|next|evidence|only|did|live|paper|type|content|source|monolith|final|step_id|run_id|true|false|null|https|http|com|github|slack|telegram|nick|audel'
+_related_memories() {  # _related_memories <query> [prev-names, one per line] [n]
+    local query="$1" prev="${2:-}" n="${3:-${MONOLITH_RELATED_MEMORIES:-3}}"
+    (( n > 0 )) || return 0
+    [[ -d "${MEM_DIR:-}" ]] || return 0
+    command -v mem >/dev/null 2>&1 || return 0
+    local cleaned now fresh f name ftype created body age shown=0
+    cleaned=$(printf '%s' "$query" | tr -c 'A-Za-z0-9_#@.-' '\n' | grep -vxiE "$_RELATED_STOPWORDS" | tr '\n' ' ')
+    [[ -n "${cleaned// /}" ]] || return 0
+    now=$(date -u +%s); fresh="${RELATED_FRESH_S:-86400}"
+    while IFS= read -r f; do
+        [[ -f "$f" ]] || continue
+        name=$(basename "$f" .md)
+        case "$prev" in *"$name"*) continue ;; esac
+        created=$(awk 'NR==1 && /^---$/{f=1; next} f && /^---$/{exit} f && /^created:/{sub(/^created:[[:space:]]*/, ""); print}' "$f")
+        age=$(_mem_age "$created" "$f" "$now")
+        case "$age" in *h) continue ;; esac
+        if [[ "$fresh" -gt 86400 && "$age" == *d ]]; then (( ${age%d} * 86400 < fresh )) && continue; fi
+        ftype=$(awk 'NR==1 && /^---$/{f=1; next} f && /^---$/{exit} f && /^type:/{sub(/^type:[[:space:]]*/, ""); print}' "$f")
+        body=$(awk 'NR==1 && /^---$/{f=1; next} f && /^---$/{f=0; next} !f{print}' "$f" | sed '/./,$!d' | head -1 | sed 's/^# *//' | cut -c1-140)
+        [[ -n "$body" ]] || continue
+        printf -- '- %s [%s%s]: %s\n' "$name" "${ftype:-memory}" "${age:+, $age}" "$body"
+        shown=$((shown + 1))
+        (( shown >= n )) && break
+    done < <(MEM_DIR="$MEM_DIR" mem prefilter "$cleaned" --top $(( n * 4 )) 2>/dev/null)
+    return 0
+}
+
 load_prompt() {
     local prompt_file="$1"
     local identity_name="$2"

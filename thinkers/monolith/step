@@ -58,6 +58,11 @@ THOUGHT_CAP="${MONOLITH_THOUGHT_CAP:-60}"
 # Every N spontaneous wakes, add a routing hint suggesting the `share` function
 # (outward-facing initiative). 0 disables the nudge.
 SHARE_HINT_EVERY="${MONOLITH_SHARE_HINT_EVERY:-12}"
+# Related memories shown per wake (design/related_memories.md); 0 disables.
+RELATED_MEMORIES="${MONOLITH_RELATED_MEMORIES:-3}"
+# Every N days, a routing hint asks for a goal review (retire, merge, date
+# todos). 0 disables. Once a week is the cadence Nick chose on 2026-09-04.
+GOAL_REVIEW_DAYS="${MONOLITH_GOAL_REVIEW_DAYS:-7}"
 
 state_dir="$IDENTITY_DIR/run"
 mkdir -p "$state_dir"
@@ -81,7 +86,12 @@ _delay_for_level() {
 level=0
 ticks_at_level=0
 wakes_since_share_hint=0
+related_prev=""
+goal_review_at=0
 if [[ -f "$state_file" ]]; then
+    related_prev=$(jq -r '(.related_prev // []) | .[]' "$state_file" 2>/dev/null) || related_prev=""
+    goal_review_at=$(jq -r '.goal_review_at // 0' "$state_file" 2>/dev/null) || goal_review_at=0
+    [[ "$goal_review_at" =~ ^[0-9]+$ ]] || goal_review_at=0
     level=$(jq -r '.level // 0' "$state_file" 2>/dev/null) || level=0
     ticks_at_level=$(jq -r '.ticks_at_level // 0' "$state_file" 2>/dev/null) || ticks_at_level=0
     wakes_since_share_hint=$(jq -r '.wakes_since_share_hint // 0' "$state_file" 2>/dev/null) || wakes_since_share_hint=0
@@ -94,8 +104,10 @@ _save_state() {
     local tmp
     tmp=$(mktemp) || return 0
     if jq -nc --argjson l "$level" --argjson t "$ticks_at_level" \
-        --argjson w "$wakes_since_share_hint" \
-        '{level:$l, ticks_at_level:$t, wakes_since_share_hint:$w}' > "$tmp" 2>/dev/null; then
+        --argjson w "$wakes_since_share_hint" --argjson g "$goal_review_at" \
+        --arg rp "${related_shown:-}" \
+        '{level:$l, ticks_at_level:$t, wakes_since_share_hint:$w, goal_review_at:$g,
+          related_prev: ($rp | split("\n") | map(select(. != "")))}' > "$tmp" 2>/dev/null; then
         mv "$tmp" "$state_file"
     else
         rm -f "$tmp"
@@ -239,6 +251,18 @@ if [[ "$SHARE_HINT_EVERY" -gt 0 && "$wake_mode" == "spontaneous" ]]; then
 "
     fi
 fi
+# Goal review nudge: once every GOAL_REVIEW_DAYS, ask for the goals function
+# with the housekeeping spelled out. Goals only ever got added on Audel
+# (13 goal memories, 3 shown, duplicates and expired todos among them, 2026-09-04).
+_now_s=$(date -u +%s)
+if [[ "$GOAL_REVIEW_DAYS" -gt 0 ]] && (( _now_s - goal_review_at >= GOAL_REVIEW_DAYS * 86400 )); then
+    goal_review_at="$_now_s"
+    hints="${hints}- GOAL REVIEW (about once a week): read your active goals below and tidy them this wake (goals). Retire what is done or stale with \`mem forget\`, merge duplicates with \`mem edit\`, and give open todos a date with \`mem add --type todo --until YYYY-MM-DD\` so they expire on their own.
+"
+fi
+# The query for related memories is the wake's own material: the real hints
+# (before the placeholder below) and the last three stream steps.
+related_query="$hints $(printf '%s\n' "$recent_context" | tail -n 3 | jq -r '.content // ""' 2>/dev/null | cut -c1-600 | tr '\n' ' ')"
 [[ -z "$hints" ]] && hints="- (no special signals — pick what best serves the mind right now)"
 
 prompt_file="$SCRIPT_DIR/prompt.md"
@@ -266,13 +290,29 @@ $_lc
 "
 fi
 
+# Related memories: up to RELATED_MEMORIES one-line pointers into the memory
+# store, matched to this wake's material. Names shown go into the state file
+# so the next wake shows different ones. See design/related_memories.md.
+related_section=""
+related_shown=""
+if [[ "$RELATED_MEMORIES" -gt 0 ]]; then
+    _rm=$(_related_memories "$related_query" "$related_prev" "$RELATED_MEMORIES" 2>/dev/null) || _rm=""
+    if [[ -n "$_rm" ]]; then
+        related_shown=$(printf '%s\n' "$_rm" | sed -n 's/^- \([^ ]*\) \[.*/\1/p')
+        related_section="Related memories (matched to this wake from your memory store; \`mem show <name>\` prints one whole; if one is wrong or stale, fix it with \`mem edit\` or \`mem forget\`):
+$_rm
+
+"
+    fi
+fi
+
 route_prompt="<context>
 $system_prompt
 
 ${life_section}Recent stream (last $THINK_CONTEXT_TAIL durable steps; \`traj tail -n 200\` shows more, verbatim):
 $recent_context
 
-Routing signals:
+${related_section}Routing signals:
 $hints
 
 $think_prompt
