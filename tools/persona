@@ -619,7 +619,7 @@ _redact_tree() (
             done
             cat "$f"
         } | python3 -c '
-import re, sys
+import json, re, sys
 
 source = sys.stdin.buffer
 def framed():
@@ -630,11 +630,27 @@ def framed():
     return value
 
 pairs = [(framed(), framed()) for _ in range(int(source.readline()))]
+expanded = []
+def json_inner(value):
+    try:
+        text = value.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return json.dumps(text, ensure_ascii=False)[1:-1].encode("utf-8")
+
+for needle, replacement in pairs:
+    if not needle:
+        continue
+    expanded.append((needle, replacement))
+    json_needle = json_inner(needle)
+    if json_needle is not None and json_needle != needle:
+        json_replacement = json_inner(replacement)
+        expanded.append((json_needle, json_replacement or b"<redacted>"))
+pairs = expanded
 pairs.sort(key=lambda pair: len(pair[0]), reverse=True)
 data = source.read()
 for needle, replacement in pairs:
-    if needle:
-        data = data.replace(needle, replacement)
+    data = data.replace(needle, replacement)
 
 credential = re.compile(br"(?:SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?|KEY|TOKEN)")
 endpoint = re.compile(br"(?:^|_)(?:URL|URI|ENDPOINT|DSN)(?:_|$)")

@@ -54,6 +54,8 @@ DSN="postgresql://bugreport-user:bugreport-pass@example.invalid/private-db"
 SERVICE_URL="https://overlap.example.invalid"
 PRIVATE_DSN="$SERVICE_URL/private-secret-suffix"
 export BROKEN_SECRET=$'first-line\nsecond-line'
+export JSON_PASSWORD='prefix"json-secret-suffix'
+export JSON_TOKEN='ab"c-token-value-0123456789-xyz'
 cat > "$HEADLONG_HOME/.env" <<ENV
 OPENROUTER_API_KEY=$KEY
 SUPABASE_DB_PASSWORD=$PW
@@ -89,6 +91,8 @@ cat >> "$TJ/trajectory.jsonl" <<ROWS
 ROWS
 jq -nc --arg cmd 'shellm --var DB_PASSWORD=first"quote-secret-suffix --var SHELLM_ENV=local run' \
     '{type:"shellm-run",cmd:$cmd,ts:"2026-08-21T15:34:00Z"}' >> "$TJ/trajectory.jsonl"
+jq -nc --arg content "quoted: $JSON_PASSWORD; multiline: $BROKEN_SECRET; token: $JSON_TOKEN" \
+    '{type:"thought",content:$content,ts:"2026-08-21T15:35:00Z"}' >> "$TJ/trajectory.jsonl"
 mkdir -p "$ID/run/logs" "$ID/memories" "$ID/workdir" "$TJ/blobs"
 printf 'env: OPENROUTER_API_KEY=%s\nmultiline: %s\n' "$KEY" "$BROKEN_SECRET" > "$ID/run/logs/monolith.log"
 printf -- '---\ntitle: db\n---\nthe db password is %s\nthe dsn is %s\n' "$PW" "$DSN" > "$ID/memories/db.md"
@@ -145,6 +149,9 @@ check_not "compact access token nowhere in bundle" grep -rqF 'tok_compact_012345
 check_not "multiline literal nowhere in bundle"     grep -rqF "$BROKEN_SECRET" "$TOP"
 check_not "spaced password suffix nowhere in bundle" grep -rqF 'horse battery staple' "$TOP"
 check_not "quoted password suffix nowhere in bundle" grep -rqF 'quote-secret-suffix' "$TOP"
+check_not "JSON quoted password suffix nowhere in bundle" grep -rqF 'json-secret-suffix' "$TOP"
+check_not "JSON multiline secret suffix nowhere in bundle" grep -rqF 'second-line' "$TOP"
+check_not "JSON token value nowhere in bundle" grep -rqF 'token-value-0123456789' "$TOP"
 check "legacy --var KEY=value row masked, 4+4 hint kept" grep -q -- '--var OPENROUTER_API_KEY=<redacted sk-o...cdef> think' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "token not in .env still masked by pattern (hint kept)" grep -q -- '--var GH_TOKEN=<redacted ghp_...ijkl> ' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "password on argv masked whole"         grep -q -- '--var PG_PASSWORD=<redacted> --var SHELLM_ENV=local' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
@@ -158,6 +165,10 @@ check "thinker log key scrubbed (hint kept)"  grep -q 'OPENROUTER_API_KEY=<redac
 check "memory password scrubbed"              grep -q 'password is <redacted>' "$TOP/identity/memories/db.md"
 check "memory DSN literal scrubbed"           grep -q 'dsn is <redacted>' "$TOP/identity/memories/db.md"
 check "plain thought text kept"               grep -q 'all is well' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
+check "JSON escaped credential values masked" grep -q 'quoted: <redacted>; multiline: <redacted>' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
+check "JSON escaped hint remains valid" bash -c \
+    'jq -r ".content // empty" "$1" | grep -qF '\''token: <redacted ab"c...-xyz>'\''' \
+    _ "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "scrubbed trajectory remains valid JSONL" bash -c \
     'while IFS= read -r line; do printf "%s\n" "$line" | jq -e . >/dev/null || exit 1; done < "$1"' \
     _ "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
