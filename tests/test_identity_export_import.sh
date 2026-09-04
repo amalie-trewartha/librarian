@@ -194,11 +194,14 @@ fi
 
 ALPHA_TRAJ="$ALPHA/trajectories/${ALPHA_RT:0:8}-root/trajectory.jsonl"
 long=$(printf 'x%.0s' $(seq 1 2000))
+file_key="sk-or-v1-FILELEAK$(printf 'd%.0s' $(seq 1 40))"
+file_b64=$(printf '%s' "$file_key" | base64 -w0 2>/dev/null || printf '%s' "$file_key" | base64)
 {
     printf '{"type":"shellm-run","command":"shellm --var OPENROUTER_API_KEY=sk-or-v1-%s %s","step_id":"s1","ts":"t1"}\n' "$(printf 'a%.0s' $(seq 1 64))" "$long"
     printf '{"type":"prompt","content":"%s","run_id":"r","step_id":"s2","ts":"t2"}\n' "$long"
     printf '{"type":"thought","content":"keep me whole %s","step_id":"s3","ts":"t3"}\n' "$long"
     printf '{"type":"shell-output","content":"token xoxb-1234-5678-abcdef lin_api_%s","step_id":"s4","ts":"t4"}\n' "$(printf 'b%.0s' $(seq 1 40))"
+    printf '{"type":"message","content":"[file: secret.bin]","filename":"secret.bin","content_b64":"%s","from":"a","to":"b","source":"chat","step_id":"s5","ts":"t5"}\n' "$file_b64"
 } >> "$ALPHA_TRAJ"
 
 SLIM="$WORK/slim.tgz"
@@ -216,6 +219,26 @@ check_not "slack token gone"      grep -q 'xoxb-1234' "$SLIM_TRAJ"
 check_not "linear key gone"       grep -q 'lin_api_bbbb' "$SLIM_TRAJ"
 check "redaction markers"         bash -c "test \$(grep -o 'REDACTED:' '$SLIM_TRAJ' | wc -l) -eq 3"
 check "slim archive still imports" bash -c "cd '$ROOT_B' && identity import '$SLIM' --name slimmy >/dev/null 2>&1 && test -f '$ROOT_B/.identities/slimmy/trajectories/${ALPHA_RT:0:8}-root/trajectory.jsonl'"
+
+check "slim drops content_b64"    bash -c "jq -e 'select(.filename==\"secret.bin\") | has(\"content_b64\") | not' '$SLIM_TRAJ'"
+check "slim keeps filename"       bash -c "jq -e 'select(.filename==\"secret.bin\").filename == \"secret.bin\"' '$SLIM_TRAJ'"
+check "slim keeps file marker"    bash -c "jq -e 'select(.filename==\"secret.bin\").content == \"[file: secret.bin]\"' '$SLIM_TRAJ'"
+check_not "slim file key gone"    grep -q 'FILELEAK' "$SLIM_TRAJ"
+check_not "slim file b64 gone"    grep -Fq "$file_b64" "$SLIM_TRAJ"
+
+# Same jq transform as deploy/scripts/audel-export's default SLIM filter
+# (KEEP_FULL=0). The box-side script is SSM-only; assert the filter here.
+AUDEL_SLIM='def cut($n): if (length > $n) then (.[0:$n] + " …[truncated " + ((length - $n)|tostring) + " chars]") else . end;
+          (if .type=="shellm-run" then .command |= cut(300)
+          elif .type=="prompt" then .content |= cut(600)
+          else . end)
+          | del(.content_b64)'
+AUDEL_OUT="$WORK/audel-export.jsonl"
+jq -c "$AUDEL_SLIM" "$ALPHA_TRAJ" > "$AUDEL_OUT"
+check "audel-export drops content_b64" bash -c "jq -e 'select(.filename==\"secret.bin\") | has(\"content_b64\") | not' '$AUDEL_OUT'"
+check "audel-export keeps filename"    bash -c "jq -e 'select(.filename==\"secret.bin\").filename == \"secret.bin\"' '$AUDEL_OUT'"
+check_not "audel-export file key gone" grep -q 'FILELEAK' "$AUDEL_OUT"
+check_not "audel-export file b64 gone" grep -Fq "$file_b64" "$AUDEL_OUT"
 
 # ---------------------------------------------------------------------------
 

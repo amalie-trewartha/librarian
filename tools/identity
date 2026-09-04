@@ -489,12 +489,15 @@ _export_manifest_entry() {
 # repetition — every `shellm-run` step embeds the same launch command line
 # and every `prompt` step embeds the whole rendered context. Cut both to a
 # short head plus a "…[truncated N chars]" tail; every other step travels
-# whole. Then scrub API-key shapes. Audel's 1GB log came out at ~17MB gzipped.
+# whole except encoded file bytes (`content_b64`), which slim drops so a
+# credential inside a sent file cannot bypass text redaction. Then scrub
+# API-key shapes. Audel's 1GB log came out at ~17MB gzipped.
 _SLIM_JQ='def cut($n): if (type == "string" and length > $n)
     then (.[0:$n] + " …[truncated " + ((length - $n)|tostring) + " chars]") else . end;
-  if .type == "shellm-run" then .command |= cut(300)
-  elif .type == "prompt" then .content |= cut(600)
-  else . end'
+  (if .type == "shellm-run" then .command |= cut(300)
+   elif .type == "prompt" then .content |= cut(600)
+   else . end)
+  | del(.content_b64)'
 
 _slim_redact() {
     LC_ALL=C sed -E \
