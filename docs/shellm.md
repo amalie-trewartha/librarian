@@ -337,14 +337,15 @@ Types: `memory`, `todo`, `objective`, `value`, `belief`, `fact`, `preference`, `
 
 ```bash
 skills                      # List installed skills
-skills search "web research" # Search installed and remote (GitHub) skills
-skills install owner/repo   # Install from GitHub
 skills show web-research    # Show a skill's full instructions
-skills init my-new-skill    # Create a new skill
-skills remove old-skill     # Remove a skill
+skills prompt               # The skills section of the mind's system prompt
+headlong-skills search "web research" # Search installed and remote (GitHub) skills
+headlong-skills install owner/repo    # Install from GitHub
+headlong-skills init my-new-skill     # Create a new skill
+headlong-skills remove old-skill      # Remove a skill
 ```
 
-Skills can declare requirements (env vars, binaries, OS) in their YAML frontmatter under `metadata.shelllm.requires`. By default, `skills list` only shows skills whose requirements are met. Use `skills check <name>` to diagnose a specific skill's requirements. Skills live in `SKILLS_DIR` (default: `./.skills/`); the bundled core skills are installed to `~/.skills/core-skills` and added as a remote.
+The core `skills` (in `bin/`) only lists, shows, and renders skills; the package manager `headlong-skills` (in `tools/`) does the rest and shares its code. `skills install ...` and the other manager subcommands forward to it when it is on PATH. Skills can declare requirements (env vars, binaries, OS) in their YAML frontmatter under `metadata.shelllm.requires`. By default, `skills list` only shows skills whose requirements are met. Use `headlong-skills check <name>` to diagnose a specific skill's requirements. Skills live in `SKILLS_DIR` (default: `./.skills/`); the bundled core skills are installed to `~/.skills/core-skills` and added as a remote.
 
 ## Options
 

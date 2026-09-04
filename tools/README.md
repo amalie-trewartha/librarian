@@ -11,6 +11,9 @@ tools live in [bin/](../bin/).
   `headlong-telegram-bridge` connect chat platforms into the mind.
 - `shellm-docker-broker` is the host-side policy server for brokered
   Docker. It is never present in the mind's environment.
+- `headlong-skills` is the skills package manager (search, install, check,
+  init, promote, kernel, remotes). The mind's own `skills` only lists,
+  shows, and renders skills, and forwards those subcommands here.
 - `shellm-explore` visualizes run trees, `pr-committee` runs multi-model
   PR reviews, and `headlong-killall` stops every Headlong-related process.
 
