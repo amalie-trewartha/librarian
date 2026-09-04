@@ -48,7 +48,7 @@ life, and opens a dashboard where you can watch its mind run:
 curl -fsSL https://headlong.ai/install.sh | bash
 ```
 
-You'll need bash 3.2+, git, curl, jq, and an LLM API key (Anthropic,
+You'll need bash 3.2+, git, curl, jq, Python 3, and an LLM API key (Anthropic,
 OpenAI, Gemini, or OpenRouter) — or a local model on any
 OpenAI-compatible server (llama.cpp, Ollama, vLLM, LM Studio; see
 [Local models](#local-models) below, no key needed); the dashboard also

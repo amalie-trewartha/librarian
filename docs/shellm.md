@@ -292,12 +292,13 @@ Set `LLM_API_KEY` if the endpoint wants a bearer token. The policy for
 which providers live in core is in
 [design/providers.md](../design/providers.md).
 
-Under shellm, set `SHELLM_API_URL` instead of `LLM_API_URL` — shellm
-clears any inherited `LLM_API_URL`, and `llm` itself falls back to
-`SHELLM_API_URL` for this provider, so thinkers and other tools that
-call `llm` directly reach the endpoint too. Name the model as well, or
-shellm falls back to its default Claude model and sends that to your
-endpoint:
+Under shellm, `SHELLM_API_URL` is the preferred name and `LLM_API_URL` is
+accepted as an alias. A value already in the process wins over either name
+loaded from `.env`. If both names are already in the process,
+`SHELLM_API_URL` wins. Shellm exports the resolved value as `LLM_API_URL`,
+so thinkers and other tools that call `llm` directly reach the same
+endpoint. Name the model as well, or shellm falls back to its default Claude
+model and sends that to your endpoint:
 
 ```bash
 LLM_PROVIDER=openai-compatible \

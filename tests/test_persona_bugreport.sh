@@ -51,11 +51,15 @@ export PATH="$REPO/bin:$REPO/tools:$PATH"
 KEY="sk-or-v1-0123456789abcdef0123456789abcdef0123456789abcdef"
 PW="hunter2hunter2-very-secret"
 DSN="postgresql://bugreport-user:bugreport-pass@example.invalid/private-db"
+SERVICE_URL="https://overlap.example.invalid"
+PRIVATE_DSN="$SERVICE_URL/private-secret-suffix"
 export BROKEN_SECRET=$'first-line\nsecond-line'
 cat > "$HEADLONG_HOME/.env" <<ENV
 OPENROUTER_API_KEY=$KEY
 SUPABASE_DB_PASSWORD=$PW
 DATABASE_DSN=$DSN
+SERVICE_URL=$SERVICE_URL
+PRIVATE_DSN=$PRIVATE_DSN
 SHELLM_MODEL=anthropic/claude-sonnet-4.5
 ENV
 printf 'headlong-web serving on http://127.0.0.1:8080\n' > "$HEADLONG_HOME/logs/web.log"
@@ -64,6 +68,10 @@ printf 'init ok\n' > "$HEADLONG_HOME/logs/init.log"
 (cd "$HEADLONG_APP_DIR" && identity new alpha >/dev/null 2>&1) || { bad "identity new alpha"; exit 1; }
 ID="$HEADLONG_APP_DIR/.identities/alpha"
 ln -s alpha "$HEADLONG_APP_DIR/.identities/default"
+cat > "$ID/.env" <<ENV
+IDENTITY_PASSWORD=identity-password-canary
+IDENTITY_CONFIG=identity-config-canary
+ENV
 
 # Seed content: a trajectory with a legacy key-on-argv row and a plain row,
 # a thinker log that echoed the key, a memory that quotes the DB password,
@@ -79,9 +87,12 @@ cat >> "$TJ/trajectory.jsonl" <<ROWS
 {"type":"shellm-run","cmd":"shellm --var DB_PASSWORD=correct horse battery staple run","ts":"2026-08-21T15:33:00Z"}
 {"type":"thought","content":"the model is anthropic/claude-sonnet-4.5 and all is well","ts":"2026-08-21T15:00:01Z"}
 ROWS
+jq -nc --arg cmd 'shellm --var DB_PASSWORD=first"quote-secret-suffix --var SHELLM_ENV=local run' \
+    '{type:"shellm-run",cmd:$cmd,ts:"2026-08-21T15:34:00Z"}' >> "$TJ/trajectory.jsonl"
 mkdir -p "$ID/run/logs" "$ID/memories" "$ID/workdir" "$TJ/blobs"
 printf 'env: OPENROUTER_API_KEY=%s\nmultiline: %s\n' "$KEY" "$BROKEN_SECRET" > "$ID/run/logs/monolith.log"
 printf -- '---\ntitle: db\n---\nthe db password is %s\nthe dsn is %s\n' "$PW" "$DSN" > "$ID/memories/db.md"
+printf 'the private endpoint is %s\n' "$PRIVATE_DSN" >> "$ID/memories/db.md"
 printf 'scratch file\n' > "$ID/workdir/scratch.txt"
 head -c 2048 /dev/urandom > "$TJ/blobs/bin.dat"
 
@@ -123,6 +134,9 @@ check "binary blob carried intact"        cmp -s "$TJ/blobs/bin.dat" "$TOP/ident
 check_not "API key value nowhere in bundle"   grep -rqF "$KEY" "$TOP"
 check_not "DB password nowhere in bundle"     grep -rqF "$PW" "$TOP"
 check_not "DSN literal nowhere in bundle"     grep -rqF "$DSN" "$TOP"
+check_not "overlapping secret suffix nowhere in bundle" grep -rqF 'private-secret-suffix' "$TOP"
+check_not "identity password nowhere in bundle" grep -rqF 'identity-password-canary' "$TOP"
+check_not "identity config nowhere in bundle" grep -rqF 'identity-config-canary' "$TOP"
 check_not "no sk-... shaped string survives"  grep -rqE 'sk-[A-Za-z0-9_-]{8,}' "$TOP"
 check_not "other token value nowhere in bundle" grep -rqF 'ghp_OTHERTOKEN0123456789abcdefghijkl' "$TOP"
 check_not "other password nowhere in bundle"  grep -rqF 'correcthorsebatterystaple' "$TOP"
@@ -130,6 +144,7 @@ check_not "compact API key values nowhere in bundle" grep -rqE '(svc|api)_compac
 check_not "compact access token nowhere in bundle" grep -rqF 'tok_compact_0123456789abcdef' "$TOP"
 check_not "multiline literal nowhere in bundle"     grep -rqF "$BROKEN_SECRET" "$TOP"
 check_not "spaced password suffix nowhere in bundle" grep -rqF 'horse battery staple' "$TOP"
+check_not "quoted password suffix nowhere in bundle" grep -rqF 'quote-secret-suffix' "$TOP"
 check "legacy --var KEY=value row masked, 4+4 hint kept" grep -q -- '--var OPENROUTER_API_KEY=<redacted sk-o...cdef> think' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "token not in .env still masked by pattern (hint kept)" grep -q -- '--var GH_TOKEN=<redacted ghp_...ijkl> ' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "password on argv masked whole"         grep -q -- '--var PG_PASSWORD=<redacted> --var SHELLM_ENV=local' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
@@ -143,7 +158,11 @@ check "thinker log key scrubbed (hint kept)"  grep -q 'OPENROUTER_API_KEY=<redac
 check "memory password scrubbed"              grep -q 'password is <redacted>' "$TOP/identity/memories/db.md"
 check "memory DSN literal scrubbed"           grep -q 'dsn is <redacted>' "$TOP/identity/memories/db.md"
 check "plain thought text kept"               grep -q 'all is well' "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
+check "scrubbed trajectory remains valid JSONL" bash -c \
+    'while IFS= read -r line; do printf "%s\n" "$line" | jq -e . >/dev/null || exit 1; done < "$1"' \
+    _ "$TOP/identity/trajectories/$(basename "$TJ")/trajectory.jsonl"
 check "source trajectory untouched"           grep -qF "$KEY" "$TJ/trajectory.jsonl"
+check "installer requires Python 3"            grep -q '_require_deps jq curl python3' "$REPO/install.sh"
 
 # 3. helper failure is fail-closed; literals stay out of argv and temp files
 REAL_PYTHON=$(command -v python3)
@@ -181,6 +200,8 @@ check_not "implementation writes no secret helper script" grep -q 'headlong-reda
 check "--include-workdir adds workdir" bash -c '
     persona alpha bugreport --out "$1" --include-workdir >/dev/null 2>&1 &&
     tar -tzf "$1" | grep -q "identity/workdir/scratch.txt"' _ "$WORK/b2.tgz"
+check_not "--include-workdir still leaves .env out" bash -c \
+    'tar -tzf "$1" | grep -q "/identity/.env$"' _ "$WORK/b2.tgz"
 check "default --out lands in HOME"    bash -c '
     out=$(persona alpha bugreport 2>/dev/null) && [[ "$out" == "$HOME/headlong-bugreport-alpha-"*.tgz && -s "$out" ]]'
 check "--help exits 0 and mentions Usage" bash -c 'persona alpha bugreport --help | grep -q "^Usage:"'

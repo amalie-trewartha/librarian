@@ -432,6 +432,7 @@ EOF
             *) die "bugreport: unknown option: $1" ;;
         esac
     done
+    command -v python3 >/dev/null 2>&1 || die "bugreport requires python3 for secret scrubbing"
     local stamp; stamp=$(date +%Y%m%d-%H%M%S)
     [[ -n "$out" ]] || out="$HOME/headlong-bugreport-$NAME-$stamp.tgz"
     local iddir="$IDENTITY_ROOT/$NAME"
@@ -446,8 +447,8 @@ EOF
     # carry com.apple.provenance; we don't want xattrs in the bundle anyway.
     local -a tarq=()
     case "$(tar --version 2>/dev/null)" in *bsdtar*) tarq=(--no-xattrs --no-mac-metadata) ;; esac
-    local excl=(--exclude='./workdir')
-    [[ "$BUGREPORT_INCLUDE_WORKDIR" -eq 1 ]] && excl=()
+    local excl=(--exclude='./.env')
+    [[ "$BUGREPORT_INCLUDE_WORKDIR" -eq 1 ]] || excl+=(--exclude='./workdir')
     # Follow the default -> name symlink; copy files, not the symlink itself.
     # Skip single files over 50MB (noted in report.txt) so a runaway blob
     # doesn't turn the bundle into a gigabyte.
@@ -629,6 +630,7 @@ def framed():
     return value
 
 pairs = [(framed(), framed()) for _ in range(int(source.readline()))]
+pairs.sort(key=lambda pair: len(pair[0]), reverse=True)
 data = source.read()
 for needle, replacement in pairs:
     if needle:
@@ -636,7 +638,7 @@ for needle, replacement in pairs:
 
 credential = re.compile(br"(?:SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?|KEY|TOKEN)")
 endpoint = re.compile(br"(?:^|_)(?:URL|URI|ENDPOINT|DSN)(?:_|$)")
-var = re.compile(br"(--var ([A-Za-z_][A-Za-z0-9_]*)=)(.*?)(?= --var |\"|$)", re.M)
+var = re.compile(br"(--var ([A-Za-z_][A-Za-z0-9_]*)=)((?:\\.|[^\"\\])*?)(?= --var |\"|$)", re.M)
 def mask(match):
     name = match.group(2).upper()
     value = match.group(3)
