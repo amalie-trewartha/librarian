@@ -178,11 +178,44 @@ class _FakeClient:
             {"channel": channel, "ts": ts, "latest": latest,
              "inclusive": inclusive, "limit": limit, "cursor": cursor}
         )
-        if self.replies_delay:
-            time.sleep(self.replies_delay)
-        if self.replies_exc:
-            raise RuntimeError("replies failed")
-        return {"ok": True, "messages": list(self.replies_messages)}
+        with self._lock:
+            self._live += 1
+            if self._live > self.max_live:
+                self.max_live = self._live
+        try:
+            if self.replies_delay:
+                time.sleep(self.replies_delay)
+            if self.replies_exc:
+                raise RuntimeError("replies failed")
+            msgs = list(self.replies_messages)
+
+            def _key(m):
+                try:
+                    return float(m.get("ts") or 0)
+                except (TypeError, ValueError):
+                    return 0.0
+
+            if latest is not None:
+                cut = float(latest)
+                if inclusive:
+                    msgs = [m for m in msgs if _key(m) <= cut]
+                else:
+                    msgs = [m for m in msgs if _key(m) < cut]
+            start = int(cursor) if cursor else 0
+            if limit is None:
+                page = msgs[start:]
+            else:
+                page = msgs[start:start + int(limit)]
+            next_cursor = ""
+            if limit is not None and start + int(limit) < len(msgs):
+                next_cursor = str(start + int(limit))
+            out = {"ok": True, "messages": page}
+            if next_cursor:
+                out["response_metadata"] = {"next_cursor": next_cursor}
+            return out
+        finally:
+            with self._lock:
+                self._live -= 1
 
 
 def _cfg(tmp_path, followups=True, join_backfill=20):
@@ -553,6 +586,37 @@ def test_first_mention_in_thread_prepends_capped_prior_lines(tmp_path, posted):
     assert client.replies_calls[0]["inclusive"] is False
 
 
+def test_join_backfill_cap_is_closest_prior_on_long_thread(tmp_path, posted):
+    """Nick #108: fake must honor limit; cap is the latest context, not the oldest page."""
+    client = _FakeClient()
+    mention_ts = "111.500"
+    client.replies_messages = [
+        {"ts": PARENT, "user": NICK, "text": "parent"},
+        {"ts": "111.301", "user": NICK, "text": "early one"},
+        {"ts": "111.302", "user": NICK, "text": "early two"},
+        {"ts": "111.303", "user": NICK, "text": "late one"},
+        {"ts": "111.304", "user": NICK, "text": "late two"},
+        {"ts": mention_ts, "user": NICK, "text": f"<@{BOT}> catch up?"},
+    ]
+    event = _message_event(text=f"<@{BOT}> catch up?", ts=mention_ts)
+    _run_message(tmp_path, client, event, posted, join_backfill=2)
+
+    assert len(posted.items) == 1
+    body = posted.items[0]["json"]["content"]
+    assert "thread before this mention — 2 earlier messages" in body
+    assert "early one" not in body
+    assert "early two" not in body
+    assert "Nick Jalbert: late one" in body
+    assert "Nick Jalbert: late two" in body
+    assert "catch up?" in body
+    # First page is oldest (parent + early one + early two at fetch=3);
+    # a second page is required to reach the two replies before the mention.
+    assert len(client.replies_calls) >= 2
+    assert client.replies_calls[0]["cursor"] in (None, "")
+    assert client.replies_calls[0]["limit"] == 3
+    assert client.replies_calls[1]["cursor"]
+
+
 def test_already_active_thread_does_not_backfill(tmp_path, posted):
     threads = ActiveThreads(tmp_path / "pre-threads.json")
     threads.touch(CHAN, PARENT)
@@ -620,3 +684,64 @@ def test_dm_does_not_backfill(tmp_path, posted):
 
     assert len(posted.items) == 1
     assert client.replies_calls == []
+
+
+def test_join_backfill_timeouts_share_one_worker(tmp_path, posted, monkeypatch):
+    """Nick #108: do not queue stale conversations.replies after a timeout.
+
+    One in-flight backfill lookup; later first mentions fail open
+    immediately instead of submitting more work. A human message after
+    the burst is delivered without waiting for the stale calls.
+    """
+    monkeypatch.setattr(inbound, "JOIN_BACKFILL_TIMEOUT", 0.05)
+    client = _FakeClient()
+    client.replies_delay = 0.8
+    client.replies_messages = [
+        {"ts": PARENT, "user": NICK, "text": "stale context"},
+    ]
+    cfg = _cfg(tmp_path, join_backfill=2)
+    threads = ActiveThreads(cfg.state_dir / "threads.json")
+    ib = Inbound(cfg, _FakeApp(client), BOT, threads)
+    logger = logging.getLogger("test")
+    try:
+        t0 = time.time()
+        for i in range(5):
+            parent = f"300.{i:03d}"
+            ts = f"301.{i:03d}"
+            ib._on_event(
+                _message_event(
+                    text=f"<@{BOT}> ping {i}",
+                    ts=ts,
+                    thread_ts=parent,
+                ),
+                logger,
+            )
+        ib._on_event(
+            {
+                "type": "message",
+                "user": NICK,
+                "text": "hello after burst",
+                "channel": DM,
+                "ts": "400.000",
+                "channel_type": "im",
+            },
+            logger,
+        )
+        deadline = t0 + 3
+        while time.time() < deadline and len(posted.items) < 6:
+            time.sleep(0.02)
+        elapsed = time.time() - t0
+        assert len(posted.items) == 6, posted.items
+        assert client.max_live == 1
+        assert len(client.replies_calls) == 1
+        # Five 2s waits would be 10s; one 50ms timeout plus delivery is far less.
+        assert elapsed < 1.0, elapsed
+        assert "hello after burst" in posted.items[-1]["json"]["content"]
+        for item in posted.items[:-1]:
+            body = item["json"]["content"]
+            assert "ping" in body
+            assert "thread before this mention" not in body
+            assert "stale context" not in body
+    finally:
+        ib.stop()
+        ib._worker.join(timeout=1)
