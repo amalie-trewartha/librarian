@@ -210,21 +210,72 @@ cmd_send_file() {
     [[ -z "$filepath" ]] && die "Usage: chat send-file [--from <name>] [--to <name>] <filename>"
     [[ -f "$filepath" ]] || die "File not found: $filepath"
 
+    local size max
+    size=$(stat -c%s "$filepath" 2>/dev/null || wc -c < "$filepath")
+    size=${size//[[:space:]]/}
+    max="${CHAT_SEND_FILE_MAX_BYTES:-10485760}"
+    [[ "$max" =~ ^[0-9]+$ ]] || die "CHAT_SEND_FILE_MAX_BYTES must be an integer"
+    if (( size == 0 )); then
+        die "empty file: $filepath"
+    fi
+    if (( size > max )); then
+        die "file too large: $filepath ($size bytes; max $max)"
+    fi
+
     _resolve_from_to
 
     local filename
     filename=$(basename "$filepath")
-    local content
-    content=$(cat "$filepath")
+    # Binary-safe: JSON cannot hold raw bytes, so stamp standard base64
+    # via a temp file (never argv). Text files also keep their body in
+    # `content` so Slack and web chat still deliver the file text; binary
+    # files use a short marker because `content` cannot hold raw bytes.
+    local b64tmp
+    b64tmp=$(mktemp) || die "mktemp failed"
+    if ! base64 -w 0 < "$filepath" | tr -d '\n' > "$b64tmp"; then
+        rm -f "$b64tmp"
+        die "failed to encode $filepath"
+    fi
 
-    printf '{"type":"message","filename":%s,"content":%s,"from":%s,"to":%s,"source":"chat"}' \
-        "$(printf '%s' "$filename" | jq -Rsa .)" \
-        "$(printf '%s' "$content" | jq -Rsa .)" \
-        "$(printf '%s' "$from" | jq -Rsa .)" \
-        "$(printf '%s' "$to" | jq -Rsa .)" \
-        | _chat_append
+    local jq_rc=0
+    if _chat_is_text_file "$filepath"; then
+        jq -nc \
+            --arg filename "$filename" \
+            --arg from "$from" \
+            --arg to "$to" \
+            --rawfile content "$filepath" \
+            --rawfile content_b64 "$b64tmp" \
+            '{type:"message", content:($content | sub("\n+$";"")), filename:$filename, content_b64:$content_b64, from:$from, to:$to, source:"chat"}' \
+            | _chat_append || jq_rc=$?
+    else
+        jq -nc \
+            --arg filename "$filename" \
+            --arg content "[file: $filename]" \
+            --arg from "$from" \
+            --arg to "$to" \
+            --rawfile content_b64 "$b64tmp" \
+            '{type:"message", content:$content, filename:$filename, content_b64:$content_b64, from:$from, to:$to, source:"chat"}' \
+            | _chat_append || jq_rc=$?
+    fi
+    rm -f "$b64tmp"
+    [[ "$jq_rc" -eq 0 ]] || die "failed to encode/append $filepath"
 
     printf 'File sent: %s\n' "$filename" >&2
+}
+
+# UTF-8, no NUL: the historical `content=$(cat ...)` shape Slack/web still read.
+# JSON strings cannot hold NUL; jq --rawfile requires UTF-8.
+_chat_is_text_file() {
+    local f="$1" n stripped
+    n=$(wc -c < "$f")
+    n=${n//[[:space:]]/}
+    stripped=$(tr -d '\0' < "$f" | wc -c)
+    stripped=${stripped//[[:space:]]/}
+    [[ "$n" -eq "$stripped" ]] || return 1
+    if command -v iconv >/dev/null 2>&1; then
+        iconv -f UTF-8 -t UTF-8 "$f" >/dev/null 2>&1 || return 1
+    fi
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -589,6 +640,8 @@ Environment:
   MEM_DIR         Memories dir; `type: person` memories with `person_key`
                   and `aliases` merge several keys into one person for
                   history --with
+  CHAT_SEND_FILE_MAX_BYTES
+                  Max file size for `chat send-file` (default 10485760)
 EOF
     exit 0
 }

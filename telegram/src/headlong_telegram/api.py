@@ -28,8 +28,13 @@ class Bot:
         self._base = f"https://api.telegram.org/bot{token}"
         self._client = httpx.Client(timeout=httpx.Timeout(30, read=POLL_SECONDS + 10))
 
-    def _call(self, method: str, **params: Any) -> Any:
-        response = self._client.post(f"{self._base}/{method}", json=params)
+    def _call(self, method: str, files: dict | None = None, **params: Any) -> Any:
+        url = f"{self._base}/{method}"
+        if files:
+            data = {k: v for k, v in params.items() if v is not None}
+            response = self._client.post(url, data=data, files=files)
+        else:
+            response = self._client.post(url, json=params)
         # Anything that is not a well-formed Telegram envelope has to leave here
         # as ApiError. The poll loop retries on (ApiError, httpx.HTTPError) and
         # dies on everything else, so a 502 HTML page from an edge would
@@ -69,3 +74,39 @@ class Bot:
 
     def leave_chat(self, chat_id: int) -> None:
         self._call("leaveChat", chat_id=chat_id)
+
+    def send_document(
+        self,
+        chat_id: int,
+        content: bytes | str,
+        filename: str,
+        caption: str | None = None,
+    ) -> Any:
+        if isinstance(content, str):
+            content = content.encode("utf-8")
+        params: dict[str, Any] = {"chat_id": chat_id}
+        if caption:
+            params["caption"] = caption
+        return self._call(
+            "sendDocument",
+            files={"document": (filename, content)},
+            **params,
+        )
+
+    def send_photo(
+        self,
+        chat_id: int,
+        content: bytes | str,
+        filename: str,
+        caption: str | None = None,
+    ) -> Any:
+        if isinstance(content, str):
+            content = content.encode("utf-8")
+        params: dict[str, Any] = {"chat_id": chat_id}
+        if caption:
+            params["caption"] = caption
+        return self._call(
+            "sendPhoto",
+            files={"photo": (filename, content)},
+            **params,
+        )

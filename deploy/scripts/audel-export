@@ -119,9 +119,10 @@ if [ "$KEEP_FULL" = 1 ]; then
     SLIM='.'
 else
     SLIM='def cut($n): if (length > $n) then (.[0:$n] + " …[truncated " + ((length - $n)|tostring) + " chars]") else . end;
-          if .type=="shellm-run" then .command |= cut(300)
+          (if .type=="shellm-run" then .command |= cut(300)
           elif .type=="prompt" then .content |= cut(600)
-          else . end'
+          else . end)
+          | del(.content_b64)'
 fi
 echo "slimming + redacting $(wc -l < "$TRAJ") steps ($(stat -c %s "$TRAJ") bytes)"
 jq -c "$SLIM" "$TRAJ" | redact > "$D/trajectory.jsonl"

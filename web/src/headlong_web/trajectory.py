@@ -205,6 +205,17 @@ _CHAT_FIELDS = (
 )
 
 
+
+def _wire_raw(raw: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Dashboard copy of a step: drop file bytes. The UI shows `filename`
+    and the short `content` marker; `content_b64` only inflates the JSON."""
+    if raw is None or "content_b64" not in raw:
+        return raw
+    stripped = dict(raw)
+    stripped.pop("content_b64", None)
+    return stripped
+
+
 class _Normalizer:
     """Stateful step normalizer: feed raw steps in order, read results any
     time. The state (open runs, unmatched actions, seen ids) is exactly what
@@ -236,7 +247,7 @@ class _Normalizer:
             "type": step_type,
             "source": source,
             "preview": step_preview(raw),
-            "raw": raw,
+            "raw": _wire_raw(raw),
             "run_id": None,
         }
 
@@ -492,7 +503,7 @@ class TrajectoryCache:
                 )
                 for i, raw in zip(missing, raws):
                     if raw is not None:
-                        steps[i - lo] = {**norm.steps[i], "raw": raw}
+                        steps[i - lo] = {**norm.steps[i], "raw": _wire_raw(raw)}
 
             return {
                 "steps": steps,

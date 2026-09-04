@@ -300,7 +300,12 @@ _recent_stream() {
             | select(.type == "thought" or .type == "action" or .type == "observation"
                      or .type == "message" or .type == "idle" or .type == "merge"
                      or .type == "final" or .type == "error")
-            | .content = ((.content // "") | tostring
+            | del(.content_b64)
+            | .content = (
+                (if ((.content // "") == "") and ((.filename // "") != "")
+                 then "[file: \(.filename)]"
+                 else (.content // "") end)
+                | tostring
                 | if length > 1500 then .[0:1500] + "…[truncated]" else . end)
             | if .type == "final" and ((.run_id // "") | tostring) != ""
               then .details = "traj tail -n 400 --filter run_id=" + (.run_id | tostring) else . end
