@@ -690,8 +690,10 @@ def test_join_backfill_timeouts_share_one_worker(tmp_path, posted, monkeypatch):
     """Nick #108: do not queue stale conversations.replies after a timeout.
 
     One in-flight backfill lookup; later first mentions fail open
-    immediately instead of submitting more work. A human message after
-    the burst is delivered without waiting for the stale calls.
+    immediately instead of submitting more work. Observe pool.submit
+    counts (not replies_calls at start-of-call) so queued-but-unstarted
+    lookups still fail the test. Wait until the first slow call finishes
+    before asserting no second call started.
     """
     monkeypatch.setattr(inbound, "JOIN_BACKFILL_TIMEOUT", 0.05)
     client = _FakeClient()
@@ -703,6 +705,14 @@ def test_join_backfill_timeouts_share_one_worker(tmp_path, posted, monkeypatch):
     threads = ActiveThreads(cfg.state_dir / "threads.json")
     ib = Inbound(cfg, _FakeApp(client), BOT, threads)
     logger = logging.getLogger("test")
+    submits: list[object] = []
+    orig_submit = ib._lookup_pool.submit
+
+    def counting_submit(*args, **kwargs):
+        submits.append(args)
+        return orig_submit(*args, **kwargs)
+
+    ib._lookup_pool.submit = counting_submit  # type: ignore[method-assign]
     try:
         t0 = time.time()
         for i in range(5):
@@ -732,8 +742,6 @@ def test_join_backfill_timeouts_share_one_worker(tmp_path, posted, monkeypatch):
             time.sleep(0.02)
         elapsed = time.time() - t0
         assert len(posted.items) == 6, posted.items
-        assert client.max_live == 1
-        assert len(client.replies_calls) == 1
         # Five 2s waits would be 10s; one 50ms timeout plus delivery is far less.
         assert elapsed < 1.0, elapsed
         assert "hello after burst" in posted.items[-1]["json"]["content"]
@@ -742,6 +750,14 @@ def test_join_backfill_timeouts_share_one_worker(tmp_path, posted, monkeypatch):
             assert "ping" in body
             assert "thread before this mention" not in body
             assert "stale context" not in body
+        # Submissions are counted at pool.submit, so a queued second lookup
+        # fails this even before conversations.replies starts. Then wait out
+        # the first slow call so a queued worker would have started.
+        assert len(submits) == 1, len(submits)
+        time.sleep(client.replies_delay + 0.15)
+        assert client.max_live == 1
+        assert len(client.replies_calls) == 1
+        assert len(submits) == 1, len(submits)
     finally:
         ib.stop()
         ib._worker.join(timeout=1)
