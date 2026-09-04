@@ -125,6 +125,10 @@ class _FakeClient:
         self.permalink_delay = permalink_delay
         self.reactions_get_calls = []
         self.permalink_calls = []
+        self.replies_calls = []
+        self.replies_messages = []
+        self.replies_delay = 0.0
+        self.replies_exc = False
         self._live = 0
         self.max_live = 0
         self._lock = __import__("threading").Lock()
@@ -168,8 +172,53 @@ class _FakeClient:
     def chat_postMessage(self, **kwargs):
         raise AssertionError(f"unexpected chat_postMessage {kwargs}")
 
+    def conversations_replies(self, *, channel, ts, latest=None, inclusive=None,
+                              limit=None, cursor=None, **_kw):
+        self.replies_calls.append(
+            {"channel": channel, "ts": ts, "latest": latest,
+             "inclusive": inclusive, "limit": limit, "cursor": cursor}
+        )
+        with self._lock:
+            self._live += 1
+            if self._live > self.max_live:
+                self.max_live = self._live
+        try:
+            if self.replies_delay:
+                time.sleep(self.replies_delay)
+            if self.replies_exc:
+                raise RuntimeError("replies failed")
+            msgs = list(self.replies_messages)
 
-def _cfg(tmp_path, followups=True):
+            def _key(m):
+                try:
+                    return float(m.get("ts") or 0)
+                except (TypeError, ValueError):
+                    return 0.0
+
+            if latest is not None:
+                cut = float(latest)
+                if inclusive:
+                    msgs = [m for m in msgs if _key(m) <= cut]
+                else:
+                    msgs = [m for m in msgs if _key(m) < cut]
+            start = int(cursor) if cursor else 0
+            if limit is None:
+                page = msgs[start:]
+            else:
+                page = msgs[start:start + int(limit)]
+            next_cursor = ""
+            if limit is not None and start + int(limit) < len(msgs):
+                next_cursor = str(start + int(limit))
+            out = {"ok": True, "messages": page}
+            if next_cursor:
+                out["response_metadata"] = {"next_cursor": next_cursor}
+            return out
+        finally:
+            with self._lock:
+                self._live -= 1
+
+
+def _cfg(tmp_path, followups=True, join_backfill=20):
     serve = tmp_path / "serve"
     ident = serve / "audel"
     ident.mkdir(parents=True)
@@ -184,6 +233,7 @@ def _cfg(tmp_path, followups=True):
         web_url="http://127.0.0.1:9",
         state_dir=state,
         thread_followups=followups,
+        thread_join_backfill=join_backfill,
     )
 
 
@@ -474,3 +524,240 @@ def test_permalink_failure_does_not_drop_message(monkeypatch):
 
     assert len(posts) == 1
     assert "source_url" not in posts[0]
+
+
+
+def _message_event(*, text, ts="111.500", thread_ts=PARENT, channel=CHAN,
+                   user=NICK, event_type="app_mention", channel_type="channel"):
+    event = {
+        "type": event_type,
+        "user": user,
+        "text": text,
+        "channel": channel,
+        "ts": ts,
+        "channel_type": channel_type,
+    }
+    if thread_ts is not None:
+        event["thread_ts"] = thread_ts
+    return event
+
+
+def _run_message(tmp_path, client, event, posted, followups=True, join_backfill=20,
+                 threads=None):
+    cfg = _cfg(tmp_path, followups=followups, join_backfill=join_backfill)
+    if threads is None:
+        threads = ActiveThreads(cfg.state_dir / "threads.json")
+    ib = Inbound(cfg, _FakeApp(client), BOT, threads)
+    logger = logging.getLogger("test")
+    try:
+        ib._on_event(event, logger)
+        deadline = time.time() + 2
+        while time.time() < deadline and not posted.items:
+            time.sleep(0.02)
+        time.sleep(0.05)
+    finally:
+        ib.stop()
+        ib._worker.join(timeout=1)
+    return threads
+
+
+def test_first_mention_in_thread_prepends_capped_prior_lines(tmp_path, posted):
+    client = _FakeClient()
+    mention_ts = "111.500"
+    client.replies_messages = [
+        {"ts": PARENT, "user": NICK, "text": "context one"},
+        {"ts": "111.300", "user": NICK, "text": "context two"},
+        {"ts": "111.400", "user": NICK, "text": "context three"},
+        {"ts": mention_ts, "user": NICK, "text": f"<@{BOT}> what do you think?"},
+    ]
+    event = _message_event(text=f"<@{BOT}> what do you think?", ts=mention_ts)
+    _run_message(tmp_path, client, event, posted, join_backfill=2)
+
+    assert len(posted.items) == 1
+    body = posted.items[0]["json"]["content"]
+    assert "thread before this mention — 2 earlier messages" in body
+    assert "context one" not in body
+    assert "Nick Jalbert: context two" in body
+    assert "Nick Jalbert: context three" in body
+    assert "what do you think?" in body
+    assert client.replies_calls
+    assert client.replies_calls[0]["ts"] == PARENT
+    assert client.replies_calls[0]["latest"] == mention_ts
+    assert client.replies_calls[0]["inclusive"] is False
+
+
+def test_join_backfill_cap_is_closest_prior_on_long_thread(tmp_path, posted):
+    """Nick #108: fake must honor limit; cap is the latest context, not the oldest page."""
+    client = _FakeClient()
+    mention_ts = "111.500"
+    client.replies_messages = [
+        {"ts": PARENT, "user": NICK, "text": "parent"},
+        {"ts": "111.301", "user": NICK, "text": "early one"},
+        {"ts": "111.302", "user": NICK, "text": "early two"},
+        {"ts": "111.303", "user": NICK, "text": "late one"},
+        {"ts": "111.304", "user": NICK, "text": "late two"},
+        {"ts": mention_ts, "user": NICK, "text": f"<@{BOT}> catch up?"},
+    ]
+    event = _message_event(text=f"<@{BOT}> catch up?", ts=mention_ts)
+    _run_message(tmp_path, client, event, posted, join_backfill=2)
+
+    assert len(posted.items) == 1
+    body = posted.items[0]["json"]["content"]
+    assert "thread before this mention — 2 earlier messages" in body
+    assert "early one" not in body
+    assert "early two" not in body
+    assert "Nick Jalbert: late one" in body
+    assert "Nick Jalbert: late two" in body
+    assert "catch up?" in body
+    # First page is oldest (parent + early one + early two at fetch=3);
+    # a second page is required to reach the two replies before the mention.
+    assert len(client.replies_calls) >= 2
+    assert client.replies_calls[0]["cursor"] in (None, "")
+    assert client.replies_calls[0]["limit"] == 3
+    assert client.replies_calls[1]["cursor"]
+
+
+def test_already_active_thread_does_not_backfill(tmp_path, posted):
+    threads = ActiveThreads(tmp_path / "pre-threads.json")
+    threads.touch(CHAN, PARENT)
+    client = _FakeClient()
+    client.replies_messages = [
+        {"ts": PARENT, "user": NICK, "text": "old context"},
+    ]
+    event = _message_event(text=f"<@{BOT}> ping")
+    _run_message(tmp_path, client, event, posted, threads=threads)
+
+    assert len(posted.items) == 1
+    body = posted.items[0]["json"]["content"]
+    assert "thread before this mention" not in body
+    assert "old context" not in body
+    assert client.replies_calls == []
+
+
+def test_top_level_mention_does_not_backfill(tmp_path, posted):
+    client = _FakeClient()
+    event = _message_event(
+        text=f"<@{BOT}> hello",
+        ts="111.500",
+        thread_ts=None,
+    )
+    _run_message(tmp_path, client, event, posted)
+
+    assert len(posted.items) == 1
+    assert "thread before this mention" not in posted.items[0]["json"]["content"]
+    assert client.replies_calls == []
+
+
+def test_join_backfill_failure_still_delivers_mention(tmp_path, posted):
+    client = _FakeClient()
+    client.replies_exc = True
+    event = _message_event(text=f"<@{BOT}> still there?")
+    _run_message(tmp_path, client, event, posted)
+
+    assert len(posted.items) == 1
+    body = posted.items[0]["json"]["content"]
+    assert "still there?" in body
+    assert "thread before this mention" not in body
+
+
+def test_join_backfill_zero_skips_lookup(tmp_path, posted):
+    client = _FakeClient()
+    event = _message_event(text=f"<@{BOT}> hi")
+    _run_message(tmp_path, client, event, posted, join_backfill=0)
+
+    assert len(posted.items) == 1
+    assert client.replies_calls == []
+    assert "thread before this mention" not in posted.items[0]["json"]["content"]
+
+
+def test_dm_does_not_backfill(tmp_path, posted):
+    client = _FakeClient()
+    event = _message_event(
+        text="hello",
+        ts="111.500",
+        thread_ts=None,
+        channel=DM,
+        event_type="message",
+        channel_type="im",
+    )
+    _run_message(tmp_path, client, event, posted)
+
+    assert len(posted.items) == 1
+    assert client.replies_calls == []
+
+
+def test_join_backfill_timeouts_share_one_worker(tmp_path, posted, monkeypatch):
+    """Nick #108: do not queue stale conversations.replies after a timeout.
+
+    One in-flight backfill lookup; later first mentions fail open
+    immediately instead of submitting more work. Observe pool.submit
+    counts (not replies_calls at start-of-call) so queued-but-unstarted
+    lookups still fail the test. Wait until the first slow call finishes
+    before asserting no second call started.
+    """
+    monkeypatch.setattr(inbound, "JOIN_BACKFILL_TIMEOUT", 0.05)
+    client = _FakeClient()
+    client.replies_delay = 0.8
+    client.replies_messages = [
+        {"ts": PARENT, "user": NICK, "text": "stale context"},
+    ]
+    cfg = _cfg(tmp_path, join_backfill=2)
+    threads = ActiveThreads(cfg.state_dir / "threads.json")
+    ib = Inbound(cfg, _FakeApp(client), BOT, threads)
+    logger = logging.getLogger("test")
+    submits: list[object] = []
+    orig_submit = ib._lookup_pool.submit
+
+    def counting_submit(*args, **kwargs):
+        submits.append(args)
+        return orig_submit(*args, **kwargs)
+
+    ib._lookup_pool.submit = counting_submit  # type: ignore[method-assign]
+    try:
+        t0 = time.time()
+        for i in range(5):
+            parent = f"300.{i:03d}"
+            ts = f"301.{i:03d}"
+            ib._on_event(
+                _message_event(
+                    text=f"<@{BOT}> ping {i}",
+                    ts=ts,
+                    thread_ts=parent,
+                ),
+                logger,
+            )
+        ib._on_event(
+            {
+                "type": "message",
+                "user": NICK,
+                "text": "hello after burst",
+                "channel": DM,
+                "ts": "400.000",
+                "channel_type": "im",
+            },
+            logger,
+        )
+        deadline = t0 + 3
+        while time.time() < deadline and len(posted.items) < 6:
+            time.sleep(0.02)
+        elapsed = time.time() - t0
+        assert len(posted.items) == 6, posted.items
+        # Five 2s waits would be 10s; one 50ms timeout plus delivery is far less.
+        assert elapsed < 1.0, elapsed
+        assert "hello after burst" in posted.items[-1]["json"]["content"]
+        for item in posted.items[:-1]:
+            body = item["json"]["content"]
+            assert "ping" in body
+            assert "thread before this mention" not in body
+            assert "stale context" not in body
+        # Submissions are counted at pool.submit, so a queued second lookup
+        # fails this even before conversations.replies starts. Then wait out
+        # the first slow call so a queued worker would have started.
+        assert len(submits) == 1, len(submits)
+        time.sleep(client.replies_delay + 0.15)
+        assert client.max_live == 1
+        assert len(client.replies_calls) == 1
+        assert len(submits) == 1, len(submits)
+    finally:
+        ib.stop()
+        ib._worker.join(timeout=1)

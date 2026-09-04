@@ -32,6 +32,11 @@ DELIVERY_ERROR_TEXT = (
 # Bound reaction parent-lookups so a hung reactions.get cannot stall
 # the single inbound drain thread. Fail open rather than wait.
 ITEM_LOOKUP_TIMEOUT = 2
+# Same bound for first-join conversations.replies. Fail open: deliver
+# the mention without prior lines rather than stall later messages.
+JOIN_BACKFILL_TIMEOUT = 2
+# Per-line cap so a single huge Slack message cannot dump the mind log.
+JOIN_BACKFILL_LINE_CHARS = 200
 
 
 def reaction_text(reaction: str, item_ts: str, thread_ts: str | None) -> str:
@@ -62,6 +67,9 @@ class InboundMessage:
     # client's default timeout is 30s; a burst of reaction permalink
     # lookups would otherwise stall later human messages.
     is_reaction: bool = False
+    # First @mention in a thread: drain worker prepends capped prior lines.
+    # Bolt must not wait on conversations.replies.
+    backfill: bool = False
 
 
 class SlackNames:
@@ -160,10 +168,11 @@ class Inbound:
         self._lookup_pool = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="slack-item-lookup"
         )
-        # At most one reactions.get in flight. Timed-out reactions use the
-        # fallback immediately instead of queueing another stale call.
+        # At most one Slack lookup in flight (reactions.get or
+        # conversations.replies). Timed-out work uses the fallback
+        # immediately instead of queueing another stale call.
         self._lookup_lock = threading.Lock()
-        self._lookup_future: concurrent.futures.Future[dict[str, Any] | None] | None = None
+        self._lookup_future: concurrent.futures.Future[Any] | None = None
         self._worker = threading.Thread(
             target=self._drain, name="slack-inbound", daemon=True
         )
@@ -224,28 +233,39 @@ class Inbound:
             return None
         return found.get("thread_ts") or None
 
+    def _try_lookup(self, fn: Any, *, timeout: float, what: str, channel: str, ts: str) -> Any | None:
+        """Run fn on the shared lookup worker. At most one call in flight.
+
+        If a previous call is still running after a timeout, do not queue
+        another stale lookup — return None immediately so the drain thread
+        can take the next item. Fail open on timeout or Slack error.
+        """
+        with self._lookup_lock:
+            fut = self._lookup_future
+            if fut is not None and not fut.done():
+                return None
+            fut = self._lookup_pool.submit(fn)
+            self._lookup_future = fut
+        try:
+            return fut.result(timeout=timeout)
+        except Exception:
+            log.warning("%s failed for %s ts=%s", what, channel, ts, exc_info=True)
+            return None
+
     def _lookup_item_message(self, channel: str, ts: str) -> dict[str, Any] | None:
         def _call() -> dict[str, Any] | None:
             resp = self.app.client.reactions_get(channel=channel, timestamp=ts)
             msg = resp.get("message") or {}
             return msg or None
 
-        # At most one in-flight reactions.get. If a previous call is still
-        # running after a timeout, do not queue another stale lookup —
-        # fail open immediately so the drain thread can take the next item.
-        with self._lookup_lock:
-            fut = self._lookup_future
-            if fut is not None and not fut.done():
-                return None
-            fut = self._lookup_pool.submit(_call)
-            self._lookup_future = fut
-        try:
-            return fut.result(timeout=ITEM_LOOKUP_TIMEOUT)
-        except Exception:
-            log.warning(
-                "reactions.get failed for %s ts=%s", channel, ts, exc_info=True
-            )
-            return None
+        found = self._try_lookup(
+            _call,
+            timeout=ITEM_LOOKUP_TIMEOUT,
+            what="reactions.get",
+            channel=channel,
+            ts=ts,
+        )
+        return found or None
 
     def _on_event(self, event: dict[str, Any], logger: logging.Logger) -> None:
         if event.get("bot_id") or event.get("subtype"):
@@ -261,6 +281,7 @@ class Inbound:
         if not self.dedupe.add(f"{channel}:{ts}"):
             return
 
+        first_join = False
         if event.get("channel_type") == "im":
             # DMs: everything is for us; replies go top-level.
             from_name = naming.encode(user, channel)
@@ -278,9 +299,22 @@ class Inbound:
             else:
                 return
             from_name = naming.encode(user, channel, thread_ts)
+            # First @mention in an existing thread: fetch prior lines on
+            # the drain worker. Already-active threads have been fed
+            # followups; a top-level mention has no thread above it.
+            first_join = bool(
+                mentioned
+                and event.get("thread_ts")
+                and not self.threads.is_active(channel, thread_ts)
+                and self.cfg.thread_join_backfill > 0
+            )
             self.threads.touch(channel, thread_ts)
 
-        self.queue.put(InboundMessage(from_name, user, channel, thread_ts, ts, text))
+        self.queue.put(
+            InboundMessage(
+                from_name, user, channel, thread_ts, ts, text, backfill=first_join
+            )
+        )
 
     # -- delivery worker -----------------------------------------------------
 
@@ -294,7 +328,112 @@ class Inbound:
             except Exception:
                 log.exception("failed delivering %s", msg.from_name)
 
+    def _thread_lines_before(
+        self, channel: str, thread_ts: str, before_ts: str, limit: int
+    ) -> list[dict[str, Any]]:
+        """Prior messages in a thread, closest to before_ts, capped at limit.
+
+        conversations.replies pages oldest-first, so one `limit`-sized
+        request would return the parent and earliest replies. Cursor-walk
+        to the last page (bounded by JOIN_BACKFILL_TIMEOUT and a page
+        cap); keep ts < before_ts and take the tail. Fail open to [] so
+        the mention still lands. Shares the one-in-flight lookup worker.
+        """
+        fetch = min(200, max(limit + 1, 1))
+        # Enough pages for a long thread at this fetch size; the submit
+        # timeout is the real bound. Stop short of the end: return []
+        # rather than the oldest page.
+        max_pages = 50
+
+        def _call() -> list[dict[str, Any]]:
+            collected: list[dict[str, Any]] = []
+            cursor = ""
+            exhausted = False
+            for _ in range(max_pages):
+                kwargs: dict[str, Any] = {
+                    "channel": channel,
+                    "ts": thread_ts,
+                    "latest": before_ts,
+                    "inclusive": False,
+                    "limit": fetch,
+                }
+                if cursor:
+                    kwargs["cursor"] = cursor
+                resp = self.app.client.conversations_replies(**kwargs)
+                batch = list(resp.get("messages") or [])
+                collected.extend(batch)
+                cursor = (resp.get("response_metadata") or {}).get("next_cursor") or ""
+                if not cursor or not batch:
+                    exhausted = True
+                    break
+            return collected if exhausted else []
+
+        msgs = self._try_lookup(
+            _call,
+            timeout=JOIN_BACKFILL_TIMEOUT,
+            what="conversations.replies",
+            channel=channel,
+            ts=thread_ts,
+        )
+        if not msgs:
+            return []
+
+        def _key(ts: str) -> float:
+            try:
+                return float(ts)
+            except (TypeError, ValueError):
+                return 0.0
+
+        cutoff = _key(before_ts)
+        out = []
+        for m in msgs:
+            ts = m.get("ts") or ""
+            if not ts or _key(ts) >= cutoff:
+                continue
+            if m.get("subtype"):
+                continue
+            out.append(m)
+        out.sort(key=lambda m: _key(m.get("ts") or ""))
+        return out[-limit:]
+
+    def _format_backfill(self, messages: list[dict[str, Any]]) -> str:
+        lines: list[str] = []
+        for m in messages:
+            user = m.get("user")
+            name = self.names.user(user) if user else (m.get("username") or "unknown")
+            text = clean_inbound(m.get("text") or "", self.bot_user_id)
+            if not text:
+                continue
+            text = " ".join(text.split())
+            if len(text) > JOIN_BACKFILL_LINE_CHARS:
+                text = text[: JOIN_BACKFILL_LINE_CHARS - 3] + "..."
+            lines.append(f"{name}: {text}")
+        if not lines:
+            return ""
+        n = len(lines)
+        noun = "message" if n == 1 else "messages"
+        header = f"[thread before this mention — {n} earlier {noun}]"
+        return header + "\n" + "\n".join(lines)
+
     def _deliver(self, msg: InboundMessage) -> None:
+        if msg.backfill and msg.thread_ts and msg.message_ts:
+            prior = self._thread_lines_before(
+                msg.channel,
+                msg.thread_ts,
+                msg.message_ts,
+                self.cfg.thread_join_backfill,
+            )
+            block = self._format_backfill(prior)
+            if block:
+                msg = InboundMessage(
+                    msg.from_name,
+                    msg.user,
+                    msg.channel,
+                    msg.thread_ts,
+                    msg.message_ts,
+                    block + "\n\n" + msg.text,
+                    backfill=False,
+                )
         if msg.resolve_parent and msg.thread_ts:
             item_ts = msg.thread_ts
             parent = self._item_thread_ts(msg.channel, item_ts)

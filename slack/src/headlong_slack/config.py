@@ -21,6 +21,8 @@ class Config:
     web_url: str
     state_dir: Path
     thread_followups: bool
+    # How many messages above a first @mention to prepend. 0 disables.
+    thread_join_backfill: int = 20
 
     @property
     def identity_api_id(self) -> str:
@@ -106,4 +108,20 @@ def load(serve_root: Path) -> Config:
         ).rstrip("/"),
         state_dir=state_dir,
         thread_followups=os.environ.get("SLACK_THREAD_FOLLOWUPS", "") not in ("", "0"),
+        thread_join_backfill=_join_backfill_limit(),
     )
+
+
+def _join_backfill_limit() -> int:
+    """SLACK_THREAD_JOIN_BACKFILL: prior thread lines on first @mention.
+
+    Default 20. 0 disables. Clamped to 50 so a long thread cannot dump.
+    """
+    raw = os.environ.get("SLACK_THREAD_JOIN_BACKFILL", "")
+    if raw == "":
+        return 20
+    try:
+        n = int(raw)
+    except ValueError:
+        return 20
+    return max(0, min(50, n))
