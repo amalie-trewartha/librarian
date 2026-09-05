@@ -308,10 +308,20 @@ $_rm
     fi
 fi
 
+# Runtime line + workspace map: stable across wakes (cached prefix), and they
+# remove the reason for the pwd/ls/find opening and the per-wake re-grep of
+# bin/ and thinkers/ that took ~64% of reasoning steps on 2026-09-04.
+runtime_line=$(_prompt_section runtime _runtime_line) || runtime_line=""
+workspace_section=$(_prompt_section workspace _workspace_section "$run_dir") || workspace_section=""
+
 route_prompt="<context>
 $system_prompt
 
-${life_section}Recent stream (last $THINK_CONTEXT_TAIL durable steps; \`traj tail -n 200\` shows more, verbatim):
+${runtime_line:+$runtime_line
+
+}${workspace_section:+$workspace_section
+
+}${life_section}Recent stream (last $THINK_CONTEXT_TAIL durable steps; \`traj tail -n 200\` shows more, verbatim):
 $recent_context
 
 ${related_section}Routing signals:

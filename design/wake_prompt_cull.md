@@ -67,3 +67,24 @@ and no `prompt-section-failed` error step follows the deploy.
 - Runs that never reach a final leave only their observations, and long
   observations survive the pairing rule. If they turn noisy, a lower content
   cap for observations in `_recent_stream` is one line.
+
+## Runtime line and workspace map (2026-09-05)
+
+Two stable sections added right after the identity/skills prefix, so they sit
+in the cached part of every call:
+
+- `Runtime: headlong <sha> (<subject>), checked out <time>; your thinkers
+  synced <time>.` from the app checkout (`_runtime_line`). Empty when the app
+  root is not a git checkout. Gives a runtime fact a version to be keyed to.
+- `Workspace: <workdir>` with one line per top-level directory (recursive file
+  count, hidden and `__pycache__` skipped, capped at `WORKSPACE_DIRS`=12), the
+  count of loose top-level files, and the first 8 lines of `WORKSPACE.md` if
+  the mind keeps one (`_workspace_section`).
+
+Why: on 2026-09-04, 52% of Audel's reasoning steps re-grepped `bin/shellm` and
+checksummed its own thinker files, and 12% were `pwd`/`ls`/`find` openings —
+about two thirds of a 125-dollar day re-deriving facts it had written down
+hundreds of times, because nothing in the prompt said where things were or
+whether the runtime had changed. A rule in prompt.md names both sections as
+authoritative. Measure with the step-category split (code-audit, orientation)
+in the treadmill probe; target: both under 10% of steps.

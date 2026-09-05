@@ -34,6 +34,7 @@ mk 2026-08-20-00-00-00_a1_gh   fact "2026-08-20 00:00:00" "GitHub write on this 
 mk 2026-08-21-00-00-00_b2_disp fact "2026-08-21 00:00:00" "The dispatcher token file arms the wake and lives under run/"
 mk 2026-08-22-00-00-00_c3_todo todo "2026-08-22 00:00:00" "Ping Braden about the temporal test"
 printf '{"step_id":"t1","type":"thought","content":"I should check the github pull-only login headlong42 before the PR work","source":"monolith","ts":"2026-09-04T00:00:00Z"}\n' >> "$TRAJ"
+mkdir -p "$ID/workdir/notes"; printf 'a\n' > "$ID/workdir/notes/a.md"; printf 'b\n' > "$ID/workdir/notes/b.md"
 
 run_step() {  # $1 = trigger json, then env overrides
     local trig="$1"; shift
@@ -47,6 +48,10 @@ WAKE='{"type":"monolith-wake","content":"wake","source":"monolith-timer"}'
 run_step "$WAKE"
 p=$(cat "$STUB_CAPTURE" 2>/dev/null)
 grep -q '^Related memories' <<<"$p" && ok "the related-memories section is in the wake prompt" || bad "related section present" "$(grep -c . <<<"$p") lines"
+grep -q '^Runtime: headlong [0-9a-f]\{7,\} (' <<<"$p" && ok "the runtime line names the checked-out commit" || bad "runtime line present"
+grep -q '^Workspace: ' <<<"$p" && ok "the workspace section is in the wake prompt" || bad "workspace section present"
+grep -q '^- notes/ 2 files' <<<"$p" && ok "the workspace section counts files per directory" || bad "workspace dir count" "$(grep '^- ' <<<"$p" | head -3)"
+grep -q 'No WORKSPACE.md yet' <<<"$p" && ok "the workspace section invites a WORKSPACE.md when none exists" || bad "workspace invite"
 grep -q 'a1_gh \[fact, ' <<<"$p" && ok "the memory matched to the stream is listed with its type" || bad "matched memory listed"
 grep -q 'GOAL REVIEW (about once a week)' <<<"$p" && ok "the goal-review hint fires on the first wake" || bad "goal review hint fires"
 grep -q '\[todo, ' <<<"$p" && ok "the active-goals section shows the todo with its type" || bad "goals section shows todo"

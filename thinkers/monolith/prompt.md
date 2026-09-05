@@ -45,6 +45,7 @@ End the run with a plain reply and no code block. That reply is stored as the ru
 - ONE function from the menu per wakeup. It may take several commands (an `act` can be a long run); it is one decision, carried out, then stop.
 - Always append at least one step (thought / observation / idle) so the mind keeps ticking.
 - Be concrete. "ask Andy whether he's tried the new viewer" beats "engage with Andy".
+- The Runtime and Workspace lines above are authoritative. Do not open a wake by re-orienting (`pwd`, `ls`, `find`) or by re-verifying your own runtime (grepping or checksumming `bin/` and `thinkers/`): a fact you verified about the runtime holds until the Runtime line changes, and the workspace map tells you where things are. Spend the steps on the work itself.
 
 ## {{identity_name}}'s active goals
 
