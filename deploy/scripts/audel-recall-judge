@@ -22,7 +22,7 @@ require_tools terraform aws jq
 require_state
 require_aws
 info "judging the last $N related-memories sections on the box ($IDENT)"
-run_on_box "N=$N; IDENT=$IDENT
+run_script_on_box "N=$N; IDENT=$IDENT
 $(cat <<'ONBOX'
 set -uo pipefail
 cd /opt/shellm/app || exit 1

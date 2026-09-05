@@ -145,7 +145,7 @@ skipped = 0
 total = 0
 ledger_rows = 0
 
-DAY_KEYS = ("rows", "in_msg", "out_msg", "runs", "reasoning", "calls", "in", "out", "think",
+DAY_KEYS = ("rows", "in_msg", "out_msg", "runs", "reasoning", "calls", "in", "out", "think", "bf",
             "ctx_n", "ctx_zero",
             "outs", "whole2k", "whole8k", "out_true", "out_2k", "out_8k", "reads", "rereads",
             "rel_wakes", "rel_shown", "rel_repeat", "rel_fetched", "rel_fixed", "rel_bytes", "mem_searches")
@@ -155,7 +155,17 @@ DAY_KEYS = ("rows", "in_msg", "out_msg", "runs", "reasoning", "calls", "in", "ou
 # names it (mem show, cat of the file, anything), "fixed" when a mem edit or
 # mem forget names it (or a prefix of it) within a day of it being shown.
 RE_REL_LINE = re.compile(r"^- (\S+) \[", re.M)
-RE_MEM_SEARCH = re.compile(r"(^|[;&|]\s*)mem search\b", re.M)
+RE_MEM_SEARCH = re.compile(r"(^|[;&|(]\s*)mem search\b", re.M)
+RE_HEREDOC = re.compile(r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n.*?\n\s*\1\s*$", re.S | re.M)
+RE_QUOTED = re.compile(r"'[^'\n]*'|\"[^\"\n]*\"")
+
+
+def command_text(cmd):
+    """The parts of a shell step that can be commands: heredoc bodies and quoted
+    strings are dropped, so a note that says `mem search grep = 0` or a grep
+    pattern `'traj|mem search'` does not count as running mem search (on
+    2026-09-04 that inflated the count from 2 to 616)."""
+    return RE_QUOTED.sub("''", RE_HEREDOC.sub("<<HEREDOC", cmd))
 RE_MEM_FIX = re.compile(r"(^|[;&|]\s*)mem (?:edit|forget) (\S+)", re.M)
 RE_MEM_FIX_LINE = re.compile(r"^.*\bmem (?:edit|forget)\b.*$", re.M)
 def related_names(content):
@@ -177,7 +187,7 @@ rel_prev = set()        # names shown in the previous wake (repeat rate)
 rel_recent = {}         # name -> ts last shown (for the fixed-within-a-day rate)
 rel_fetched_seen = set(); rel_fixed_seen = set()
 day_distinct = {}       # day -> set of names shown
-TOK = ("calls", "in", "out", "think")
+TOK = ("calls", "in", "out", "think", "bf")
 
 # Responder context metrics (design/conversation_memory.md, part 6): every
 # decision observation the responder writes carries context_msgs (earlier
@@ -279,7 +289,7 @@ with open(path, encoding="utf-8", errors="replace") as fh:
             if t == "reasoning":
                 dd["reasoning"] += 1
                 cmd = step.get("cmd") or ""
-                if RE_MEM_SEARCH.search(cmd):
+                if RE_MEM_SEARCH.search(command_text(cmd)):
                     dd["mem_searches"] += 1
                 read_cmd = RE_MEM_FIX_LINE.sub("", cmd)   # an edit or forget is a fix, not a read
                 for nm in rel_by_run.get(rid, ()):
@@ -322,7 +332,17 @@ with open(path, encoding="utf-8", errors="replace") as fh:
 # The llm usage ledger: one line per successful bin/llm call from any caller
 # (shellm runs, the responder fast path, other thinkers). Appended by bin/llm
 # unconditionally, so it is the complete spend on the days it covers.
+#
+# shellm stops reading a response the moment its first code block closes
+# (SHELLM_STOP_AT_FENCE), so for those calls the provider's usage event never
+# arrives: bin/llm writes the row with out_tok estimated from bytes and NO
+# in_tok (2,184 of 3,993 grok calls on 2026-09-04). Summing metered in_tok
+# alone halved the day's input spend. Backfill: the prompt inside one run is
+# the same conversation growing by a step at a time, so a cut call's input is
+# taken from the nearest metered call of the same run (cache_tok along with
+# it); a run with no metered call at all takes the day's median for the model.
 ledger_path = os.path.join(ident_dir, "usage", "llm.jsonl")
+ledger_recs = []
 try:
     with open(ledger_path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
@@ -335,19 +355,49 @@ try:
                 lts = epoch(rec.get("ts") or "")
             except (ValueError, TypeError, AttributeError):
                 continue
-            ld = ledger_daily.setdefault(day_key(lts), dict.fromkeys(TOK, 0))
-            lm = ld.setdefault("models", {}).setdefault(str(rec.get("model") or "?"), dict.fromkeys(TOK, 0))
-            stamped = False
-            for key, short in (("in_tok", "in"), ("out_tok", "out"), ("think_tok", "think")):
-                if isinstance(rec.get(key), (int, float)):
-                    ld[short] += int(rec[key])
-                    lm[short] += int(rec[key])
-                    stamped = True
-            if stamped:
-                ld["calls"] += 1
-                lm["calls"] += 1
+            ledger_recs.append((lts, rec))
 except OSError:
     pass
+ledger_recs.sort(key=lambda x: x[0])
+_by_run = {}
+for i, (lts, rec) in enumerate(ledger_recs):
+    _by_run.setdefault((rec.get("run_id"), rec.get("model")), []).append(i)
+_day_model_in = {}
+for lts, rec in ledger_recs:
+    if isinstance(rec.get("in_tok"), (int, float)):
+        _day_model_in.setdefault((day_key(lts), rec.get("model")), []).append(int(rec["in_tok"]))
+for key, idxs in _by_run.items():
+    metered = [i for i in idxs if isinstance(ledger_recs[i][1].get("in_tok"), (int, float))]
+    for i in idxs:
+        lts, rec = ledger_recs[i]
+        if isinstance(rec.get("in_tok"), (int, float)) or not isinstance(rec.get("out_tok"), (int, float)):
+            continue
+        if metered and key[0] is not None:
+            j = min(metered, key=lambda k: abs(k - i))
+            rec["in_tok"] = ledger_recs[j][1]["in_tok"]
+            if isinstance(ledger_recs[j][1].get("cache_tok"), (int, float)):
+                rec["cache_tok"] = ledger_recs[j][1]["cache_tok"]
+        else:
+            pool = sorted(_day_model_in.get((day_key(lts), rec.get("model")), []))
+            if not pool:
+                continue
+            rec["in_tok"] = pool[len(pool) // 2]
+        rec["_backfilled"] = True
+for lts, rec in ledger_recs:
+    ld = ledger_daily.setdefault(day_key(lts), dict.fromkeys(TOK, 0))
+    lm = ld.setdefault("models", {}).setdefault(str(rec.get("model") or "?"), dict.fromkeys(TOK, 0))
+    stamped = False
+    for key, short in (("in_tok", "in"), ("out_tok", "out"), ("think_tok", "think")):
+        if isinstance(rec.get(key), (int, float)):
+            ld[short] += int(rec[key])
+            lm[short] += int(rec[key])
+            stamped = True
+    if stamped:
+        ld["calls"] += 1
+        lm["calls"] += 1
+        if rec.get("_backfilled"):
+            ld["bf"] += 1
+            lm["bf"] += 1
 
 # Per day, the ledger wins when it has at least as many calls as the stamps
 # (a complete ledger is a superset of them); otherwise the stamps stand (days
@@ -637,6 +687,12 @@ if daily:
           % (" (from %s)" % led["since"] if led.get("since") else ""))
     print("   shellm-run stamps only on earlier days; forgot = replies with no earlier conversation")
     print("   in the prompt / replies where a previous exchange within 48h existed)")
+    bf_calls = sum(v.get("bf", 0) for _, v in daily)
+    bf_of = sum(v["calls"] for _, v in daily if v.get("source") == "ledger")
+    if bf_calls:
+        print("  (tok_in backfills %d of %d ledger calls (%d%%) whose stream shellm cut before the usage"
+              % (bf_calls, bf_of, round(100.0 * bf_calls / max(bf_of, 1))))
+        print("   event, from the nearest metered call of the same run; those calls are billed in full)")
 
 ob = [(day, v) for day, v in daily if v.get("outs")]
 if ob:
