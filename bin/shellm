@@ -1728,7 +1728,7 @@ extract_code() {
         # fence. On its own the model sees only the raw shell error, which does
         # not explain the mechanism, so a weaker model repeats the sentence and
         # stalls. Flag it so the notice below can say what actually happened.
-        [[ -n "${code//[[:space:]]/}" ]] && no_fence=1
+        [[ "$code" =~ [^[:space:]] ]] && no_fence=1
     fi
 
     # Prepend notices to stderr. Stderr is captured and shown back to the model

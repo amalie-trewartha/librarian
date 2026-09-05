@@ -21,8 +21,13 @@ pass=0; fail=0
 ok()  { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 bad() { fail=$((fail+1)); printf 'FAIL %s%s\n' "$1" "${2:+ — $2}"; }
 
+# Load just extract_code from bin/shellm. Source from a temp file, not
+# `source <(...)`: the CI macOS bash 3.2 binary has no process substitution.
+FN=$(mktemp)
+trap 'rm -f "$FN"' EXIT
+sed -n '/^extract_code() {/,/^}/p' "$REPO/bin/shellm" > "$FN"
 # shellcheck disable=SC1090
-source <(sed -n '/^extract_code() {/,/^}/p' "$REPO/bin/shellm")
+source "$FN"
 
 NOTICE='shellm: your reply had no'   # start of the prepended notice line
 
