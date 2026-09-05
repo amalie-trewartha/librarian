@@ -295,3 +295,248 @@ def test_client_without_upload_posts_notice(tmp_path, monkeypatch):
 
     outbound.run(_cfg(tmp_path), FakeClient(), FakeThreads(), threading.Event())
     assert sent == ["(failed to deliver file note.txt)"]
+
+
+def test_message_ts_from_source_url():
+    parse = outbound.message_ts_from_source_url
+    assert parse(
+        "https://laudesters.slack.com/archives/C123/p1788451200123456"
+    ) == "1788451200.123456"
+    assert parse("https://slack.com/archives/C1/p12345678") == "12.345678"
+    assert parse("https://example.com/archives/C123/p1788451200123456") == "1788451200.123456"
+    assert parse("not-a-url") is None
+    assert parse("") is None
+    assert parse(None) is None
+    assert parse("https://slack.com/archives/C123") is None
+    assert parse("https://slack.com/files/C123/p1788451200123456") is None
+
+
+def test_reaction_name_strips_colons():
+    assert outbound.reaction_name({"reaction": "thumbsup"}) == "thumbsup"
+    assert outbound.reaction_name({"reaction": ":eyes:"}) == "eyes"
+    assert outbound.reaction_name({"reaction": "+1"}) == "+1"
+    assert outbound.reaction_name({"reaction": "thumbsup::skin-tone-2"}) == "thumbsup::skin-tone-2"
+    assert outbound.reaction_name({"reaction": "not a name"}) is None
+    assert outbound.reaction_name({"reaction": ""}) is None
+    assert outbound.reaction_name({"content": ":eyes:"}) is None
+
+
+def test_reaction_step_calls_reactions_add(tmp_path, monkeypatch):
+    steps = [
+        {"type": "message", "from": "audel",
+         "to": "slack-U1-C1-1722400000.123456",
+         "source": "chat", "reaction": "thumbsup", "content": ":thumbsup:",
+         "source_url": "https://laudesters.slack.com/archives/C1/p1722400000123456",
+         "step_id": "r1"},
+        {"type": "message", "from": "audel",
+         "to": "slack-U1-C1-1722400000.123456",
+         "source": "chat", "content": "text after", "step_id": "t1"},
+    ]
+    monkeypatch.setattr(outbound.mindlog, "find_trajectory", lambda d: tmp_path / "t.jsonl")
+    monkeypatch.setattr(outbound.mindlog, "follow", lambda *a, **k: iter(steps))
+
+    added = []
+    sent = []
+
+    class FakeClient:
+        def chat_postMessage(self, channel, thread_ts, text, unfurl_links=False, **kw):
+            sent.append(text)
+
+        def reactions_add(self, channel, timestamp, name):
+            added.append((channel, timestamp, name))
+
+    class FakeThreads:
+        def touch(self, channel, thread_ts):
+            pass
+
+    outbound.run(_cfg(tmp_path), FakeClient(), FakeThreads(), threading.Event())
+    assert added == [("C1", "1722400000.123456", "thumbsup")]
+    assert sent == ["text after"]
+
+
+def test_reaction_falls_back_to_thread_ts_without_permalink(tmp_path, monkeypatch):
+    steps = [
+        {"type": "message", "from": "audel",
+         "to": "slack-U1-C1-1722400000.123456",
+         "source": "chat", "reaction": "eyes", "content": ":eyes:",
+         "step_id": "r1"},
+    ]
+    monkeypatch.setattr(outbound.mindlog, "find_trajectory", lambda d: tmp_path / "t.jsonl")
+    monkeypatch.setattr(outbound.mindlog, "follow", lambda *a, **k: iter(steps))
+
+    added = []
+
+    class FakeClient:
+        def chat_postMessage(self, **kw):
+            raise AssertionError("reaction must not post text")
+
+        def reactions_add(self, channel, timestamp, name):
+            added.append((channel, timestamp, name))
+
+    class FakeThreads:
+        def touch(self, channel, thread_ts):
+            pass
+
+    outbound.run(_cfg(tmp_path), FakeClient(), FakeThreads(), threading.Event())
+    assert added == [("C1", "1722400000.123456", "eyes")]
+
+
+def test_dm_reaction_without_permalink_is_skipped(tmp_path, monkeypatch):
+    steps = [
+        {"type": "message", "from": "audel", "to": "slack-U1-D1",
+         "source": "chat", "reaction": "thumbsup", "content": ":thumbsup:",
+         "step_id": "r1"},
+        {"type": "message", "from": "audel", "to": "slack-U1-D1",
+         "source": "chat", "content": "later", "step_id": "t1"},
+    ]
+    monkeypatch.setattr(outbound.mindlog, "find_trajectory", lambda d: tmp_path / "t.jsonl")
+    monkeypatch.setattr(outbound.mindlog, "follow", lambda *a, **k: iter(steps))
+
+    added = []
+    sent = []
+
+    class FakeClient:
+        def chat_postMessage(self, channel, thread_ts, text, unfurl_links=False, **kw):
+            sent.append(text)
+
+        def reactions_add(self, **kw):
+            added.append(kw)
+
+    class FakeThreads:
+        def touch(self, channel, thread_ts):
+            pass
+
+    outbound.run(_cfg(tmp_path), FakeClient(), FakeThreads(), threading.Event())
+    assert added == []
+    assert sent == ["later"]
+
+
+def test_identical_reactions_are_suppressed(tmp_path, monkeypatch):
+    steps = [
+        {"type": "message", "from": "audel",
+         "to": "slack-U1-C1-1.1",
+         "source": "chat", "reaction": "eyes", "content": ":eyes:",
+         "step_id": "a"},
+        {"type": "message", "from": "audel",
+         "to": "slack-U1-C1-1.1",
+         "source": "chat", "reaction": "eyes", "content": ":eyes:",
+         "step_id": "b"},
+        {"type": "message", "from": "audel",
+         "to": "slack-U1-C1-1.1",
+         "source": "chat", "reaction": "thumbsup", "content": ":thumbsup:",
+         "step_id": "c"},
+    ]
+    monkeypatch.setattr(outbound.mindlog, "find_trajectory", lambda d: tmp_path / "t.jsonl")
+    monkeypatch.setattr(outbound.mindlog, "follow", lambda *a, **k: iter(steps))
+
+    added = []
+
+    class FakeClient:
+        def chat_postMessage(self, **kw):
+            raise AssertionError("no text")
+
+        def reactions_add(self, channel, timestamp, name):
+            added.append(name)
+
+    class FakeThreads:
+        def touch(self, channel, thread_ts):
+            pass
+
+    outbound.run(_cfg(tmp_path), FakeClient(), FakeThreads(), threading.Event())
+    assert added == ["eyes", "thumbsup"]
+
+
+def test_failed_reaction_is_not_recorded_so_retry_works(tmp_path, monkeypatch):
+    steps = [
+        {"type": "message", "from": "audel",
+         "to": "slack-U1-C1-1.1",
+         "source": "chat", "reaction": "eyes", "content": ":eyes:",
+         "step_id": "a"},
+        {"type": "message", "from": "audel",
+         "to": "slack-U1-C1-1.1",
+         "source": "chat", "reaction": "eyes", "content": ":eyes:",
+         "step_id": "b"},
+    ]
+    monkeypatch.setattr(outbound.mindlog, "find_trajectory", lambda d: tmp_path / "t.jsonl")
+    monkeypatch.setattr(outbound.mindlog, "follow", lambda *a, **k: iter(steps))
+
+    added = []
+
+    class FakeClient:
+        def chat_postMessage(self, **kw):
+            raise AssertionError("no text")
+
+        def reactions_add(self, channel, timestamp, name):
+            added.append(name)
+            if len(added) == 1:
+                raise RuntimeError("transient")
+
+    class FakeThreads:
+        def touch(self, channel, thread_ts):
+            pass
+
+    outbound.run(_cfg(tmp_path), FakeClient(), FakeThreads(), threading.Event())
+    assert added == ["eyes", "eyes"]
+
+
+def test_already_reacted_counts_as_success(tmp_path, monkeypatch):
+    steps = [
+        {"type": "message", "from": "audel",
+         "to": "slack-U1-C1-1.1",
+         "source": "chat", "reaction": "eyes", "content": ":eyes:",
+         "step_id": "a"},
+        {"type": "message", "from": "audel",
+         "to": "slack-U1-C1-1.1",
+         "source": "chat", "reaction": "eyes", "content": ":eyes:",
+         "step_id": "b"},
+    ]
+    monkeypatch.setattr(outbound.mindlog, "find_trajectory", lambda d: tmp_path / "t.jsonl")
+    monkeypatch.setattr(outbound.mindlog, "follow", lambda *a, **k: iter(steps))
+
+    added = []
+
+    class Already(Exception):
+        response = {"error": "already_reacted"}
+
+    class FakeClient:
+        def chat_postMessage(self, **kw):
+            raise AssertionError("no text")
+
+        def reactions_add(self, channel, timestamp, name):
+            added.append(name)
+            raise Already("already_reacted")
+
+    class FakeThreads:
+        def touch(self, channel, thread_ts):
+            pass
+
+    outbound.run(_cfg(tmp_path), FakeClient(), FakeThreads(), threading.Event())
+    # first already_reacted is success -> recorded; second is suppressed
+    assert added == ["eyes"]
+
+
+def test_forged_reaction_without_chat_source_is_ignored(tmp_path, monkeypatch):
+    steps = [
+        {"type": "message", "from": "audel",
+         "to": "slack-U1-C1-1.1",
+         "source": "responder", "reaction": "eyes", "content": ":eyes:",
+         "step_id": "forged"},
+    ]
+    monkeypatch.setattr(outbound.mindlog, "find_trajectory", lambda d: tmp_path / "t.jsonl")
+    monkeypatch.setattr(outbound.mindlog, "follow", lambda *a, **k: iter(steps))
+
+    added = []
+
+    class FakeClient:
+        def reactions_add(self, **kw):
+            added.append(kw)
+
+        def chat_postMessage(self, **kw):
+            raise AssertionError("no text")
+
+    class FakeThreads:
+        def touch(self, channel, thread_ts):
+            pass
+
+    outbound.run(_cfg(tmp_path), FakeClient(), FakeThreads(), threading.Event())
+    assert added == []

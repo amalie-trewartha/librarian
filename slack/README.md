@@ -16,8 +16,9 @@ Slack <=(Socket Mode websocket)=> headlong-slack-bridge
               reaction_added on the bot's messages (and any DM reaction)
               lands as a `:emoji:` body (same from_name / thread)
     outbound: tail trajectory.jsonl -> message steps where from=<identity>
-              and to=slack-* -> chat.postMessage, or files.upload_v2 when
-              the step has filename (chat send-file)
+              and to=slack-* -> chat.postMessage, files.upload_v2 when
+              the step has filename (chat send-file), or reactions.add
+              when the step has reaction (chat react)
 ```
 
 The Slack conversation is encoded into the chat `from` name, which the

@@ -383,3 +383,28 @@ def test_invalid_file_content_does_not_stop_later_replies(tmp_path, monkeypatch)
     assert docs == []
     assert sent == ["(failed to deliver file bad.bin)", "later reply"]
 
+
+
+def test_slack_reaction_step_is_not_posted(tmp_path, monkeypatch):
+    steps = [
+        {"type": "message", "from": "audel", "to": "telegram-1-1",
+         "source": "chat", "reaction": "thumbsup", "content": ":thumbsup:",
+         "step_id": "r1"},
+        {"type": "message", "from": "audel", "to": "telegram-1-1",
+         "source": "chat", "content": "later reply", "step_id": "t1"},
+    ]
+    monkeypatch.setattr(outbound.mindlog, "find_trajectory", lambda d: tmp_path / "t.jsonl")
+    monkeypatch.setattr(outbound.mindlog, "follow", lambda *a, **k: iter(steps))
+
+    sent = []
+
+    class FakeBot:
+        def send_message(self, chat, text, html=False):
+            sent.append(text)
+
+    class ApproveAll:
+        def is_approved(self, user):
+            return True
+
+    outbound.run(_cfg(tmp_path), FakeBot(), ApproveAll(), threading.Event())
+    assert sent == ["later reply"]

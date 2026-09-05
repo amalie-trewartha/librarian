@@ -12,6 +12,7 @@ import logging
 import threading
 import time
 from typing import Any
+from urllib.parse import urlsplit
 
 from . import mindlog, naming
 from .config import Config
@@ -50,6 +51,62 @@ class RecentPosts:
     def record(self, conversation: str, text: str, now: float | None = None) -> None:
         now = time.time() if now is None else now
         self._last[conversation] = (text, now)
+
+
+def reaction_name(step: dict[str, Any]) -> str | None:
+    """Slack emoji name from a chat-react step, or None if this is not one."""
+    raw = step.get("reaction")
+    if not isinstance(raw, str):
+        return None
+    name = raw.strip().strip(":")
+    if not name or any(c.isspace() for c in name):
+        return None
+    if not all(c.isalnum() or c in "_+-:" for c in name):
+        return None
+    if len(name) > 100:
+        return None
+    return name
+
+
+def message_ts_from_source_url(url: object) -> str | None:
+    """Decode Slack archive permalink /archives/<channel>/p<ts-without-dot>."""
+    if not isinstance(url, str) or not url:
+        return None
+    try:
+        parts = [p for p in urlsplit(url).path.split("/") if p]
+    except ValueError:
+        return None
+    if len(parts) < 3 or parts[-3] != "archives":
+        return None
+    last = parts[-1]
+    if not last.startswith("p") or not last[1:].isdigit() or len(last) < 8:
+        return None
+    digits = last[1:]
+    return f"{digits[:-6]}.{digits[-6:]}"
+
+
+def _already_reacted(exc: BaseException) -> bool:
+    resp = getattr(exc, "response", None)
+    error = ""
+    if isinstance(resp, dict):
+        error = str(resp.get("error") or "")
+    elif resp is not None and hasattr(resp, "get"):
+        error = str(resp.get("error") or "")
+    return error == "already_reacted" or "already_reacted" in str(exc)
+
+
+def _add_reaction(
+    client: Any,
+    conv: naming.Conversation,
+    name: str,
+    timestamp: str,
+) -> None:
+    try:
+        client.reactions_add(channel=conv.channel, timestamp=timestamp, name=name)
+    except Exception as exc:
+        if _already_reacted(exc):
+            return
+        raise
 
 
 def _post_notice(client: Any, conv: naming.Conversation, text: str) -> None:
@@ -113,6 +170,25 @@ def run(
         if not naming.is_slack_name(to):
             continue
         conv = naming.decode(to)
+        if "reaction" in step:
+            name = reaction_name(step)
+            ts = message_ts_from_source_url(step.get("source_url")) or conv.thread_ts
+            sig = f"react:{name}:{ts}" if name and ts else None
+            if not name:
+                log.error("invalid reaction on step %s", step.get("step_id"))
+            elif not ts:
+                log.error("reaction %s for %s has no message timestamp", name, to)
+            elif sig is not None and recent.seen(to, sig):
+                log.warning("skipping duplicate reaction %s on %s", name, to)
+            elif not hasattr(client, "reactions_add"):
+                log.error("client cannot add reactions for %s", to)
+            else:
+                try:
+                    _add_reaction(client, conv, name, ts)
+                    recent.record(to, sig)
+                except Exception:
+                    log.exception("reactions.add failed for %s (%s)", to, name)
+            continue
         payload = file_payload(step)
         if payload is not None:
             # File steps travel in content_b64 and often have empty `content`.

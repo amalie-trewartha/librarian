@@ -263,6 +263,63 @@ cmd_send_file() {
     printf 'File sent: %s\n' "$filename" >&2
 }
 
+cmd_react() {
+    local from="${IDENTITY_NAME:-}" to="" reply_to="" source_url="" emoji=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --from) from="${2:?--from requires a name}"; shift 2 ;;
+            --to)   to="${2:?--to requires a name}"; shift 2 ;;
+            --reply-to) reply_to="${2:?--reply-to requires a step id}"; shift 2 ;;
+            --source-url) source_url="${2:?--source-url requires a URL}"; shift 2 ;;
+            *) break ;;
+        esac
+    done
+    if [[ -z "$to" && $# -gt 0 ]]; then
+        to="$1"; shift
+    fi
+    [[ -z "$to" ]] && die "Usage: chat react [--reply-to <step_id>] [--source-url <url>] <to_name> <emoji>"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --from) from="${2:?--from requires a name}"; shift 2 ;;
+            --to)   to="${2:?--to requires a name}"; shift 2 ;;
+            --reply-to) reply_to="${2:?--reply-to requires a step id}"; shift 2 ;;
+            --source-url) source_url="${2:?--source-url requires a URL}"; shift 2 ;;
+            *) break ;;
+        esac
+    done
+    emoji="${1:-}"
+    [[ -z "$emoji" ]] && die "Usage: chat react [--reply-to <step_id>] [--source-url <url>] <to_name> <emoji>"
+    shift
+    [[ $# -eq 0 ]] || die "unexpected extra arguments"
+
+    # Slack reactions.add wants the short name (thumbsup), not :thumbsup: or 👍.
+    emoji="${emoji#:}"
+    emoji="${emoji%:}"
+    [[ "$emoji" =~ ^[a-z0-9_+\-:]{1,64}$ ]] || die "invalid Slack emoji name: $emoji"
+
+    _resolve_from_to
+
+    if [[ -z "$source_url" && -n "$reply_to" ]]; then
+        source_url=$(
+            traj show --traj_dir "$TRAJ_DIR" "$reply_to" --field source_url 2>/dev/null \
+                | tr -d '\n'
+        ) || true
+    fi
+
+    jq -nc \
+        --arg from "$from" \
+        --arg to "$to" \
+        --arg reaction "$emoji" \
+        --arg reply_to "$reply_to" \
+        --arg source_url "$source_url" \
+        '{type:"message", content:(":" + $reaction + ":"), reaction:$reaction, from:$from, to:$to, source:"chat"}
+         + (if $reply_to == "" then {} else {reply_to:$reply_to} end)
+         + (if $source_url == "" then {} else {source_url:$source_url} end)' \
+        | _chat_append
+
+    printf 'Reaction sent: :%s:\n' "$emoji" >&2
+}
+
 # UTF-8, no NUL: the historical `content=$(cat ...)` shape Slack/web still read.
 # JSON strings cannot hold NUL; jq --rawfile requires UTF-8.
 _chat_is_text_file() {
@@ -595,6 +652,9 @@ Usage:
                              default_send_from, to defaults to $IDENTITY_NAME)
   chat send-file [--from <name>] [--to <name>] <file>
                              Send a file's contents as a message
+  chat react [--reply-to <step_id>] [--source-url <url>] <to_name> <emoji>
+                             Add a Slack emoji reaction (name, not unicode).
+                             Stamps reaction on a chat-sourced message step.
   chat reply [--reply-to <step_id>] [--follow-up] <to_name> <message>
                              Agent sends a reply (from is $IDENTITY_NAME).
                              Stamps reply_to with the step it answers —
@@ -650,6 +710,7 @@ EOF
 case "${1:-}" in
     send)      shift; cmd_send "$@" ;;
     send-file) shift; cmd_send_file "$@" ;;
+    react)     shift; cmd_react "$@" ;;
     reply)     shift; cmd_reply "$@" ;;
     history) shift; cmd_history "$@" ;;
     pending)   shift; cmd_pending "$@" ;;
