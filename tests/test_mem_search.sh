@@ -133,5 +133,16 @@ n=$(mem prefilter "dispatcher token" | wc -l | tr -d ' ')
 z=$(mem prefilter "zzz qqq" | wc -l | tr -d ' ')
 [[ "$z" == 0 ]] && ok "mem prefilter prints nothing with no term overlap" || bad "prefilter no overlap" "got $z"
 
+# `until:` survives `mem edit` (2026-09-05): a todo shortlist appended to
+# during the day must still expire that night.
+mkdir -p "$WORK/mem3"; export MEM_DIR="$WORK/mem3"
+mem add --type todo --until 2026-09-30 "shortlist: first candidate" >/dev/null 2>&1
+f=$(ls "$MEM_DIR"/*.md | head -1); id=$(sed -n 's/^id: //p' "$f")
+mem edit "$id" "shortlist: first candidate
+- second candidate" >/dev/null 2>&1
+f=$(ls "$MEM_DIR"/*.md | head -1)
+grep -q '^until: 2026-09-30$' "$f" && ok "mem edit keeps the until: expiry" || bad "mem edit keeps until" "$(sed -n '1,8p' "$f")"
+grep -q 'second candidate' "$f" && ok "mem edit replaced the body" || bad "mem edit body"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

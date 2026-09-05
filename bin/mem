@@ -366,12 +366,15 @@ action_edit() {
     local now
     now=$(date +"%Y-%m-%d %H:%M:%S")
 
-    # Extract frontmatter fields
-    local summary type created id
+    # Extract frontmatter fields. `until:` (mem add --until) rides through an
+    # edit: a todo shortlist that is appended to during the day must still
+    # expire that night.
+    local summary type created id until
     summary=$(printf '%s' "$text" | head -1 | head -c 80)
     type=$(frontmatter_field "$file" "type")
     created=$(frontmatter_field "$file" "created")
     id=$(frontmatter_field "$file" "id")
+    until=$(frontmatter_field "$file" "until")
 
     # Build updated: field — collect existing entries and append new one
     local updated_block=""
@@ -391,9 +394,11 @@ action_edit() {
         updated_block=$(printf 'updated: %s' "$now")
     fi
 
-    # Reconstruct the file (preserve id if present)
-    local id_line=""
+    # Reconstruct the file (preserve id and until if present)
+    local id_line="" until_line=""
     [[ -n "$id" ]] && id_line="id: $id
+"
+    [[ -n "$until" ]] && until_line="until: $until
 "
 
     cat > "$file" << EOF
@@ -401,7 +406,7 @@ action_edit() {
 ${id_line}summary: $summary
 type: $type
 created: $created
-$updated_block
+${until_line}$updated_block
 ---
 
 $text
