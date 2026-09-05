@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# deploy/scripts/audel-env — read and edit the box's app .env, safely.
+#
+# Usage:
+#   deploy/scripts/audel-env get [KEY]         show all model/effort keys, or one KEY
+#   deploy/scripts/audel-env set KEY VALUE      set (or add) KEY, back up .env first
+#   deploy/scripts/audel-env unset KEY          remove KEY
+#   deploy/scripts/audel-env model MODEL        shorthand: set SHELLM_MODEL + restart
+#   deploy/scripts/audel-env restart            restart the dispatcher (monolith + responder)
+#
+# Edits the LIVE box file /opt/shellm/app/.env in place, after a timestamped
+# backup beside it. A change to SHELLM_MODEL (or anything already exported into
+# the dispatcher's environment) only reaches the mind after a dispatcher
+# restart, so set/unset take --restart and `model` restarts for you. This never
+# touches SSM: `deploy/scripts/rebuild` reverts to whatever `env-push` last
+# stored, so an edit here is a live, reversible change. To make it survive a
+# rebuild, mirror it into ~/.env.slack and run env-push.
+#
+#   -y   skip the confirmation prompt
+#
+# Identity defaults to audel; override with SHELLM_ENV_IDENTITY.
+
+set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+IDENT="${SHELLM_ENV_IDENTITY:-audel}"
+ENV_FILE="/opt/shellm/app/.env"
+SHOWN_KEYS='^(SHELLM_MODEL|SHELLM_FAST_MODEL|SHELLM_EFFORT|SHELLM_MAX_TOKENS|SHELLM_ROLLUP_MODEL|RECAP_MODEL|LLM_PROVIDER)='
+
+yes=0
+args=()
+for a in "$@"; do
+    case "$a" in
+        -y|--yes)  yes=1 ;;
+        -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *)         args+=("$a") ;;
+    esac
+done
+set -- "${args[@]+"${args[@]}"}"
+cmd="${1:-get}"; shift || true
+
+require_tools terraform aws jq
+require_state
+require_aws
+
+valid_key() { [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "not a valid env var name: $1"; }
+confirm() {
+    [[ "$yes" -eq 1 ]] && return 0
+    read -r -p "$1 [y/N] " a
+    [[ "$a" == y || "$a" == Y ]] || die "aborted"
+}
+
+# Run an on-box snippet with $KEY and $VAL preset from base64, so no value can
+# collide with shell, sed, or awk syntax. The snippet is the first argument.
+box_with_kv() {
+    local key_b64 val_b64 snippet
+    key_b64=$(printf '%s' "${2:-}" | base64 | tr -d '\n')
+    val_b64=$(printf '%s' "${3:-}" | base64 | tr -d '\n')
+    snippet="set -euo pipefail
+ENV_FILE='$ENV_FILE'
+KEY=\$(echo $key_b64 | base64 -d)
+VAL=\$(echo $val_b64 | base64 -d)
+$1"
+    run_script_on_box "$snippet"
+}
+
+restart_dispatcher() {
+    info "restarting the dispatcher for $IDENT (drains in-flight steps, seconds to a few minutes)..."
+    run_script_on_box "sudo headlong-thinkersctl restart $(printf %q "$IDENT")" || die "dispatcher restart failed"
+    info "restarted."
+}
+
+do_set() {  # do_set KEY VAL want_restart
+    local key="$1" val="$2" want_restart="$3"
+    valid_key "$key"
+    info "current:"
+    box_with_kv 'sudo grep -E "^${KEY}=" "$ENV_FILE" | sed "s/^/  /" || echo "  (${KEY} not set — will be added)"' "$key"
+    info "new:     ${key}=${val}"
+    confirm "Edit $ENV_FILE on $IDENT's box?"
+    box_with_kv '
+ts=$(date -u +%Y%m%d-%H%M%S)
+sudo cp -p "$ENV_FILE" "${ENV_FILE}.bak-${ts}"
+if sudo grep -qE "^${KEY}=" "$ENV_FILE"; then
+    sudo env K="$KEY" V="$VAL" awk '"'"'BEGIN{k=ENVIRON["K"];v=ENVIRON["V"]} $0 ~ "^" k "=" {print k"="v; next} {print}'"'"' "$ENV_FILE" | sudo tee "${ENV_FILE}.tmp" >/dev/null
+    sudo cp "${ENV_FILE}.tmp" "$ENV_FILE"; sudo rm -f "${ENV_FILE}.tmp"
+else
+    printf "%s=%s\n" "$KEY" "$VAL" | sudo tee -a "$ENV_FILE" >/dev/null
+fi
+echo "now:    $(sudo grep -E "^${KEY}=" "$ENV_FILE")"
+echo "backup: ${ENV_FILE}.bak-${ts}"' "$key" "$val" || die "edit failed"
+    if [[ "$want_restart" -eq 1 ]]; then restart_dispatcher
+    else info "not restarted — run 'audel-env restart' for the change to reach the mind."; fi
+    info "SSM untouched: a rebuild reverts this. Mirror to ~/.env.slack + env-push to persist."
+}
+
+case "$cmd" in
+    get)
+        key="${1:-}"
+        if [[ -n "$key" ]]; then
+            valid_key "$key"
+            box_with_kv 'sudo grep -E "^${KEY}=" "$ENV_FILE" || echo "(${KEY} not set)"' "$key"
+        else
+            info "model/effort keys in $ENV_FILE on $IDENT's box:"
+            run_script_on_box "sudo grep -E '$SHOWN_KEYS' '$ENV_FILE' || echo '(none of the shown keys are set)'"
+        fi
+        ;;
+    set)
+        key="${1:?usage: audel-env set KEY VALUE}"; val="${2:?usage: audel-env set KEY VALUE}"
+        want_restart=0; [[ "${3:-}" == "--restart" ]] && want_restart=1
+        do_set "$key" "$val" "$want_restart"
+        ;;
+    unset)
+        key="${1:?usage: audel-env unset KEY}"; valid_key "$key"
+        want_restart=0; [[ "${2:-}" == "--restart" ]] && want_restart=1
+        info "current:"
+        box_with_kv 'sudo grep -E "^${KEY}=" "$ENV_FILE" | sed "s/^/  /" || echo "  (${KEY} not set)"' "$key"
+        confirm "Remove ${key} from $ENV_FILE on $IDENT's box?"
+        box_with_kv '
+ts=$(date -u +%Y%m%d-%H%M%S)
+sudo cp -p "$ENV_FILE" "${ENV_FILE}.bak-${ts}"
+sudo env K="$KEY" awk '"'"'BEGIN{k=ENVIRON["K"]} $0 ~ "^" k "=" {next} {print}'"'"' "$ENV_FILE" | sudo tee "${ENV_FILE}.tmp" >/dev/null
+sudo cp "${ENV_FILE}.tmp" "$ENV_FILE"; sudo rm -f "${ENV_FILE}.tmp"
+echo "removed ${KEY}"; echo "backup: ${ENV_FILE}.bak-${ts}"' "$key" || die "edit failed"
+        if [[ "$want_restart" -eq 1 ]]; then restart_dispatcher
+        else info "not restarted — run 'audel-env restart' for the change to reach the mind."; fi
+        ;;
+    model)
+        val="${1:?usage: audel-env model MODEL}"
+        do_set SHELLM_MODEL "$val" 1
+        ;;
+    restart)
+        confirm "Restart $IDENT's dispatcher now?"
+        restart_dispatcher
+        ;;
+    *)
+        die "unknown command: $cmd (see --help)"
+        ;;
+esac
