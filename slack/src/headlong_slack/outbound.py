@@ -15,6 +15,7 @@ from typing import Any
 
 from . import mindlog, naming
 from .config import Config
+from .filepayload import file_payload, file_signature
 from .slackfmt import chunk, strip_leaked_command, to_mrkdwn
 from .state import ActiveThreads
 
@@ -40,6 +41,38 @@ class RecentPosts:
             return True
         self._last[conversation] = (text, now)
         return False
+
+
+def _post_notice(client: Any, conv: naming.Conversation, text: str) -> None:
+    try:
+        client.chat_postMessage(
+            channel=conv.channel,
+            thread_ts=conv.thread_ts,
+            text=text,
+            unfurl_links=False,
+        )
+    except Exception:
+        log.exception("delivery-failed notice also failed for %s/%s", conv.channel, conv.thread_ts)
+
+
+def _upload_file(
+    client: Any,
+    conv: naming.Conversation,
+    filename: str,
+    data: bytes | str,
+    comment: str | None,
+) -> None:
+    kwargs: dict[str, Any] = {
+        "channel": conv.channel,
+        "filename": filename,
+        "title": filename,
+        "content": data,
+    }
+    if conv.thread_ts:
+        kwargs["thread_ts"] = conv.thread_ts
+    if comment:
+        kwargs["initial_comment"] = comment
+    client.files_upload_v2(**kwargs)
 
 
 def run(
@@ -71,6 +104,31 @@ def run(
         if not naming.is_slack_name(to):
             continue
         conv = naming.decode(to)
+        payload = file_payload(step)
+        if payload is not None:
+            # File steps travel in content_b64 and often have empty `content`.
+            # Do not require text, and do not fall back to posting bytes as a message.
+            name = payload["filename"]
+            data = payload["content"]
+            comment = payload.get("initial_comment")
+            sent_file = False
+            if payload.get("decode_error") or data is None:
+                log.error("undecodable file payload for %s (%s)", to, name)
+            elif recent.is_duplicate(to, file_signature(name, data)):
+                log.warning("skipping duplicate file post to %s", to)
+                continue
+            elif not hasattr(client, "files_upload_v2"):
+                log.error("client cannot upload files for %s", to)
+            else:
+                try:
+                    _upload_file(client, conv, name, data, comment)
+                    sent_file = True
+                except Exception:
+                    log.exception("file upload failed for %s", to)
+            threads.touch(conv.channel, conv.thread_ts)
+            if not sent_file:
+                _post_notice(client, conv, f"(failed to deliver file {name})")
+            continue
         text = to_mrkdwn(strip_leaked_command(str(step.get("content") or ""))).strip()
         if not text:
             continue

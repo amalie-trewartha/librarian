@@ -16,7 +16,8 @@ Slack <=(Socket Mode websocket)=> headlong-slack-bridge
               reaction_added on the bot's messages (and any DM reaction)
               lands as a `:emoji:` body (same from_name / thread)
     outbound: tail trajectory.jsonl -> message steps where from=<identity>
-              and to=slack-* -> chat.postMessage(channel, thread_ts)
+              and to=slack-* -> chat.postMessage, or files.upload_v2 when
+              the step has filename (chat send-file)
 ```
 
 The Slack conversation is encoded into the chat `from` name, which the
@@ -92,6 +93,8 @@ Information → App-Level Tokens, scope `connections:write`). Box-side day-2
 ```bash
 uv run --project slack pytest slack/tests
 ```
+
+Outbound `chat send-file` posts use Slack `files.upload_v2` and need the bot scope `files:write` in addition to `chat:write`. A scope change requires reinstall / re-grant.
 
 ## Security notes
 

@@ -40,9 +40,10 @@ After the rebuild, copy the archive back and run `identity import`.
 
 Work from the `slack/` directory. `manifest.json` is the source of truth.
 
-`reaction_added` needs bot scope `reactions:read` (in `manifest.json`). A
-scope change requires reinstall / re-grant; until then Socket Mode will
-not deliver reaction events.
+`reaction_added` needs bot scope `reactions:read` (in `manifest.json`).
+Outbound `chat send-file` needs `files:write`. A scope change requires
+reinstall / re-grant; until then Socket Mode will not deliver reaction
+events, and file uploads will fail.
 
 ```bash
 cd slack
