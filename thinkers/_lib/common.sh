@@ -508,6 +508,9 @@ _export_skill_vars() {
     while IFS= read -r vname; do
         [[ -n "$vname" && -n "${!vname:-}" ]] && export "${vname?}"
     done < <(collect_skill_vars "$identity_dir")
+    # Callers run under set -e: a declared-but-unset last var must not end the
+    # function on a false test (it killed every Audel wake on 2026-09-05).
+    return 0
 }
 
 _export_provider_keys() {

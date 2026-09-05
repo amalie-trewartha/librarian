@@ -214,6 +214,38 @@ case "$out" in
         ;;
 esac
 
+# Under set -e (how every thinker step runs), a skill that declares a var the
+# environment does not set must not end _export_skill_vars on a false test —
+# that killed every Audel wake after the 2026-09-05 deploy.
+out=$(
+    H=$(mktemp -d)
+    trap 'rm -rf "$H"' EXIT
+    export HOME="$H"
+    unset HEADLONG_HOME SHELLM_HOME ZZ_UNSET_SKILL_VAR
+    mkdir -p "$H/id/skills/probe" "$H/id/kernel"
+    cat > "$H/id/skills/probe/SKILL.md" <<'EOF'
+---
+name: probe
+description: Test fixture.
+metadata:
+  shelllm:
+    requires:
+      env: ["ZZ_UNSET_SKILL_VAR"]
+---
+EOF
+    set -euo pipefail
+    # shellcheck disable=SC1090  # the library under test
+    source "$REPO/thinkers/_lib/common.sh"
+    _export_skill_vars "$H/id"
+    _export_provider_keys
+    printf 'survived'
+)
+if [[ "$out" == "survived" ]]; then
+    ok "unset declared skill var does not kill a set -e caller"
+else
+    bad "unset declared skill var does not kill a set -e caller" "caller exited early"
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
