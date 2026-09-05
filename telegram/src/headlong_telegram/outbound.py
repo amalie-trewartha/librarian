@@ -72,6 +72,9 @@ def run(cfg: Config, bot: Bot, allowlist: Allowlist, stop_event: threading.Event
         if not naming.is_telegram_name(to):
             continue
         conv = naming.decode(to)
+        if "reaction" in step:
+            # Slack-only: a chat-react step must not become a Telegram message.
+            continue
         if not allowlist.is_approved(conv.user):
             log.warning("dropping reply to unapproved user %s", conv.user)
             continue

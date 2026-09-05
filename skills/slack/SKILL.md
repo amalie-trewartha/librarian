@@ -34,6 +34,20 @@ chat reply slack-U07AB12CD-C09XYZ123-1722400000.123456 "On it — deploy is gree
 Always use the sender's full `slack-…` name verbatim as the reply target.
 Do not shorten it or substitute the person's display name.
 
+### Reacting
+
+Add an emoji reaction to the Slack message you are answering. Use the
+Slack short name (`thumbsup`, `eyes`, `+1`), not unicode:
+
+```bash
+chat react slack-U07AB12CD-C09XYZ123-1722400000.123456 thumbsup
+chat react --reply-to <inbound-step-id> slack-U07AB12CD-C09XYZ123-1722400000.123456 eyes
+```
+
+`--reply-to` copies that inbound step's `source_url` so the reaction
+lands on the specific message, not just the thread root. Needs the
+Slack app's `reactions:write` scope (reinstall after it lands).
+
 ### Following up proactively
 
 To continue a Slack conversation later (e.g. after finishing a task someone
