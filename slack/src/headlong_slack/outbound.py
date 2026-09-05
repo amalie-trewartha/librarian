@@ -36,11 +36,20 @@ class RecentPosts:
 
     def is_duplicate(self, conversation: str, text: str, now: float | None = None) -> bool:
         now = time.time() if now is None else now
-        previous = self._last.get(conversation)
-        if previous and previous[0] == text and now - previous[1] < self._window:
+        if self.seen(conversation, text, now=now):
             return True
-        self._last[conversation] = (text, now)
+        self.record(conversation, text, now=now)
         return False
+
+    def seen(self, conversation: str, text: str, now: float | None = None) -> bool:
+        """True if this payload was already recorded in the window. Does not record."""
+        now = time.time() if now is None else now
+        previous = self._last.get(conversation)
+        return bool(previous and previous[0] == text and now - previous[1] < self._window)
+
+    def record(self, conversation: str, text: str, now: float | None = None) -> None:
+        now = time.time() if now is None else now
+        self._last[conversation] = (text, now)
 
 
 def _post_notice(client: Any, conv: naming.Conversation, text: str) -> None:
@@ -112,9 +121,10 @@ def run(
             data = payload["content"]
             comment = payload.get("initial_comment")
             sent_file = False
+            sig = file_signature(name, data) if data is not None else None
             if payload.get("decode_error") or data is None:
                 log.error("undecodable file payload for %s (%s)", to, name)
-            elif recent.is_duplicate(to, file_signature(name, data)):
+            elif sig is not None and recent.seen(to, sig):
                 log.warning("skipping duplicate file post to %s", to)
                 continue
             elif not hasattr(client, "files_upload_v2"):
@@ -123,6 +133,8 @@ def run(
                 try:
                     _upload_file(client, conv, name, data, comment)
                     sent_file = True
+                    if sig is not None:
+                        recent.record(to, sig)
                 except Exception:
                     log.exception("file upload failed for %s", to)
             threads.touch(conv.channel, conv.thread_ts)

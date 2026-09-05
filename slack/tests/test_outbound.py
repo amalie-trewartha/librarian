@@ -168,6 +168,48 @@ def test_undecodable_file_falls_back_to_notice(tmp_path, monkeypatch):
     assert sent == ["(failed to deliver file note.txt)"]
 
 
+
+def test_file_upload_retries_after_slack_rejects_first_identical_step(tmp_path, monkeypatch):
+    """Do not suppress a retry after Slack rejects the first upload.
+
+    recent.seen/record must not stamp the file signature until files_upload_v2
+    succeeds. Otherwise a transient Slack failure plus a repeated chat send-file
+    step posts one notice and skips the second attempt for five minutes.
+    """
+    raw = b"same-bytes"
+    b64 = base64.b64encode(raw).decode("ascii")
+    steps = [
+        {"type": "message", "from": "audel", "to": "slack-U1-C1",
+         "source": "chat", "filename": "note.txt", "content_b64": b64,
+         "step_id": "a"},
+        {"type": "message", "from": "audel", "to": "slack-U1-C1",
+         "source": "chat", "filename": "note.txt", "content_b64": b64,
+         "step_id": "b"},
+    ]
+    monkeypatch.setattr(outbound.mindlog, "find_trajectory", lambda d: tmp_path / "t.jsonl")
+    monkeypatch.setattr(outbound.mindlog, "follow", lambda *a, **k: iter(steps))
+
+    sent = []
+    uploads = []
+
+    class FakeClient:
+        def chat_postMessage(self, channel, thread_ts, text, unfurl_links=False, **kw):
+            sent.append(text)
+
+        def files_upload_v2(self, **kw):
+            uploads.append(kw["content"])
+            if len(uploads) == 1:
+                raise RuntimeError("upload rejected")
+
+    class FakeThreads:
+        def touch(self, channel, thread_ts):
+            pass
+
+    outbound.run(_cfg(tmp_path), FakeClient(), FakeThreads(), threading.Event())
+    assert uploads == [raw, raw]
+    assert sent == ["(failed to deliver file note.txt)"]
+
+
 def test_identical_file_steps_are_suppressed(tmp_path, monkeypatch):
     raw = b"same-bytes"
     b64 = base64.b64encode(raw).decode("ascii")
