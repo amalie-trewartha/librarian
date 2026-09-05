@@ -773,14 +773,35 @@ _sorted_tree_steps() {
                     ($step[$k] // null) as $fv |
                     ($vs | any(. as $v | $v == ($fv | tostring)))
                 );
+            # Sort key, in integer milliseconds. Three things it has to get
+            # right, none of which it did:
+            #   - capture() matches the legacy "<datetime><numeric offset>"
+            #     spelling. This arm is the catch-all for everything else,
+            #     which for a stamp traj writes means UTC ending in "Z" (or
+            #     the RFC-3339 lowercase "z"). Strip that before the "Z"
+            #     added back below; otherwise fromdateiso8601 is handed
+            #     "...:18ZZ", errors on every step _iso_ts ever wrote, and -r
+            #     sorts an empty stream.
+            #   - keep the milliseconds. A trajectory writes many steps per
+            #     second, so a whole-second key ties for most of them and
+            #     sort(1) falls back to comparing the JSON text: an order that
+            #     is neither chronological nor the same on GNU and BSD.
+            #   - a stamp that will not parse must not delete the step. Every
+            #     other date read in the tree already guards this (bin/chat,
+            #     thinkers/_lib/common.sh, bin/thinkers); this one did not.
+            # The milliseconds are folded into an integer rather than left as
+            # a decimal, so the numeric sort below cannot depend on the
+            # locale decimal point.
             def to_epoch:
-                tostring |
-                sub("\\.[0-9]+"; "") |
+                tostring as $raw |
+                ((($raw | capture("\\.(?<f>[0-9]+)") | .f) // "") + "000")[0:3] as $ms |
+                ($raw | sub("\\.[0-9]+"; "")) |
                 (capture("^(?<dt>\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2})(?<sign>[+-])(?<oh>\\d{2}):?(?<om>\\d{2})$") //
-                 {dt: ., sign: "+", oh: "00", om: "00"}) |
+                 {dt: sub("[Zz][[:space:]]*$"; ""), sign: "+", oh: "00", om: "00"}) |
                 ((.oh | tonumber) * 3600 + (.om | tonumber) * 60) as $off |
-                ((.dt + "Z") | fromdateiso8601) as $local_epoch |
+                ((.dt + "Z") | try fromdateiso8601 catch 0) as $local_epoch |
                 (if .sign == "-" then ($local_epoch + $off) else ($local_epoch - $off) end) |
+                (. * 1000 + ($ms | tonumber)) |
                 tostring;
             . + {_traj_hex: $h} | select(matches_filters($filters))
             | ((.ts // .timestamp // "0") | to_epoch) + "\t" + tojson
