@@ -1719,17 +1719,31 @@ extract_code() {
 
     # If no fenced blocks at all, use the whole response as code.
     # Strip [cmd]/[thought] markers that the model may emit instead of fences.
+    local no_fence=0
     if [[ -z "$code" ]]; then
         code=$(printf '%s\n' "$response" | sed '/^[[:space:]]*\[cmd\][[:space:]]*$/d; /^[[:space:]]*\[thought\]/d')
+        # A response with no bash block and real content is about to be run as
+        # a shell command. That is almost always the model ending its turn with
+        # a plain sentence (which fails "command not found") or forgetting the
+        # fence. On its own the model sees only the raw shell error, which does
+        # not explain the mechanism, so a weaker model repeats the sentence and
+        # stalls. Flag it so the notice below can say what actually happened.
+        [[ -n "${code//[[:space:]]/}" ]] && no_fence=1
     fi
 
-    # If the model emitted extra blocks past the first, prepend a notice
-    # echoed to stderr.  Stderr is captured and shown back to the model on
-    # its next turn, so it learns its trailing blocks were dropped.  Prepend
-    # rather than append so the notice fires even if the user code exits
-    # early.
+    # Prepend notices to stderr. Stderr is captured and shown back to the model
+    # on its next turn, so these teach it what shellm did with its last reply.
+    # Prepend rather than append so a notice fires even if the code exits early.
     if [[ "$truncation_signal" == *TRUNCATED* ]]; then
         code=$'echo "[rest of model response truncated after first code block]" >&2\n'"$code"
+    fi
+    if [[ "$no_fence" -eq 1 ]]; then
+        local nofence_notice
+        nofence_notice=$(cat <<'NOTICE'
+printf '%s\n' '[shellm: your reply had no ```bash code block, so your whole message was run as one shell command and most likely failed. Put commands inside a ```bash block. To END the run, set FINAL="your handoff sentence" inside a ```bash block. Do not finish with a bare sentence outside a block.]' >&2
+NOTICE
+)
+        code="$nofence_notice"$'\n'"$code"
     fi
 
     echo "$code"

@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# tests/test_extract_code_notice.sh — bin/shellm extract_code behavior, and the
+# stderr notice it prepends when a reply has no bash code block.
+#
+# Usage: tests/test_extract_code_notice.sh
+#
+# When a model reply has no ```bash block, shellm runs the whole reply as a
+# shell command (the no-fence fallback). That is almost always the model ending
+# its turn with a plain sentence, which fails "command not found" and, on a
+# weaker model, repeats until the run is killed as a stall (Nemotron on idle
+# wakes, 2026-09-05). extract_code now prepends a notice — captured on stderr
+# and shown back to the model next turn — that says the reply ran as a command
+# and how to end a run (FINAL= inside a bash block). This test loads extract_code
+# out of bin/shellm and checks the notice fires only for bare prose with real
+# content.
+
+set -uo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(dirname "$HERE")"
+pass=0; fail=0
+ok()  { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
+bad() { fail=$((fail+1)); printf 'FAIL %s%s\n' "$1" "${2:+ — $2}"; }
+
+# shellcheck disable=SC1090
+source <(sed -n '/^extract_code() {/,/^}/p' "$REPO/bin/shellm")
+
+NOTICE='shellm: your reply had no'   # start of the prepended notice line
+
+# Bare prose: notice prepended, and the prose is still present as code.
+out=$(extract_code "Idle — nothing to do now.")
+grep -q "$NOTICE" <<<"$out" && ok "bare prose gets the no-fence notice" || bad "bare prose notice" "$out"
+grep -q 'Idle — nothing to do now\.' <<<"$out" && ok "the prose is still passed through as code" || bad "prose passthrough"
+grep -q 'FINAL=' <<<"$out" && ok "the notice tells the model how to end a run (FINAL=)" || bad "notice mentions FINAL="
+
+# A fenced block: no notice, just the code.
+out=$(extract_code "Let me look.
+\`\`\`bash
+ls -la
+\`\`\`")
+grep -q "$NOTICE" <<<"$out" && bad "a fenced reply must not get the notice" || ok "a fenced reply gets no notice"
+[[ "$(printf '%s' "$out")" == "ls -la" ]] && ok "a fenced reply extracts just its code" || bad "fenced extract" "$out"
+
+# A clean FINAL= block: no notice.
+out=$(extract_code "\`\`\`bash
+FINAL=\"done\"
+\`\`\`")
+grep -q "$NOTICE" <<<"$out" && bad "a FINAL= block must not get the notice" || ok "a FINAL= block gets no notice"
+
+# Whitespace-only reply: no notice (empty code is treated as a final upstream).
+out=$(extract_code "   ")
+grep -q "$NOTICE" <<<"$out" && bad "a blank reply must not get the notice" || ok "a blank reply gets no notice"
+
+# A fence appended to the end of a prose line (grok style) still counts as fenced.
+out=$(extract_code "do it now.\`\`\`bash
+echo hi
+\`\`\`")
+grep -q "$NOTICE" <<<"$out" && bad "an end-of-line fence must not get the notice" || ok "an end-of-line fence gets no notice"
+
+echo
+echo "$pass passed, $fail failed"
+[[ $fail -eq 0 ]]
