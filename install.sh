@@ -606,7 +606,7 @@ main() {
     fi
     unset HEADLONG_INSTALL_LOCATION_CHOSEN
 
-    _require_deps jq curl
+    _require_deps jq curl python3
 
     mkdir -p "$PREFIX"
     _install_tools

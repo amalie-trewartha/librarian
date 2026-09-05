@@ -500,6 +500,25 @@ collect_skill_vars() {
     fi
 }
 
+# Bare `--var NAME` is resolved from shellm's inherited environment. Export
+# skill values in the caller before flag assembly runs in process substitution,
+# whose subshell cannot export anything back to its parent.
+_export_skill_vars() {
+    local identity_dir="$1" vname
+    while IFS= read -r vname; do
+        [[ -n "$vname" && -n "${!vname:-}" ]] && export "${vname?}"
+    done < <(collect_skill_vars "$identity_dir")
+}
+
+_export_provider_keys() {
+    local vname
+    for vname in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY \
+                 OPENCODE_API_KEY LLM_API_KEY; do
+        [[ -n "${!vname:-}" ]] && export "${vname?}"
+    done
+    return 0
+}
+
 # ---------------------------------------------------------------------------
 # Path resolution
 # ---------------------------------------------------------------------------
@@ -546,12 +565,13 @@ _build_shellm_flags() {
     [[ -n "${SHELLM_MODEL:-}" ]] && printf '%s\n' "--var" "SHELLM_MODEL=$SHELLM_MODEL"
     # The generic openai-compatible provider is env-configured and never
     # auto-detected, so nested calls need the provider name (routing, not a
-    # secret) and its key (bare name, like the vendor keys below).
+    # secret) and key. Endpoint variables are inherited rather than repeated
+    # as --var: shellm rewrites their values for Docker, and a duplicate extra
+    # var would overwrite that rewritten value in generated code.
     [[ -n "${LLM_PROVIDER:-}" ]] && printf '%s\n' "--var" "LLM_PROVIDER=$LLM_PROVIDER"
     for _ak in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY \
                OPENCODE_API_KEY LLM_API_KEY; do
         if [[ -n "${!_ak:-}" ]]; then
-            export "${_ak?}"
             printf '%s\n' "--var" "$_ak"
         fi
     done
@@ -559,8 +579,16 @@ _build_shellm_flags() {
     # Skill-declared vars
     while IFS= read -r vname; do
         [[ -z "$vname" ]] && continue
+        # shellm owns endpoint alias resolution and Docker rewriting. Emitting
+        # either alias again as an extra var would overwrite its canonical URL.
+        case "$vname" in LLM_API_URL|SHELLM_API_URL) continue ;; esac
         local vval="${!vname:-}"
-        [[ -n "$vval" ]] && printf '%s\n' "--var" "$vname=$vval"
+        if [[ -n "$vval" ]]; then
+            # Skills commonly declare credentials and service endpoints. Keep
+            # every declared value off argv rather than trying to infer which
+            # names are sensitive.
+            printf '%s\n' "--var" "$vname"
+        fi
     done < <(collect_skill_vars "$identity_dir")
 
     # Standard binaries. Keep this in sync with the tools promised to the

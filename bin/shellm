@@ -11,6 +11,20 @@ set -euo pipefail
 # a parent shellm run) always wins over files — same semantics as
 # thinkers/_lib/common.sh:_load_env_defaults. Values are extracted by
 # sourcing the file in a subshell so quoting behaves like a plain `source`.
+# Preserve endpoint values from the original process separately: the two
+# endpoint names are aliases, so a process LLM_API_URL must also beat a
+# SHELLM_API_URL subsequently loaded from a file (and vice versa).
+_shellm_process_shellm_api_url_set=0
+_shellm_process_llm_api_url_set=0
+if [[ -n "${SHELLM_API_URL+x}" ]]; then
+    _shellm_process_shellm_api_url_set=1
+    _shellm_process_shellm_api_url="$SHELLM_API_URL"
+fi
+if [[ -n "${LLM_API_URL+x}" ]]; then
+    _shellm_process_llm_api_url_set=1
+    _shellm_process_llm_api_url="$LLM_API_URL"
+fi
+
 _shellm_load_env() {
     local envfile="$1"
     [[ -f "$envfile" ]] || return 1
@@ -70,7 +84,15 @@ SHELLM_MAX_ITERATIONS="${SHELLM_MAX_ITERATIONS:-}"
 SHELLM_MAX_CONSECUTIVE_FAILURES="${SHELLM_MAX_CONSECUTIVE_FAILURES:-10}"
 SHELLM_MAX_REPEAT_FAILURES="${SHELLM_MAX_REPEAT_FAILURES:-3}"
 SHELLM_TRUNCATE="${SHELLM_TRUNCATE:-2000}"
-SHELLM_API_URL="${SHELLM_API_URL:-}"
+if [[ "$_shellm_process_shellm_api_url_set" -eq 1 ]]; then
+    SHELLM_API_URL="$_shellm_process_shellm_api_url"
+elif [[ "$_shellm_process_llm_api_url_set" -eq 1 ]]; then
+    SHELLM_API_URL="$_shellm_process_llm_api_url"
+else
+    SHELLM_API_URL="${SHELLM_API_URL:-${LLM_API_URL:-}}"
+fi
+unset _shellm_process_shellm_api_url_set _shellm_process_shellm_api_url \
+    _shellm_process_llm_api_url_set _shellm_process_llm_api_url 2>/dev/null || true
 # Clear any inherited LLM_API_URL so llm uses per-provider defaults
 unset LLM_API_URL 2>/dev/null || true
 if [[ -n "$SHELLM_API_URL" ]]; then
@@ -2669,6 +2691,12 @@ exit \$__shellm_rc
         for _ev in "${_SHELLM_EXTRA_VARS[@]+"${_SHELLM_EXTRA_VARS[@]}"}"; do
             env_vars+=("$_ev")
         done
+        # Endpoint aliases are canonical shellm state, not ordinary extras.
+        # Keep the Docker-rewritten value last so a duplicate --var cannot
+        # restore a host-only URL inside generated code.
+        if [[ -n "$execution_api_url" ]]; then
+            env_vars+=(SHELLM_API_URL="$execution_api_url" LLM_API_URL="$execution_api_url")
+        fi
         if [[ "$SHELLM_DOCKER_ACCESS" == "broker" && -n "${_SHELLM_DOCKER_BROKER_DIR:-}" ]]; then
             env_vars+=(SHELLM_DOCKER_BROKER="$_SHELLM_DOCKER_BROKER_DIR")
             env_vars+=(SHELLM_DOCKER_TRANSPORT="$_SHELLM_DOCKER_BROKER_TRANSPORT")
@@ -2980,19 +3008,22 @@ exit \$__shellm_rc
 
 # The command line as recorded in the shellm-run trajectory row. Trajectories
 # get rendered into prompts, exported and shared, so `--var NAME=VALUE` values
-# whose NAME looks like a credential are masked. (Passing secrets as a bare
-# `--var NAME` keeps them off the command line altogether.)
+# whose NAME looks like a credential or endpoint are masked. (Passing private
+# configuration as a bare `--var NAME` keeps it off the process command line
+# altogether.)
+_shellm_private_var_name() {
+    local u
+    u=$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')
+    [[ "$u" =~ (KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?) \
+        || "$u" =~ (^|_)(URL|URI|ENDPOINT|DSN)(_|$) ]]
+}
+
 _redacted_cmdline() {
-    local out="shellm" prev="" a n nu
+    local out="shellm" prev="" a n
     for a in "$@"; do
         if [[ "$prev" == "--var" && "$a" == *=* ]]; then
             n="${a%%=*}"
-            # Uppercase via tr, not ${n^^}: the latter is a bash-4 expansion
-            # and macOS's /bin/bash is 3.2, where it is a fatal "bad
-            # substitution" that kills the whole run (every shellm run exited
-            # rc=1 with no output on macOS).
-            nu=$(printf '%s' "$n" | tr '[:lower:]' '[:upper:]')
-            if [[ "$nu" =~ (KEY|TOKEN|SECRET|PASSW|CREDENTIAL) ]]; then
+            if _shellm_private_var_name "$n"; then
                 a="$n=<redacted>"
             fi
         fi

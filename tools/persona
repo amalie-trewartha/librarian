@@ -432,6 +432,7 @@ EOF
             *) die "bugreport: unknown option: $1" ;;
         esac
     done
+    command -v python3 >/dev/null 2>&1 || die "bugreport requires python3 for secret scrubbing"
     local stamp; stamp=$(date +%Y%m%d-%H%M%S)
     [[ -n "$out" ]] || out="$HOME/headlong-bugreport-$NAME-$stamp.tgz"
     local iddir="$IDENTITY_ROOT/$NAME"
@@ -446,8 +447,8 @@ EOF
     # carry com.apple.provenance; we don't want xattrs in the bundle anyway.
     local -a tarq=()
     case "$(tar --version 2>/dev/null)" in *bsdtar*) tarq=(--no-xattrs --no-mac-metadata) ;; esac
-    local excl=(--exclude='./workdir')
-    [[ "$BUGREPORT_INCLUDE_WORKDIR" -eq 1 ]] && excl=()
+    local excl=(--exclude='./.env')
+    [[ "$BUGREPORT_INCLUDE_WORKDIR" -eq 1 ]] || excl+=(--exclude='./workdir')
     # Follow the default -> name symlink; copy files, not the symlink itself.
     # Skip single files over 50MB (noted in report.txt) so a runaway blob
     # doesn't turn the bundle into a gigabyte.
@@ -467,7 +468,7 @@ EOF
     ( set +e; set +o pipefail; _bugreport_text "$iddir" "${big[@]+"${big[@]}"}" ) > "$top/report.txt" 2>&1 || true
 
     echo "Scrubbing secrets..." >&2
-    _redact_tree "$top"
+    _redact_tree "$top" || die "bugreport: secret scrubbing failed; no archive was written"
 
     tar "${tarq[@]+"${tarq[@]}"}" -czf "$out" -C "$stage" "$(basename "$top")"
     cat >&2 <<EOF
@@ -561,10 +562,13 @@ _bugreport_text() {
 # API keys and tokens keep their first and last 4 characters
 # (`<redacted sk-o...cdef>`) so two keys can be told apart; passwords and
 # anything under 20 characters are masked whole.
-_redact_tree() {
+_redact_tree() (
     local root="$1"
-    local -a pairs=() files=()   # pairs: "value<TAB>replacement"
-    # Literal values: credential-looking names from the env files and the
+    local -a values=() replacements=() files=()
+    local tmp=""
+    trap '[[ -z "$tmp" ]] || rm -f "$tmp"' EXIT
+    trap 'exit 1' HUP INT TERM
+    # Literal values: private-looking names from the env files and the
     # current environment (the env files were loaded into it at startup).
     local n v e
     for e in "$SHELLM_HOME/.env" "$APP_DIR/.env"; do
@@ -574,13 +578,19 @@ _redact_tree() {
             _is_secret_name "$n" || continue
             # shellcheck disable=SC1090
             v=$(set -a; . "$e" 2>/dev/null; printf '%s' "${!n}") || continue
-            [[ "${#v}" -ge 8 ]] && pairs+=("$v	$(_redact_hint "$n" "$v")")
+            if [[ "${#v}" -ge 8 ]]; then
+                values+=("$v")
+                replacements+=("$(_redact_hint "$n" "$v")")
+            fi
         done < <(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*=.*/\2/p' "$e")
     done
     while IFS= read -r n; do
         _is_secret_name "$n" || continue
         v="${!n:-}"
-        [[ "${#v}" -ge 8 ]] && pairs+=("$v	$(_redact_hint "$n" "$v")")
+        if [[ "${#v}" -ge 8 ]]; then
+            values+=("$v")
+            replacements+=("$(_redact_hint "$n" "$v")")
+        fi
     done < <(compgen -e)
     # Text files only (tar'd dirs can carry binaries in blobs/).
     while IFS= read -r -d '' f; do files+=("$f"); done \
@@ -588,30 +598,91 @@ _redact_tree() {
                 -o -name '*.txt' -o -name '*.md' -o -name '*.sh' -o -name '*.yaml' -o -name '*.yml' \
                 -o -name '*.toml' -o -name '*.env' -o -name '*.cfg' -o -name '*.ini' \) -print0 2>/dev/null)
     [[ "${#files[@]}" -gt 0 ]] || return 0
-    # One sed script for everything, ERE (`sed -E` is in both BSD and GNU sed;
-    # BSD sed has no usable BRE alternation). Write via temp file because
-    # `sed -i` differs between the two.
-    local script="" pr
-    for pr in "${pairs[@]+"${pairs[@]}"}"; do
-        script+="s/$(_sed_escape "${pr%%	*}")/$(_sed_escape "${pr#*	}")/g;"
-    done
-    # --var NAME=VALUE: KEY/TOKEN names keep a 4+4 hint when long enough,
-    # other credential names are masked whole.
-    # (a value starting with "<" is one an earlier pass already replaced)
-    script+='s/--var ([A-Za-z_]*(KEY|TOKEN)[A-Za-z0-9_]*)=([^ "<\\][^ "\\]{3})[^ "\\]{12,}([^ "\\]{4})/--var \1=<redacted \3...\4>/g;'
-    script+='s/--var ([A-Za-z_]*(KEY|TOKEN|SECRET|PASSW|CREDENTIAL)[A-Za-z0-9_]*)=[^ "<\\][^ "\\]*/--var \1=<redacted>/g;'
-    script+='s/sk-([A-Za-z0-9_-]{4})[A-Za-z0-9_-]{12,}([A-Za-z0-9_-]{4})/<redacted sk-\1...\2>/g;'
-    script+='s/sk-[A-Za-z0-9_-]{8,}/<redacted sk-...>/g;'
-    local f tmp
+    # A length-framed stdin stream keeps literals out of argv and the
+    # filesystem. Python's byte replacement handles embedded newlines and
+    # regex metacharacters literally; any helper failure aborts the report.
+    # The --var pass masks through the next --var (or JSON quote/end of line),
+    # because old unquoted command records cannot distinguish a value with
+    # spaces from the command words after it. Hiding too much is safer than
+    # retaining a password suffix.
+    local f i
     for f in "${files[@]}"; do
-        tmp="$f.redact.$$"
-        if sed -E "$script" "$f" > "$tmp" 2>/dev/null; then
+        tmp=$(mktemp "$root/.redact-output.XXXXXX") || return 1
+        if {
+            printf '%s\n' "${#values[@]}"
+            for ((i=0; i<${#values[@]}; i++)); do
+                LC_ALL=C
+                printf '%s\n' "${#values[$i]}"
+                printf '%s\n' "${values[$i]}"
+                printf '%s\n' "${#replacements[$i]}"
+                printf '%s\n' "${replacements[$i]}"
+            done
+            cat "$f"
+        } | python3 -c '
+import json, re, sys
+
+source = sys.stdin.buffer
+def framed():
+    size = int(source.readline())
+    value = source.read(size)
+    if source.read(1) != b"\n":
+        raise ValueError("invalid redaction input")
+    return value
+
+pairs = [(framed(), framed()) for _ in range(int(source.readline()))]
+expanded = []
+def json_inner(value):
+    try:
+        text = value.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return json.dumps(text, ensure_ascii=False)[1:-1].encode("utf-8")
+
+for needle, replacement in pairs:
+    if not needle:
+        continue
+    expanded.append((needle, replacement))
+    json_needle = json_inner(needle)
+    if json_needle is not None and json_needle != needle:
+        json_replacement = json_inner(replacement)
+        expanded.append((json_needle, json_replacement or b"<redacted>"))
+pairs = expanded
+pairs.sort(key=lambda pair: len(pair[0]), reverse=True)
+data = source.read()
+for needle, replacement in pairs:
+    data = data.replace(needle, replacement)
+
+credential = re.compile(br"(?:SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?|KEY|TOKEN)")
+endpoint = re.compile(br"(?:^|_)(?:URL|URI|ENDPOINT|DSN)(?:_|$)")
+var = re.compile(br"(--var ([A-Za-z_][A-Za-z0-9_]*)=)((?:\\.|[^\"\\])*?)(?= --var |\"|$)", re.M)
+def mask(match):
+    name = match.group(2).upper()
+    value = match.group(3)
+    if value.startswith(b"<") or not (credential.search(name) or endpoint.search(name)):
+        return match.group(0)
+    token = value.split(None, 1)[0]
+    if (b"KEY" in name or b"TOKEN" in name) and not re.search(
+            br"SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?", name) \
+            and not endpoint.search(name) and len(token) >= 20:
+        replacement = b"<redacted " + token[:4] + b"..." + token[-4:] + b">"
+    else:
+        replacement = b"<redacted>"
+    return match.group(1) + replacement
+
+data = var.sub(mask, data)
+data = re.sub(br"sk-([A-Za-z0-9_-]{4})[A-Za-z0-9_-]{12,}([A-Za-z0-9_-]{4})", br"<redacted sk-\1...\2>", data)
+data = re.sub(br"sk-[A-Za-z0-9_-]{8,}", b"<redacted sk-...>", data)
+sys.stdout.buffer.write(data)
+' > "$tmp" 2>/dev/null; then
             mv -f "$tmp" "$f"
+            tmp=""
         else
             rm -f "$tmp"
+            tmp=""
+            return 1
         fi
     done
-}
+)
 
 # _redact_hint NAME VALUE — the replacement for VALUE: first/last 4 chars for
 # keys and tokens of 20+ chars, a plain <redacted> otherwise.
@@ -622,7 +693,10 @@ _upper() { printf '%s' "$1" | tr '[:lower:]' '[:upper:]'; }
 _redact_hint() {
     local u v="$2"
     u=$(_upper "$1")
-    if [[ "$u" =~ (KEY|TOKEN) && ! "$u" =~ (SECRET|PASSW|CREDENTIAL) && "${#v}" -ge 20 ]]; then
+    if [[ "$u" =~ (KEY|TOKEN) \
+       && ! "$u" =~ (SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?) \
+       && ! "$u" =~ (^|_)(URL|URI|ENDPOINT|DSN)(_|$) \
+       && "${#v}" -ge 20 ]]; then
         printf '<redacted %s...%s>' "${v:0:4}" "${v: -4}"
     else
         printf '<redacted>'
@@ -632,11 +706,8 @@ _redact_hint() {
 _is_secret_name() {  # same notion as shellm's trajectory masking
     local u
     u=$(_upper "$1")
-    [[ "$u" =~ (KEY|TOKEN|SECRET|PASSW|CREDENTIAL) ]]
-}
-
-_sed_escape() {  # escape a literal for use in an ERE sed s/// pattern or replacement
-    printf '%s' "$1" | sed -e 's/[][\/.*^$&+?(){}|\\]/\\&/g'
+    [[ "$u" =~ (KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?) \
+        || "$u" =~ (^|_)(URL|URI|ENDPOINT|DSN)(_|$) ]]
 }
 
 usage() {
