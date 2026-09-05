@@ -153,6 +153,18 @@ _epoch_utc() {  # _epoch_utc <epoch> -> "YYYY-MM-DD HH:MMZ"
 # top, and the head of WORKSPACE.md if the mind keeps one. Replaces the
 # pwd/ls/find opening that took 12% of Audel's reasoning steps (2026-09-04).
 # Bounded: at most WORKSPACE_DIRS directories, counts capped at 5000.
+# Counts in the workspace section are rounded to two significant figures
+# ("about 3500") so the section, which sits in the cached prefix of every
+# call, does not change on every wake that adds one file.
+_coarse_count() {  # _coarse_count <n> [cap]
+    local n="$1" cap="${2:-}"
+    [[ -n "$cap" && "$n" -ge "$cap" ]] && { printf '%s+' "$cap"; return 0; }
+    if (( n < 100 )); then printf '%s' "$n"; return 0; fi
+    local digits=${#n}
+    local scale=$(( 10 ** (digits - 2) ))
+    printf 'about %s' "$(( (n + scale / 2) / scale * scale ))"
+}
+
 _workspace_section() {  # _workspace_section <workdir>
     local wd="$1" d n loose lines=() cap=5000
     [[ -d "$wd" ]] || return 0
@@ -160,17 +172,16 @@ _workspace_section() {  # _workspace_section <workdir>
     while IFS= read -r d; do
         [[ -n "$d" ]] || continue
         n=$(find "$d" -type f 2>/dev/null | head -n "$cap" | wc -l | tr -d ' ')
-        [[ "$n" -ge "$cap" ]] && n="${cap}+"
-        lines+=("$(printf '%s	%s' "$n" "${d##*/}/")")
+        lines+=("$(printf '%s\t%s' "$n" "${d##*/}/")")
     done < <(find "$wd" -mindepth 1 -maxdepth 1 -type d ! -name '.*' ! -name '__pycache__' 2>/dev/null | sort)
     loose=$(find "$wd" -mindepth 1 -maxdepth 1 -type f ! -name '.*' 2>/dev/null | wc -l | tr -d ' ')
     printf 'Workspace: %s (every wake starts here; paths below are relative to it)\n' "$wd"
     if [[ ${#lines[@]} -gt 0 ]]; then
         printf '%s\n' "${lines[@]}" | sort -t$'\t' -k1,1nr | head -n "$max" \
-            | awk -F'\t' '{printf "- %s %s files\n", $2, $1}'
+            | while IFS=$'\t' read -r n d; do printf -- '- %s %s files\n' "$d" "$(_coarse_count "$n" "$cap")"; done
         [[ ${#lines[@]} -gt "$max" ]] && printf -- '- and %d more directories\n' $(( ${#lines[@]} - max ))
     fi
-    printf -- '- %s loose files at the top level\n' "$loose"
+    printf -- '- %s loose files at the top level\n' "$(_coarse_count "$loose")"
     if [[ -f "$wd/WORKSPACE.md" ]]; then
         printf 'WORKSPACE.md (yours to keep current; first lines):\n'
         head -n 8 "$wd/WORKSPACE.md" | cut -c1-160

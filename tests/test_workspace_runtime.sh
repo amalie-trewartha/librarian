@@ -42,6 +42,8 @@ grep -q '^- notes/ 2 files' <<<"$out" && ok "directory counts are recursive" || 
 grep -q '^- 1 loose files' <<<"$out" && ok "hidden top-level files are not loose files" || bad "loose count" "$out"
 grep -qE '__pycache__|\.git/' <<<"$out" && bad "hidden and __pycache__ dirs are skipped" || ok "hidden and __pycache__ dirs are skipped"
 [[ "$(grep -c '^- .*/ ' <<<"$out")" -eq 2 ]] && ok "one line per directory" || bad "dir lines" "$out"
+out=$(run '_coarse_count 7; echo; _coarse_count 99; echo; _coarse_count 100; echo; _coarse_count 3459; echo; _coarse_count 1808; echo; _coarse_count 5000 5000')
+[[ "$out" == $'7\n99\nabout 100\nabout 3500\nabout 1800\n5000+' ]] && ok "counts round to two significant figures from 100 up (cache-stable prefix)" || bad "coarse counts" "$out"
 printf 'notes/ = research\npapers/ = cached HTML\n' > "$W/wd/WORKSPACE.md"
 out=$(run "_workspace_section '$W/wd'")
 grep -q '^notes/ = research' <<<"$out" && ! grep -q 'No WORKSPACE.md' <<<"$out" && ok "WORKSPACE.md head replaces the invite" || bad "WORKSPACE.md head" "$out"
