@@ -295,7 +295,7 @@ cmd_react() {
     # Slack reactions.add wants the short name (thumbsup), not :thumbsup: or 👍.
     emoji="${emoji#:}"
     emoji="${emoji%:}"
-    [[ "$emoji" =~ ^[a-z0-9_+\-:]{1,64}$ ]] || die "invalid Slack emoji name: $emoji"
+    [[ "$emoji" =~ ^[-a-z0-9_+:]{1,64}$ ]] || die "invalid Slack emoji name: $emoji"
 
     _resolve_from_to
 
