@@ -38,14 +38,73 @@ def test_read_new_skips_corrupt_lines(tmp_path):
     assert [s["content"] for s in steps] == ["ok"]
 
 
-def test_read_new_resets_on_truncation(tmp_path):
+def test_read_new_does_not_replay_a_rebuilt_file(tmp_path):
+    """A shrunk file is a different log; resume at its end, do not re-send
+    everything in it (2026-09-09 Telegram replay)."""
     traj = tmp_path / "trajectory.jsonl"
     _append(traj, {"content": "a"})
     _append(traj, {"content": "b"})
     _, off = read_new(traj, 0)
     traj.write_text('{"content": "fresh"}\n')
-    steps, _ = read_new(traj, off)
-    assert [s["content"] for s in steps] == ["fresh"]
+    steps, off2 = read_new(traj, off)
+    assert steps == [] and off2 == traj.stat().st_size
+    _append(traj, {"content": "after"})
+    steps, _ = read_new(traj, off2)
+    assert [s["content"] for s in steps] == ["after"]
+
+
+def test_follow_ignores_a_cursor_from_another_trajectory(tmp_path):
+    """The Telegram bridge's state dir is shared across identities: after an
+    identity switch its cursor held the other log's (small) offset and the
+    bridge replayed 1.5GB of Audel's history. A cursor names its trajectory
+    and is ignored for any other."""
+    other = tmp_path / "other.jsonl"
+    other.write_text("x\n")
+    traj = tmp_path / "trajectory.jsonl"
+    for i in range(50):
+        _append(traj, {"content": f"old {i}"})
+    cursor = tmp_path / "cursor"
+    cursor.write_text(f"2 {other.resolve()}")
+
+    def _later():
+        time.sleep(0.05)
+        _append(traj, {"content": "new"})
+
+    threading.Thread(target=_later, daemon=True).start()
+    gen = follow(traj, cursor, poll_interval=0.01)
+    try:
+        assert next(gen)["content"] == "new"
+        assert cursor.read_text().split()[1] == str(traj.resolve())
+    finally:
+        gen.close()
+
+
+def test_follow_honours_its_own_cursor(tmp_path):
+    traj = tmp_path / "trajectory.jsonl"
+    _append(traj, {"content": "seen"})
+    off = traj.stat().st_size
+    _append(traj, {"content": "unseen"})
+    cursor = tmp_path / "cursor"
+    cursor.write_text(f"{off} {traj.resolve()}")
+    gen = follow(traj, cursor, poll_interval=0.01)
+    try:
+        assert next(gen)["content"] == "unseen"
+    finally:
+        gen.close()
+
+
+def test_follow_legacy_offset_only_cursor(tmp_path):
+    traj = tmp_path / "trajectory.jsonl"
+    _append(traj, {"content": "seen"})
+    off = traj.stat().st_size
+    _append(traj, {"content": "unseen"})
+    cursor = tmp_path / "cursor"
+    cursor.write_text(str(off))
+    gen = follow(traj, cursor, poll_interval=0.01)
+    try:
+        assert next(gen)["content"] == "unseen"
+    finally:
+        gen.close()
 
 
 def test_find_trajectory(tmp_path):
