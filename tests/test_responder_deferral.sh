@@ -232,6 +232,25 @@ sent=$(jq -r 'select(.type=="message" and .from=="testid" and .reply_to=="trig-4
 act=$(jq -c 'select(.type=="action" and .source=="responder" and .trigger_step=="trig-4")' "$TRAJ" | tail -1)
 [[ -n "$act" && "$(printf '%s' "$act" | jq -r .request)" == "check the workspace for test goal conflicts" ]] && ok "a DEFER after a blank line still appends the action" || bad "a DEFER after a blank line still appends the action" "got '$act'"
 
+# --- 6. DEFER emitted twice, holding text glued onto the first copy
+#        (Nemotron, 2026-09-14: line 2 "DEFER: ..." was sent to Nick) --------
+printf '{"step_id":"trig-5","type":"message","from":"%s","to":"%s","content":"can you please open a PR on github?","ts":"%s","source":"chat"}\n' "$THEM" "$ME" "$(now)" >> "$TRAJ"
+printf 'DEFER: open a PR for commit 1adc15cLet me open that PR for you.\nDEFER: open a PR for commit 1adc15c\n' > "$STUB_REPLY_FILE"
+run_responder "$(grep -F '"step_id":"trig-5"' "$TRAJ")"
+sent=$(jq -r 'select(.type=="message" and .from=="testid" and .reply_to=="trig-5") | .content' "$TRAJ" | tail -1)
+[[ "$sent" == "Let me look into that and get back to you." ]] && ok "a duplicated DEFER never reaches the person" || bad "a duplicated DEFER never reaches the person" "got '$sent'"
+act=$(jq -c 'select(.type=="action" and .source=="responder" and .trigger_step=="trig-5")' "$TRAJ" | tail -1)
+[[ -n "$act" && "$(printf '%s' "$act" | jq -r .request)" == "open a PR for commit 1adc15c" ]] && ok "the clean copy of a glued DEFER becomes the request" || bad "the clean copy of a glued DEFER becomes the request" "got '$act'"
+
+# --- 7. holding text first, DEFER on a later line ---------------------------
+printf '{"step_id":"trig-6","type":"message","from":"%s","to":"%s","content":"what does the box say?","ts":"%s","source":"chat"}\n' "$THEM" "$ME" "$(now)" >> "$TRAJ"
+printf 'Let me check the box and get back to you.\nDEFER: read the box status and report it\n' > "$STUB_REPLY_FILE"
+run_responder "$(grep -F '"step_id":"trig-6"' "$TRAJ")"
+sent=$(jq -r 'select(.type=="message" and .from=="testid" and .reply_to=="trig-6") | .content' "$TRAJ" | tail -1)
+[[ "$sent" == "Let me check the box and get back to you." ]] && ok "a DEFER on a later line is stripped and the holding text is sent" || bad "a DEFER on a later line is stripped and the holding text is sent" "got '$sent'"
+act=$(jq -c 'select(.type=="action" and .source=="responder" and .trigger_step=="trig-6")' "$TRAJ" | tail -1)
+[[ -n "$act" && "$(printf '%s' "$act" | jq -r .request)" == "read the box status and report it" ]] && ok "a DEFER on a later line still appends the action" || bad "a DEFER on a later line still appends the action" "got '$act'"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

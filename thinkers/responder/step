@@ -463,10 +463,30 @@ fi
 # delivers the result with `chat reply --follow-up`. Without this the
 # responder's "let me check" bound nobody (Experiment C: 6 to 9 of 22 replies
 # promised work that never happened).
+#
+# The model does not always put the DEFER line first, or only once. Nemotron
+# has emitted it after the holding text, and on 2026-09-14 twice: the holding
+# sentence glued onto the first copy ("...headlong mainLet me open that PR
+# for you.") and a clean copy on the next line, so line 1 became the request
+# and line 2, still starting "DEFER:", was sent to Nick. So: the request is
+# the first DEFER line wherever it is (a shorter DEFER line that is a prefix
+# of it wins, which un-glues the duplicate case), every DEFER line is dropped
+# from the text sent, and what is left is the holding message.
 deferred_request=""
-if [[ "$first_line" == DEFER:* ]]; then
-    deferred_request=$(printf '%s' "$first_line" | sed -E 's/^DEFER:[[:space:]]*//')
-    reply=$(printf '%s' "$reply" | sed '1d' | sed '/./,$!d')
+_defer_lines=$(printf '%s' "$reply" | grep -E '^[[:space:]]*DEFER:' || true)
+if [[ -n "$_defer_lines" ]]; then
+    while IFS= read -r _dl; do
+        _dl=$(printf '%s' "$_dl" | sed -E 's/^[[:space:]]*DEFER:[[:space:]]*//;s/[[:space:]]+$//')
+        [[ -n "$_dl" ]] || continue
+        if [[ -z "$deferred_request" ]]; then
+            deferred_request="$_dl"
+        elif [[ "$deferred_request" == "$_dl"* && ${#_dl} -lt ${#deferred_request} ]]; then
+            deferred_request="$_dl"
+        fi
+    done <<< "$_defer_lines"
+    # grep -v exits 1 when it drops every line (a bare DEFER); under pipefail
+    # that must not kill the step.
+    reply=$(printf '%s' "$reply" | grep -vE '^[[:space:]]*DEFER:' | sed '/./,$!d' || true)
     [[ -z "$reply" ]] && reply="Let me look into that and get back to you."
     printf '  deferring to the mind: %s\n' "$deferred_request" >&2
     jq -nc --arg source "$THINKER_NAME" --arg trigger "$trigger_step_id" \
