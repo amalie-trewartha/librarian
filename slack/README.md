@@ -59,7 +59,13 @@ Other settings: `HEADLONG_SLACK_STATE_DIR`, legacy `SHELLM_SLACK_STATE_DIR`
 `<identity>/run/slack-bridge/`), `SLACK_THREAD_FOLLOWUPS=1` (answer
 un-mentioned replies in threads the bot is already part of),
 `SLACK_THREAD_JOIN_BACKFILL` (how many closest prior messages above a first @mention
-to prepend; default 20, 0 disables, max 50).
+to prepend; default 20, 0 disables, max 50), and peer hearing:
+`SLACK_PEER_BOT_USERS` (comma-separated bot user ids of other Headlong
+personas whose posts may reach this mind; empty keeps every bot post
+dropped), `SLACK_PEER_MAX_TURNS` (peer messages forwarded in one thread in a
+row with no person speaking; default 4) and `SLACK_PEER_HOURLY_CAP` (peer
+messages forwarded per hour; default 30). See
+[design/peer_hearing.md](../design/peer_hearing.md).
 
 For the end-to-end procedure we used to install our agent, Audel, into a
 workspace on that stack (Slack app, tokens, SSM env, rebuild, verification),
