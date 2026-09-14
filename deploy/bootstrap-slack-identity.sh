@@ -10,7 +10,15 @@ set -euo pipefail
 
 APP_DIR="${1:-/opt/shellm/app}"
 cd "$APP_DIR"
-export PATH="$APP_DIR/bin:$PATH"
+# bin/ holds the mind's commands (thinkers, traj, chat); tools/ holds the
+# operator commands (identity, persona). The 2026-08-20 bin/ -> tools/ move
+# left `identity` off this PATH, which broke every fresh persona boot with
+# "identity: command not found" (first seen on the Harris box, 2026-09-14;
+# Audel's identity already existed so its box never re-ran that step).
+export PATH="$APP_DIR/bin:$APP_DIR/tools:$PATH"
+for cmd in identity thinkers; do
+    command -v "$cmd" >/dev/null 2>&1 || { echo "error: '$cmd' not on PATH ($PATH)" >&2; exit 1; }
+done
 
 # Root .env carries SHELLM_SLACK_IDENTITY (and the API keys thinkers need)
 if [[ -f "$APP_DIR/.env" ]]; then
