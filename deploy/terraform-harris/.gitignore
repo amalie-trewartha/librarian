@@ -1,0 +1,11 @@
+.envrc
+env.sh
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.*
+terraform.tfvars
+*.auto.tfvars
+crash.log
+lambda/*.zip
+*.tfplan

@@ -82,6 +82,12 @@ slack run                        # local dev: CLI-managed dev app + tokens,
                                  # runs the bridge against the repo root
 ```
 
+`manifest.harris.json` is the same app definition for the second persona,
+Harris, which has its own Slack app and bot user (so the two personas post
+as different bots and the bridge on each box only sees its own tokens).
+It was created from that file with "Create New App → From a manifest" in
+the laudesters workspace; keep the two files in step when scopes change.
+
 Scope changes become: edit `manifest.json` → `slack manifest validate` →
 `slack app install`. Production still uses the long-lived `xoxb-`/`xapp-`
 tokens from app settings, stored in the box's SSM env parameter — the CLI
