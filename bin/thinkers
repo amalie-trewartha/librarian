@@ -26,6 +26,16 @@ THINKERS_MAX_CONCURRENT="${THINKERS_MAX_CONCURRENT:-20}"
 # (0 disables). Default applies only to trigger_self subscriptions — reactive
 # thinkers are legitimately silent for long stretches.
 THINKERS_WATCHDOG_SECS="${THINKERS_WATCHDOG_SECS:-300}"
+# Rewind guard. A step whose ts is older than the newest step already
+# dispatched by more than this many seconds is a replay of history, not a new
+# step, and is skipped. The comparison is against the dispatcher's own cursor,
+# never against the clock, so a message that is merely old (the agent was
+# away) still passes: it is newer than anything dispatched before it.
+# 2026-09-12: a script rewrote Audel's trajectory with `grep -v > tmp && mv`;
+# `tail -F` follows by name, so it re-read the 1.5 GB history from line 1,
+# twice, and the responder answered month-old Slack threads for 22 hours.
+# 0 disables.
+THINKERS_REWIND_TOLERANCE="${THINKERS_REWIND_TOLERANCE:-600}"
 VERBOSE=0
 NO_SELF_TRIGGER=0
 
@@ -43,6 +53,41 @@ _kill_tree() {
         _kill_tree "$child" "$sig"
     done
     kill -"$sig" "$pid" 2>/dev/null || true
+}
+
+# ISO-8601 UTC stamp ("YYYY-MM-DDTHH:MM:SS[.fff](Z|+0000)") -> epoch seconds
+# in $_EPOCH, pure bash: no date -d / date -j (not portable across GNU and
+# macOS) and no jq, so the dispatch loop can call it for every step of a
+# replay without a fork. Sets _EPOCH="" on a malformed or missing stamp;
+# callers treat empty as "unknown, let it through". traj stamps every ts in
+# UTC, so no zone handling is needed.
+_iso_epoch() {
+    _EPOCH=""
+    [[ "$1" =~ ^([0-9][0-9][0-9][0-9])-([0-9][0-9])-([0-9][0-9])T([0-9][0-9]):([0-9][0-9]):([0-9][0-9]) ]] || return 0
+    local y=$((10#${BASH_REMATCH[1]})) m=$((10#${BASH_REMATCH[2]})) d=$((10#${BASH_REMATCH[3]}))
+    local H=$((10#${BASH_REMATCH[4]})) M=$((10#${BASH_REMATCH[5]})) S=$((10#${BASH_REMATCH[6]}))
+    # Days from civil date (Howard Hinnant's algorithm), proleptic Gregorian.
+    (( m <= 2 )) && y=$((y - 1))
+    local era=$(( y / 400 ))
+    local yoe=$(( y - era * 400 ))
+    local doy=$(( (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1 ))
+    local doe=$(( yoe * 365 + yoe / 4 - yoe / 100 + doy ))
+    local days=$(( era * 146097 + doe - 719468 ))
+    _EPOCH=$(( days * 86400 + H * 3600 + M * 60 + S ))
+}
+
+# Epoch of a raw step line's top-level ts -> $_EPOCH ("" if none). Matches the
+# LAST `"ts":"..."` on the line: traj append adds ts as the final key, and a
+# `"ts":"` inside a string value is escaped (`\"ts\":\"`) so it cannot match.
+_step_epoch() {
+    _EPOCH=""
+    [[ "$1" =~ .*\"ts\":\"([^\"]*)\" ]] || return 0
+    _iso_epoch "${BASH_REMATCH[1]}"
+}
+
+# "inode size" of a file, portable (GNU then BSD stat); "0 0" if unreadable.
+_file_ident() {
+    stat -c '%i %s' "$1" 2>/dev/null || stat -f '%i %z' "$1" 2>/dev/null || printf '0 0'
 }
 
 # Kill leaked `tail -n 0 -F <traj_file>` feeders by argv pattern. PID-tree
@@ -354,9 +399,19 @@ _start_dispatcher() {
         # leave the new owner's runtime files alone.
         printf '' > "$tail_pids_file"
         _my_tail_pids=""
-        # Live feeders as "pid<TAB>traj_file" lines, so the housekeeping
-        # tick can notice a dead one and respawn it for the right file.
+        # Live feeders as "pid<TAB>inode<TAB>size<TAB>traj_file" lines, so
+        # the housekeeping tick can notice a dead one and respawn it for the
+        # right file, and notice a file that was replaced or truncated under
+        # its tail (inode changed, or size shrank).
         _feeder_entries=""
+
+        # Append an operator-visible error step to a traj file (same shape as
+        # the monolith's run-failed step). Failure-open: never blocks dispatch.
+        _append_traj_error() {  # <traj_file> <reason> <content>
+            jq -nc --arg reason "$2" --arg content "$3" \
+                '{type:"error", source:"dispatcher", reason:$reason, content:$content}' \
+                | traj append --traj_dir "$TRAJ_DIR" "${1#"$TRAJ_DIR"/}" >/dev/null 2>&1 || true
+        }
 
         # Spawn the feeder pipeline for one traj file: tail -F tags each
         # new line with its traj path and writes it to the fifo. Wrapped in
@@ -374,7 +429,9 @@ _start_dispatcher() {
             ) 3<&- &
             printf '%s\n' "$!" >> "$tail_pids_file"
             _my_tail_pids="${_my_tail_pids}${_my_tail_pids:+ }$!"
-            _feeder_entries="${_feeder_entries}$!	${_ftraj}
+            local _fino _fsize
+            read -r _fino _fsize <<< "$(_file_ident "$_ftraj")"
+            _feeder_entries="${_feeder_entries}$!	${_fino}	${_fsize}	${_ftraj}
 "
         }
 
@@ -383,17 +440,40 @@ _start_dispatcher() {
         # silently fell back to watchdog-only wakeups. Respawning is safe:
         # tail -n 0 -F starts at the current end of file, so no step is
         # replayed and every step appended after the respawn is picked up.
+        #
+        # Also the swap detector: `tail -F` follows by NAME, so when a traj
+        # file is replaced (mv over it) or truncated, GNU tail reopens it and
+        # reads from byte 0 — the whole history streams through the fifo as
+        # if freshly appended, and with a 1.5 GB file tail first drains the
+        # deleted old inode to EOF (hours, mind deaf to live steps) before it
+        # even notices the swap. A feeder whose file changed inode or shrank
+        # is killed and respawned, so the new file is followed from its END
+        # within one tick. The rewind guard in the dispatch loop skips
+        # whatever tail managed to replay before this ran.
         _respawn_dead_feeders() {
-            local _fpid _ftraj _live="" _dead=""
-            while IFS=$'\t' read -r _fpid _ftraj; do
+            local _fpid _fino _fsize _ftraj _cino _csize _live="" _dead=""
+            while IFS=$'\t' read -r _fpid _fino _fsize _ftraj; do
                 [[ -z "$_fpid" ]] && continue
-                if kill -0 "$_fpid" 2>/dev/null; then
-                    _live="${_live}${_fpid}	${_ftraj}
-"
-                else
+                if ! kill -0 "$_fpid" 2>/dev/null; then
                     _dead="${_dead}${_ftraj}
 "
+                    continue
                 fi
+                read -r _cino _csize <<< "$(_file_ident "$_ftraj")"
+                if [[ "$_cino" =~ ^[0-9]+$ && "$_csize" =~ ^[0-9]+$ && "$_cino" != 0 ]] \
+                    && [[ "$_cino" != "$_fino" || "$_csize" -lt "$_fsize" ]]; then
+                    printf '%s [dispatcher] TRAJECTORY REPLACED: %s changed under its feeder (inode %s -> %s, size %s -> %s) — restarting the feeder at end of file; history is not replayed. The trajectory is append-only; whatever rewrote it is a bug.\n' \
+                        "$(date -u +%FT%TZ)" "$_ftraj" "$_fino" "$_cino" "$_fsize" "$_csize" >&2
+                    _kill_tree "$_fpid" TERM
+                    _dead="${_dead}${_ftraj}
+"
+                    _append_traj_error "$_ftraj" "trajectory-replaced" \
+                        "dispatcher: the trajectory file was replaced or truncated under its feeder (inode $_fino -> $_cino, size $_fsize -> $_csize). The feeder was restarted at end of file and history was not replayed. The trajectory is append-only: never rewrite, copy over, or truncate trajectory.jsonl."
+                    continue
+                fi
+                [[ "$_csize" =~ ^[0-9]+$ ]] || _csize="$_fsize"
+                _live="${_live}${_fpid}	${_fino}	${_csize}	${_ftraj}
+"
             done <<< "$_feeder_entries"
             [[ -z "$_dead" ]] && return 0
             _feeder_entries="$_live"
@@ -421,6 +501,30 @@ _start_dispatcher() {
             [[ -f "$_traj_file" ]] || continue
             _spawn_feeder "$_traj_file"
         done < "$run_dir/traj_files"
+
+        # Rewind cursor (see THINKERS_REWIND_TOLERANCE): epoch of the newest
+        # step dispatched so far, seeded from the last line already in each
+        # traj file so the very first replayed step is caught. Lives only in
+        # this dispatcher's memory on purpose: the feeders start at end of
+        # file, so a restart never replays history and needs no cursor.
+        _rewind_tol="$THINKERS_REWIND_TOLERANCE"
+        [[ "$_rewind_tol" =~ ^[0-9]+$ ]] || _rewind_tol=0
+        _cursor=0
+        _rewind_run=0
+        # Recent step_ids (newline-delimited, newest last, bounded). Catches
+        # the part of a replay the ts guard cannot: steps inside the
+        # tolerance window that tail re-emits before the swap detector
+        # restarts the feeder. A step_id seen once is never dispatched twice.
+        _nl=$'\n'
+        _recent_ids="$_nl"
+        _recent_n=0
+        if (( _rewind_tol > 0 )); then
+            while IFS= read -r _traj_file; do
+                [[ -f "$_traj_file" ]] || continue
+                _step_epoch "$(tail -n 1 "$_traj_file" 2>/dev/null)"
+                [[ -n "$_EPOCH" ]] && (( _EPOCH > _cursor )) && _cursor=$_EPOCH
+            done < "$run_dir/traj_files"
+        fi
 
         # Track thinker step PIDs as "name:pid" pairs (space-separated, bash 3.2 compat)
         _step_entries=""
@@ -757,6 +861,47 @@ _start_dispatcher() {
             _step_json="${_line#*"$_tab"}"
             [[ "$_step_json" == "$_line" ]] && _step_json=""
             if [[ -z "$_step_json" ]]; then continue; fi
+
+            # Rewind guard: a step older than the cursor by more than the
+            # tolerance can only be history streaming back through the feed
+            # (file replaced or truncated under tail -F). Skip it before any
+            # jq or dispatch work, log the run once, and leave one error step
+            # for the operator. Steps without a parseable ts pass.
+            if (( _rewind_tol > 0 )); then
+                _skip_why="" _sid=""
+                _step_epoch "$_step_json"
+                if [[ -n "$_EPOCH" ]] && (( _cursor > 0 && _EPOCH < _cursor - _rewind_tol )); then
+                    _skip_why="a step stamped $((_cursor - _EPOCH))s before the newest dispatched step arrived"
+                elif [[ "$_step_json" =~ .*\"step_id\":\"([^\"]+)\" ]]; then
+                    _sid="${BASH_REMATCH[1]}"
+                    if [[ "$_recent_ids" == *"$_nl$_sid$_nl"* ]]; then
+                        _skip_why="step $_sid arrived a second time"
+                    fi
+                fi
+                if [[ -n "$_skip_why" ]]; then
+                    if (( _rewind_run == 0 )); then
+                        printf '%s [dispatcher] REWIND: %s from %s — the feed restarted from history (trajectory file rewritten or truncated?). Skipping replayed steps; live steps still dispatch.\n' \
+                            "$(date -u +%FT%TZ)" "$_skip_why" "$_traj_file" >&2
+                        _append_traj_error "$_traj_file" "trajectory-rewind" \
+                            "dispatcher: the trajectory feed rewound ($_skip_why). Replayed history is being skipped, not re-dispatched. The trajectory is append-only: never rewrite, copy over, or truncate trajectory.jsonl."
+                    fi
+                    _rewind_run=$((_rewind_run + 1))
+                    continue
+                fi
+                if (( _rewind_run > 0 )); then
+                    printf '%s [dispatcher] rewind over: skipped %s replayed step(s)\n' \
+                        "$(date -u +%FT%TZ)" "$_rewind_run" >&2
+                    _rewind_run=0
+                fi
+                [[ -n "$_EPOCH" ]] && (( _EPOCH > _cursor )) && _cursor=$_EPOCH
+                if [[ -n "$_sid" ]]; then
+                    _recent_ids="${_recent_ids}${_sid}${_nl}"
+                    if (( ++_recent_n > 1000 )); then
+                        _recent_ids="${_nl}$(printf '%s' "$_recent_ids" | tail -n 500)${_nl}"
+                        _recent_n=500
+                    fi
+                fi
+            fi
 
             # Fire pending re-triggers first so a step flagged while its
             # thinker was busy is delivered before this newer step

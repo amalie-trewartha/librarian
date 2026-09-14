@@ -45,6 +45,28 @@ msg_from=$(printf '%s' "$step_json" | jq -r '.from // "human"' 2>/dev/null) || t
 # Only reply to messages addressed to this identity.
 [[ "$msg_to" == "$IDENTITY_NAME" ]] || exit 0
 
+# Stale-trigger guard. A message step is dispatched within a second of being
+# appended, so a trigger stamped long ago is not a new message: it is history
+# re-fed by the dispatcher (2026-09-12: the trajectory file was rewritten,
+# `tail -F` replayed the whole log, and this step answered month-old Slack
+# threads for 22 hours). Second line of defense behind the dispatcher's own
+# rewind guard. Deliberately no observation step: one would wake the monolith
+# per stale message, which is the flood this prevents. 0 disables; set it
+# when a deliberate catch-up after downtime should answer older messages.
+_max_age="${RESPONDER_MAX_TRIGGER_AGE:-900}"
+if [[ "$_max_age" =~ ^[0-9]+$ && "$_max_age" -gt 0 ]]; then
+    _trig_epoch=$(printf '%s' "$step_json" | jq -r \
+        '(.ts // empty) | sub("\\.[0-9]+"; "") | sub("\\+0000$"; "Z") | fromdateiso8601? // empty' 2>/dev/null) || _trig_epoch=""
+    if [[ "$_trig_epoch" =~ ^[0-9]+$ ]]; then
+        _trig_age=$(( $(date +%s) - _trig_epoch ))
+        if (( _trig_age > _max_age )); then
+            printf '  stale trigger: message %s from %s is %ss old (RESPONDER_MAX_TRIGGER_AGE=%s) — replayed history, not a new message; not replying\n' \
+                "$trigger_step_id" "$msg_from" "$_trig_age" "$_max_age" >&2
+            exit 0
+        fi
+    fi
+fi
+
 # Append an observation step crediting this thinker, tagged with the
 # trigger step when known. $1 = content, $2 (optional) = decision field,
 # $3 (optional) = a JSON object of extra fields (the context metrics below).
