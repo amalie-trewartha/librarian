@@ -5,7 +5,7 @@ env.sh
 terraform.tfstate
 terraform.tfstate.*
 terraform.tfvars
+terraform.tfvars.*
 *.auto.tfvars
 crash.log
 lambda/*.zip
-*.tfplan
