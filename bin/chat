@@ -462,17 +462,44 @@ _deliveries_path() { printf '%s/deliveries.jsonl' "$(dirname "$1")"; }
 # _index_update <trajectory file> <index file>
 # Brings the index up to date. Only complete lines are consumed: a line still
 # being appended is left for the next call, so a message is never skipped.
+# The offset file records where the last update stopped: byte offset, the
+# trajectory's header id, and (since 2026-09-15) the file's inode and size at
+# that moment. The index is only as good as the assumption that the bytes
+# before the offset are the bytes it already read. A trajectory rewritten in
+# place breaks that: on 2026-09-12 a `grep -v > tmp && mv` kept the header
+# but shrank the file, so the offset pointed past the end, the index stalled
+# silently, then resumed at a stale byte position once the file had regrown,
+# and every message and deferral appended in between fell into a gap. Two
+# days later a header-changing rewrite forced the first full rebuild, the
+# gap surfaced all at once as OVERDUE pending requests, and the mind
+# delivered month-old replayed work into an August thread. Now a changed
+# inode (mv over the file) or a size below the offset (truncate and rewrite)
+# rebuilds the index from byte zero: one scan instead of a silent gap.
+_file_ino() { stat -c %i -- "$1" 2>/dev/null || stat -f %i -- "$1" 2>/dev/null || echo ""; }
+
 _index_update() {
     local tf="$1" idx="$2" off="$2.offset" lock="$2.lock"
-    local header have_off have_header size
+    local header have_off have_header have_ino size ino why=""
     header=$(head -n 1 -- "$tf" 2>/dev/null | jq -r '.step_id // .traj_id // ""' 2>/dev/null) || header=""
-    have_off=0; have_header=""
+    have_off=0; have_header=""; have_ino=""
     if [[ -f "$off" ]]; then
-        read -r have_off have_header < "$off" || true
+        read -r have_off have_header have_ino _ < "$off" || true
         [[ "$have_off" =~ ^[0-9]+$ ]] || have_off=0
     fi
+    size=$(wc -c < "$tf" | tr -d ' ')
+    ino=$(_file_ino "$tf")
     local dfr dlv; dfr=$(_deferrals_path "$idx"); dlv=$(_deliveries_path "$idx")
-    if [[ ! -f "$idx" || ! -f "$dfr" || ! -f "$dlv" || "$have_header" != "$header" ]]; then
+    if [[ ! -f "$idx" || ! -f "$dfr" || ! -f "$dlv" ]]; then
+        why="no index yet"
+    elif [[ "$have_header" != "$header" ]]; then
+        why="trajectory header changed"
+    elif [[ -n "$have_ino" && -n "$ino" && "$have_ino" != "$ino" ]]; then
+        why="trajectory file replaced (inode $have_ino -> $ino)"
+    elif (( have_off > 0 && size < have_off )); then
+        why="trajectory shrank below the index offset ($size < $have_off)"
+    fi
+    if [[ -n "$why" ]]; then
+        [[ "$why" != "no index yet" ]] && printf 'chat: rebuilding the message index from the start: %s\n' "$why" >&2
         have_off=0
         : > "$idx.rebuild" || return 1
         mv -f "$idx.rebuild" "$idx"
@@ -481,8 +508,14 @@ _index_update() {
         : > "$dlv.rebuild" || return 1
         mv -f "$dlv.rebuild" "$dlv"
     fi
-    size=$(wc -c < "$tf" | tr -d ' ')
-    (( size > have_off )) || return 0
+    if (( size <= have_off )); then
+        # Nothing new. Upgrade a pre-inode offset record in passing so the
+        # next replacement is caught.
+        if [[ -z "$have_ino" && -n "$ino" ]]; then
+            printf '%s %s %s %s\n' "$have_off" "$header" "$ino" "$size" > "$off" 2>/dev/null || true
+        fi
+        return 0
+    fi
     # One updater at a time; a concurrent reader just uses what is there.
     mkdir "$lock" 2>/dev/null || return 0
     _index_apply "$tf" "$idx" "$off" "$header" "$have_off"
@@ -530,7 +563,8 @@ _index_apply() {
                 | {step_id, ts, trigger_step, status, transport, reason, permalink, channel, message_ts}
                 | with_entries(select(.value != null))' -R >> "$(_deliveries_path "$idx")" 2>/dev/null || true
     fi
-    printf '%s %s\n' "$((have_off + new_bytes - partial))" "$header" > "$off"
+    # Record the inode and the size the offset refers to (see _index_update).
+    printf '%s %s %s %s\n' "$((have_off + new_bytes - partial))" "$header" "$(_file_ino "$tf")" "$((have_off + new_bytes))" > "$off"
     rm -f "$tmp"
 }
 
