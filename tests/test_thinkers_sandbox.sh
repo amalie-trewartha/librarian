@@ -70,7 +70,16 @@ printf 'HEADLONG_SANDBOX=1\n' > "$APP/.env"
 r=$(run install "$APP" "$HOME_DIR" "$UNITS")
 [[ "$r" == installed ]] && grep -q 'ProtectSystem=strict' "$DROPIN" && ok "install: stale drop-in rewritten" || bad "install: stale drop-in rewritten" "$r"
 
-# 7. the shipped installers call it
+# 7. a moved identities root: the writable mount names the real directory
+printf 'HEADLONG_SANDBOX=1\nHEADLONG_IDENTITIES_DIR=/var/lib/headlong/identities\n' > "$APP/.env"
+out=$(run render "$APP" "$HOME_DIR")
+grep -q '^ReadWritePaths=/var/lib/headlong/identities/%i$' <<< "$out" && ok "render: HEADLONG_IDENTITIES_DIR moves the writable mount" || bad "render: HEADLONG_IDENTITIES_DIR" "$out"
+grep -q "^ReadOnlyPaths=$APP$" <<< "$out" && ok "render: app checkout still read-only with a moved root" || bad "render: app still read-only"
+out=$(HEADLONG_IDENTITIES_DIR=/srv/ids bash "$SCRIPT" render "$APP" "$HOME_DIR")
+grep -q '^ReadWritePaths=/srv/ids/%i$' <<< "$out" && ok "render: environment overrides .env for the root" || bad "render: env override for root"
+printf 'HEADLONG_SANDBOX=1\n' > "$APP/.env"
+
+# 8. the shipped installers call it
 grep -q 'thinkers-sandbox.sh' "$REPO/deploy/update.sh" && grep -q 'thinkers-sandbox.sh' "$REPO/deploy/setup.sh" \
     && ok "update.sh and setup.sh install the drop-in" || bad "update.sh and setup.sh install the drop-in"
 

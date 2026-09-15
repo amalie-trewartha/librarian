@@ -21,7 +21,9 @@ set -euo pipefail
 #   the shellm home            writable    (tool caches, ~/.headlong state, backups)
 #   the app checkout           read-only   (bin, thinkers, tools, deploy, .env)
 #   the identity directory     writable    (memories, prompts, thinker copies,
-#                                            workdir, its own clone of the repo)
+#                                            workdir, its own clone of the repo;
+#                                            at HEADLONG_IDENTITIES_DIR/<name>
+#                                            when the root was moved out)
 #   /tmp and /var/tmp          writable    (shared with the bridges, so a file
 #                                            the mind writes for `chat send-file`
 #                                            is still visible to them)
@@ -53,15 +55,33 @@ UNIT_DIR="${4:-/etc/systemd/system}"
 DROPIN_DIR="$UNIT_DIR/headlong-thinkers@.service.d"
 DROPIN="$DROPIN_DIR/sandbox.conf"
 
-flag_on() {
-    local v="${HEADLONG_SANDBOX:-}"
+env_value() {  # env_value NAME -> the environment wins, then APP_DIR/.env
+    local v="${!1:-}"
     if [[ -z "$v" && -r "$APP_DIR/.env" ]]; then
-        v=$(sed -n 's/^[[:space:]]*HEADLONG_SANDBOX=//p' "$APP_DIR/.env" | tail -n 1 | tr -d '"'"'" | tr -d '[:space:]')
+        v=$(sed -n "s/^[[:space:]]*$1=//p" "$APP_DIR/.env" | tail -n 1 | tr -d '"'"'" | tr -d '[:space:]')
     fi
+    printf '%s' "$v"
+}
+
+flag_on() {
+    local v
+    v=$(env_value HEADLONG_SANDBOX)
     case "${v:-1}" in
         0|false|no|off) return 1 ;;
         *) return 0 ;;
     esac
+}
+
+# Where the identities really live. systemd does not resolve symlinks in
+# ReadWritePaths (probed 2026-09-15: a link at app/.identities pointing at
+# /var/lib left both paths read-only), so when the identities root has been
+# moved out of the checkout and linked back (layer 0 of
+# design/runtime_isolation.md), HEADLONG_IDENTITIES_DIR in .env names the
+# real directory and the writable mount lands on it. Default: inside the app.
+identities_dir() {
+    local v
+    v=$(env_value HEADLONG_IDENTITIES_DIR)
+    printf '%s' "${v:-$SHELLM_HOME/app/.identities}"
 }
 
 render() {
@@ -74,7 +94,7 @@ render() {
 ProtectSystem=strict
 ReadWritePaths=$SHELLM_HOME /tmp /var/tmp
 ReadOnlyPaths=$SHELLM_HOME/app
-ReadWritePaths=$SHELLM_HOME/app/.identities/%i
+ReadWritePaths=$(identities_dir)/%i
 InaccessiblePaths=-$SHELLM_HOME/app/.env.bridge
 CONF
 }
