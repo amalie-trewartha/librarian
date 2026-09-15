@@ -49,7 +49,7 @@ fi
 mkdir -p /etc/systemd/system/headlong-web.service.d
 cat > /etc/systemd/system/headlong-web.service.d/override.conf <<OVERRIDE
 [Service]
-Environment="HEADLONG_WEB_ALLOWED_ORIGINS=https://${hostname}"
+Environment="HEADLONG_WEB_ALLOWED_ORIGINS=${allowed_origins}"
 OVERRIDE
 
 systemctl daemon-reload
