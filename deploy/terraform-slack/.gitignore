@@ -9,3 +9,4 @@ terraform.tfvars.*
 *.auto.tfvars
 crash.log
 lambda/*.zip
+*.tfplan
