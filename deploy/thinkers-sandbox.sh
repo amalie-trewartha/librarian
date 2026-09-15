@@ -84,8 +84,8 @@ identities_dir() {
     v=$(env_value HEADLONG_IDENTITIES_DIR)
     if [[ -n "$v" ]]; then printf '%s' "$v"; return 0; fi
     d="$SHELLM_HOME/app/.identities"
-    # No override: follow the link the box setup leaves at the old path
-    # (deploy/setup.sh), so a fresh box needs no env at all.
+    # No override: a bind mount (the provisioned layout) is a real directory
+    # and needs nothing; a symlink is followed so that layout works too.
     if [[ -L "$d" ]]; then
         readlink -f -- "$d" 2>/dev/null || printf '%s' "$d"
     else

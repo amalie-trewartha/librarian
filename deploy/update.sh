@@ -71,6 +71,14 @@ for unit_file in headlong-thinkers@.service headlong-thinkers-alert@.service \
         sudo systemctl daemon-reload
     fi
 done
+# Identities root bind mount (deploy/setup.sh): make sure it is up before
+# anything below reads or restarts against it. fstab restores it at boot;
+# this covers a box whose mount was dropped by hand.
+if grep -qs " $APP_DIR/.identities none bind" /etc/fstab && ! mountpoint -q "$APP_DIR/.identities"; then
+    echo "==> Mounting the identities root at $APP_DIR/.identities"
+    sudo mount "$APP_DIR/.identities"
+fi
+
 # Runtime sandbox for every wake: a drop-in on the thinkers template,
 # driven by HEADLONG_SANDBOX in the root .env (default on). See
 # deploy/thinkers-sandbox.sh. A change reaches a running mind at its next

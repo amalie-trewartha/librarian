@@ -83,20 +83,30 @@ fi
 
 # Identities live outside the checkout (design/runtime_isolation.md, layer
 # 0): the runtime tree is the runtime, the minds' state is its own tree, and
-# a deploy pull can never touch it. The checkout keeps a symlink at the old
-# path, so every tool that says ".identities" keeps working. A box from
-# before this layout has a real directory here; that is left alone (the
-# migration is a deliberate step: stop, rename, link, restart).
+# a deploy pull can never touch it. The real directory is bind-mounted at
+# the old path inside the checkout, so every tool that says ".identities"
+# sees a plain directory (a symlink there tripped the web scan and would
+# trip find/tar, 2026-09-15). The mount is in fstab so it survives reboots.
+# A box from before this layout has a populated real directory at the old
+# path; that is left alone (migration is a deliberate stop, move, mount).
 IDENTITIES_DIR="${HEADLONG_IDENTITIES_DIR:-/var/lib/headlong/identities}"
-echo "==> Identities root: $IDENTITIES_DIR (linked from $APP_DIR/.identities)"
+echo "==> Identities root: $IDENTITIES_DIR (mounted at $APP_DIR/.identities)"
 mkdir -p "$IDENTITIES_DIR"
 chown "$SHELLM_USER:$SHELLM_USER" "$IDENTITIES_DIR"
 chmod 755 "$(dirname "$IDENTITIES_DIR")" "$IDENTITIES_DIR"
-if [[ ! -e "$APP_DIR/.identities" ]]; then
-    ln -s "$IDENTITIES_DIR" "$APP_DIR/.identities"
-    chown -h "$SHELLM_USER:$SHELLM_USER" "$APP_DIR/.identities"
-elif [[ ! -L "$APP_DIR/.identities" ]]; then
-    echo "    note: $APP_DIR/.identities is a real directory (pre-layer-0 box); not moving it"
+if [[ -L "$APP_DIR/.identities" ]]; then
+    rm -f "$APP_DIR/.identities"
+fi
+if [[ -d "$APP_DIR/.identities" ]] && ! mountpoint -q "$APP_DIR/.identities" \
+    && [[ -n "$(ls -A "$APP_DIR/.identities" 2>/dev/null)" ]]; then
+    echo "    note: $APP_DIR/.identities is a populated directory (pre-layer-0 box); not mounting over it"
+else
+    mkdir -p "$APP_DIR/.identities"
+    chown "$SHELLM_USER:$SHELLM_USER" "$APP_DIR/.identities"
+    if ! grep -qs "^$IDENTITIES_DIR $APP_DIR/.identities " /etc/fstab; then
+        printf '%s %s none bind 0 0\n' "$IDENTITIES_DIR" "$APP_DIR/.identities" >> /etc/fstab
+    fi
+    mountpoint -q "$APP_DIR/.identities" || mount --bind "$IDENTITIES_DIR" "$APP_DIR/.identities"
 fi
 
 echo "==> Installing systemd service"

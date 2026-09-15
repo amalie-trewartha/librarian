@@ -1,6 +1,6 @@
 # Runtime isolation for a persona box
 
-Status: layer 1 and the secret split built 2026-09-15. Layer 0 open.
+Status: all three layers built 2026-09-15 (layer 0 as a bind mount; Harris migrated the same day, Audel next).
 
 ## The problem
 
@@ -35,11 +35,20 @@ identity plus two web servers that wedged the wake loop for seven hours
    unit. Alerts post with `HEADLONG_ALERT_TOKEN`, seeded as a copy of the
    bot token and meant to be replaced by a dedicated alert-only app.
    Telegram already had this shape.
-3. **Identities out of the checkout** (open). `.identities/` and the
-   working directory move to their own tree so a deploy pull can never
-   collide with the mind's files and the box git status is the runtime's
-   alone. Touches many path assumptions; matters less once layer 1 is
-   in.
+3. **Identities out of the checkout** (built). The real directory is
+   `/var/lib/headlong/identities`, bind-mounted at `app/.identities` via
+   fstab (`deploy/setup.sh` provisions it; `deploy/update.sh` re-mounts it
+   if dropped). Every tool keeps saying `.identities` and sees a plain
+   directory. A symlink was tried first and rejected: systemd does not
+   resolve symlinks in ReadWritePaths, the web scan treated the linked root
+   as a candidate identity and never walked it (the bridges deliver inbound
+   messages through that API, so Harris went deaf to Slack for a minute),
+   and `find`/`tar` would not follow it either. The scan now walks a linked
+   root one level anyway (belt and braces), and the sandbox installer
+   resolves a link if one is ever used. Migration of an existing box is a
+   deliberate step: stop thinkers, web and bridges; move the directory;
+   mount; re-render the sandbox drop-in; start; verify from inside the
+   unit. Twelve seconds of downtime on Harris.
 
 Not chosen: a Unix user per persona (most of the value comes from the
 namespace for far less migration; personas already live on separate
