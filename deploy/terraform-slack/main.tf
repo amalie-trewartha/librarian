@@ -189,15 +189,14 @@ resource "cloudflare_zero_trust_access_policy" "allowlist" {
   precedence     = 1
   decision       = "allow"
 
+  # One include block with both selectors. With two blocks (emails, then
+  # domains) the v4 provider kept only the last one: the live policies held
+  # just the domain rule, the explicit emails were re-added on every apply
+  # and dropped again, and OTP login for a non-domain address never worked
+  # (found 2026-09-15 via the API; the plan had shown the "diff" forever).
   include {
-    email = var.allowed_emails
-  }
-
-  dynamic "include" {
-    for_each = length(var.allowed_email_domains) > 0 ? [1] : []
-    content {
-      email_domain = var.allowed_email_domains
-    }
+    email        = var.allowed_emails
+    email_domain = length(var.allowed_email_domains) > 0 ? var.allowed_email_domains : null
   }
 }
 
@@ -256,15 +255,14 @@ resource "cloudflare_zero_trust_access_policy" "chat_allowlist" {
   precedence     = 1
   decision       = "allow"
 
+  # One include block with both selectors. With two blocks (emails, then
+  # domains) the v4 provider kept only the last one: the live policies held
+  # just the domain rule, the explicit emails were re-added on every apply
+  # and dropped again, and OTP login for a non-domain address never worked
+  # (found 2026-09-15 via the API; the plan had shown the "diff" forever).
   include {
-    email = var.allowed_emails
-  }
-
-  dynamic "include" {
-    for_each = length(var.allowed_email_domains) > 0 ? [1] : []
-    content {
-      email_domain = var.allowed_email_domains
-    }
+    email        = var.allowed_emails
+    email_domain = length(var.allowed_email_domains) > 0 ? var.allowed_email_domains : null
   }
 }
 
@@ -295,15 +293,14 @@ resource "cloudflare_zero_trust_access_policy" "extra_dash_allowlist" {
   precedence     = 1
   decision       = "allow"
 
+  # One include block with both selectors. With two blocks (emails, then
+  # domains) the v4 provider kept only the last one: the live policies held
+  # just the domain rule, the explicit emails were re-added on every apply
+  # and dropped again, and OTP login for a non-domain address never worked
+  # (found 2026-09-15 via the API; the plan had shown the "diff" forever).
   include {
-    email = var.allowed_emails
-  }
-
-  dynamic "include" {
-    for_each = length(var.allowed_email_domains) > 0 ? [1] : []
-    content {
-      email_domain = var.allowed_email_domains
-    }
+    email        = var.allowed_emails
+    email_domain = length(var.allowed_email_domains) > 0 ? var.allowed_email_domains : null
   }
 }
 
@@ -356,15 +353,14 @@ resource "cloudflare_zero_trust_access_policy" "extra_chat_allowlist" {
   precedence     = 1
   decision       = "allow"
 
+  # One include block with both selectors. With two blocks (emails, then
+  # domains) the v4 provider kept only the last one: the live policies held
+  # just the domain rule, the explicit emails were re-added on every apply
+  # and dropped again, and OTP login for a non-domain address never worked
+  # (found 2026-09-15 via the API; the plan had shown the "diff" forever).
   include {
-    email = var.allowed_emails
-  }
-
-  dynamic "include" {
-    for_each = length(var.allowed_email_domains) > 0 ? [1] : []
-    content {
-      email_domain = var.allowed_email_domains
-    }
+    email        = var.allowed_emails
+    email_domain = length(var.allowed_email_domains) > 0 ? var.allowed_email_domains : null
   }
 }
 
