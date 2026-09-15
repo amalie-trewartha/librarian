@@ -49,15 +49,23 @@ fi
 # are what let the dash (user shellm) start dispatchers in their own
 # cgroup; the sudoers file is only installed if it passes visudo's check,
 # because a malformed sudoers file breaks sudo box-wide.
-for unit_tpl in headlong-thinkers@ headlong-thinkers-alert@; do
-    unit_src="$APP_DIR/deploy/${unit_tpl}.service"
+for unit_file in headlong-thinkers@.service headlong-thinkers-alert@.service \
+                 headlong-thinkers-silence@.service headlong-thinkers-silence@.timer; do
+    unit_src="$APP_DIR/deploy/${unit_file}"
     [[ -f "$unit_src" ]] || continue
     rendered=$(sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$unit_src")
-    if ! printf '%s\n' "$rendered" | cmp -s - "/etc/systemd/system/${unit_tpl}.service" 2>/dev/null; then
-        echo "==> Unit file changed — re-installing ${unit_tpl}"
-        printf '%s\n' "$rendered" | sudo tee "/etc/systemd/system/${unit_tpl}.service" >/dev/null
+    if ! printf '%s\n' "$rendered" | cmp -s - "/etc/systemd/system/${unit_file}" 2>/dev/null; then
+        echo "==> Unit file changed — re-installing ${unit_file}"
+        printf '%s\n' "$rendered" | sudo tee "/etc/systemd/system/${unit_file}" >/dev/null
         sudo systemctl daemon-reload
     fi
+done
+# Silence timer: one per identity that has a thinkers unit on this box.
+# Idempotent; a timer for a stopped identity exits quietly on every tick.
+for inst in $(systemctl list-units --all 'headlong-thinkers@*.service' --no-legend --plain 2>/dev/null | awk '{print $1}'); do
+    ident="${inst#headlong-thinkers@}"; ident="${ident%.service}"
+    [[ -n "$ident" ]] || continue
+    sudo systemctl enable --now "headlong-thinkers-silence@${ident}.timer" >/dev/null 2>&1 || true
 done
 # Single name only — the headlong rename ships no wrapper compat. Legacy
 # copies are swept so nothing on the box can still invoke a wrapper that

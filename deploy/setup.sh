@@ -91,9 +91,10 @@ systemctl enable --now headlong-web
 # headlong-thinkers@<identity>.service (via the sudo wrapper) so they get
 # their own cgroup instead of living inside headlong-web's.
 echo "==> Installing per-identity thinkers unit + control wrapper"
-for unit_tpl in headlong-thinkers@ headlong-thinkers-alert@; do
-    sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$SCRIPT_DIR/${unit_tpl}.service" \
-        > "/etc/systemd/system/${unit_tpl}.service"
+for unit_file in headlong-thinkers@.service headlong-thinkers-alert@.service \
+                 headlong-thinkers-silence@.service headlong-thinkers-silence@.timer; do
+    sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$SCRIPT_DIR/${unit_file}" \
+        > "/etc/systemd/system/${unit_file}"
 done
 install -o root -g root -m 0755 "$SCRIPT_DIR/headlong-thinkersctl" /usr/local/bin/headlong-thinkersctl
 if visudo -cf "$SCRIPT_DIR/sudoers-headlong-thinkers"; then
