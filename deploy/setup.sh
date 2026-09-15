@@ -81,6 +81,24 @@ ENV
     chmod 600 "$APP_DIR/.env"
 fi
 
+# Identities live outside the checkout (design/runtime_isolation.md, layer
+# 0): the runtime tree is the runtime, the minds' state is its own tree, and
+# a deploy pull can never touch it. The checkout keeps a symlink at the old
+# path, so every tool that says ".identities" keeps working. A box from
+# before this layout has a real directory here; that is left alone (the
+# migration is a deliberate step: stop, rename, link, restart).
+IDENTITIES_DIR="${HEADLONG_IDENTITIES_DIR:-/var/lib/headlong/identities}"
+echo "==> Identities root: $IDENTITIES_DIR (linked from $APP_DIR/.identities)"
+mkdir -p "$IDENTITIES_DIR"
+chown "$SHELLM_USER:$SHELLM_USER" "$IDENTITIES_DIR"
+chmod 755 "$(dirname "$IDENTITIES_DIR")" "$IDENTITIES_DIR"
+if [[ ! -e "$APP_DIR/.identities" ]]; then
+    ln -s "$IDENTITIES_DIR" "$APP_DIR/.identities"
+    chown -h "$SHELLM_USER:$SHELLM_USER" "$APP_DIR/.identities"
+elif [[ ! -L "$APP_DIR/.identities" ]]; then
+    echo "    note: $APP_DIR/.identities is a real directory (pre-layer-0 box); not moving it"
+fi
+
 echo "==> Installing systemd service"
 sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$SCRIPT_DIR/headlong-web.service" \
     > /etc/systemd/system/headlong-web.service

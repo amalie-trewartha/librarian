@@ -74,14 +74,23 @@ flag_on() {
 
 # Where the identities really live. systemd does not resolve symlinks in
 # ReadWritePaths (probed 2026-09-15: a link at app/.identities pointing at
-# /var/lib left both paths read-only), so when the identities root has been
-# moved out of the checkout and linked back (layer 0 of
-# design/runtime_isolation.md), HEADLONG_IDENTITIES_DIR in .env names the
-# real directory and the writable mount lands on it. Default: inside the app.
+# /var/lib left both paths read-only), so when the identities root lives
+# outside the checkout and is linked back (layer 0 of
+# design/runtime_isolation.md), the writable mount must land on the real
+# directory: the link at app/.identities is resolved, or
+# HEADLONG_IDENTITIES_DIR in .env names it outright.
 identities_dir() {
-    local v
+    local v d
     v=$(env_value HEADLONG_IDENTITIES_DIR)
-    printf '%s' "${v:-$SHELLM_HOME/app/.identities}"
+    if [[ -n "$v" ]]; then printf '%s' "$v"; return 0; fi
+    d="$SHELLM_HOME/app/.identities"
+    # No override: follow the link the box setup leaves at the old path
+    # (deploy/setup.sh), so a fresh box needs no env at all.
+    if [[ -L "$d" ]]; then
+        readlink -f -- "$d" 2>/dev/null || printf '%s' "$d"
+    else
+        printf '%s' "$d"
+    fi
 }
 
 render() {

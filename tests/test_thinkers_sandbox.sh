@@ -78,6 +78,11 @@ grep -q "^ReadOnlyPaths=$APP$" <<< "$out" && ok "render: app checkout still read
 out=$(HEADLONG_IDENTITIES_DIR=/srv/ids bash "$SCRIPT" render "$APP" "$HOME_DIR")
 grep -q '^ReadWritePaths=/srv/ids/%i$' <<< "$out" && ok "render: environment overrides .env for the root" || bad "render: env override for root"
 printf 'HEADLONG_SANDBOX=1\n' > "$APP/.env"
+real="$TMP/var-lib-identities"; mkdir -p "$real"; ln -s "$real" "$APP/.identities"
+real_resolved=$(cd "$real" && pwd -P)   # macOS: /var is itself a link to /private/var
+out=$(run render "$APP" "$HOME_DIR")
+grep -q "^ReadWritePaths=$real_resolved/%i$" <<< "$out" && ok "render: a linked .identities resolves to its real directory" || bad "render: linked .identities resolves" "$out"
+rm -f "$APP/.identities"
 
 # 8. the shipped installers call it
 grep -q 'thinkers-sandbox.sh' "$REPO/deploy/update.sh" && grep -q 'thinkers-sandbox.sh' "$REPO/deploy/setup.sh" \
