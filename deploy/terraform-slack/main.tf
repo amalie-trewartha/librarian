@@ -100,7 +100,7 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "shellm" {
 
 resource "cloudflare_record" "shellm" {
   zone_id = var.cloudflare_zone_id
-  name    = var.subdomain
+  name    = coalesce(var.dash_subdomain, var.subdomain)
   type    = "CNAME"
   content = "${cloudflare_zero_trust_tunnel_cloudflared.shellm.id}.cfargotunnel.com"
   proxied = true
