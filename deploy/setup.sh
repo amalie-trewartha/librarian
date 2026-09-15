@@ -96,6 +96,9 @@ for unit_file in headlong-thinkers@.service headlong-thinkers-alert@.service \
     sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$SCRIPT_DIR/${unit_file}" \
         > "/etc/systemd/system/${unit_file}"
 done
+# Runtime sandbox drop-in for the thinkers template (HEADLONG_SANDBOX in
+# .env, default on; see deploy/thinkers-sandbox.sh).
+bash "$SCRIPT_DIR/thinkers-sandbox.sh" install "$APP_DIR" "$SHELLM_HOME" >/dev/null
 install -o root -g root -m 0755 "$SCRIPT_DIR/headlong-thinkersctl" /usr/local/bin/headlong-thinkersctl
 if visudo -cf "$SCRIPT_DIR/sudoers-headlong-thinkers"; then
     install -o root -g root -m 0440 "$SCRIPT_DIR/sudoers-headlong-thinkers" /etc/sudoers.d/headlong-thinkers

@@ -11,8 +11,19 @@ set -euo pipefail
 APP_DIR="${APP_DIR:-/opt/shellm/app}"
 UNIT_DST="${UNIT_DST:-/etc/systemd/system/headlong-web.service}"
 
+# bash has already read this script when the pull below replaces it, so a
+# deploy that changes update.sh itself, or adds unit files this script
+# installs, used to need a second run (2026-09-15: the silence timer landed
+# on Harris only on the second update). Re-exec the pulled copy once.
+before=$(sha256sum "$0" 2>/dev/null | cut -d' ' -f1 || true)
 echo "==> Pulling latest"
 sudo -u shellm git -C "$APP_DIR" pull --ff-only
+after=$(sha256sum "$0" 2>/dev/null | cut -d' ' -f1 || true)
+if [[ -z "${HEADLONG_UPDATE_REEXEC:-}" && -n "$before" && "$before" != "$after" ]]; then
+    echo "==> update.sh changed in this pull — re-running the new copy"
+    export HEADLONG_UPDATE_REEXEC=1
+    exec bash "$0" "$@"
+fi
 
 # The headlong rename moved every unit from shelly-* to headlong-*. That
 # cutover restarts the identity dispatchers, so it must never happen as a
@@ -60,6 +71,16 @@ for unit_file in headlong-thinkers@.service headlong-thinkers-alert@.service \
         sudo systemctl daemon-reload
     fi
 done
+# Runtime sandbox for every wake: a drop-in on the thinkers template,
+# driven by HEADLONG_SANDBOX in the root .env (default on). See
+# deploy/thinkers-sandbox.sh. A change reaches a running mind at its next
+# headlong-thinkersctl restart <identity>; this script never restarts a
+# dispatcher on its own.
+sandbox_state=$(sudo bash "$APP_DIR/deploy/thinkers-sandbox.sh" install "$APP_DIR" "$SHELLM_HOME")
+if [[ "$sandbox_state" != "unchanged" ]]; then
+    echo "==> Thinkers sandbox drop-in $sandbox_state — daemon-reload; restart each identity (headlong-thinkersctl restart <identity>) to apply"
+    sudo systemctl daemon-reload
+fi
 # Silence timer: one per identity that has a thinkers unit on this box.
 # Idempotent; a timer for a stopped identity exits quietly on every tick.
 for inst in $(systemctl list-units --all 'headlong-thinkers@*.service' --no-legend --plain 2>/dev/null | awk '{print $1}'); do
@@ -106,6 +127,12 @@ fi
 # SHELLM_INSTALL_SLACK_BRIDGE=1). Re-sync its units + deps and restart the
 # bridge; the persona bootstrap (oneshot) is left alone so the running
 # dispatcher is untouched.
+# Keep the Slack bridge tokens out of the mind's env (deploy/split-bridge-env.sh;
+# idempotent, a no-op once split). Before the bridge restart below so the
+# bridge comes back reading .env.bridge.
+if [[ -f "$APP_DIR/deploy/split-bridge-env.sh" ]]; then
+    sudo bash "$APP_DIR/deploy/split-bridge-env.sh" "$APP_DIR"
+fi
 if [[ -f /etc/systemd/system/headlong-slack-bridge.service ]]; then
     echo "==> Updating Slack bridge"
     for unit in headlong-slack-agent headlong-slack-bridge; do
