@@ -133,8 +133,17 @@ _runtime_line() {
             | sort -n | tail -1)
         [[ -n "$newest" ]] && sync_t=$(_epoch_utc "$newest")
     fi
-    printf 'Runtime: headlong %s (%s)%s%s. A fact about your own runtime that you verified under this commit holds until this line changes.\n' \
-        "$sha" "$subject" "${head_t:+, checked out $head_t}" "${sync_t:+; your thinkers synced $sync_t}"
+    # Boundary sentence, only when it is true from where this wake runs: under
+    # the thinkers sandbox (deploy/thinkers-sandbox.sh) the checkout is a
+    # read-only mount and the identity directory is the writable island. Said
+    # every wake so the mind never has to rediscover it from an EROFS error
+    # (a Slack message saying so leaves the recent stream in fifteen minutes).
+    local boundary=""
+    if [[ ! -w "$root/bin" ]]; then
+        boundary=" The checkout at $root is read-only inside a wake: bin, thinkers, tools, deploy and .env cannot be edited in place, and no identity can be created beside yours; runtime changes go through your own clone and a pull request. Your identity directory${IDENTITY_DIR:+ ($IDENTITY_DIR)} is yours to write."
+    fi
+    printf 'Runtime: headlong %s (%s)%s%s. A fact about your own runtime that you verified under this commit holds until this line changes.%s\n' \
+        "$sha" "$subject" "${head_t:+, checked out $head_t}" "${sync_t:+; your thinkers synced $sync_t}" "$boundary"
     return 0
 }
 
