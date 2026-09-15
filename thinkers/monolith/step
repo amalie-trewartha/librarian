@@ -444,10 +444,18 @@ rm -f "$run_err_tmp"
 # killed here: a backgrounded sub-run can be deliberate. Reported so the log
 # says what outlived the wake, which is what took six hours to find above.
 if [[ "$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')" == "$$" ]]; then
-    run_leftovers=$(pgrep -g $$ 2>/dev/null | grep -vx "$$" || true)
+    # pgrep runs inside a subshell of this group, so its own pipeline shows
+    # up in the list; those pids are gone once the substitution returns,
+    # and the kill -0 below drops them. Only what is still alive counts.
+    run_leftovers=""
+    for run_leftover in $(pgrep -g $$ 2>/dev/null || true); do
+        [[ "$run_leftover" == "$$" ]] && continue
+        kill -0 "$run_leftover" 2>/dev/null || continue
+        run_leftovers="${run_leftovers}${run_leftovers:+ }${run_leftover}"
+    done
     if [[ -n "$run_leftovers" ]]; then
         printf '  WARNING: %s process(es) the run backgrounded are still alive after it exited:\n' \
-            "$(printf '%s\n' "$run_leftovers" | wc -l | tr -d ' ')" >&2
+            "$(printf '%s\n' $run_leftovers | wc -l | tr -d ' ')" >&2
         for run_leftover in $run_leftovers; do
             ps -o pid=,etime=,args= -p "$run_leftover" 2>/dev/null | cut -c1-160 | sed 's/^/    /' >&2 || true
         done
