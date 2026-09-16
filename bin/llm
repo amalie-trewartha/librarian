@@ -576,6 +576,11 @@ get_model_max_tokens() {
         # is null). It's a reasoning model, so the generic 16384 starves its
         # thinking. Give it the reasoning-model tier like Anthropic above.
         x-ai/grok-4*|x-ai/grok*) echo 64000 ;;
+        # Zhipu GLM 5.x (via OpenRouter): reasoning model whose thinking
+        # counts against max_tokens; 16384 returned empty answers on Harris
+        # (2026-09-16, finish_reason length at zero visible characters).
+        # OpenRouter reports a 943K completion ceiling.
+        z-ai/glm-5*) echo 64000 ;;
         */*) echo 16384 ;;
         *)
             # Conservative fallback for unknown models. openai-compatible
