@@ -472,6 +472,17 @@ fi
 # the first DEFER line wherever it is (a shorter DEFER line that is a prefix
 # of it wins, which un-glues the duplicate case), every DEFER line is dropped
 # from the text sent, and what is left is the holding message.
+#
+# 2026-09-15 23:58Z shape: the holding sentence glued in FRONT of the DEFER
+# on one line ("...your wake prompt.DEFER: Investigate ..."), so the line
+# started with prose, no DEFER line was found, and the whole thing went to
+# Slack. A DEFER: glued to a non-space character is split onto its own line
+# first. A DEFER: after a space is left alone on purpose: that is the model
+# talking about the protocol ("the raw DEFER: handoff text"), not using it.
+reply=$(printf '%s\n' "$reply" | awk '{
+    i = index($0, "DEFER:")
+    if (i > 1 && substr($0, i - 1, 1) !~ /[[:space:]]/) { print substr($0, 1, i - 1); print substr($0, i) } else print
+}')
 deferred_request=""
 _defer_lines=$(printf '%s' "$reply" | grep -E '^[[:space:]]*DEFER:' || true)
 if [[ -n "$_defer_lines" ]]; then
@@ -487,6 +498,9 @@ if [[ -n "$_defer_lines" ]]; then
     # grep -v exits 1 when it drops every line (a bare DEFER); under pipefail
     # that must not kill the step.
     reply=$(printf '%s' "$reply" | grep -vE '^[[:space:]]*DEFER:' | sed '/./,$!d' || true)
+    # The un-glued shape leaves the holding sentence twice (before and after
+    # the DEFER); send a repeated non-blank line once.
+    reply=$(printf '%s\n' "$reply" | awk '!/[^[:space:]]/ || !seen[$0]++' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')
     [[ -z "$reply" ]] && reply="Let me look into that and get back to you."
     printf '  deferring to the mind: %s\n' "$deferred_request" >&2
     jq -nc --arg source "$THINKER_NAME" --arg trigger "$trigger_step_id" \
@@ -498,6 +512,15 @@ if [[ -n "$_defer_lines" ]]; then
           source:$source, person:$person, request:$request}
          + (if $trigger == "" then {} else {trigger_step: $trigger} end)' \
         | traj append >/dev/null || true
+fi
+
+# A reply that is tool-call markup is the model trying to act, not talk
+# (Nemotron 3 Ultra: "<function=skills>..." sent to a DM on 2026-09-15).
+# Never send it; surface it like a failed reply so the mind can answer.
+if printf '%s' "$reply" | head -n 1 | grep -qE '^[[:space:]]*<(function|tool_call|parameter|invoke)[=> ]'; then
+    printf '  model returned tool-call markup instead of a reply — not sending\n' >&2
+    _obs "reply failed: the model answered $msg_from with tool-call markup instead of a message, so nothing was sent. Reply to them yourself. Their message was: $(printf '%.200s' "$trigger_content")" reply-failed "$(_finish_metrics)"
+    exit 0
 fi
 
 reply_args=()

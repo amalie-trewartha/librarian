@@ -251,6 +251,34 @@ sent=$(jq -r 'select(.type=="message" and .from=="testid" and .reply_to=="trig-6
 act=$(jq -c 'select(.type=="action" and .source=="responder" and .trigger_step=="trig-6")' "$TRAJ" | tail -1)
 [[ -n "$act" && "$(printf '%s' "$act" | jq -r .request)" == "read the box status and report it" ]] && ok "a DEFER on a later line still appends the action" || bad "a DEFER on a later line still appends the action" "got '$act'"
 
+# --- 8. holding text glued in FRONT of the DEFER on one line, then repeated
+#        (Nemotron, 2026-09-15 23:58Z: the whole line went to Slack) --------
+printf '{"step_id":"trig-7","type":"message","from":"%s","to":"%s","content":"how do goals reach your wake prompt?","ts":"%s","source":"chat"}\n' "$THEM" "$ME" "$(now)" >> "$TRAJ"
+printf 'Let me look into the shellm architecture.DEFER: Investigate how goals are injected into the wake prompt\nLet me look into the shellm architecture.\n' > "$STUB_REPLY_FILE"
+run_responder "$(grep -F '"step_id":"trig-7"' "$TRAJ")"
+sent=$(jq -r 'select(.type=="message" and .from=="testid" and .reply_to=="trig-7") | .content' "$TRAJ" | tail -1)
+[[ "$sent" == "Let me look into the shellm architecture." ]] && ok "a DEFER glued after prose is split off and the holding text is sent once" || bad "a DEFER glued after prose is split off and the holding text is sent once" "got '$sent'"
+act=$(jq -c 'select(.type=="action" and .source=="responder" and .trigger_step=="trig-7")' "$TRAJ" | tail -1)
+[[ -n "$act" && "$(printf '%s' "$act" | jq -r .request)" == "Investigate how goals are injected into the wake prompt" ]] && ok "a DEFER glued after prose still becomes the request" || bad "a DEFER glued after prose still becomes the request" "got '$act'"
+
+# --- 9. talking ABOUT the protocol is not using it --------------------------
+printf '{"step_id":"trig-8","type":"message","from":"%s","to":"%s","content":"what was that plumbing you mentioned?","ts":"%s","source":"chat"}\n' "$THEM" "$ME" "$(now)" >> "$TRAJ"
+printf 'My outgoing chat showed the raw DEFER: handoff text. I am tracing it.\n' > "$STUB_REPLY_FILE"
+run_responder "$(grep -F '"step_id":"trig-8"' "$TRAJ")"
+sent=$(jq -r 'select(.type=="message" and .from=="testid" and .reply_to=="trig-8") | .content' "$TRAJ" | tail -1)
+[[ "$sent" == "My outgoing chat showed the raw DEFER: handoff text. I am tracing it." ]] && ok "a DEFER: after a space is prose and is sent as written" || bad "a DEFER: after a space is prose and is sent as written" "got '$sent'"
+act=$(jq -c 'select(.type=="action" and .source=="responder" and .trigger_step=="trig-8")' "$TRAJ" | tail -1)
+[[ -z "$act" ]] && ok "talking about DEFER appends no action" || bad "talking about DEFER appends no action" "got '$act'"
+
+# --- 10. tool-call markup is never sent (Nemotron, 2026-09-15 DM) -----------
+printf '{"step_id":"trig-9","type":"message","from":"%s","to":"%s","content":"which skills do you have?","ts":"%s","source":"chat"}\n' "$THEM" "$ME" "$(now)" >> "$TRAJ"
+printf '<function=skills>\n<parameter=command>\nshow\n</parameter>\n</function>\n' > "$STUB_REPLY_FILE"
+run_responder "$(grep -F '"step_id":"trig-9"' "$TRAJ")"
+sent=$(jq -r 'select(.type=="message" and .from=="testid" and .reply_to=="trig-9") | .content' "$TRAJ" | tail -1)
+[[ -z "$sent" ]] && ok "tool-call markup is not sent to the person" || bad "tool-call markup is not sent to the person" "got '$sent'"
+obs=$(jq -c 'select(.type=="observation" and .source=="responder" and .trigger_step=="trig-9")' "$TRAJ" | tail -1)
+[[ -n "$obs" && "$(printf '%s' "$obs" | jq -r .decision)" == "reply-failed" ]] && ok "tool-call markup leaves a reply-failed observation for the mind" || bad "tool-call markup leaves a reply-failed observation for the mind" "got '$obs'"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
