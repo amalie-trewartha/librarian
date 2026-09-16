@@ -311,7 +311,79 @@ $_pnb
     fi
 fi
 
-reply_system="$system_prompt
+# ---------------------------------------------------------------------------
+# Reply voice and shape
+# ---------------------------------------------------------------------------
+# The voice is concrete bans, not adjectives. The 2026-09-16 replay of 57
+# real prompts (headlong-experiments/responder-defer) showed "first person,
+# natural, conversational, concise" left 94% of replies with em dashes, a
+# third over 400 characters and a fifth in three or more paragraphs; this
+# block cut those to 3%, 3% and 0% and a blind judge preferred its
+# readability 20 to 1. The deferral protocol is stated INSIDE the block on
+# purpose: the same block without it halved deferrals and produced bare
+# "Let me look into that" replies with no work behind them.
+#
+# Shape: with RESPONDER_STRUCTURED=1, or auto (default) on a model whose
+# provider enforces a JSON Schema, the model returns one object
+# {action, message, request} through `llm --json-schema` (reply.schema.json
+# beside this step), which makes the reply/defer/no_reply decision a
+# required field instead of a first line the model can forget. On the same
+# replay the structured form kept every deferral and was judged clearer
+# 12 to 6. Any other model, RESPONDER_STRUCTURED=0, or a failed schema call
+# uses the text protocol (DEFER: first line / NO_REPLY) unchanged.
+RESPONDER_STRUCTURED="${RESPONDER_STRUCTURED:-auto}"
+_schema_file="$SCRIPT_DIR/reply.schema.json"
+_supports_schema() {
+    case "$1" in
+        deepseek/*|x-ai/*|z-ai/glm-5*|moonshotai/*|qwen/*|meta-llama/*|mistralai/*|google/gemini*|openai/*|gpt-4o*|gpt-5*|o1*|o3*|o4*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+structured=0
+case "$RESPONDER_STRUCTURED" in
+    1) structured=1 ;;
+    0) structured=0 ;;
+    *) _supports_schema "$REPLY_MODEL" && structured=1 ;;
+esac
+[[ -f "$_schema_file" ]] || structured=0
+
+_compose_reply_system() {   # $1 = 1 structured, 0 text; sets reply_system
+    local defer_rule defer_para noreply_rule output_para
+    if [[ "$1" -eq 1 ]]; then
+        defer_rule='answer with action "defer", the work in "request" (one line) and one short
+  holding sentence in "message". A holding sentence with action "reply" is a
+  promise nobody will keep.'
+        defer_para='Answer completely from what you already know. If a real answer needs tools,
+files, or looking something up, do not guess and do not promise to check
+yourself: hand the work to the mind with action "defer" and send a short
+holding message such as "Let me look into that and get back to you." The
+mind follows up with the result.'
+        noreply_rule='use action "no_reply" with an empty message.'
+        output_para='Output ONLY one JSON object and nothing else (no code fence, no preamble):
+{"action": "reply" | "defer" | "no_reply",
+ "message": "the reply text to send; empty when no_reply",
+ "request": "one line describing the work for the mind; only when defer, else empty"}
+The message follows the rules above: no dashes, no markdown, no praise
+opener, no closing question. It is delivered automatically: never write
+'"'"'chat reply'"'"' or the recipient'"'"'s address inside it, and never put commands in it.
+Check before you answer: does this need work you cannot do inside this reply?
+Then action is "defer", request is the work, message is the holding sentence.'
+    else
+        defer_rule='write `DEFER: <the work, one line>` as the first line and one short holding
+  sentence as the second. A holding sentence without the DEFER line is a
+  promise nobody will keep.'
+        defer_para='Answer completely from what you already know. If a real answer needs tools,
+files, or looking something up, do not guess and do not promise to check
+yourself: put `DEFER: <the work, one line>` on the first line, then the short
+message to send (e.g. "Let me look into that and get back to you."). The work
+is handed to the mind, which follows up with the result.'
+        noreply_rule='output exactly NO_REPLY on its own line and nothing else.'
+        output_para='Output ONLY the reply message text, no preamble, no quotes, no commands.
+Delivery is automatic: never write '"'"'chat reply'"'"' or the recipient'"'"'s address.
+Check before you answer: does this need work you cannot do inside this reply?
+Then the first line is DEFER: and the second is the holding sentence.'
+    fi
+    reply_system="$system_prompt
 
 The current time is $now_utc. You are in a live chat conversation with
 $msg_from. The messages are the real back-and-forth so far, spanning up to
@@ -319,24 +391,40 @@ $HISTORY_SINCE; each of their messages is prefixed with how long ago it was sent
 so mind the gaps (an answer from days ago is not \"this morning\"). In a group
 thread some earlier messages are from other people (the header in each message
 names the speaker); they are context, and you are answering $msg_from. Reply to
-their newest message — first person, natural, conversational, concise. Never repeat or rephrase an earlier reply of yours.
-Answer completely from what you already know. If a real answer needs tools,
-files, or looking something up, do not guess and do not promise to check
-yourself: put \`DEFER: <the work, one line>\` on the first line, then the short
-message to send (e.g. \"Let me look into that and get back to you.\"). The work
-is handed to the mind, which follows up with the result.
+their newest message the way the people in this chat write to each other:
+plain sentences, first person, one to three sentences unless they asked for
+detail. These rules hold even when you feel you are being helpful:
+- No dashes of any kind. Use a period or a comma.
+- Do not open by praising or agreeing (\"Good question\", \"Fair\", \"Got it\",
+  \"Makes sense\"). Start with the answer.
+- No bold, headers, bullets, or code formatting in chat. If the answer needs
+  a list or more than a short paragraph, give the short version and offer to
+  put the rest in a thread or a file.
+- Do not end with a question unless you need the answer to continue.
+- Do not describe your own machinery (wakes, trajectory, responder, bridge,
+  thinkers, prompts) unless they asked about it.
+- If they ask you to do something, or the answer needs a file, a tool, or a
+  lookup, do not answer from guesswork and do not just say you will do it:
+  $defer_rule
+- Say what you know, then stop. No filler, no restating their message, no
+  sign-off, no \"happy to help\".
+- Everyday words. No \"delve\", \"robust\", \"leverage\", \"landscape\", \"nuance\".
+  Repeat a word rather than swap in a synonym.
+Never repeat or rephrase an earlier reply of yours.
+$defer_para
 
 Not every message needs a reply. If their newest message is already answered
 (a reply of yours addressing it is visible above), is a bare acknowledgment
 like \"thanks\" or \"ok\", is a Slack reaction (a \`:emoji:\` body, optionally with \`(on <ts>)\`), or anything you could say would only repeat you,
-output exactly NO_REPLY on its own line and nothing else. Staying quiet is
+$noreply_rule Staying quiet is
 better than a duplicate or a contentless reply.
 
 ${person_notes_block}Your recent inner life (context only, not part of the conversation):
 $inner_context
 
-Output ONLY the reply message text — no preamble, no quotes, no commands.
-Delivery is automatic: never write 'chat reply' or the recipient's address."
+$output_para"
+}
+_compose_reply_system "$structured"
 
 # ---------------------------------------------------------------------------
 # Person notes writer (part 4). After a reply is sent, rewrite this person's
@@ -437,7 +525,41 @@ if [[ "${RESPONDER_LOG_PROMPT:-0}" == "1" && -n "${IDENTITY_DIR:-}" ]]; then
 fi
 
 printf '  replying to %s...\n' "$msg_from" >&2
-reply=$(llm -m "$REPLY_MODEL" -M "$convo_json" -s "$reply_system") || true
+reply=""
+if [[ "$structured" -eq 1 ]]; then
+    if ! reply=$(llm -m "$REPLY_MODEL" -M "$convo_json" -s "$reply_system" --json-schema "$_schema_file"); then
+        # The provider refused the schema (or the call failed): once more as
+        # plain text so a model without structured output still answers.
+        printf '  structured reply call failed — retrying as plain text\n' >&2
+        structured=0
+        _compose_reply_system 0
+        reply=$(llm -m "$REPLY_MODEL" -M "$convo_json" -s "$reply_system") || true
+    fi
+else
+    reply=$(llm -m "$REPLY_MODEL" -M "$convo_json" -s "$reply_system") || true
+fi
+
+# Structured reply: read the object and hand the rest of the step the text
+# protocol it already knows (NO_REPLY line, DEFER: line + holding sentence,
+# or the message). An object that does not parse is treated as text, so a
+# model that ignored the format still gets the DEFER parser and the markup
+# guard below instead of an empty reply.
+if [[ "$structured" -eq 1 ]]; then
+    _obj=$(printf '%s' "$reply" | sed -E '1s/^[[:space:]]*```(json)?[[:space:]]*//' | sed -E '$s/[[:space:]]*```[[:space:]]*$//' \
+        | jq -c 'select(type == "object" and (.action | type) == "string")' 2>/dev/null) || _obj=""
+    if [[ -n "$_obj" ]]; then
+        _action=$(printf '%s' "$_obj" | jq -r '.action | ascii_downcase')
+        _message=$(printf '%s' "$_obj" | jq -r '.message // ""')
+        _request=$(printf '%s' "$_obj" | jq -r '.request // "" | gsub("\n"; " ")')
+        case "$_action" in
+            no_reply) reply="NO_REPLY" ;;
+            defer)    reply=$(printf 'DEFER: %s\n%s' "$_request" "$_message") ;;
+            *)        reply="$_message" ;;
+        esac
+    else
+        printf '  structured reply did not parse as an object — treating it as text\n' >&2
+    fi
+fi
 
 # Drop leading blank lines first: the NO_REPLY and DEFER protocols key off
 # the first line, and a model that opens with a newline (Nemotron, 2026-09-10)
@@ -527,6 +649,7 @@ reply_args=()
 [[ -n "$trigger_step_id" ]] && reply_args+=(--reply-to "$trigger_step_id")
 if [[ -n "$reply" ]] && printf '%s' "$reply" | chat reply ${reply_args[@]+"${reply_args[@]}"} "$msg_from"; then
     _extra=$(_finish_metrics)
+    _extra=$(printf '%s' "$_extra" | jq -c --argjson s "$structured" '. + {structured: ($s == 1)}')
     if [[ -n "$deferred_request" ]]; then
         _extra=$(printf '%s' "$_extra" | jq -c --arg r "$deferred_request" '. + {deferred: true, request: $r}')
         _obs "Replied to $msg_from with a holding message and handed the mind a pending request: $(printf '%.200s' "$deferred_request")" replied "$_extra"

@@ -38,6 +38,7 @@ _llm_load_env "$_llm_home/.env" || true
 LLM_MODEL="${LLM_MODEL:-}"
 LLM_SYSTEM=""
 LLM_MAX_TOKENS="${LLM_MAX_TOKENS:-}"
+LLM_JSON_SCHEMA=""     # --json-schema FILE: a JSON Schema the reply must satisfy
 LLM_MESSAGES=""
 LLM_STREAM=1
 LLM_PROVIDER="${LLM_PROVIDER:-}"
@@ -263,6 +264,9 @@ Options:
                            openrouter, named or inferred from the model)
   --thinking [LEVEL]       Enable thinking (Anthropic: adaptive; Gemini: minimal/low/medium/high)
   --effort LEVEL           Thinking effort/provider output effort
+  --json-schema FILE       Ask for one JSON object matching this JSON Schema
+                           (response_format json_schema, strict) on OpenAI-style
+                           providers; ignored with a warning elsewhere
   --raw                    Print raw non-streaming API response JSON
   -h, --help               Show this help
 
@@ -391,6 +395,7 @@ while [[ $# -gt 0 ]]; do
             fi
             shift ;;
         --effort)        LLM_EFFORT="${2:?--effort requires a value}"; shift 2 ;;
+        --json-schema)   _jsf="${2:?--json-schema requires a path}"; [[ -f "$_jsf" ]] || die "Schema file not found: $_jsf"; LLM_JSON_SCHEMA=$(cat "$_jsf"); shift 2 ;;
         --raw)           LLM_RAW=1; shift ;;
         --stop-after-code-block) LLM_STOP_AFTER_CODE_BLOCK=1; shift ;;
         -*)              die "Unknown option: $1 (try llm --help)" ;;
@@ -660,6 +665,7 @@ supports_gemini_thinking() {
 # ---------------------------------------------------------------------------
 
 build_payload_anthropic() {
+    [[ -n "$LLM_JSON_SCHEMA" ]] && echo "llm: --json-schema ignored: not supported for provider anthropic (OpenAI-style providers only)" >&2
     local -a jq_args=(
         --arg model "$LLM_MODEL"
         --argjson max_tokens "$LLM_MAX_TOKENS"
@@ -728,10 +734,21 @@ build_payload_openai() {
         fi
     fi
 
+    # --json-schema: OpenAI-style structured output. The file holds a bare
+    # JSON Schema; it is wrapped as {type:"json_schema", json_schema:{name,
+    # strict:true, schema}} which OpenAI, OpenRouter and most compatible
+    # endpoints accept. A provider that cannot enforce it returns an API
+    # error, so callers that must work everywhere retry without the flag.
+    if [[ -n "$LLM_JSON_SCHEMA" ]]; then
+        jq_args+=(--argjson schema "$LLM_JSON_SCHEMA")
+        jq_filter="${jq_filter} + {response_format: {type: \"json_schema\", json_schema: {name: \"response\", strict: true, schema: \$schema}}}"
+    fi
+
     printf '%s' "$msgs" | jq "${jq_args[@]}" "$jq_filter"
 }
 
 build_payload_gemini() {
+    [[ -n "$LLM_JSON_SCHEMA" ]] && echo "llm: --json-schema ignored: not supported for provider gemini" >&2
     # Convert messages to Gemini format: {contents:[{role,parts:[{text}]}]}
     local contents
     contents=$(printf '%s' "$LLM_MESSAGES" | jq '[.[] | {role: (if .role == "assistant" then "model" else .role end), parts: [{text: .content}]}]')
