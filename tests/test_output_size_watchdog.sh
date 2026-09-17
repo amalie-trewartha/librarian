@@ -64,11 +64,10 @@ run_shellm() {
 fence() { printf '```bash\n%s\n```\n' "$1"; }
 
 # --- runaway output is killed at SHELLM_MAX_OUTPUT_SIZE ----------------------
-# A bounded producer that keeps writing for ~6s at ~20 KB/s: it never goes idle
-# (size grows every watchdog tick), so only the size guard can stop it. With the
-# guard at 50 KB it is killed part-way; without the guard it runs to completion
-# and no watchdog line is emitted.
-fence 'end=$((SECONDS+6)); while [ $SECONDS -lt $end ]; do printf "x%.0s" {1..1000}; echo; sleep 0.05; done' > "$WORK/script/1"
+# The finite deadline also bounds a broken implementation. Check a side effect
+# after shellm returns: killing just the execution wrapper used to report a
+# successful kill while this producer kept running through its open output fd.
+fence 'echo $$ > producer.pid; end=$((SECONDS+10)); while [ $SECONDS -lt $end ]; do printf "x%.0s" {1..1000}; echo; echo tick >> heartbeat; sleep 0.05; done; echo completed > completed' > "$WORK/script/1"
 fence 'FINAL=done' > "$WORK/script/last"
 SHELLM_MAX_OUTPUT_SIZE=50000 SHELLM_INACTIVITY_TIMEOUT=600 SHELLM_INACTIVITY_MAX=600 \
     run_shellm "runaway case"
@@ -88,6 +87,30 @@ else
     bad "kill feedback names the output-size cause" \
         "$(grep -o '"type":"feedback"[^}]*' "${runaway_traj[@]}" 2>/dev/null | head -c 200)"
 fi
+
+producer=$(cat "$WORK/wd/producer.pid" 2>/dev/null || echo 0)
+before=$(wc -l < "$WORK/wd/heartbeat")
+sleep 0.3
+after=$(wc -l < "$WORK/wd/heartbeat")
+if [[ "$producer" -gt 1 ]] && ! kill -0 "$producer" 2>/dev/null \
+    && [[ "$before" -eq "$after" && ! -f "$WORK/wd/completed" ]] \
+    && grep -qx 'done' "$WORK/out"; then
+    ok "producer exits and stops writing before shellm returns its final answer"
+else
+    bad "producer exits and stops writing before shellm returns its final answer"
+    [[ "$producer" -gt 1 ]] && kill "$producer" 2>/dev/null || true
+fi
+
+# The limit applies to one block, and zero keeps the previous unlimited policy.
+fence 'end=$((SECONDS+2)); while [ $SECONDS -lt $end ]; do printf "x%.0s" {1..1000}; echo; sleep 0.05; done; echo completed > completed' > "$WORK/script/1"
+for limit in 0 104857600; do
+    SHELLM_MAX_OUTPUT_SIZE="$limit" run_shellm "allowed case $limit"
+    if [[ -f "$WORK/wd/completed" ]] && ! grep -q 'shellm-watchdog' "$WORK/err"; then
+        ok "limit $limit lets bounded output finish"
+    else
+        bad "limit $limit lets bounded output finish"
+    fi
+done
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
