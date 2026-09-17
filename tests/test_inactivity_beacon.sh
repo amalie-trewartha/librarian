@@ -113,6 +113,7 @@ printf '30' > "$WORK/script/2.sleep"
 fence 'FINAL=sub-answer' > "$WORK/script/2"
 fence 'FINAL=done' > "$WORK/script/last"
 SHELLM_INACTIVITY_TIMEOUT=3 SHELLM_INACTIVITY_MAX=8 run_shellm "ceiling case"
+ceiling_rc=$?
 if grep -q 'shellm-watchdog\] nested timeout' "$WORK/err"; then
     ok "nested run past SHELLM_INACTIVITY_MAX is killed"
 else
@@ -124,7 +125,9 @@ if grep -q 'A nested shellm run was still alive' "${ceiling_traj[@]}" 2>/dev/nul
     ok "kill feedback names the sub-run, not an interactive prompt"
 else
     bad "kill feedback names the sub-run, not an interactive prompt" \
-        "$(grep -o '"type":"feedback"[^}]*' "${ceiling_traj[@]}" 2>/dev/null | head -c 200)"
+        "shellm rc=$ceiling_rc; $(tail -10 "$WORK/err")"
+    jq -c 'select(.type == "shell-output" or .type == "feedback") | {type,exit,timed_out,feedback,content}' \
+        "${ceiling_traj[@]}" 2>/dev/null || true
 fi
 
 # --- case 4: without beacon stamps the same block dies, as it used to --------
