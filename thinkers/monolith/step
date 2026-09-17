@@ -438,17 +438,19 @@ rm -f "$run_out_tmp"
 run_err_tail=$(grep -v '^[[:space:]]*$' "$run_err_tmp" 2>/dev/null | tail -n 3 | cut -c1-300 | tr '\n' ' ' | sed 's/ $//') || run_err_tail=""
 rm -f "$run_err_tmp"
 
-# Anything still alive in this step's process group is a process the run
-# left behind (setsid gives each step its own group on Linux; on macOS the
-# group is shared with the dispatcher, so only report when it is ours). Not
+# Anything still alive in this step's session is a process the run left
+# behind (setsid gives each step its own session on Linux; on macOS the
+# session is shared with the dispatcher, so only report when it is ours). The
+# session, not the process group: shellm runs each execution tree in a group
+# of its own, so what a run backgrounds is no longer in this step's group. Not
 # killed here: a backgrounded sub-run can be deliberate. Reported so the log
 # says what outlived the wake, which is what took six hours to find above.
-if [[ "$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')" == "$$" ]]; then
-    # pgrep runs inside a subshell of this group, so its own pipeline shows
+if [[ "$(ps -o sid= -p $$ 2>/dev/null | tr -d ' ')" == "$$" ]]; then
+    # pgrep runs inside a subshell of this session, so its own pipeline shows
     # up in the list; those pids are gone once the substitution returns,
     # and the kill -0 below drops them. Only what is still alive counts.
     run_leftovers=""
-    for run_leftover in $(pgrep -g $$ 2>/dev/null || true); do
+    for run_leftover in $(pgrep -s $$ 2>/dev/null || true); do
         [[ "$run_leftover" == "$$" ]] && continue
         kill -0 "$run_leftover" 2>/dev/null || continue
         run_leftovers="${run_leftovers}${run_leftovers:+ }${run_leftover}"

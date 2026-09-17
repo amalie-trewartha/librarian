@@ -2832,9 +2832,17 @@ exit \$__shellm_rc
         local _exec_t0
         _exec_t0=$(date +%s)
         set +eo pipefail
-        set +m  # suppress "Terminated" job-control messages
+        # The execution tree gets its own process group (set -m for the one
+        # launch). _kill_exec_tree stops processes before it kills them, and a
+        # group that is orphaned while it holds stopped members gets SIGHUP
+        # from the kernel: on macOS that hang-up reached this shell and killed
+        # the whole run (rc=129, CI 2026-09-17). In its own group the hang-up
+        # can only land on the tree being killed. Monitor mode goes straight
+        # back off, which also keeps "Terminated" job messages quiet.
+        set -m
         execute_code "$workdir" "$wrapped_code" "${env_vars[@]}" >> "$output_file" 2>&1 &
         local exec_pid=$!
+        set +m
         printf '%s' "$exec_pid" > "$exec_pid_file"
         set -eo pipefail
 
