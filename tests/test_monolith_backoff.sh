@@ -55,6 +55,10 @@ case "$mode" in
     fail)    exit 3 ;;
     fail-diag) printf 'diag-run-0001' > "$SHELLM_RUN_ID_OUT"
                printf '{"type":"shell-output","step_id":"diag-so-1","run_id":"diag-run-0001","stdout":"boom: the actual diagnostic","exit":1,"source":"monolith"}\n' >> "$STUB_TRAJ"
+               printf '{"type":"shell-output","step_id":"diag-so-2","run_id":"diag-run-0001","stdout":"=== me === benign status read after the failure","exit":0,"source":"monolith"}\n' >> "$STUB_TRAJ"
+               exit 3 ;;
+    fail-diag-noexit) printf 'diag-run-0002' > "$SHELLM_RUN_ID_OUT"
+               printf '{"type":"shell-output","step_id":"diag-so-3","run_id":"diag-run-0002","stdout":"hang then killed, no exit code recorded","source":"monolith"}\n' >> "$STUB_TRAJ"
                exit 3 ;;
     none)    : ;;
 esac
@@ -183,6 +187,18 @@ if [[ "$bare" == "absent" ]]; then
     ok "bare failed run: error step has no diagnostic_step (nothing to reference)"
 else
     bad "bare failed run: error step has no diagnostic_step" "got=$bare"
+fi
+
+# --- 6d. failed run whose only shell-output has no exit code: diagnostic_step
+#      falls back to the last non-empty step (inference-layer death) ---
+reset_state
+echo fail-diag-noexit > "$STUB_MODE_FILE"
+run_step "$WAKE"
+fb=$(jq -Rr 'fromjson? // empty | select(.type=="error") | .diagnostic_step // empty' "$TRAJ" | tail -n 1)
+if [[ "$fb" == "diag-so-3" ]]; then
+    ok "failed run with no-exit shell-output: diagnostic_step falls back to last non-empty"
+else
+    bad "failed run with no-exit shell-output: diagnostic_step falls back to last non-empty" "fb=$fb"
 fi
 
 # --- 7. share nudge: every N spontaneous wakes, then counter resets ----------

@@ -372,19 +372,25 @@ _last_thought_id() {
         | tail -n 1
 }
 _last_diagnostic_id() {
-    # Last non-empty shell-output step_id for a run_id, from the cached
-    # post-run probe. Gives a failed no-durable-step run a rerunnable
+    # Last FAILING shell-output step_id (exit != 0) for a run_id, from the
+    # cached post-run probe; falls back to the last non-empty shell-output
+    # when no command actually failed (inference-layer deaths leave no
+    # failed command — the fallback is provably never worse than the
+    # last-non-empty pick). Gives a failed no-durable-step run a rerunnable
     # diagnostic pointer (see design/monolith_run_health.md B2 + the
     # failure-path certification gap). Empty when the run never ran a shell.
     local _rid="$1"
     printf '%s\n' "$_probe_tail" \
-        | jq -Rr --arg rid "$_rid" 'fromjson? // empty
+        | jq -Rnr --arg rid "$_rid" '[ inputs | fromjson? // empty
             | select(.type == "shell-output")
             | select(.run_id == $rid)
             | select((.stdout != null and (.stdout|length) > 0)
                      or (.stderr != null and (.stderr|length) > 0))
-            | .step_id // empty' 2>/dev/null \
-        | tail -n 1
+            | select(.step_id != null)
+            | {sid: .step_id, exit: (.exit // null)} ]
+          | (map(select(.exit != null and .exit != 0)) | last | .sid)
+            // (last | .sid)
+            // empty' 2>/dev/null
 }
 before_visible=""
 before_thought=""
@@ -509,9 +515,10 @@ if [[ "$did_work" -eq 0 ]]; then
     # never references them — a stranger sees "no durable step" and cannot
     # rerun the diagnostic. The outliving layer holds run_id + the post-run
     # probe at write time, and the run just exited, so its shell-output
-    # steps are among the most-recent. Point the error step at the last
-    # non-empty one via a `diagnostic_step` field. Absent when the run
-    # never ran a shell (nothing to reference — correct).
+    # steps are among the most-recent. Point the error step at the failing
+    # command (last exit != 0; else last non-empty — inference-layer deaths
+    # leave no failed command) via a `diagnostic_step` field. Absent when
+    # the run never ran a shell (nothing to reference — correct).
     diagnostic_step=""
     if [[ "$run_errored" -eq 1 && -n "$idle_run_id" ]]; then
         diagnostic_step=$(_last_diagnostic_id "$idle_run_id") || diagnostic_step=""
