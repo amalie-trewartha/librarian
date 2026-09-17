@@ -91,5 +91,35 @@ err=$(chat history --with "$NICK" --json 2>&1 >/dev/null)
 grep -q 'header changed\|replaced' <<< "$err" && ok "header change: rebuild announced" || bad "header change: rebuild announced" "$err"
 [[ "$(n_hist)" -eq 3 ]] && ok "header change: history intact after rebuild" || bad "header change: history" "$(n_hist)"
 
+# 6. a header pretty-printed over several lines (2026-09-14: an identity
+# rewrote its own header that way) is read as one header: one rebuild for the
+# rewrite, then none, the offset record keeps four fields, and appends stay
+# incremental. Before the fix every call rebuilt from byte zero.
+{ printf '{\n  "type": "trajectory",\n  "step_id": "hdr-3",\n  "ts": "%s",\n  "hmac_key": "k"\n}\n' "$(ago 99999)"; tail -n +2 "$TRAJ"; } > "$TRAJ.tmp" && mv "$TRAJ.tmp" "$TRAJ"
+chat history --with "$NICK" --json >/dev/null 2>&1
+[[ "$(cut -d' ' -f2 "$OFF")" == "hdr-3" ]] && ok "multi-line header: id recorded" || bad "multi-line header: id recorded" "$(cat "$OFF")"
+err=$(chat history --with "$NICK" --json 2>&1 >/dev/null)
+! grep -q 'rebuilding' <<< "$err" && ok "multi-line header: no rebuild on the next call" || bad "multi-line header: no rebuild on the next call" "$err"
+msg m6 "$NICK" ada "after the pretty header" 5
+err=$(chat history --with "$NICK" --json 2>&1 >/dev/null)
+! grep -q 'rebuilding' <<< "$err" && [[ "$(n_hist)" -eq 4 ]] && ok "multi-line header: append stays incremental" || bad "multi-line header: append incremental" "$(n_hist) $err"
+
+# 7. a header with no id never leaves an empty field in the offset record
+{ printf '{"type":"trajectory"}\n'; tail -n +7 "$TRAJ"; } > "$TRAJ.tmp" && mv "$TRAJ.tmp" "$TRAJ"
+chat history --with "$NICK" --json >/dev/null 2>&1
+[[ "$(off_fields)" -eq 4 ]] && ok "header without an id: offset record still has 4 fields" || bad "header without an id: 4 fields" "$(cat "$OFF")"
+err=$(chat history --with "$NICK" --json 2>&1 >/dev/null)
+! grep -q 'rebuilding' <<< "$err" && ok "header without an id: no rebuild loop" || bad "header without an id: no rebuild loop" "$err"
+
+# 8. a line still being appended is left for the next call, and the index
+# build leaves nothing behind in the temp dir
+printf '{"step_id":"m7","type":"message","from":"%s","to":"ada","content":"half' "$NICK" >> "$TRAJ"
+before=$(n_hist)
+printf ' done","ts":"%s","source":"chat"}\n' "$(ago 1)" >> "$TRAJ"
+[[ "$(n_hist)" -eq $((before + 1)) ]] && ok "partial line: indexed once complete" || bad "partial line" "$before -> $(n_hist)"
+T2="$WORK/tmpdir"; mkdir -p "$T2"; rm -f "$OFF"
+TMPDIR="$T2" chat history --with "$NICK" --json >/dev/null 2>&1
+[[ -z "$(ls -A "$T2")" ]] && ok "rebuild leaves nothing in the temp dir" || bad "rebuild leaves nothing in the temp dir" "$(ls -A "$T2")"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 (( fail == 0 ))

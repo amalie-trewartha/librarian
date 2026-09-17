@@ -475,12 +475,24 @@ _deliveries_path() { printf '%s/deliveries.jsonl' "$(dirname "$1")"; }
 # delivered month-old replayed work into an August thread. Now a changed
 # inode (mv over the file) or a size below the offset (truncate and rewrite)
 # rebuilds the index from byte zero: one scan instead of a silent gap.
+# The header id is the first JSON value in the file, which is normally line 1.
+# On 2026-09-14 an identity rewrote its header as a pretty-printed object over
+# six lines; `head -n 1` then parsed nothing, the offset record got an empty
+# header field, `read` shifted the inode into its place, and every call saw
+# "trajectory header changed" and rebuilt the whole index. So: parse the first
+# value however many lines it spans, and never record an empty field ("-").
+_traj_header_id() {
+    local id
+    id=$(head -c 65536 -- "$1" 2>/dev/null | jq -rn 'first(inputs) | .step_id // .traj_id // ""' 2>/dev/null) || id=""
+    printf '%s' "${id:--}"
+}
+
 _file_ino() { stat -c %i -- "$1" 2>/dev/null || stat -f %i -- "$1" 2>/dev/null || echo ""; }
 
 _index_update() {
     local tf="$1" idx="$2" off="$2.offset" lock="$2.lock"
     local header have_off have_header have_ino size ino why=""
-    header=$(head -n 1 -- "$tf" 2>/dev/null | jq -r '.step_id // .traj_id // ""' 2>/dev/null) || header=""
+    header=$(_traj_header_id "$tf")
     have_off=0; have_header=""; have_ino=""
     if [[ -f "$off" ]]; then
         read -r have_off have_header have_ino _ < "$off" || true
@@ -525,19 +537,34 @@ _index_update() {
 }
 
 # The locked part of _index_update: read the new bytes, index the complete
-# message lines among them, advance the offset.
+# message lines among them, advance the offset. The new bytes are read straight
+# from the trajectory as a fixed byte range, never copied to a temp file: a
+# full rebuild on a 1.6 GB trajectory used to need 1.6 GB free in /tmp, and on
+# 2026-09-17 a nearly full disk left all three indexes empty. The trajectory is
+# append-only, so the same range reads the same bytes on every pass.
 _index_apply() {
     local tf="$1" idx="$2" off="$3" header="$4" have_off="$5"
-    local new_bytes tmp partial
-    tmp=$(mktemp) || return 1
-    tail -c +"$((have_off + 1))" -- "$tf" > "$tmp"
-    new_bytes=$(wc -c < "$tmp" | tr -d ' ')
+    local size new_bytes partial probe len
+    size=$(wc -c < "$tf" | tr -d ' ')
+    new_bytes=$((size - have_off))
+    (( new_bytes > 0 )) || return 0
+    # Length of a trailing line that is still being appended: look at the end
+    # of the range only. No newline in the probe at all means one very long
+    # unfinished line; leave it for the next call.
+    probe=$(( new_bytes < 4194304 ? new_bytes : 4194304 ))
     partial=0
-    if [[ "$new_bytes" -gt 0 && "$(tail -c 1 "$tmp" | wc -l | tr -d ' ')" -eq 0 ]]; then
-        partial=$(tail -n 1 "$tmp" | wc -c | tr -d ' ')
+    if [[ "$(tail -c +"$((size - probe + 1))" -- "$tf" | head -c "$probe" | tail -c 1 | wc -l | tr -d ' ')" -eq 0 ]]; then
+        if [[ "$(tail -c +"$((size - probe + 1))" -- "$tf" | head -c "$probe" | wc -l | tr -d ' ')" -eq 0 ]]; then
+            (( probe == new_bytes )) || return 0
+            partial=$new_bytes
+        else
+            partial=$(tail -c +"$((size - probe + 1))" -- "$tf" | head -c "$probe" | tail -n 1 | wc -c | tr -d ' ')
+        fi
     fi
-    if (( new_bytes - partial > 0 )); then
-        head -c "$((new_bytes - partial))" "$tmp" \
+    len=$((new_bytes - partial))
+    _index_range() { tail -c +"$((have_off + 1))" -- "$tf" 2>/dev/null | head -c "$len"; }
+    if (( len > 0 )); then
+        _index_range \
             | grep -F '"type":"message"' \
             | jq -c --argjson cap "$_INDEX_CONTENT_CAP" 'fromjson? // empty
                 | select(.type == "message" and (.from // "") != "" and (.to // "") != "")
@@ -545,7 +572,7 @@ _index_apply() {
                    content: ((.content // "") | tostring
                              | if length > $cap then .[0:$cap] + "…[truncated]" else . end)}
                 | with_entries(select(.value != null))' -R >> "$idx" 2>/dev/null || true
-        head -c "$((new_bytes - partial))" "$tmp" \
+        _index_range \
             | grep -F -e '"trigger_step"' -e '"resolves":' \
             | jq -c --argjson cap "$_INDEX_CONTENT_CAP" 'fromjson? // empty
                 | if .type == "action" and .source == "responder" and (.trigger_step // "") != "" then
@@ -556,7 +583,7 @@ _index_apply() {
                     {kind: "resolve", step_id, ts, resolves}
                   else empty end
                 | with_entries(select(.value != null))' -R >> "$(_deferrals_path "$idx")" 2>/dev/null || true
-        head -c "$((new_bytes - partial))" "$tmp" \
+        _index_range \
             | grep -F '"type":"delivery"' \
             | jq -c 'fromjson? // empty
                 | select(.type == "delivery" and (.trigger_step // "") != "")
@@ -564,8 +591,7 @@ _index_apply() {
                 | with_entries(select(.value != null))' -R >> "$(_deliveries_path "$idx")" 2>/dev/null || true
     fi
     # Record the inode and the size the offset refers to (see _index_update).
-    printf '%s %s %s %s\n' "$((have_off + new_bytes - partial))" "$header" "$(_file_ino "$tf")" "$((have_off + new_bytes))" > "$off"
-    rm -f "$tmp"
+    printf '%s %s %s %s\n' "$((have_off + len))" "$header" "$(_file_ino "$tf")" "$size" > "$off"
 }
 
 # Parse "7d" / "36h" / "90m" / "3600" (seconds) into seconds.
