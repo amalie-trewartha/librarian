@@ -205,6 +205,27 @@ action_prefilter() {
 }
 
 action_search() {
+    # Callers signal this public PID. Give the worker and its descendants a
+    # separate process group so cancellation also stops the model and heartbeat.
+    local worker rc=0
+    set -m
+    _search_worker "$@" & worker=$!
+    set +m
+    _cancel_search() {
+        trap '' TERM INT
+        kill -KILL -- "-$worker" 2>/dev/null || true
+        wait "$worker" 2>/dev/null || true
+        exit "$1"
+    }
+    trap '_cancel_search 143' TERM
+    trap '_cancel_search 130' INT
+    # Unlike a foreground function call, wait is interrupted by trapped signals.
+    wait "$worker" || rc=$?
+    trap - TERM INT
+    return "$rc"
+}
+
+_search_worker() (
     local query="$1"
 
     local count
@@ -240,15 +261,37 @@ $(cat "$f")
     # before its first visible token (glm 5.3 flash: 31s on the box,
     # 2026-09-03). MEM_SEARCH_HEARTBEAT_S=0 disables it.
     local hb="${MEM_SEARCH_HEARTBEAT_S:-10}" _hb_pid=""
-    [[ "$hb" != 0 ]] && { ( while :; do sleep "$hb"; printf 'mem search: waiting for the model...\n' >&2; done ) & _hb_pid=$!; }
+    local search_pid="${BASHPID:-$$}"
+    # Run the search in a subshell so the traps below stay local to this call
+    # and do not leak to the caller, and clean up on model failure or
+    # cancellation. The heartbeat must never own the search result pipe: a
+    # failed or signalled llm used to leave it alive forever, keeping
+    # `mem search | head` open (issue #119).
+    trap 'if [[ -n "$_hb_pid" ]]; then kill "$_hb_pid" 2>/dev/null || true; wait "$_hb_pid" 2>/dev/null || true; fi' EXIT
+    trap 'exit 143' TERM
+    trap 'exit 130' INT
+    if [[ "$hb" != 0 ]]; then
+        (
+            sleeper=""
+            trap 'if [[ -n "$sleeper" ]]; then kill "$sleeper" 2>/dev/null || true; wait "$sleeper" 2>/dev/null || true; fi; exit 0' TERM INT
+            while kill -0 "$search_pid" 2>/dev/null; do
+                sleep "$hb" & sleeper=$!
+                wait "$sleeper" || exit 0
+                kill -0 "$search_pid" 2>/dev/null || exit 0
+                printf 'mem search: waiting for the model...\n' >&2
+            done
+        ) >/dev/null &
+        _hb_pid=$!
+    fi
+    local rc=0
     # shellcheck disable=SC2086
     printf 'Search these memories for: %s\n\n%s' "$query" "$memories" | \
         llm ${SHELLM_FAST_MODEL:+-m "$SHELLM_FAST_MODEL"} -t "${MEM_SEARCH_MAX_TOKENS:-16000}" \
-            -s "You are a semantic search engine for memory files. Each memory has a filename header (=== filename ===), YAML frontmatter (summary, type), and a body. Return ONLY the filenames and summaries of semantically matching memories, one per line. If nothing matches, say 'No matches found.'"
-    local rc=$?
-    if [[ -n "$_hb_pid" ]]; then kill "$_hb_pid" 2>/dev/null || true; wait "$_hb_pid" 2>/dev/null || true; fi
+            -s "You are a semantic search engine for memory files. Each memory has a filename header (=== filename ===), YAML frontmatter (summary, type), and a body. Return ONLY the filenames and summaries of semantically matching memories, one per line. If nothing matches, say 'No matches found.'" || rc=$?
+    # The EXIT trap owns heartbeat cleanup; a second wait here would print
+    # "not a child" once the trap has already reaped it.
     return "$rc"
-}
+)
 
 action_list() {
     local limit=0 short=0 filter_type="" filter_before="" filter_after=""
