@@ -87,13 +87,14 @@ Create a .chatrc file with:
 }
 
 cmd_send() {
-    local message="" from="" to="${IDENTITY_NAME:-}" source_url="" force=0
+    local message="" from="" to="${IDENTITY_NAME:-}" source_url="" force=0 key=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --from) from="${2:?--from requires a name}"; shift 2 ;;
             --to)   to="${2:?--to requires a name}"; shift 2 ;;
             --source-url) source_url="${2:?--source-url requires a URL}"; shift 2 ;;
             --force) force=1; shift ;;
+            --key)  key="${2:?--key requires a key}"; shift 2 ;;
             *)      message="${message:+$message }$1"; shift ;;
         esac
     done
@@ -115,6 +116,7 @@ cmd_send() {
 To message someone else: chat reply <their-name> <message>
 To keep a note for yourself, append a thought step instead of a message."
 
+    [[ "$force" -eq 1 || -z "$key" ]] || _refuse_key "$key"
     [[ "$force" -eq 1 ]] || _refuse_repeat "$from" "$to" "$message"
 
     # source_url records where a bridged message came from. It is optional
@@ -123,9 +125,10 @@ To keep a note for yourself, append a thought step instead of a message."
         | jq -Rsc \
         --arg from "$from" \
         --arg to "$to" \
-        --arg source_url "$source_url" \
+        --arg source_url "$source_url" --arg key "$key" \
         '{type:"message", content:., from:$from, to:$to, source:"chat"}
-         + (if $source_url == "" then {} else {source_url:$source_url} end)' \
+         + (if $source_url == "" then {} else {source_url:$source_url} end)
+         + (if $key == "" then {} else {key:$key} end)' \
         | _chat_append
 
     printf 'Message sent.\n' >&2
@@ -568,7 +571,7 @@ _index_apply() {
             | grep -F '"type":"message"' \
             | jq -c --argjson cap "$_INDEX_CONTENT_CAP" 'fromjson? // empty
                 | select(.type == "message" and (.from // "") != "" and (.to // "") != "")
-                | {step_id, ts, from, to, reply_to, filename,
+                | {step_id, ts, from, to, reply_to, filename, key,
                    content: ((.content // "") | tostring
                              | if length > $cap then .[0:$cap] + "…[truncated]" else . end)}
                 | with_entries(select(.value != null))' -R >> "$idx" 2>/dev/null || true
@@ -788,12 +791,28 @@ cmd_sent() {
                       state: ($n.status // (if ($m.to | test($confirming)) then "pending" else "unconfirmed" end)),
                       reason: $n.reason, permalink: $n.permalink, transport: $n.transport}
               | with_entries(select(.value != null)))
-        | if $json == 1 then map({step_id, ts, to, content, state, reason, permalink, transport, age_s, reply_to, filename})
+        | if $json == 1 then map({step_id, ts, to, content, state, reason, permalink, transport, age_s, reply_to, filename, key})
           else .[] | "\(.ts // "?") \(.to)  \(.state)"
                      + (if .state == "pending" then " \(.age_s | age_text)" else "" end)
                      + (if .reason then " (\(.reason))" else "" end)
+                     + (if .key then " [\(.key)]" else "" end)
                      + "  " + ((.filename // .content // "") | gsub("\n"; " ") | if length > 80 then .[0:80] + "…" else . end)
           end' -R < "$idx"
+}
+
+# _refuse_key <key>: die if a send with this key already went out and did not
+# fail. A key names the one duty a send fulfils (a scheduled window, say), so
+# the check holds however the text is reworded and has no time window: on
+# 2026-09-18 the same papers post went out five times in three hours, reworded
+# each time, past the exact-text check below (design/scheduled_goals.md).
+_refuse_key() {
+    local hit
+    hit=$(cmd_sent --json -n 1000000 2>/dev/null | jq -r --arg k "$1" '
+        [.[] | select((.key // "") == $k and .state != "failed" and .state != "skipped")]
+        | last // empty | "\(.ts) to \(.to) (\(.state), step \(.step_id))"' 2>/dev/null) || hit=""
+    [[ -z "$hit" ]] && return 0
+    die "refusing to send: '$1' was already sent at $hit. That duty is done; do not send it again.
+\`chat sent\` shows recent sends. If a second send is deliberate, add --force."
 }
 
 # _refuse_repeat <from> <to> <message>: die if this exact message already went
@@ -847,12 +866,14 @@ usage() {
 chat — Messaging for an activated identity
 
 Usage:
-  chat send [--from <name>] [--to <name>] [--source-url <url>] [--force] <message>
+  chat send [--from <name>] [--to <name>] [--source-url <url>] [--key <key>] [--force] <message>
                              Send a message (from defaults to .chatrc
                              default_send_from, to defaults to $IDENTITY_NAME).
                              Refuses a message identical to one sent to the
                              same destination in the last 24h
                              (CHAT_REPEAT_WINDOW) unless --force.
+                             --key names the one duty this send fulfils;
+                             a second send with the same key is refused.
                              A slack-* destination must be a form the bridge
                              delivers: slack-<user>-<channel>[-<ts>],
                              slack-C<id> (channel), or slack-U<id> (DM)

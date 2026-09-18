@@ -69,6 +69,7 @@ End the run from INSIDE your bash block by setting `FINAL="..."` — that string
 - ONE function from the menu per wakeup. It may take several commands (an `act` can be a long run); it is one decision, carried out, then stop.
 - Always append at least one step (thought / observation / idle) so the mind keeps ticking.
 - Be concrete. "ask Andy whether he's tried the new viewer" beats "engage with Andy".
+- The "Now" line and the scheduled-goal lines in the routing signals are computed by the runtime, not remembered. Take the date, the weekday and whether a scheduled window is due from them, never from your own arithmetic. Send a scheduled post only when a line says DUE NOW, with the exact `--key` it gives.
 - The Runtime and Workspace lines above are authoritative. Do not open a wake by re-orienting (`pwd`, `ls`, `find`) or by re-verifying your own runtime (grepping or checksumming `bin/` and `thinkers/`): a fact you verified about the runtime holds until the Runtime line changes, and the workspace map tells you where things are. Spend the steps on the work itself.
 
 ## {{identity_name}}'s active goals

@@ -264,6 +264,12 @@ fi
 # (before the placeholder below) and the last three stream steps.
 related_query="$hints $(printf '%s\n' "$recent_context" | tail -n 3 | jq -r '.content // ""' 2>/dev/null | cut -c1-600 | tr '\n' ' ')"
 [[ -z "$hints" ]] && hints="- (no special signals — pick what best serves the mind right now)"
+# Clock and scheduled-goal windows go first, after the placeholder test and
+# the related-memories query: they are present on every wake and are not the
+# wake's topic (design/scheduled_goals.md).
+_sched=$(_prompt_section schedule _schedule_signals "$MEM_DIR") || _sched=""
+[[ -n "$_sched" ]] && hints="$_sched
+$hints"
 
 prompt_file="$SCRIPT_DIR/prompt.md"
 [[ -f "$prompt_file" ]] || { printf 'monolith/step: error: prompt.md not found at %s\n' "$prompt_file" >&2; exit 1; }
