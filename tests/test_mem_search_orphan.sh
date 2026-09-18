@@ -51,7 +51,12 @@ def check(name, body, expected, cancel=None, heartbeat="0.1"):
 
         def recorded():
             path = work / "pids"
-            return {int(pid) for pid in path.read_text().split()} if path.exists() else set()
+            if not path.exists():
+                return set()
+            # A stub may start after its parent exits and report PPID 1.
+            # PID 1 adopted it; it is not our descendant and must not be killed.
+            # Keep the stub's own PID so a surviving orphan still fails the test.
+            return {int(pid) for pid in path.read_text().split() if int(pid) > 1}
 
         try:
             if cancel:
