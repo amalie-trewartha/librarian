@@ -1,84 +1,98 @@
 #!/usr/bin/env bash
-# test_mem_search_orphan.sh — a failed/cancelled `mem search` must not keep
-# a result pipeline open via an orphaned heartbeat.
-#
-# Why: the search's stderr heartbeat was an infinite
-#   ( while :; do sleep; printf ... >&2; done ) &
-# loop backgrounded from the search. When the model call failed (set -e exits
-# before the cleanup line) or the search was signalled, the loop was
-# orphaned — reparented to init, still holding the write end of the
-# `mem search | head` pipe, so the reader never saw EOF and hung (issue
-# #119). The heartbeat now self-terminates when the search dies, and the
-# search runs in a subshell whose EXIT/TERM/INT traps reap it.
-#
-# Usage: tests/test_mem_search_orphan.sh
-
-set -uo pipefail
-
+# Failed or cancelled searches must close their pipes and stop their children.
+# Python supplies a portable timeout, including on macOS without GNU timeout.
+set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-REPO="$(dirname "$HERE")"
+python3 - "$(dirname "$HERE")" <<'PY'
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import tempfile
+import time
 
-pass=0 fail=0
-ok()  { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
-bad() { fail=$((fail+1)); printf 'FAIL %s\n' "$1"; [[ -n "${2:-}" ]] && printf '     %s\n' "$2"; }
+repo = Path(sys.argv[1])
 
-# A bounded runner: timeout is GNU coreutils (gtimeout on a stock Mac).
-TIMEOUT=""
-for _t in timeout gtimeout; do
-    command -v "$_t" >/dev/null 2>&1 && { TIMEOUT="$_t"; break; }
-done
 
-WORK=$(mktemp -d)
-trap 'rm -rf "$WORK"' EXIT
-mkdir -p "$WORK/bin" "$WORK/mem"
-printf -- '---\nsummary: capture race\ntype: fact\n---\ncapture race\n' \
-    > "$WORK/mem/2026-09-08-00-00-00_abcd_capture.md"
+def alive(pid):
+    result = subprocess.run(
+        ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True
+    )
+    # An adopted zombie has stopped and cannot hold an output pipe open.
+    return bool(result.stdout.strip()) and not result.stdout.strip().startswith("Z")
 
-# run_search <stub-body>: point `llm` at a stub that sleeps 1s (so the
-# heartbeat is established) then does <stub-body>. Run the search through a
-# reader (`head -5`) under a 5s bound. Sets RC and FINISHED (1 = the search
-# closed its pipeline on its own, 0 = the bound fired = the pipe stayed open).
-run_search() {
-    printf '%s\n' '#!/bin/bash' 'cat >/dev/null' "$1" > "$WORK/bin/llm"
-    chmod +x "$WORK/bin/llm"
-    cat > "$WORK/search.sh" <<EOF
-#!/bin/bash
-set -o pipefail
-export PATH="$WORK/bin:$REPO/bin:\$PATH"
-export MEM_DIR="$WORK/mem"
-export MEM_SEARCH_HEARTBEAT_S=2
-"$REPO/bin/mem" search "capture race" | head -5
-EOF
-    chmod +x "$WORK/search.sh"
-    RC=$("$TIMEOUT" 5 "$WORK/search.sh" 2>"$WORK/err")
-    RC=$?
-    FINISHED=0
-    [[ $RC -ne 124 ]] && FINISHED=1
-}
 
-if [[ -z "$TIMEOUT" ]]; then
-    echo "skip: no timeout/gtimeout; the orphan-hang check needs a bounded runner"
-    printf '\n%d passed, %d failed (skipped)\n' "$pass" "$fail"
-    exit 0
-fi
+def check(name, body, expected, cancel=None, heartbeat="0.1"):
+    with tempfile.TemporaryDirectory() as directory:
+        work = Path(directory)
+        (work / "bin").mkdir()
+        (work / "mem").mkdir()
+        (work / "mem" / "capture.md").write_text(
+            "---\nsummary: capture race\ntype: fact\n---\ncapture race\n"
+        )
+        # Record the model, heartbeat, worker, and sleep PIDs. The sleep wrapper
+        # execs the real sleep so the recorded PID remains valid.
+        for tool, script in {
+            "llm": 'cat >/dev/null\nprintf "%s %s\\n" "$$" "$PPID" >> "$PIDS"\n' + body,
+            "sleep": 'printf "%s %s\\n" "$$" "$PPID" >> "$PIDS"\nexec /bin/sleep "$@"',
+        }.items():
+            path = work / "bin" / tool
+            path.write_text("#!/usr/bin/env bash\n" + script + "\n")
+            path.chmod(0o755)
+        env = dict(os.environ, PATH=f'{work / "bin"}:{os.environ["PATH"]}',
+                   MEM_DIR=str(work / "mem"), MEM_SEARCH_HEARTBEAT_S=heartbeat,
+                   PIDS=str(work / "pids"), READY=str(work / "ready"))
+        process = subprocess.Popen(
+            [str(repo / "bin" / "mem"), "search", "capture race"],
+            cwd=work, env=env, start_new_session=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
 
-# 1. A failed model call must close the pipeline and preserve the exit code.
-run_search 'sleep 1; exit 42'
-if [[ $FINISHED -eq 1 && $RC -eq 42 ]]; then
-    ok "failed search closes its pipeline and preserves exit 42"
-else
-    bad "failed search closes its pipeline and preserves exit 42" \
-        "finished=$FINISHED rc=$RC (orphan heartbeat kept the pipe open)"
-fi
+        def recorded():
+            path = work / "pids"
+            return {int(pid) for pid in path.read_text().split()} if path.exists() else set()
 
-# 2. A signalled search must close the pipeline and exit 143.
-run_search 'sleep 1; kill -TERM "$PPID"; exit 0'
-if [[ $FINISHED -eq 1 && $RC -eq 143 ]]; then
-    ok "cancelled search closes its pipeline and exits 143"
-else
-    bad "cancelled search closes its pipeline and exits 143" \
-        "finished=$FINISHED rc=$RC (orphan heartbeat kept the pipe open)"
-fi
+        try:
+            if cancel:
+                deadline = time.monotonic() + 5
+                while not (work / "ready").exists():
+                    assert time.monotonic() < deadline, "model never became ready"
+                    time.sleep(0.02)
+                # Allow the heartbeat to start its own sleep before cancellation.
+                time.sleep(0.2)
+                process.send_signal(cancel)
+            out, err = process.communicate(timeout=5)
+            assert process.returncode == expected, (process.returncode, err.decode())
+            assert out == (b"matched memory\n" if expected == 0 else b""), out
+            deadline = time.monotonic() + 2
+            while any(alive(pid) for pid in recorded()) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            survivors = sorted(pid for pid in recorded() if alive(pid))
+            assert not survivors, f"surviving descendants: {survivors}"
+            print(f"ok   {name}", flush=True)
+        finally:
+            # Clean up even when testing a broken implementation. The worker
+            # may have its own process group, so also stop recorded descendants.
+            for pid in recorded():
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate(timeout=5)
 
-printf '\n%d passed, %d failed\n' "$pass" "$fail"
-[[ $fail -eq 0 ]]
+
+check("successful search closes pipes and reaps heartbeat", 'sleep 0.3; echo "matched memory"', 0)
+check("failed model preserves exit 42 and reaps heartbeat", "sleep 0.3; exit 42", 42)
+check("worker TERM preserves exit 143", 'sleep 0.3; kill -TERM "$PPID"; exit 0', 143)
+for sig, code in [(signal.SIGTERM, 143), (signal.SIGINT, 130)]:
+    for heartbeat in ["0.1", "0"]:
+        check(f"public PID {sig.name}, heartbeat={heartbeat}",
+              'sleep 30 & child=$!; : > "$READY"; wait "$child"',
+              code, cancel=sig, heartbeat=heartbeat)
+print("\n7 passed, 0 failed")
+PY

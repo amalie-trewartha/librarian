@@ -204,7 +204,28 @@ action_prefilter() {
     mem_prefilter "$query" "$top"
 }
 
-action_search() (
+action_search() {
+    # Callers signal this public PID. Give the worker and its descendants a
+    # separate process group so cancellation also stops the model and heartbeat.
+    local worker rc=0
+    set -m
+    _search_worker "$@" & worker=$!
+    set +m
+    _cancel_search() {
+        trap '' TERM INT
+        kill -KILL -- "-$worker" 2>/dev/null || true
+        wait "$worker" 2>/dev/null || true
+        exit "$1"
+    }
+    trap '_cancel_search 143' TERM
+    trap '_cancel_search 130' INT
+    # Unlike a foreground function call, wait is interrupted by trapped signals.
+    wait "$worker" || rc=$?
+    trap - TERM INT
+    return "$rc"
+}
+
+_search_worker() (
     local query="$1"
 
     local count
@@ -252,7 +273,7 @@ $(cat "$f")
     if [[ "$hb" != 0 ]]; then
         (
             sleeper=""
-            trap '[[ -z "$sleeper" ]] || kill "$sleeper" 2>/dev/null || true; exit 0' TERM INT
+            trap 'if [[ -n "$sleeper" ]]; then kill "$sleeper" 2>/dev/null || true; wait "$sleeper" 2>/dev/null || true; fi; exit 0' TERM INT
             while kill -0 "$search_pid" 2>/dev/null; do
                 sleep "$hb" & sleeper=$!
                 wait "$sleeper" || exit 0
