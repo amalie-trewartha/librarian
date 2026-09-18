@@ -2306,6 +2306,14 @@ run_loop() {
 
     # Create a temp dir for transient state (exec pids, output, watchdog, etc.)
     rundir=$(mktemp -d "${TMPDIR:-/tmp}/shellm-run.XXXXXX")
+    # Every temp file this run and its commands make (mktemp, sort, python)
+    # lands under the run dir and dies with it in cleanup. A command killed
+    # by the watchdog never cleans up its own, and wakes share the real /tmp
+    # (2026-09-17: 24 GB of mktemp trajectory copies filled a box). Nested
+    # runs nest their run dir here too; they die with the exec tree anyway.
+    if [[ -n "$rundir" && -d "$rundir" ]] && mkdir -p "$rundir/tmp"; then
+        export TMPDIR="$rundir/tmp"
+    fi
 
     # Track root rundir for the run tree
     if [[ -n "${_SHELLM_PARENT_TRAJ_ID:-}" ]]; then

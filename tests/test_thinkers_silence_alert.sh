@@ -6,7 +6,10 @@
 # Stubs curl on PATH to capture the Slack payload. A stale trajectory with a
 # live dispatcher pid posts one "gone quiet" alert and writes the marker; a
 # second tick posts nothing; a fresh trajectory posts the recovery and drops
-# the marker; a dead dispatcher pid or a deliberate stop posts nothing.
+# the marker; a dead dispatcher pid or a deliberate stop posts nothing. Then
+# the 2026-09-17 lessons: the alert re-posts after the repost interval, a
+# marker that cannot be written never blocks the post (full disk), and the
+# disk check posts at the threshold and recovers below it.
 
 set -uo pipefail
 
@@ -88,6 +91,63 @@ rm -f "$ID/run/deliberate_stop"
 rm -f "$APP/.env" "$ID/run/silent_since"
 run; rc=$?
 [[ "$rc" -eq 0 && -f "$TMP/fallback.log" ]] && ok "missing config degrades to the fallback log" || bad "missing config degrades to the fallback log" "rc=$rc"
+
+# 8. still stale past the repost interval → posts again, as "still quiet"
+printf 'SLACK_BOT_TOKEN=xoxb-test\nHEADLONG_ALERT_CHANNEL=C0TEST\n' > "$APP/.env"
+rm -f "$ID/run/silent_since" "$TMP/fallback.log"; : > "$CURL_LOG"
+age_traj 1200
+run
+HEADLONG_SILENCE_REPOST_SECS=0 run
+if [[ "$(posts)" -eq 2 ]] && tail -n 1 "$CURL_LOG" | grep -q 'is still quiet'; then ok "re-posts after the repost interval"
+else bad "re-posts after the repost interval" "posts=$(posts) $(tail -n 1 "$CURL_LOG" 2>/dev/null | head -c 200)"; fi
+run
+[[ "$(posts)" -eq 2 ]] && ok "inside the repost interval it is silent" || bad "inside the repost interval it is silent" "posts=$(posts)"
+
+# 9. run/ cannot take a byte (full disk stand-in: read-only dir) → the post
+#    still goes out and the marker lands in the tmpfs fallback; recovery
+#    finds it there.
+rm -f "$ID/run/silent_since"; : > "$CURL_LOG"
+mkdir -p "$TMP/shm"
+if [[ "$(id -u)" -eq 0 ]]; then
+    ok "skip: root can write a read-only dir"
+else
+    chmod 555 "$ID/run"
+    HEADLONG_ALERT_STATE_FALLBACK="$TMP/shm" run
+    chmod 755 "$ID/run"
+    if [[ "$(posts)" -eq 1 ]] && grep -q 'has gone quiet' "$CURL_LOG"; then ok "unwritable marker does not block the post"
+    else bad "unwritable marker does not block the post" "posts=$(posts)"; fi
+    [[ -f "$TMP/shm/headlong-alert-quiet/silent_since" ]] && ok "marker falls back to tmpfs" || bad "marker falls back to tmpfs"
+    age_traj 10
+    HEADLONG_ALERT_STATE_FALLBACK="$TMP/shm" run
+    if [[ "$(posts)" -eq 2 ]] && tail -n 1 "$CURL_LOG" | grep -q 'is back'; then ok "recovery finds the fallback marker"
+    else bad "recovery finds the fallback marker" "posts=$(posts)"; fi
+    [[ -f "$TMP/shm/headlong-alert-quiet/silent_since" ]] && bad "fallback marker removed" || ok "fallback marker removed"
+fi
+
+# 10. disk check: a df stub reports the usage; alert at 90, recovery under 85
+mkdir -p "$TMP/dfstub"
+cat > "$TMP/dfstub/df" <<'STUB'
+#!/usr/bin/env bash
+pct=$(cat "$DF_PCT")
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n'
+printf '/dev/stub 39000000 %s %s %s%% /\n' $(( 390000 * pct )) $(( 390000 * (100 - pct) )) "$pct"
+STUB
+chmod +x "$TMP/dfstub/df"
+export DF_PCT="$TMP/df_pct"
+run_df() { PATH="$TMP/dfstub:$TMP/stub:$PATH" HEADLONG_SILENCE_SECS=600 HEADLONG_ALERT_FALLBACK_LOG="$TMP/fallback.log" bash "$SCRIPT" "$APP" quiet; }
+age_traj 10; : > "$CURL_LOG"
+printf '95' > "$DF_PCT"; run_df
+if [[ "$(posts)" -eq 1 ]] && grep -q '95% full' "$CURL_LOG"; then ok "disk over the threshold posts the alert"
+else bad "disk over the threshold posts the alert" "posts=$(posts) $(cat "$CURL_LOG" 2>/dev/null | head -c 200)"; fi
+[[ -f "$ID/run/disk_alert" ]] && ok "disk marker written" || bad "disk marker written"
+run_df
+[[ "$(posts)" -eq 1 ]] && ok "disk alert does not repeat inside the interval" || bad "disk alert does not repeat inside the interval" "posts=$(posts)"
+printf '88' > "$DF_PCT"; run_df
+[[ "$(posts)" -eq 1 ]] && ok "88% is not yet a recovery" || bad "88% is not yet a recovery" "posts=$(posts)"
+printf '60' > "$DF_PCT"; run_df
+if [[ "$(posts)" -eq 2 ]] && tail -n 1 "$CURL_LOG" | grep -q 'back to 60%'; then ok "disk under the threshold posts the recovery"
+else bad "disk under the threshold posts the recovery" "posts=$(posts) $(tail -n 1 "$CURL_LOG" 2>/dev/null | head -c 200)"; fi
+[[ -f "$ID/run/disk_alert" ]] && bad "disk marker removed" || ok "disk marker removed"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 (( fail == 0 ))
