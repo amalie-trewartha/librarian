@@ -526,8 +526,11 @@ _responder_scan() {
 #     reads as elapsed time without eating the whole window.
 #   - `error` steps (a run that died with no durable step) are IN, collapsed
 #     the same way, so the mind can see its own failed runs.
-# The window is the last N kept steps BEFORE collapsing, so N still bounds the
-# raw steps considered; the output is at most N lines and usually fewer.
+# The window is the last N lines AFTER collapsing. It used to be cut first, so
+# 20 idle wakes filled the window and collapsed into one "idle x20" line: on
+# 2026-09-18 that was the whole stream on three of the four wakes that re-sent
+# the papers post, 7 to 50 minutes after the send they could no longer see.
+# The raw input is still bounded by _root_traj_raw_tail.
 _RECENT_STREAM_COLLAPSE_JQ='
   def secs: ((. // "")[0:19] + "Z") | try fromdateiso8601 catch null;
   def dur($a; $b):
@@ -614,8 +617,8 @@ _recent_stream() {
             | with_entries(select(.key | IN("type", "content", "source", "ts", "from", "to", "run_id", "step_id", "request", "person", "resolves", "trigger_step", "reply_to", "follow_up", "decision", "deferred", "rc", "details", "status", "reason")))' \
         2>/dev/null \
         | jq -cs "$_RECENT_STREAM_PAIR_JQ" 2>/dev/null \
-        | tail -n "$n" \
         | jq -cs "$_RECENT_STREAM_COLLAPSE_JQ" 2>/dev/null \
+        | tail -n "$n" \
         | jq -c '.ts |= (tostring | .[0:16])
             | .step_id |= (tostring | .[0:8])
             | if .run_id then .run_id |= (tostring | .[0:8]) else . end' 2>/dev/null
