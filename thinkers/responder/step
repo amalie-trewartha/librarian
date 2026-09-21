@@ -89,6 +89,28 @@ _rl_sync() {   # after each _reply_llm: its record into this shell's variables
     _llm_calls=$(printf '%s' "$_llm_meta" | jq -r '.llm_calls // 0' 2>/dev/null) || _llm_calls=0
 }
 
+# Card redaction for everything this step writes: the reply sent back, the
+# observations, the deferral handoff, and person notes. The triggering
+# message is the record and keeps its raw content in the log, and the model
+# still sees the raw text in its prompt (the work may need the digits); what
+# stays out is OUR restatements, because recap lifts digit text upward into
+# sealed summary blocks. Redaction is by shape first (three or four groups
+# of four with single separators, or a contiguous 13-19 digit run) and by
+# keyword second (card/pan/credit/debit/amex/visa/mastercard near a long
+# digit run, which also catches Amex's 4-6-5 grouping), plus keyword-anchored
+# cvv and expiry forms. A bare MM/YY is deliberately not redacted: that is
+# also a date and dates are facts the work needs, so an expiry only goes
+# when a keyword says it is one. Verification codes stay: an OTP relayed in
+# chat is the work's input. GNU sed (\b, I flag).
+_redact_card() {
+    sed -E \
+        -e 's/[0-9]{4}([ -][0-9]{4}){2,3}/[card redacted]/g' \
+        -e 's/\b[0-9]{13,19}\b/[card redacted]/g' \
+        -e 's/\b(card|pan|credit|debit|amex|visa|mastercard)\b[^A-Za-z0-9]{0,8}(the |is |was )?[0-9][0-9 -]{11,27}[0-9]/\1 [card redacted]/Ig' \
+        -e 's/\b(cvv|cvc|cvv2|csc|security code|sec code)\b[ :.,=-]*(the |is |was )?[0-9]{3,4}\b/\1 [redacted]/Ig' \
+        -e 's/\b(exp|expiry|expiration|expires|good (through|thru))\b[ :.,=-]*(the |is |was )?[0-9]{1,2}\/[0-9]{2,4}\b/\1 [redacted]/Ig'
+}
+
 # Read the triggering step from stdin.
 step_json=$(cat)
 [[ -z "$step_json" ]] && exit 0
@@ -145,7 +167,7 @@ _obs() {
 # Self-message guard: replying would create a self-chat loop.
 if [[ "$msg_from" == "$IDENTITY_NAME" ]]; then
     printf '  self-message — dropping with observation\n' >&2
-    _obs "self-message dropped: you chat-sent a message to yourself and it will not be replied to (replying would loop). To message someone else use: chat reply <their-name> <message>. To keep a note for later, write it as a thought step instead. Your message was: $(printf '%.200s' "$trigger_content")"
+    _obs "self-message dropped: you chat-sent a message to yourself and it will not be replied to (replying would loop). To message someone else use: chat reply <their-name> <message>. To keep a note for later, write it as a thought step instead. Your message was: $(printf '%.200s' "$trigger_content" | _redact_card)"
     exit 0
 fi
 
@@ -512,7 +534,7 @@ notes and drop what the conversation shows is stale. At most 12 short lines of
 plain text, no headers, no bullet syntax. Output only the notes.
 NOTES
 }
-_redact_keys() { sed -E 's/(sk|xox[abp]|ghp|gho|AKIA)[-_A-Za-z0-9]{12,}/[redacted]/g'; }
+_redact_keys() { sed -E 's/(sk|xox[abp]|ghp|gho|AKIA)[-_A-Za-z0-9]{12,}/[redacted]/g' | _redact_card; }
 _update_person_notes() {
     local key="$1" person="$2" hist prev_body prev_file system user new_body
     local lockdir="${MEM_DIR:-/tmp}/.person-notes.lock"
@@ -700,7 +722,7 @@ reply=$(printf '%s' "$reply" | sed -E '1s/^[[:space:]]*chat reply [A-Za-z0-9._-]
 first_line=$(printf '%s' "$reply" | head -n 1 | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')
 if [[ "$first_line" == "NO_REPLY" ]]; then
     printf '  model declined to reply (NO_REPLY)\n' >&2
-    _obs "Chose not to reply to $msg_from — their message needed no reply (already answered, or a bare acknowledgment). Their message was: $(printf '%.200s' "$trigger_content")" no-reply "$(_finish_metrics)"
+    _obs "Chose not to reply to $msg_from — their message needed no reply (already answered, or a bare acknowledgment). Their message was: $(printf '%.200s' "$trigger_content" | _redact_card)" no-reply "$(_finish_metrics)"
     exit 0
 fi
 
@@ -743,6 +765,9 @@ if [[ -n "$_defer_lines" ]]; then
             deferred_request="$_dl"
         fi
     done <<< "$_defer_lines"
+    # The handoff and every later restatement ride the redacted form; the
+    # original message step (its id is quoted in the action) stays the record.
+    deferred_request=$(printf '%s' "$deferred_request" | _redact_card)
     # grep -v exits 1 when it drops every line (a bare DEFER); under pipefail
     # that must not kill the step.
     reply=$(printf '%s' "$reply" | grep -vE '^[[:space:]]*DEFER:' | sed '/./,$!d' || true)
@@ -775,9 +800,14 @@ fi
 # Never send it; surface it like a failed reply so the mind can answer.
 if printf '%s' "$reply" | head -n 1 | grep -qE '^[[:space:]]*<(function|tool_call|parameter|invoke)[=> ]'; then
     printf '  model returned tool-call markup instead of a reply — not sending\n' >&2
-    _obs "reply failed: the model answered $msg_from with tool-call markup instead of a message, so nothing was sent. Reply to them yourself. Their message was: $(printf '%.200s' "$trigger_content")" reply-failed "$(_fail_metrics markup)"
+    _obs "reply failed: the model answered $msg_from with tool-call markup instead of a message, so nothing was sent. Reply to them yourself. Their message was: $(printf '%.200s' "$trigger_content" | _redact_card)" reply-failed "$(_fail_metrics markup)"
     exit 0
 fi
+
+# What we send back never needs card digits: the sender has their own card,
+# and this text also lands in the log as a message step. Dates, times, and
+# confirmation numbers pass through untouched.
+reply=$(printf '%s' "$reply" | _redact_card)
 
 reply_args=()
 [[ -n "$trigger_step_id" ]] && reply_args+=(--reply-to "$trigger_step_id")
@@ -799,4 +829,4 @@ fi
 printf '  reply failed — appending failure observation\n' >&2
 _kind=send
 [[ -n "$reply" ]] || _kind=empty
-_obs "reply failed: could not send a reply to $msg_from (empty model output or chat error — see responder log). Their message was: $(printf '%.200s' "$trigger_content")" reply-failed "$(_fail_metrics "$_kind")"
+_obs "reply failed: could not send a reply to $msg_from (empty model output or chat error — see responder log). Their message was: $(printf '%.200s' "$trigger_content" | _redact_card)" reply-failed "$(_fail_metrics "$_kind")"
