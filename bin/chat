@@ -117,7 +117,14 @@ To message someone else: chat reply <their-name> <message>
 To keep a note for yourself, append a thought step instead of a message."
 
     [[ "$force" -eq 1 || -z "$key" ]] || _refuse_key "$key"
-    [[ "$force" -eq 1 ]] || _refuse_repeat "$from" "$to" "$message"
+    # The repeat check guards the identity's OWN sends. A message a person
+    # sends in (a bridge delivering "great" for the second time today) is
+    # never a repeat to refuse: on 2026-09-21 the check ran on inbound
+    # deliveries too, 22 of Andy's messages came back 409 and never reached
+    # the mind, and the two bridges posted each other's error text in a loop.
+    if [[ "$force" -ne 1 ]] && ! _inbound_from "$from"; then
+        _refuse_repeat "$from" "$to" "$message"
+    fi
 
     # source_url records where a bridged message came from. It is optional
     # metadata for operators and never affects routing or model context.
@@ -815,6 +822,13 @@ _refuse_key() {
 \`chat sent\` shows recent sends. If a second send is deliberate, add --force."
 }
 
+# _inbound_from <from>: true when the sender is someone other than the
+# identity itself, i.e. a person's message being delivered in. With no
+# IDENTITY_NAME (hand use outside an identity) every send counts as outbound.
+_inbound_from() {
+    [[ -n "${IDENTITY_NAME:-}" && "$1" != "$IDENTITY_NAME" ]]
+}
+
 # _refuse_repeat <from> <to> <message>: die if this exact message already went
 # to this destination inside CHAT_REPEAT_WINDOW (default 24h). The check the
 # mind failed to make on 2026-09-08 (four sends of the same two papers) now
@@ -871,7 +885,9 @@ Usage:
                              default_send_from, to defaults to $IDENTITY_NAME).
                              Refuses a message identical to one sent to the
                              same destination in the last 24h
-                             (CHAT_REPEAT_WINDOW) unless --force.
+                             (CHAT_REPEAT_WINDOW) unless --force. Only the
+                             identity's own sends are checked; a person's
+                             message delivered in is never refused.
                              --key names the one duty this send fulfils;
                              a second send with the same key is refused.
                              A slack-* destination must be a form the bridge

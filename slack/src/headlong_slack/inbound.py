@@ -29,6 +29,17 @@ DELIVERY_ATTEMPTS = 3
 DELIVERY_ERROR_TEXT = (
     "(bridge error: I couldn't reach my mind just now — please try again in a bit)"
 )
+
+
+def _refusal_reason(response: httpx.Response) -> str:
+    """The one-line reason behind a 409 from the web API, for the log."""
+    try:
+        detail = response.json().get("detail")
+    except Exception:
+        return response.text[:200]
+    if isinstance(detail, dict):
+        return str(detail.get("message") or detail)[:200]
+    return str(detail)[:200]
 # Bound reaction parent-lookups so a hung reactions.get cannot stall
 # the single inbound drain thread. Fail open rather than wait.
 ITEM_LOOKUP_TIMEOUT = 2
@@ -480,6 +491,12 @@ class Inbound:
         content = clean_inbound(msg.text, self.bot_user_id)
         if not content:
             return
+        # A peer's bridge error is the other bridge talking, not the other
+        # persona. Forwarding it made two minds answer an error string at each
+        # other every seven seconds on 2026-09-21.
+        if msg.is_peer and DELIVERY_ERROR_TEXT in content:
+            log.info("peer bridge error text from %s not forwarded", msg.from_name)
+            return
         # The reply-to name is spelled out because agent-typed replies (the
         # agentic path, unlike the mechanical fast-reply) must use the full
         # routing key, not the human display name.
@@ -509,6 +526,25 @@ class Inbound:
                 response = httpx.post(self._chat_url, json=body, timeout=30)
                 response.raise_for_status()
                 return
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 409:
+                    # The mind's tool refused the message on purpose (a
+                    # duplicate or a bad target); it will refuse it again,
+                    # and "couldn't reach my mind" would be untrue.
+                    log.warning(
+                        "chat POST refused for %s: %s",
+                        msg.from_name,
+                        _refusal_reason(exc.response),
+                    )
+                    return
+                log.warning(
+                    "chat POST failed (attempt %d/%d)",
+                    attempt,
+                    DELIVERY_ATTEMPTS,
+                    exc_info=True,
+                )
+                if attempt < DELIVERY_ATTEMPTS:
+                    time.sleep(2 * attempt)
             except httpx.HTTPError:
                 log.warning(
                     "chat POST failed (attempt %d/%d)",
