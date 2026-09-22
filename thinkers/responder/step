@@ -22,6 +22,16 @@ THINK_MODEL="${THINK_MODEL:-${SHELLM_MODEL:-claude-opus-4-7}}"
 THINK_CONTEXT_TAIL="${THINK_CONTEXT_TAIL:-20}"
 REPLY_MODEL="${MONOLITH_REPLY_MODEL:-$THINK_MODEL}"
 
+# The reply call is bounded twice, on its own, never inherited from the mind:
+# RESPONDER_MAX_TOKENS caps the output (reasoning counts against it; the
+# largest real reply on either persona was about 5K tokens, nearly all
+# thinking, and a DeepSeek runaway pads whitespace up to whatever the cap
+# is) and RESPONDER_MAX_TIME caps the wall clock (the inherited 600 s let one
+# runaway hold a reply for ten minutes on 2026-09-21). bin/llm's own retries
+# are off here: a second three-minute attempt is not a chat reply.
+RESPONDER_MAX_TOKENS="${RESPONDER_MAX_TOKENS:-8192}"
+RESPONDER_MAX_TIME="${RESPONDER_MAX_TIME:-180}"
+
 # Wall-clock milliseconds, for compose_ms. Same perl path bin/traj uses for
 # its timestamps; the fallback is whole seconds, still a valid number.
 _now_ms() {
@@ -29,6 +39,55 @@ _now_ms() {
         || printf '%s000\n' "$(date +%s)"
 }
 t_start_ms=$(_now_ms)
+
+# What the reply call(s) did, merged into every decision observation by
+# _finish_metrics: llm_ms (all calls), llm_calls, out_tok / think_tok /
+# served_by (from bin/llm's usage record; served_by is OpenRouter's upstream
+# host, one model id there is two dozen hosts at different speeds),
+# truncated, timed_out. Failures add `failure`: timeout, truncated, parse,
+# markup, empty, send.
+_llm_meta='{}'
+_llm_timed_out=0
+_llm_truncated=0
+_llm_calls=0
+# _reply_llm runs inside a command substitution (its stdout is the reply),
+# so its record travels through a file (_rl_meta_file, made right before the
+# call) and _rl_sync pulls it into this shell.
+_rl_meta_file=""
+_reply_llm() {   # _reply_llm <llm args...>; stdout = the reply, rc = llm's rc
+    local usage err rc t0 ms rec prev
+    usage=$(mktemp) || return 1
+    err=$(mktemp) || { rm -f "$usage"; return 1; }
+    t0=$(_now_ms)
+    rc=0
+    LLM_USAGE_FILE="$usage" LLM_MAX_TIME="$RESPONDER_MAX_TIME" LLM_RETRIES=0 \
+        llm -t "$RESPONDER_MAX_TOKENS" "$@" 2>"$err" || rc=$?
+    ms=$(( $(_now_ms) - t0 ))
+    cat "$err" >&2
+    local truncated=0 timed_out=0
+    grep -q 'output truncated at max_tokens' "$err" 2>/dev/null && truncated=1
+    grep -qE 'timed out|curl: \(28\)' "$err" 2>/dev/null && timed_out=1
+    rec=""
+    [[ -s "$usage" ]] && rec=$(jq -c 'select(type == "object")' "$usage" 2>/dev/null | head -1)
+    [[ -n "$rec" ]] || rec='{}'
+    prev=$(cat "$_rl_meta_file" 2>/dev/null); [[ -n "$prev" ]] || prev='{}'
+    jq -nc --argjson prev "$prev" --argjson rec "$rec" --argjson ms "$ms" \
+        --argjson tr "$truncated" --argjson to "$timed_out" '
+        $prev
+        + {llm_ms: (($prev.llm_ms // 0) + $ms), llm_calls: (($prev.llm_calls // 0) + 1)}
+        + ($rec | {out_tok, think_tok, served_by} | with_entries(select(.value != null)))
+        + (if $tr == 1 or ($rec.truncated == true) then {truncated: true} else {} end)
+        + (if $to == 1 then {timed_out: true} else {} end)' > "$_rl_meta_file" 2>/dev/null \
+        || printf '%s' "$prev" > "$_rl_meta_file"
+    rm -f "$usage" "$err"
+    return "$rc"
+}
+_rl_sync() {   # after each _reply_llm: its record into this shell's variables
+    _llm_meta=$(cat "$_rl_meta_file" 2>/dev/null); [[ -n "$_llm_meta" ]] || _llm_meta='{}'
+    _llm_timed_out=$(printf '%s' "$_llm_meta" | jq -r 'if .timed_out == true then 1 else 0 end' 2>/dev/null) || _llm_timed_out=0
+    _llm_truncated=$(printf '%s' "$_llm_meta" | jq -r 'if .truncated == true then 1 else 0 end' 2>/dev/null) || _llm_truncated=0
+    _llm_calls=$(printf '%s' "$_llm_meta" | jq -r '.llm_calls // 0' 2>/dev/null) || _llm_calls=0
+}
 
 # Read the triggering step from stdin.
 step_json=$(cat)
@@ -263,9 +322,13 @@ _finish_metrics() {
     local ms gap
     ms=$(( $(_now_ms) - t_start_ms ))
     gap=$(_gap_s) || gap=""
-    printf '%s' "$metrics_json" | jq -c --argjson ms "$ms" --arg g "$gap" \
-        '. + {compose_ms: $ms} + (if $g == "" then {} else {gap_s: ($g | tonumber)} end)' \
+    printf '%s' "$metrics_json" | jq -c --argjson ms "$ms" --arg g "$gap" --argjson llm "$_llm_meta" --arg p "${_parse:-}" \
+        '. + $llm + {compose_ms: $ms} + (if $g == "" then {} else {gap_s: ($g | tonumber)} end)
+           + (if $p == "" then {} else {parse: $p} end)' \
         2>/dev/null || printf '%s' "$metrics_json"
+}
+_fail_metrics() {   # _fail_metrics <kind>: the metrics plus what went wrong
+    _finish_metrics | jq -c --arg k "$1" '. + {failure: $k}' 2>/dev/null || _finish_metrics
 }
 
 # ---------------------------------------------------------------------------
@@ -526,17 +589,49 @@ fi
 
 printf '  replying to %s...\n' "$msg_from" >&2
 reply=""
+_parse="text"
+_rl_meta_file=$(mktemp)
+printf '{}' > "$_rl_meta_file"
 if [[ "$structured" -eq 1 ]]; then
-    if ! reply=$(llm -m "$REPLY_MODEL" -M "$convo_json" -s "$reply_system" --json-schema "$_schema_file"); then
-        # The provider refused the schema (or the call failed): once more as
-        # plain text so a model without structured output still answers.
-        printf '  structured reply call failed — retrying as plain text\n' >&2
-        structured=0
-        _compose_reply_system 0
-        reply=$(llm -m "$REPLY_MODEL" -M "$convo_json" -s "$reply_system") || true
+    _parse="structured"
+    if ! reply=$(_reply_llm -m "$REPLY_MODEL" -M "$convo_json" -s "$reply_system" --json-schema "$_schema_file"); then
+        _rl_sync
+        if [[ "$_llm_timed_out" -eq 1 || "$_llm_truncated" -eq 1 ]]; then
+            # The budget is spent (the wall clock, or the whole token cap on
+            # nothing visible); a second attempt would only double the wait.
+            printf '  structured reply call spent its budget (timed out: %s, truncated: %s) — not retrying\n' "$_llm_timed_out" "$_llm_truncated" >&2
+            reply=""
+        else
+            # The provider refused the schema (or the call failed fast): once
+            # more as plain text so a model without structured output answers.
+            printf '  structured reply call failed — retrying as plain text\n' >&2
+            structured=0
+            _parse="text"
+            _compose_reply_system 0
+            reply=$(_reply_llm -m "$REPLY_MODEL" -M "$convo_json" -s "$reply_system") || true
+            _rl_sync
+            _llm_meta=$(printf '%s' "$_llm_meta" | jq -c '. + {fallback: true}' 2>/dev/null || printf '%s' "$_llm_meta")
+            printf '%s' "$_llm_meta" > "$_rl_meta_file"
+        fi
     fi
 else
-    reply=$(llm -m "$REPLY_MODEL" -M "$convo_json" -s "$reply_system") || true
+    reply=$(_reply_llm -m "$REPLY_MODEL" -M "$convo_json" -s "$reply_system") || true
+fi
+_rl_sync
+rm -f "$_rl_meta_file"
+
+# Nothing came back and the call itself was the reason: say which.
+if [[ -z "$(printf '%s' "$reply" | tr -d '[:space:]')" ]]; then
+    if [[ "$_llm_timed_out" -eq 1 ]]; then
+        printf '  reply call timed out — appending failure observation\n' >&2
+        _obs "reply failed: the model took longer than ${RESPONDER_MAX_TIME}s to answer $msg_from, so nothing was sent. Reply to them yourself. Their message was: $(printf '%.200s' "$trigger_content")" reply-failed "$(_fail_metrics timeout)"
+        exit 0
+    fi
+    if [[ "$_llm_truncated" -eq 1 ]]; then
+        printf '  reply hit the %s token cap with nothing usable — appending failure observation\n' "$RESPONDER_MAX_TOKENS" >&2
+        _obs "reply failed: the model spent its whole ${RESPONDER_MAX_TOKENS} token budget answering $msg_from and produced nothing usable, so nothing was sent. Reply to them yourself. Their message was: $(printf '%.200s' "$trigger_content")" reply-failed "$(_fail_metrics truncated)"
+        exit 0
+    fi
 fi
 
 # Structured reply: read the object and hand the rest of the step the text
@@ -544,9 +639,35 @@ fi
 # or the message). An object that does not parse is treated as text, so a
 # model that ignored the format still gets the DEFER parser and the markup
 # guard below instead of an empty reply.
+# A cut-off object is repaired when the cut fell outside a string (DeepSeek's
+# 2026-09-21 shape: the object complete up to `"message":""`, then whitespace
+# to the cap): closing braces make it whole and every field is what the model
+# wrote. A cut inside a string is repaired only for no_reply, since a reply or
+# holding message cut mid-sentence must not reach the person. An object that
+# cannot be repaired is never sent as text: ten `{"action":"no_reply",...`
+# fragments went to Slack that way.
+_salvage_object() {   # _salvage_object <text>; stdout: the object, or nothing
+    local t c out
+    t=$(printf '%s' "$1" | sed -E '1s/^[[:space:]]*```(json)?[[:space:]]*//' | sed -E 's/[[:space:]]+$//')
+    for c in '}' '}}' '"}' '"}}'; do
+        out=$(printf '%s%s' "$t" "$c" | jq -c 'select(type == "object" and (.action | type) == "string")' 2>/dev/null) || continue
+        [[ -n "$out" ]] || continue
+        case "$c" in
+            '"'*) [[ "$(printf '%s' "$out" | jq -r '.action | ascii_downcase')" == "no_reply" ]] || return 1 ;;
+        esac
+        printf '%s' "$out"
+        return 0
+    done
+    return 1
+}
+
 if [[ "$structured" -eq 1 ]]; then
     _obj=$(printf '%s' "$reply" | sed -E '1s/^[[:space:]]*```(json)?[[:space:]]*//' | sed -E '$s/[[:space:]]*```[[:space:]]*$//' \
         | jq -c 'select(type == "object" and (.action | type) == "string")' 2>/dev/null) || _obj=""
+    if [[ -z "$_obj" ]] && _obj=$(_salvage_object "$reply") && [[ -n "$_obj" ]]; then
+        printf '  structured reply was cut off — repaired the object\n' >&2
+        _parse="salvaged"
+    fi
     if [[ -n "$_obj" ]]; then
         _action=$(printf '%s' "$_obj" | jq -r '.action | ascii_downcase')
         _message=$(printf '%s' "$_obj" | jq -r '.message // ""')
@@ -556,8 +677,13 @@ if [[ "$structured" -eq 1 ]]; then
             defer)    reply=$(printf 'DEFER: %s\n%s' "$_request" "$_message") ;;
             *)        reply="$_message" ;;
         esac
+    elif printf '%s' "$reply" | grep -qE '^[[:space:]]*\{'; then
+        printf '  structured reply did not parse and could not be repaired — not sending\n' >&2
+        _obs "reply failed: the model's reply to $msg_from was a broken JSON object, so nothing was sent. Reply to them yourself. Their message was: $(printf '%.200s' "$trigger_content")" reply-failed "$(_fail_metrics parse)"
+        exit 0
     else
         printf '  structured reply did not parse as an object — treating it as text\n' >&2
+        _parse="text"
     fi
 fi
 
@@ -636,12 +762,20 @@ if [[ -n "$_defer_lines" ]]; then
         | traj append >/dev/null || true
 fi
 
+# Whatever path led here, a reply that still looks like the structured
+# object is not a message; the person would read raw JSON.
+if printf '%s' "$reply" | head -n 1 | grep -qE '^[[:space:]]*\{[[:space:]]*"action"'; then
+    printf '  reply is a raw action object — not sending\n' >&2
+    _obs "reply failed: the model's reply to $msg_from was a raw JSON object, so nothing was sent. Reply to them yourself. Their message was: $(printf '%.200s' "$trigger_content")" reply-failed "$(_fail_metrics parse)"
+    exit 0
+fi
+
 # A reply that is tool-call markup is the model trying to act, not talk
 # (Nemotron 3 Ultra: "<function=skills>..." sent to a DM on 2026-09-15).
 # Never send it; surface it like a failed reply so the mind can answer.
 if printf '%s' "$reply" | head -n 1 | grep -qE '^[[:space:]]*<(function|tool_call|parameter|invoke)[=> ]'; then
     printf '  model returned tool-call markup instead of a reply — not sending\n' >&2
-    _obs "reply failed: the model answered $msg_from with tool-call markup instead of a message, so nothing was sent. Reply to them yourself. Their message was: $(printf '%.200s' "$trigger_content")" reply-failed "$(_finish_metrics)"
+    _obs "reply failed: the model answered $msg_from with tool-call markup instead of a message, so nothing was sent. Reply to them yourself. Their message was: $(printf '%.200s' "$trigger_content")" reply-failed "$(_fail_metrics markup)"
     exit 0
 fi
 
@@ -649,7 +783,7 @@ reply_args=()
 [[ -n "$trigger_step_id" ]] && reply_args+=(--reply-to "$trigger_step_id")
 if [[ -n "$reply" ]] && printf '%s' "$reply" | chat reply ${reply_args[@]+"${reply_args[@]}"} "$msg_from"; then
     _extra=$(_finish_metrics)
-    _extra=$(printf '%s' "$_extra" | jq -c --argjson s "$structured" '. + {structured: ($s == 1)}')
+    _extra=$(printf '%s' "$_extra" | jq -c --argjson s "$structured" --arg p "$_parse" '. + {structured: ($s == 1), parse: $p}')
     if [[ -n "$deferred_request" ]]; then
         _extra=$(printf '%s' "$_extra" | jq -c --arg r "$deferred_request" '. + {deferred: true, request: $r}')
         _obs "Replied to $msg_from with a holding message and handed the mind a pending request: $(printf '%.200s' "$deferred_request")" replied "$_extra"
@@ -663,4 +797,6 @@ fi
 
 # Reply failed — surface it so the monolith can pick it up.
 printf '  reply failed — appending failure observation\n' >&2
-_obs "reply failed: could not send a reply to $msg_from (empty model output or chat error — see responder log). Their message was: $(printf '%.200s' "$trigger_content")" reply-failed "$(_finish_metrics)"
+_kind=send
+[[ -n "$reply" ]] || _kind=empty
+_obs "reply failed: could not send a reply to $msg_from (empty model output or chat error — see responder log). Their message was: $(printf '%.200s' "$trigger_content")" reply-failed "$(_fail_metrics "$_kind")"
