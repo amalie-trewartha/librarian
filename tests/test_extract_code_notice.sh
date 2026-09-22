@@ -23,8 +23,9 @@ bad() { fail=$((fail+1)); printf 'FAIL %s%s\n' "$1" "${2:+ — $2}"; }
 
 # Load just extract_code from bin/shellm. Source from a temp file, not
 # `source <(...)`: the CI macOS bash 3.2 binary has no process substitution.
-FN=$(mktemp)
-trap 'rm -f "$FN"' EXIT
+WORK=$(mktemp -d)
+FN="$WORK/functions"
+trap 'rm -rf "$WORK"' EXIT
 sed -n '/^normalize_toolcall_markup() {/,/^}/p' "$REPO/bin/shellm" > "$FN"
 sed -n '/^extract_code() {/,/^}/p' "$REPO/bin/shellm" >> "$FN"
 # shellcheck disable=SC1090
@@ -74,13 +75,13 @@ for shape in canonical hybrid bare parameter; do
         parameter) resp=$'<tool_call>\n<function=bash>\n<parameter=command>\necho lifted-parameter\n</parameter>\n</function>\n</tool_call>' ;;
     esac
     out=$(extract_code "$resp")
-    ran=$(bash -c "$out" 2>/tmp/notice.$$)
-    if [[ "$ran" == "lifted-$shape"* ]] && grep -q 'used <tool_call>/<function=bash> markup' /tmp/notice.$$; then
+    ran=$(bash -c "$out" 2>"$WORK/notice")
+    if [[ "$ran" == "lifted-$shape"* ]] && grep -q 'used <tool_call>/<function=bash> markup' "$WORK/notice"; then
         ok "tool-call markup ($shape) is lifted, runs, and carries the notice"
     else
-        bad "tool-call markup ($shape) is lifted, runs, and carries the notice" "ran=$ran notice=$(cat /tmp/notice.$$ | head -c 120)"
+        bad "tool-call markup ($shape) is lifted, runs, and carries the notice" "ran=$ran notice=$(cat "$WORK/notice" | head -c 120)"
     fi
-    rm -f /tmp/notice.$$
+    rm -f "$WORK/notice"
 done
 out=$(extract_code $'<tool_call> mentioned in prose\n```bash\necho fence-wins\n```')
 if [[ "$(bash -c "$out" 2>/dev/null)" == "fence-wins" ]] && [[ "$out" != *"used <tool_call>"* ]]; then
@@ -89,6 +90,116 @@ else
     bad "a real fence wins over tool-call words in prose" "$out"
 fi
 
+
+# --- Literal tags must stay data, with and without an outer wrapper ---------
+# Compare complete output, including a command after the literal. An inner
+# echo being executed instead of printed must fail the comparison.
+for quoting in heredoc single double; do
+    case "$quoting" in
+        heredoc) script=$(cat <<'SCRIPT'
+cat <<'DATA'
+<tool_call>
+<function=bash>
+<parameter=command>
+<bash>
+echo DATA_ONLY
+</bash>
+</parameter>
+</function>
+</tool_call>
+DATA
+echo AFTER
+SCRIPT
+) ;;
+        single) script=$(cat <<'SCRIPT'
+printf '%s\n' '<tool_call>
+echo DATA_ONLY
+</tool_call>'
+echo AFTER
+SCRIPT
+) ;;
+        double) script=$(cat <<'SCRIPT'
+printf '%s\n' "<tool_call>
+echo DATA_ONLY
+</tool_call>"
+echo AFTER
+SCRIPT
+) ;;
+    esac
+    expected=$(printf '%s\n' "$script" | bash)
+    out=$(extract_code "$script")
+    ran=$(printf '%s\n' "$out" | bash 2>"$WORK/notice")
+    if [[ "$ran" == "$expected" && "$out" != *"used <tool_call>"* ]]; then
+        ok "unfenced $quoting preserves literal tags and the trailing command"
+    else
+        bad "unfenced $quoting preserves literal tags and the trailing command" "$ran"
+    fi
+    resp=$'<tool_call>\n<function=bash>\n'"$script"$'\n</function>\n</tool_call>'
+    out=$(extract_code "$resp")
+    ran=$(printf '%s\n' "$out" | bash 2>"$WORK/notice")
+    if [[ "$ran" == "$expected" && "$out" == *"used <tool_call>"* ]]; then
+        ok "wrapped $quoting preserves literal tags and the trailing command"
+    else
+        bad "wrapped $quoting preserves literal tags and the trailing command" "$ran"
+    fi
+done
+
+# Ambiguous or incomplete scripts must be returned unchanged. bash -n alone
+# is insufficient: an unterminated heredoc warns but exits successfully.
+for shape in quote heredoc tag_delimiter preamble unknown_tool extra_call; do
+    case "$shape" in
+        quote) resp=$'<tool_call>\nprintf "%s\\n" "unfinished\n</tool_call>' ;;
+        heredoc) resp=$'<tool_call>\ncat <<EOF\nunfinished\n</tool_call>' ;;
+        tag_delimiter) resp=$(cat <<'SCRIPT'
+<tool_call>
+cat <<'</tool_call>'
+literal body
+</tool_call>
+</tool_call>
+SCRIPT
+) ;;
+        preamble) resp=$'cat <<EOF\n<tool_call>\necho DATA_ONLY\n</tool_call>' ;;
+        unknown_tool) resp=$'<tool_call>\n<function=python>\nprint("hello")\n</function>\n</tool_call>' ;;
+        extra_call) resp=$'<tool_call>\necho first\n</tool_call>\n<tool_call>\necho second\n</tool_call>' ;;
+    esac
+    out=$(normalize_toolcall_markup "$resp"); rc=$?
+    if [[ "$rc" -eq 1 && "$out" == "$resp" ]]; then
+        ok "ambiguous markup ($shape) is left unchanged"
+    else
+        bad "ambiguous markup ($shape) is left unchanged" "rc=$rc"
+    fi
+done
+
+# A fence must win even when grep sees it before printf has finished writing.
+# Use multiline padding well beyond pipe capacity and repeat under pipefail.
+# The payload is passed through stdin, never bash -c (Linux argv size limit).
+script=$(cat <<'SCRIPT'
+cat <<'DATA'
+<tool_call>
+echo DATA_ONLY
+</tool_call>
+SCRIPT
+)
+padding=$(awk 'BEGIN { for (i = 0; i < 16000; i++) print "# padding 0123456789abcdef" }')
+script="$script"$'\n'"$padding"$'\nDATA\necho AFTER'
+resp=$'```bash\n'"$script"$'\n```'
+for attempt in 1 2 3 4 5; do
+    out=$(extract_code "$resp")
+    if [[ "$out" == "$script" ]]; then
+        ok "large fenced literal stays intact under pipefail (attempt $attempt)"
+    else
+        bad "large fenced literal stays intact under pipefail (attempt $attempt)"
+    fi
+done
+resp=$'<tool_call>\n<function=bash>\n'"$script"$'\n</function>\n</tool_call>'
+out=$(extract_code "$resp")
+expected=$(printf '%s\n' "$script" | bash)
+ran=$(printf '%s\n' "$out" | bash 2>"$WORK/notice")
+if [[ "$ran" == "$expected" && "$out" == *"used <tool_call>"* ]]; then
+    ok "large wrapped heredoc is preserved without sending the script through argv"
+else
+    bad "large wrapped heredoc is preserved without sending the script through argv"
+fi
 
 echo
 echo "$pass passed, $fail failed"

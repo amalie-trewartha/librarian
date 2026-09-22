@@ -1713,33 +1713,59 @@ call_llm() {
 # (also the hybrid "<function=bash> … </bash>"). Run as-is, the first line is a
 # bash syntax error and the whole turn is wasted (4 of 46 responses on Custos,
 # 2026-09-09). When a response has NO fence but does have this markup, lift
-# the code between the openers and the first closer into a ```bash fence so
-# it executes, and tell the model on stderr what happened so it learns the
-# fence. A response that has a real fence is left alone (fences win).
+# the code inside the outer tags into a ```bash fence so it executes, and
+# tell the model on stderr what happened so it learns the fence. Real fences
+# win. Ambiguous wrappers are left alone rather than risking script data
+# becoming commands.
 normalize_toolcall_markup() {
     local response="$1"
     case "$response" in
         *"<tool_call>"*|*"<function="*|*"<bash>"*) ;;
         *) printf '%s' "$response"; return 1 ;;
     esac
-    if printf '%s\n' "$response" | grep -qE '^```|```(bash|shell|sh)[[:space:]]*$'; then
+    # Consume the whole response: grep -q can give printf SIGPIPE, making a
+    # matching fence look absent under pipefail on larger responses.
+    if printf '%s\n' "$response" | grep -E '^```|```(bash|shell|sh)[[:space:]]*$' >/dev/null; then
         printf '%s' "$response"; return 1
     fi
-    local lifted
-    lifted=$(printf '%s\n' "$response" | awk '
-        BEGIN { started = 0 }
+    local lifted diagnostics
+    lifted=$(printf '%s\n' "$response" | awk -v sq="'" '
+        BEGIN { started = 0; body = 0; ambiguous = 0; n = 0 }
         !started {
-            if ($0 ~ /^[[:space:]]*<(tool_call|function=[A-Za-z_]+|parameter=[A-Za-z_]+|bash)>[[:space:]]*$/) { started = 1 }
+            if ($0 ~ /^[[:space:]]*<(tool_call|function=bash|bash)>[[:space:]]*$/) {
+                started = 1
+            } else if (index($0, sq) || $0 ~ /["`\\<>]/) {
+                # Permit simple prose before the wrapper, but never scan past
+                # a quote, continuation, or redirection into possible data.
+                ambiguous = 1
+            }
             next
         }
-        started {
-            if ($0 ~ /^[[:space:]]*<\/(tool_call|function|parameter|bash)>[[:space:]]*$/) { exit }
-            if ($0 ~ /^[[:space:]]*<(function=[A-Za-z_]+|parameter=[A-Za-z_]+|bash)>[[:space:]]*$/) { next }
-            print
+        !body {
+            if ($0 ~ /^[[:space:]]*<(function=bash|parameter=command|bash)>[[:space:]]*$/ ||
+                $0 ~ /^[[:space:]]*$/) next
+            body = 1
+        }
+        { lines[++n] = $0 }
+        END {
+            if (ambiguous || !started) exit
+            # Strip only the suffix, not tags within the script. In particular,
+            # a closing tag inside a heredoc or quoted string is literal data.
+            while (n > 0 && (lines[n] ~ /^[[:space:]]*<\/(tool_call|function|parameter|bash)>[[:space:]]*$/ ||
+                            lines[n] ~ /^[[:space:]]*$/)) n--
+            for (i = 1; i <= n; i++) print lines[i]
         }')
     if [[ "$lifted" =~ [^[:space:]] ]]; then
-        printf '%s' $'```bash\n'"$lifted"$'\n```'
-        return 0
+        # Reject syntax errors without executing model code or startup files.
+        # Bash 3.2 silently accepts an unclosed heredoc under -n. Appending an
+        # unmatched ) must fail: if it succeeds, the trailer was swallowed as
+        # heredoc data and the candidate is incomplete. Newer bash warns too.
+        if diagnostics=$(printf '%s\n' "$lifted" | BASH_ENV='' ENV='' bash --noprofile --norc -n 2>&1) &&
+            [[ -z "$diagnostics" ]] &&
+            ! { printf '%s\n)\n' "$lifted" | BASH_ENV='' ENV='' bash --noprofile --norc -n 2>/dev/null; }; then
+            printf '%s' $'```bash\n'"$lifted"$'\n```'
+            return 0
+        fi
     fi
     printf '%s' "$response"
     return 1
