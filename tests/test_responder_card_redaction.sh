@@ -6,11 +6,14 @@
 #
 # The inbound message step keeps its raw content (it is the record). What
 # this test pins: every string the responder itself appends or sends — the
-# reply, the deferral `action` step, the observations, and person notes —
-# has card-shaped and cvv/expiry-shaped digits replaced with
-# [card redacted]/[redacted]. Dates, times, party sizes, confirmation
-# numbers, phone numbers, and zips pass through untouched. Stubbed llm and
-# chat; no LLM calls, no docker.
+# reply, the deferral `action` step, every observation quoting the message
+# (including the failure exits: timeout, token cap, broken JSON, raw JSON),
+# and person notes — has card-shaped and cvv/expiry-shaped digits replaced
+# with [card redacted]/[redacted]. Dates, times, party sizes, confirmation
+# numbers, phone numbers, and zips pass through untouched. The person-notes
+# case drives a real notes write (nonempty history, foreground writer) and
+# a control run with the redaction stripped proves the assertion has teeth.
+# Stubbed llm and chat; no LLM calls, no docker.
 
 set -uo pipefail
 unset IDENTITY_DIR IDENTITY_NAME MEM_DIR TRAJ_DIR TRAJ_ID ROOT_TRAJ_ID THINK_CONTEXT_TAIL 2>/dev/null
@@ -43,17 +46,25 @@ cat > "$WORK/stub/llm" <<'STUB'
 #!/usr/bin/env bash
 # Serves $STUB_REPLY_FILE for the reply call. For the person-notes call
 # (recognizable by its -s system prompt containing 'notes'), serves
-# $STUB_NOTES_FILE so notes can carry digits too.
+# $STUB_NOTES_FILE so notes can carry digits too. STUB_LLM_MODE=timeout or
+# =truncated prints the failure shape bin/llm reports on stderr, with no
+# usable stdout, so the failure exits run deterministically.
 for _a in "$@"; do :; done
 _prev=""
 for _a in "$@"; do [[ "$_prev" == "-s" ]] && _sys="$_a"; _prev="$_a"; done
-if printf '%s' "${_sys:-}" | grep -q 'private notes about one person'; then cat "$STUB_NOTES_FILE"; else cat "$STUB_REPLY_FILE"; fi
+if printf '%s' "${_sys:-}" | grep -q 'private notes about one person'; then cat "$STUB_NOTES_FILE"
+elif [[ "${STUB_LLM_MODE:-}" == timeout ]]; then printf 'curl: (28) timed out\n' >&2; exit 1
+elif [[ "${STUB_LLM_MODE:-}" == truncated ]]; then printf 'output truncated at max_tokens\n' >&2; exit 1
+else cat "$STUB_REPLY_FILE"; fi
 STUB
 cat > "$WORK/stub/chat" <<'STUB'
 #!/usr/bin/env bash
-# Records every invocation, and the reply body (stdin when piped).
+# Records every invocation, and the reply body (stdin when piped). The
+# history call serves $STUB_HISTORY_FILE when set, else no history.
 printf 'CHATCALL: %s\n' "$*" >> "$STUB_CALLS_FILE"
-if [[ "$1" == history ]]; then printf '[]\n'; else cat > "${STUB_SENT_FILE:-/dev/null}"; fi
+if [[ "$1" == history ]]; then
+    if [[ -n "${STUB_HISTORY_FILE:-}" ]]; then cat "$STUB_HISTORY_FILE"; else printf '[]\n'; fi
+else cat > "${STUB_SENT_FILE:-/dev/null}"; fi
 exit 0
 STUB
 chmod +x "$WORK/stub/llm" "$WORK/stub/chat"
@@ -62,7 +73,11 @@ export STUB_REPLY_FILE="$WORK/reply" STUB_NOTES_FILE="$WORK/notes" STUB_SENT_FIL
 ENV_COMMON=(PATH="$WORK/stub:$REPO/bin:$REPO/tools:$PATH" IDENTITY_DIR="$ID" IDENTITY_NAME="$ME"
     MEM_DIR="$ID/memories" TRAJ_DIR="$ID/trajectories" TRAJ_ID="$TRAJ_ID" HOME="$WORK/home"
     SHELLM_MODEL=stub-model THINK_CONTEXT_TAIL=30 RESPONDER_PERSON_NOTES=0 MONOLITH_TIERED_MEMORY=0)
-run_responder() { : > "$STUB_SENT_FILE"; printf '%s' "$1" | env "${ENV_COMMON[@]}" "$RESPONDER" >> "$WORK/step.log" 2>&1; }
+run_responder() {  # run_responder <trigger json> [extra env assignments...]
+    local _trig="$1"; shift
+    : > "$STUB_SENT_FILE"
+    printf '%s' "$_trig" | env "${ENV_COMMON[@]}" "$@" "$RESPONDER" >> "$WORK/step.log" 2>&1
+}
 now() { date -u +%Y-%m-%dT%H:%M:%S.000Z; }
 
 hdr() { printf '{"step_id":"hdr","type":"trajectory","ts":"%s"}\n' "$(now)" >> "$TRAJ"; }
@@ -103,17 +118,85 @@ run_responder "$(grep -F '"step_id":"trig-4"' "$TRAJ")"
 sent=$(cat "$STUB_SENT_FILE")
 if printf '%s' "$sent" | grep -q '2110728612' && printf '%s' "$sent" | grep -q '94110'; then ok "benign: confirmation number and zip survive"; else bad "benign: confirmation number and zip survive" "$sent"; fi
 
-# --- 5. person notes inherit the redaction ---------------------------------
+# --- 5. person notes: the write path itself stays clean ---------------------
+# The writer only runs with history to summarize; the old stub returned none,
+# so the notes call returned before writing anything and the assertion passed
+# with no file to check. Here the chat stub serves one history row and the
+# writer runs in the foreground, so a person memory is actually written.
 : > "$TRAJ"; hdr
 printf '{"step_id":"trig-5","type":"message","from":"%s","to":"%s","content":"my card 5555 5555 5555 5555 for bookings","ts":"%s","source":"chat"}\n' "$THEM" "$ME" "$(now)" >> "$TRAJ"
-printf 'notes: andy books tables, card 5555 5555 5555 5555\n' > "$STUB_NOTES_FILE"
 printf 'ok\n' > "$STUB_REPLY_FILE"
-printf '%s' "$(grep -F '"step_id":"trig-5"' "$TRAJ")" | env "${ENV_COMMON[@]}" RESPONDER_PERSON_NOTES=1 "$RESPONDER" >> "$WORK/step.log" 2>&1
-notes_files=$(grep -rl '5555' "$ID/memories" 2>/dev/null | wc -l)
-if (( notes_files == 0 )); then ok "person notes: no card digits stored"; else bad "person notes: no card digits stored" "$(grep -rl '5555' "$ID/memories" | head -1)"; fi
+printf 'notes: andy books tables, card 5555 5555 5555 5555\n' > "$STUB_NOTES_FILE"
+STUB_HISTORY_FILE="$WORK/history"
+printf '[{"ts":"2026-09-22T09:00:00.000Z","from":"%s","content":"my card 5555 5555 5555 5555 for bookings"}]\n' "$THEM" > "$STUB_HISTORY_FILE"
+run_responder "$(grep -F '"step_id":"trig-5"' "$TRAJ")" RESPONDER_PERSON_NOTES=1 RESPONDER_PERSON_NOTES_SYNC=1 STUB_HISTORY_FILE="$STUB_HISTORY_FILE"
+_pn=$(grep -l '^type: person' "$ID/memories"/*.md 2>/dev/null | head -1)
+if [[ -n "$_pn" ]]; then ok "person notes: a person memory is written (the write path runs)"; else bad "person notes: a person memory is written (the write path runs)" "$(tail -3 "$WORK/step.log")"; fi
+if [[ -n "$_pn" ]] && grep -q 'andy books tables' "$_pn"; then ok "person notes: ordinary note text survives"; else bad "person notes: ordinary note text survives" "$(cat "$_pn" 2>/dev/null)"; fi
+if [[ -n "$_pn" ]] && grep -q '\[card redacted\]' "$_pn" && ! grep -q '5555 5555' "$_pn"; then ok "person notes: card digits replaced by the marker"; else bad "person notes: card digits replaced by the marker" "$(cat "$_pn" 2>/dev/null)"; fi
+# Control: the same run with the redaction pipe stripped must store the
+# digits, so the assertions above fail when the redaction is bypassed.
+# The step sources ../_lib/common.sh relative to its own path, so the
+# stripped copy must keep that directory shape, not sit alone in $WORK.
+_noredact_dir="$WORK/thinkers-no-redact"
+mkdir -p "$_noredact_dir/responder"
+cp -r "$REPO/thinkers/_lib" "$_noredact_dir/"
+cp "$REPO"/thinkers/responder/* "$_noredact_dir/responder/"
+sed -i 's#| _redact_keys | head -n 20#| head -n 20#' "$_noredact_dir/responder/step"
+chmod +x "$_noredact_dir/responder/step"
+rm -f "$ID/memories"/*.md
+# Fresh trigger step: the idempotency guard skips a trigger that already
+# has a stamped reply, and the first run stamped one for trig-5.
+printf '{"step_id":"trig-5b","type":"message","from":"%s","to":"%s","content":"my card 5555 5555 5555 5555 for bookings","ts":"%s","source":"chat"}\n' "$THEM" "$ME" "$(now)" >> "$TRAJ"
+printf '%s' "$(grep -F '"step_id":"trig-5b"' "$TRAJ")" | env "${ENV_COMMON[@]}" RESPONDER_PERSON_NOTES=1 RESPONDER_PERSON_NOTES_SYNC=1 STUB_HISTORY_FILE="$STUB_HISTORY_FILE" "$_noredact_dir/responder/step" >> "$WORK/step.log" 2>&1
+_pn2=$(grep -l '^type: person' "$ID/memories"/*.md 2>/dev/null | head -1)
+if [[ -n "$_pn2" ]] && grep -q '5555 5555 5555 5555' "$_pn2"; then ok "control: with the redaction stripped the same notes store the digits"; else bad "control: with the redaction stripped the same notes store the digits" "$(cat "$_pn2" 2>/dev/null)"; fi
 
 echo
-# --- 6. portability: no GNU-only escape in the redaction expressions -----
+# --- 6..9. failure exits quote the trigger through the redacted excerpt -----
+# The timeout, token-cap, broken-JSON and raw-JSON exits each append an
+# observation quoting the message; each quote must be the redacted excerpt
+# while the inbound message step keeps its raw content (it is the record).
+_fail_obs_clean() {  # _fail_obs_clean <trig-id> <label> <sensitive-egrep> <kind-words>
+    local _tid="$1" _label="$2" _sens="$3" _kind="$4" _obses _raw
+    _raw=$(jq -r --arg t "$_tid" 'select(.type=="message" and .step_id==$t) | .content // empty' "$TRAJ")
+    if printf '%s' "$_raw" | grep -qE "$_sens"; then ok "$_label: the inbound message step keeps its raw content"; else bad "$_label: the inbound message step keeps its raw content" "$_raw"; fi
+    _obses=$(jq -r 'select(.type=="observation") | .content // empty' "$TRAJ")
+    if printf '%s' "$_obses" | grep -q "$_kind"; then ok "$_label: the failure observation is appended"; else bad "$_label: the failure observation is appended" "$(jq -c 'select(.type=="observation")' "$TRAJ" | head -2)"; fi
+    if printf '%s' "$_obses" | grep -qE "$_sens"; then bad "$_label: the observation omits card, cvv, and expiry" "$(printf '%s' "$_obses" | grep -E "$_sens" | head -2)"; else ok "$_label: the observation omits card, cvv, and expiry"; fi
+    if printf '%s' "$_obses" | grep -q '\[card redacted\]'; then ok "$_label: the observation quotes the redacted excerpt"; else bad "$_label: the observation quotes the redacted excerpt" "$(printf '%s' "$_obses" | head -1)"; fi
+}
+
+# 6. timeout: nothing came back and the call itself ran out of time.
+: > "$TRAJ"; hdr
+printf '{"step_id":"trig-6","type":"message","from":"%s","to":"%s","content":"pay with 4111 1111 1111 1111 exp 10/28 cvv 999 today","ts":"%s","source":"chat"}\n' "$THEM" "$ME" "$(now)" >> "$TRAJ"
+printf 'ok\n' > "$STUB_REPLY_FILE"
+run_responder "$(grep -F '"step_id":"trig-6"' "$TRAJ")" STUB_LLM_MODE=timeout RESPONDER_MAX_TIME=45
+_fail_obs_clean trig-6 "timeout exit" '4111|999|10/28' 'longer than'
+
+# 7. token cap: the whole budget spent with nothing usable.
+: > "$TRAJ"; hdr
+printf '{"step_id":"trig-7","type":"message","from":"%s","to":"%s","content":"amex card 378282246310005 exp 04/27 cvv 777 billed monthly","ts":"%s","source":"chat"}\n' "$THEM" "$ME" "$(now)" >> "$TRAJ"
+printf 'ok\n' > "$STUB_REPLY_FILE"
+run_responder "$(grep -F '"step_id":"trig-7"' "$TRAJ")" STUB_LLM_MODE=truncated RESPONDER_MAX_TOKENS=1000
+_fail_obs_clean trig-7 "token-cap exit" '378282246310005|777|04/27' 'token budget'
+
+# 8. broken structured JSON: an object that does not parse is never sent.
+: > "$TRAJ"; hdr
+printf '{"step_id":"trig-8","type":"message","from":"%s","to":"%s","content":"book with 4242 4242 4242 4242 exp 12/28 cvv 411 tonight","ts":"%s","source":"chat"}\n' "$THEM" "$ME" "$(now)" >> "$TRAJ"
+printf '{"broken":\n' > "$STUB_REPLY_FILE"
+run_responder "$(grep -F '"step_id":"trig-8"' "$TRAJ")" RESPONDER_STRUCTURED=1
+_fail_obs_clean trig-8 "broken-JSON exit" '4242|411|12/28' 'broken JSON object'
+
+# 9. raw JSON object instead of a message: never sent, surfaced as a failure.
+: > "$TRAJ"; hdr
+printf '{"step_id":"trig-9","type":"message","from":"%s","to":"%s","content":"charge 5555 5555 5555 5555 exp 01/29 cvv 123 today","ts":"%s","source":"chat"}\n' "$THEM" "$ME" "$(now)" >> "$TRAJ"
+printf '{"action":"reply","message":"done"}\n' > "$STUB_REPLY_FILE"
+run_responder "$(grep -F '"step_id":"trig-9"' "$TRAJ")" RESPONDER_STRUCTURED=0
+_fail_obs_clean trig-9 "raw-JSON exit" '5555|123|01/29' 'raw JSON object'
+
+echo
+# --- 10. portability: no GNU-only escape in the redaction expressions -----
 # Stock macOS sed treats the GNU word boundary escape as no boundary at
 # all, so rules anchored on it silently matched nothing there (the macOS
 # bash 3.2 CI job caught it). This guard fails if it ever comes back.

@@ -118,6 +118,13 @@ trigger_type=$(printf '%s' "$step_json" | jq -r '.type // empty' 2>/dev/null) ||
 trigger_content=$(printf '%s' "$step_json" | jq -r '.content // empty' 2>/dev/null) || true
 trigger_step_id=$(printf '%s' "$step_json" | jq -r '.step_id // empty' 2>/dev/null) || true
 
+# One redacted excerpt for every observation that quotes the message: the
+# failure exits below (timeout, token cap, broken JSON, raw JSON) and the
+# quiet paths all interpolate this, never the raw content. Redacted before
+# the 200-byte cut so digits straddling the cut are still caught.
+trigger_excerpt=$(printf '%s' "$trigger_content" | _redact_card)
+trigger_excerpt=$(printf '%.200s' "$trigger_excerpt")
+
 [[ "$trigger_type" == "message" ]] || exit 0
 
 msg_to=$(printf '%s' "$step_json" | jq -r '.to // empty' 2>/dev/null) || true
@@ -167,7 +174,7 @@ _obs() {
 # Self-message guard: replying would create a self-chat loop.
 if [[ "$msg_from" == "$IDENTITY_NAME" ]]; then
     printf '  self-message — dropping with observation\n' >&2
-    _obs "self-message dropped: you chat-sent a message to yourself and it will not be replied to (replying would loop). To message someone else use: chat reply <their-name> <message>. To keep a note for later, write it as a thought step instead. Your message was: $(printf '%.200s' "$trigger_content" | _redact_card)"
+    _obs "self-message dropped: you chat-sent a message to yourself and it will not be replied to (replying would loop). To message someone else use: chat reply <their-name> <message>. To keep a note for later, write it as a thought step instead. Your message was: $trigger_excerpt"
     exit 0
 fi
 
@@ -646,12 +653,12 @@ rm -f "$_rl_meta_file"
 if [[ -z "$(printf '%s' "$reply" | tr -d '[:space:]')" ]]; then
     if [[ "$_llm_timed_out" -eq 1 ]]; then
         printf '  reply call timed out — appending failure observation\n' >&2
-        _obs "reply failed: the model took longer than ${RESPONDER_MAX_TIME}s to answer $msg_from, so nothing was sent. Reply to them yourself. Their message was: $(printf '%.200s' "$trigger_content")" reply-failed "$(_fail_metrics timeout)"
+        _obs "reply failed: the model took longer than ${RESPONDER_MAX_TIME}s to answer $msg_from, so nothing was sent. Reply to them yourself. Their message was: $trigger_excerpt" reply-failed "$(_fail_metrics timeout)"
         exit 0
     fi
     if [[ "$_llm_truncated" -eq 1 ]]; then
         printf '  reply hit the %s token cap with nothing usable — appending failure observation\n' "$RESPONDER_MAX_TOKENS" >&2
-        _obs "reply failed: the model spent its whole ${RESPONDER_MAX_TOKENS} token budget answering $msg_from and produced nothing usable, so nothing was sent. Reply to them yourself. Their message was: $(printf '%.200s' "$trigger_content")" reply-failed "$(_fail_metrics truncated)"
+        _obs "reply failed: the model spent its whole ${RESPONDER_MAX_TOKENS} token budget answering $msg_from and produced nothing usable, so nothing was sent. Reply to them yourself. Their message was: $trigger_excerpt" reply-failed "$(_fail_metrics truncated)"
         exit 0
     fi
 fi
@@ -701,7 +708,7 @@ if [[ "$structured" -eq 1 ]]; then
         esac
     elif printf '%s' "$reply" | grep -qE '^[[:space:]]*\{'; then
         printf '  structured reply did not parse and could not be repaired — not sending\n' >&2
-        _obs "reply failed: the model's reply to $msg_from was a broken JSON object, so nothing was sent. Reply to them yourself. Their message was: $(printf '%.200s' "$trigger_content")" reply-failed "$(_fail_metrics parse)"
+        _obs "reply failed: the model's reply to $msg_from was a broken JSON object, so nothing was sent. Reply to them yourself. Their message was: $trigger_excerpt" reply-failed "$(_fail_metrics parse)"
         exit 0
     else
         printf '  structured reply did not parse as an object — treating it as text\n' >&2
@@ -722,7 +729,7 @@ reply=$(printf '%s' "$reply" | sed -E '1s/^[[:space:]]*chat reply [A-Za-z0-9._-]
 first_line=$(printf '%s' "$reply" | head -n 1 | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')
 if [[ "$first_line" == "NO_REPLY" ]]; then
     printf '  model declined to reply (NO_REPLY)\n' >&2
-    _obs "Chose not to reply to $msg_from — their message needed no reply (already answered, or a bare acknowledgment). Their message was: $(printf '%.200s' "$trigger_content" | _redact_card)" no-reply "$(_finish_metrics)"
+    _obs "Chose not to reply to $msg_from — their message needed no reply (already answered, or a bare acknowledgment). Their message was: $trigger_excerpt" no-reply "$(_finish_metrics)"
     exit 0
 fi
 
@@ -791,7 +798,7 @@ fi
 # object is not a message; the person would read raw JSON.
 if printf '%s' "$reply" | head -n 1 | grep -qE '^[[:space:]]*\{[[:space:]]*"action"'; then
     printf '  reply is a raw action object — not sending\n' >&2
-    _obs "reply failed: the model's reply to $msg_from was a raw JSON object, so nothing was sent. Reply to them yourself. Their message was: $(printf '%.200s' "$trigger_content")" reply-failed "$(_fail_metrics parse)"
+    _obs "reply failed: the model's reply to $msg_from was a raw JSON object, so nothing was sent. Reply to them yourself. Their message was: $trigger_excerpt" reply-failed "$(_fail_metrics parse)"
     exit 0
 fi
 
@@ -800,7 +807,7 @@ fi
 # Never send it; surface it like a failed reply so the mind can answer.
 if printf '%s' "$reply" | head -n 1 | grep -qE '^[[:space:]]*<(function|tool_call|parameter|invoke)[=> ]'; then
     printf '  model returned tool-call markup instead of a reply — not sending\n' >&2
-    _obs "reply failed: the model answered $msg_from with tool-call markup instead of a message, so nothing was sent. Reply to them yourself. Their message was: $(printf '%.200s' "$trigger_content" | _redact_card)" reply-failed "$(_fail_metrics markup)"
+    _obs "reply failed: the model answered $msg_from with tool-call markup instead of a message, so nothing was sent. Reply to them yourself. Their message was: $trigger_excerpt" reply-failed "$(_fail_metrics markup)"
     exit 0
 fi
 
@@ -829,4 +836,4 @@ fi
 printf '  reply failed — appending failure observation\n' >&2
 _kind=send
 [[ -n "$reply" ]] || _kind=empty
-_obs "reply failed: could not send a reply to $msg_from (empty model output or chat error — see responder log). Their message was: $(printf '%.200s' "$trigger_content" | _redact_card)" reply-failed "$(_fail_metrics "$_kind")"
+_obs "reply failed: could not send a reply to $msg_from (empty model output or chat error — see responder log). Their message was: $trigger_excerpt" reply-failed "$(_fail_metrics "$_kind")"
