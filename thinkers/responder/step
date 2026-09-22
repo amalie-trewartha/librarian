@@ -101,14 +101,14 @@ _rl_sync() {   # after each _reply_llm: its record into this shell's variables
 # cvv and expiry forms. A bare MM/YY is deliberately not redacted: that is
 # also a date and dates are facts the work needs, so an expiry only goes
 # when a keyword says it is one. Verification codes stay: an OTP relayed in
-# chat is the work's input. GNU sed (\b, I flag).
+# chat is the work's input. POSIX ERE only: stock macOS sed has no word boundary escape (the CI Mac job caught these rules silently not matching there), so every boundary is an explicit (^|[^0-9A-Za-z]) restored by backreference; the I flag is honored on both the GNU and FreeBSD lineages.
 _redact_card() {
     sed -E \
         -e 's/[0-9]{4}([ -][0-9]{4}){2,3}/[card redacted]/g' \
-        -e 's/\b[0-9]{13,19}\b/[card redacted]/g' \
-        -e 's/\b(card|pan|credit|debit|amex|visa|mastercard)\b[^A-Za-z0-9]{0,8}(the |is |was )?[0-9][0-9 -]{11,27}[0-9]/\1 [card redacted]/Ig' \
-        -e 's/\b(cvv|cvc|cvv2|csc|security code|sec code)\b[ :.,=-]*(the |is |was )?[0-9]{3,4}\b/\1 [redacted]/Ig' \
-        -e 's/\b(exp|expiry|expiration|expires|good (through|thru))\b[ :.,=-]*(the |is |was )?[0-9]{1,2}\/[0-9]{2,4}\b/\1 [redacted]/Ig'
+        -e 's/(^|[^0-9A-Za-z])[0-9]{13,19}/\1[card redacted]/g' \
+        -e 's/(^|[^0-9A-Za-z])(card|pan|credit|debit|amex|visa|mastercard)[^A-Za-z0-9]{0,8}(the |is |was )?[0-9][0-9 -]{11,27}[0-9]/\1\2 [card redacted]/Ig' \
+        -e 's/(^|[^0-9A-Za-z])(cvv|cvc|cvv2|csc|security code|sec code)[ :.,=-]*(the |is |was )?[0-9]{3,4}/\1\2 [redacted]/Ig' \
+        -e 's/(^|[^0-9A-Za-z])(exp|expiry|expiration|expires|good (through|thru))[ :.,=-]*(the |is |was )?[0-9]{1,2}\/[0-9]{2,4}/\1\2 [redacted]/Ig'
 }
 
 # Read the triggering step from stdin.

@@ -113,5 +113,16 @@ notes_files=$(grep -rl '5555' "$ID/memories" 2>/dev/null | wc -l)
 if (( notes_files == 0 )); then ok "person notes: no card digits stored"; else bad "person notes: no card digits stored" "$(grep -rl '5555' "$ID/memories" | head -1)"; fi
 
 echo
+# --- 6. portability: no GNU-only escape in the redaction expressions -----
+# Stock macOS sed treats the GNU word boundary escape as no boundary at
+# all, so rules anchored on it silently matched nothing there (the macOS
+# bash 3.2 CI job caught it). This guard fails if it ever comes back.
+_redact_body=$(sed -n '/^_redact_card()/,/^}/p' "$RESPONDER")
+if printf '%s' "$_redact_body" | grep -q '\\b'; then
+    bad "portability: _redact_card uses the GNU-only word boundary escape"
+else
+    ok "portability: _redact_card uses only POSIX boundaries"
+fi
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
