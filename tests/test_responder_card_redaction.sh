@@ -142,7 +142,11 @@ _noredact_dir="$WORK/thinkers-no-redact"
 mkdir -p "$_noredact_dir/responder"
 cp -r "$REPO/thinkers/_lib" "$_noredact_dir/"
 cp "$REPO"/thinkers/responder/* "$_noredact_dir/responder/"
-sed -i 's#| _redact_keys | head -n 20#| head -n 20#' "$_noredact_dir/responder/step"
+# No in-place sed here: BSD sed takes a backup-suffix argument after -i,
+# so GNU's bare form made the Mac runner treat the script as the suffix
+# and the file path as the command, leaving the stripped copy identical
+# to the real step. Stream to the file instead; portable everywhere.
+sed 's#| _redact_keys | head -n 20#| head -n 20#' "$REPO/thinkers/responder/step" > "$_noredact_dir/responder/step"
 chmod +x "$_noredact_dir/responder/step"
 rm -f "$ID/memories"/*.md
 # Fresh trigger step: the idempotency guard skips a trigger that already
