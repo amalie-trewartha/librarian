@@ -87,5 +87,46 @@ out=$(traj search "needle row")
 out=$(traj search "needle row" --tail 2)
 [[ $(printf '%s\n' "$out" | grep -c 'needle row') -eq 4 ]] && ok "--tail 2 bounds to the two all-spilled rows and still returns four matches" || bad "all-spilled rows, tail bound" "$out"
 
+# The row-pass prefilter greps the serialized line, where jq has escaped
+# quotes, backslashes, tabs and control characters; the match the user
+# asked for lives in the decoded field. The prefilter pattern must be
+# translated (a fixed string through the escape table, a regex to a
+# superset over escaped text) or rows whose decoded text matches are
+# silently dropped. These cases all missed before the translation; the
+# concatenation-consistency property lives in test_traj_search_concat.sh.
+printf '%s\n' '{"step_id":"s20","type":"reasoning","thought":"tail says \"needle\" in quotes","ts":"2026-01-01T00:00:20Z"}' >> "$T"
+printf '%s\n' '{"step_id":"s21","type":"shell-output","stdout":"col1\tcol2 needle","ts":"2026-01-01T00:00:21Z"}' >> "$T"
+printf '%s\n' '{"step_id":"s22","type":"reasoning","thought":"ab\"cd needle","ts":"2026-01-01T00:00:22Z"}' >> "$T"
+printf '%s\n' '{"step_id":"s23","type":"shell-output","stdout":"needle opens\nmiddle needle\nneedle again\nends needle","ts":"2026-01-01T00:00:23Z"}' >> "$T"
+printf '%s\n' '{"step_id":"s24","type":"reasoning","cmd":"echo C:\\path\\to needle","ts":"2026-01-01T00:00:24Z"}' >> "$T"
+printf '%s\n' '{"step_id":"s25","type":"shell-output","stdout":"x\u0001 needle","ts":"2026-01-01T00:00:25Z"}' >> "$T"
+out=$(traj search '"needle" in' --field thought)
+[[ "$out" == 's20:thought:1:tail says "needle" in quotes' ]] && ok "a quoted literal reaches a plain row" || bad "quoted literal, plain row" "$out"
+out=$(traj search -i '"NEEDLE" IN' --field thought)
+[[ "$out" == 's20:thought:1:tail says "needle" in quotes' ]] && ok "a quoted literal still reaches a plain row case-insensitively" || bad "quoted literal, -i" "$out"
+out=$(traj search $'col1\tcol2')
+[[ "$out" == "s21:stdout:1:col1$(printf '\t')col2 needle" ]] && ok "a literal tab reaches a plain row" || bad "literal tab, plain row" "$out"
+out=$(traj search -E 'ab.cd' --field thought)
+[[ "$out" == 's22:thought:1:ab"cd needle' ]] && ok "a regex dot consumes an escaped quote" || bad "regex dot over an escape" "$out"
+out=$(traj search -E 'ab[uv"]cd' --field thought)
+[[ "$out" == 's22:thought:1:ab"cd needle' ]] && ok "a character class with an escapable member still matches" || bad "class with an escapable member" "$out"
+out=$(traj search -E '^needle' --field stdout)
+[[ "$out" == *'s23:stdout:1:needle opens'* && "$out" == *'s23:stdout:3:needle again'* ]] && ok "a caret anchor reaches a plain row at the value open and at an interior line" || bad "caret anchor, plain rows" "$out"
+out=$(traj search -E 'needle$' --field stdout)
+[[ "$out" == *'s23:stdout:2:middle needle'* && "$out" == *'s23:stdout:4:ends needle'* ]] && ok "a dollar anchor reaches an interior line end and the value end" || bad "dollar anchor, plain rows" "$out"
+out=$(traj search 'C:\path' --field cmd)
+[[ "$out" == 's24:cmd:1:echo C:\path\to needle' ]] && ok "a literal backslash reaches a plain row" || bad "literal backslash, plain row" "$out"
+out=$(traj search $'x\x01' --field stdout)
+[[ "$out" == "s25:stdout:1:x$(printf '\001') needle" ]] && ok "a control character reaches a plain row" || bad "control character, plain row" "$out"
+printf '%s\n' '{"step_id":"s26","type":"reasoning","thought":"x\u0001needle\u0001 end","ts":"2026-01-01T00:00:26Z"}' >> "$T"
+printf '%s\n' '{"step_id":"s29","type":"reasoning","thought":"q\"q\" tail","ts":"2026-01-01T00:00:29Z"}' >> "$T"
+v26="s26:thought:1:x"$'\x01'"needle"$'\x01'" end"
+out=$(traj search -E '\bneedle\b' --field thought)
+[[ "$out" == *"$v26"* ]] && ok "a word boundary beside a control character reaches a plain row" || bad "word boundary beside a control character" "$out"
+out=$(traj search -E '[[:alpha:]]eedle' --field thought)
+[[ "$out" == *"$v26"* ]] && ok "a POSIX class in the pattern still finds the row" || bad "POSIX class in the pattern" "$out"
+out=$(traj search -E '(q")\1' --field thought)
+[[ "$out" == *'s29:thought:1:q"q" tail'* ]] && ok "a backreference over an escaped quote still finds the row" || bad "backreference over an escaped quote" "$out"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]
