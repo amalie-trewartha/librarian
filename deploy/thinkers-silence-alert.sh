@@ -40,6 +40,17 @@ set -uo pipefail
 # because a full disk matters whether or not the mind is up. Recovery posts
 # when usage drops five points under the threshold.
 #
+# Permissions signal: the bridges read the root trajectory as another user
+# in the shellm group (the Telegram bridge runs as shellm-telegram; the
+# monolith sandbox keeps the mind from touching the bridges' env). The mind
+# owns the file and can lock it. 2026-09-22: Harris set its trajectory
+# directory to 700 and the file to 600 while scrubbing tokens; the Telegram
+# outbound thread died on the next stat and every reply for 19 hours stayed
+# in the log while inbound kept working. Every tick: the trajectory
+# directory must be group-traversable and the file group-readable, else
+# restore them (this unit runs as the owner) and post once an hour while it
+# keeps happening. Checked before the dispatcher gate, like the disk.
+#
 # Missing Slack config degrades to a line in
 # /var/tmp/headlong-thinkers-alert.log, never a unit failure.
 #
@@ -169,16 +180,6 @@ disk_check() {
 }
 disk_check
 
-# --- silence ---------------------------------------------------------------
-# Only judge a mind that is supposed to be awake. A dead or stopped
-# dispatcher is the death alert's business, and a stop marker means an
-# operator did it on purpose.
-dpid=$(cat "$RUN_DIR/dispatcher.pid" 2>/dev/null || true)
-if [[ ! "$dpid" =~ ^[0-9]+$ ]] || ! kill -0 "$dpid" 2>/dev/null; then
-    exit 0
-fi
-[[ -f "$RUN_DIR/deliberate_stop" ]] && exit 0
-
 # Root trajectory: info.txt names the id; the directory is either the full
 # id or <first segment>-root. Fall back to the newest *-root file.
 root_id=$(sed -n 's/^root_trajectory=//p' "$ID_DIR/info.txt" 2>/dev/null | head -n 1 || true)
@@ -190,6 +191,45 @@ done
 if [[ -z "$traj" ]]; then
     traj=$(ls -t "$ID_DIR"/trajectories/*-root/trajectory.jsonl 2>/dev/null | head -n 1 || true)
 fi
+
+# --- permissions -----------------------------------------------------------
+# mode_of PATH → octal mode (e.g. 755), or empty
+mode_of() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null || true; }
+perm_check() {
+    [[ -n "$traj" && -f "$traj" ]] || return 0
+    local dir dmode fmode dg fg bad=""
+    dir=$(dirname "$traj")
+    dmode=$(mode_of "$dir"); fmode=$(mode_of "$traj")
+    [[ "$dmode" =~ ^[0-7]+$ && "$fmode" =~ ^[0-7]+$ ]] || return 0
+    dg=$(( (8#$dmode / 8) % 8 )); fg=$(( (8#$fmode / 8) % 8 ))
+    (( (dg & 5) == 5 )) || bad="directory $dmode"
+    (( (fg & 4) == 4 )) || bad="${bad:+$bad, }file $fmode"
+    if [[ -z "$bad" ]]; then
+        unmark perm_alert
+        return 0
+    fi
+    # Repair first (the owner can), then say so. g+X on the directory, g+r
+    # on the file: exactly what a group reader needs, nothing wider.
+    chmod g+rX "$dir" 2>/dev/null || true
+    chmod g+r "$traj" 2>/dev/null || true
+    local fixed
+    fixed="restored to $(mode_of "$dir")/$(mode_of "$traj")"
+    due perm_alert || return 0
+    post_slack ":lock: *${IDENT}'s trajectory was unreadable by its bridges* — ${bad} (${fixed}). The Telegram bridge reads the mind log as another user in the shellm group; with group access gone its outbound thread stops and every reply stays in the log while inbound keeps working (2026-09-22, Harris, 19 h). Restored by the silence check; if it keeps happening the mind is chmod-ing its own trajectory dir."
+    mark perm_alert "$now"
+}
+perm_check
+
+# --- silence ---------------------------------------------------------------
+# Only judge a mind that is supposed to be awake. A dead or stopped
+# dispatcher is the death alert's business, and a stop marker means an
+# operator did it on purpose.
+dpid=$(cat "$RUN_DIR/dispatcher.pid" 2>/dev/null || true)
+if [[ ! "$dpid" =~ ^[0-9]+$ ]] || ! kill -0 "$dpid" 2>/dev/null; then
+    exit 0
+fi
+[[ -f "$RUN_DIR/deliberate_stop" ]] && exit 0
+
 [[ -n "$traj" && -f "$traj" ]] || exit 0
 
 mtime=$(mtime_of "$traj")

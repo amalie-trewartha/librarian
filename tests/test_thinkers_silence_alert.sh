@@ -149,5 +149,30 @@ if [[ "$(posts)" -eq 2 ]] && tail -n 1 "$CURL_LOG" | grep -q 'back to 60%'; then
 else bad "disk under the threshold posts the recovery" "posts=$(posts) $(tail -n 1 "$CURL_LOG" 2>/dev/null | head -c 200)"; fi
 [[ -f "$ID/run/disk_alert" ]] && bad "disk marker removed" || ok "disk marker removed"
 
+# 11. permissions: the mind locks its trajectory (dir 700, file 600) → the
+#     tick restores group access, posts once, and re-posts only after the
+#     interval; a healthy tick drops the marker.
+: > "$CURL_LOG"; rm -f "$ID/run/perm_alert" "$ID/run/silent_since" "$ID/run/disk_alert"
+printf '60' > "$DF_PCT"; age_traj 10
+TDIR=$(dirname "$TRAJ")
+chmod 700 "$TDIR"; chmod 600 "$TRAJ"
+run_df
+dm=$(stat -c %a "$TDIR" 2>/dev/null || stat -f %Lp "$TDIR"); fm=$(stat -c %a "$TRAJ" 2>/dev/null || stat -f %Lp "$TRAJ")
+if [[ "$dm" == 750 && "$fm" == 640 ]]; then ok "locked trajectory: group access restored (dir $dm, file $fm)"
+else bad "locked trajectory: group access restored" "dir=$dm file=$fm"; fi
+if [[ "$(posts)" -eq 1 ]] && grep -q 'unreadable by its bridges' "$CURL_LOG" && grep -q 'directory 700, file 600' "$CURL_LOG"; then ok "locked trajectory posts the alert with the old modes"
+else bad "locked trajectory posts the alert with the old modes" "posts=$(posts) $(cat "$CURL_LOG" 2>/dev/null | head -c 300)"; fi
+[[ -f "$ID/run/perm_alert" ]] && ok "perm marker written" || bad "perm marker written"
+chmod 700 "$TDIR"; chmod 600 "$TRAJ"
+run_df
+dm=$(stat -c %a "$TDIR" 2>/dev/null || stat -f %Lp "$TDIR")
+[[ "$dm" == 750 && "$(posts)" -eq 1 ]] && ok "locked again inside the interval: repaired, no second post" || bad "locked again inside the interval: repaired, no second post" "dir=$dm posts=$(posts)"
+chmod 700 "$TDIR"
+HEADLONG_SILENCE_REPOST_SECS=0 run_df
+[[ "$(posts)" -eq 2 ]] && ok "locked again past the interval: posts again" || bad "locked again past the interval: posts again" "posts=$(posts)"
+run_df
+[[ "$(posts)" -eq 2 && ! -f "$ID/run/perm_alert" ]] && ok "healthy permissions: silent, marker dropped" || bad "healthy permissions: silent, marker dropped" "posts=$(posts)"
+chmod 755 "$TDIR"; chmod 644 "$TRAJ"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 (( fail == 0 ))
