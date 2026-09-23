@@ -1344,7 +1344,7 @@ cmd_search() {
             ((.[$f] // "") | if type == "string" then . else tostring end) as $c |
             (.[$f + "_ref"] // "") as $r |
             select($c != "" or $r != "") |
-            "\(.step_id // "")\u001f\($f)\u001f\($r)\u001f\($c | split("\n") | length)\n\($c)"
+            "\(.step_id // "")\u001f\($f)\u001f\($r)\u001f\(($c | split("\n") | length) | if . < 1 then 1 else . end)\n\($c)"
         ' "$_refrows" > "$_chunks" 2>/dev/null || true
         local _csid _cfld _cref _cn _k _bl _buf _first _m _ml
         while IFS=$'\x1f' read -r _csid _cfld _cref _cn; do

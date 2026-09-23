@@ -64,5 +64,28 @@ out=$(traj search -E '^needle' --field stdout --tail 2)
 out=$(traj search -E '^needle' --field cmd)
 [[ -z "$out" ]] && ok "--field cmd leaves decoded stdout alone" || bad "decoded field filter" "$out"
 
+# Empty inline previews: traj append with SHELLM_STDOUT_INLINE_LIMIT=0 spills
+# every field, so the row carries an empty preview plus a ref, and the jq
+# chunk stream still emits one blank content line for it. The reader must
+# count that line or it desyncs and silently drops every later field and row.
+printf 'needle lives in the blob only\n' > "$WORK/trajectories/$TRAJ_ID/blobs/b5.txt"
+printf '{"step_id":"s11","type":"shell-output","stdout":"","stdout_ref":"blobs/b5.txt","ts":"2026-01-01T00:00:11Z"}\n' >> "$T"
+printf '{"step_id":"s12","type":"shell-output","stdout":"","stdout_ref":"blobs/gone5.txt","stderr":"needle with an empty stdout inline","ts":"2026-01-01T00:00:12Z"}\n' >> "$T"
+printf '{"step_id":"s13","type":"shell-output","stdout":"needle decoded after empty previews","stdout_ref":"blobs/gone6.txt","ts":"2026-01-01T00:00:13Z"}\n' >> "$T"
+out=$(traj search "needle lives in the blob")
+[[ "$out" == "s11:stdout:1:needle lives in the blob only" ]] && ok "an empty inline preview with an existing blob still searches the blob" || bad "empty inline, existing blob" "$out"
+out=$(traj search "needle with an empty stdout")
+[[ "$out" == "s12:stderr:1:needle with an empty stdout inline" ]] && ok "a row with an empty inline preview keeps its later fields searchable" || bad "field after an empty preview" "$out"
+out=$(traj search -E '^needle' --field stdout)
+[[ "$out" == *"s13:stdout:1:needle decoded after empty previews"* ]] && ok "a decoded fallback after empty inline previews is still found" || bad "decoded fallback after empties" "$out"
+
+# The reported case itself: every field spilled, only empty previews inline.
+SHELLM_STDOUT_INLINE_LIMIT=0 traj append --field type=shell-output --field stdout='needle row a out' --field stderr='needle row a err' >/dev/null
+SHELLM_STDOUT_INLINE_LIMIT=0 traj append --field type=shell-output --field stdout='needle row b out' --field stderr='needle row b err' >/dev/null
+out=$(traj search "needle row")
+[[ $(printf '%s\n' "$out" | grep -c 'needle row') -eq 4 ]] && ok "SHELLM_STDOUT_INLINE_LIMIT=0 rows yield all four matches" || bad "all-spilled rows" "$out"
+out=$(traj search "needle row" --tail 2)
+[[ $(printf '%s\n' "$out" | grep -c 'needle row') -eq 4 ]] && ok "--tail 2 bounds to the two all-spilled rows and still returns four matches" || bad "all-spilled rows, tail bound" "$out"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]
