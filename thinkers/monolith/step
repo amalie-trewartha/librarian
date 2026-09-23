@@ -422,6 +422,24 @@ case "$trigger_type" in
     "")            wake_reason="$wake_mode/start" ;;
     *)             wake_reason="$wake_mode/$trigger_type${trigger_source:+:$trigger_source}" ;;
 esac
+# Model tier. MONOLITH_REQUEST_MODEL, when set, runs the wakes that serve a
+# person: a REACTIVE wake (something happened outside the head, usually the
+# responder's observation about an inbound message) or any wake with an open
+# PENDING REQUEST (a deferral the responder promised to get back on). Every
+# other wake, the spontaneous timer ticks that are 700 to 900 of Audel's
+# roughly 1,000 wakes a day, stays on THINK_MODEL. A frontier model at 10x
+# the price then pays only for the minutes a person is waiting. Unset means
+# one model for everything. The wake reason carries the tier so the run row
+# in the mind log says which model answered.
+run_model="$THINK_MODEL"
+model_tier="think"
+if [[ -n "${MONOLITH_REQUEST_MODEL:-}" ]] \
+    && { [[ "$wake_mode" == "reactive" ]] || [[ -n "$pending_req" ]]; }; then
+    run_model="$MONOLITH_REQUEST_MODEL"
+    model_tier="request"
+    wake_reason="$wake_reason/request"
+fi
+printf '  model %s (%s tier)\n' "$run_model" "$model_tier" >&2
 # The prompt goes to shellm as a FILE, not an argv string. Linux caps one
 # argv string at 128KB (MAX_ARG_STRLEN) and a mature identity's wakeup prompt
 # (life summary + recent stream) passes that, which made every run die with
@@ -452,7 +470,7 @@ SHELLM_NO_BANNER=1 \
     SHELLM_TRIGGER_STEP_ID="$trigger_step_id" \
     SHELLM_WAKE="$wake_reason" \
     SHELLM_RUN_ID_OUT="$run_id_file" \
-    shellm --model "$THINK_MODEL" --traj "$TRAJ_ID" --context-scope run \
+    shellm --model "$run_model" --traj "$TRAJ_ID" --context-scope run \
     "${shellm_flags[@]}" \
     --prompt-file "$prompt_file_tmp" >"$run_out_tmp" 2>"$run_err_tmp" || run_rc=$?
 rm -f "$prompt_file_tmp"
