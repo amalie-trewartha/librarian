@@ -128,5 +128,40 @@ out=$(traj search -E '[[:alpha:]]eedle' --field thought)
 out=$(traj search -E '(q")\1' --field thought)
 [[ "$out" == *'s29:thought:1:q"q" tail'* ]] && ok "a backreference over an escaped quote still finds the row" || bad "backreference over an escaped quote" "$out"
 
+# Compare the search with grep on decoded fields, not another search path:
+# both search paths can share a broken serialized-JSON prefilter.
+oracle_dir="$WORK/decoded-oracle"
+mkdir -p "$oracle_dir/$TRAJ_ID"
+oracle_rows="$oracle_dir/$TRAJ_ID/trajectory.jsonl"
+printf '%s\n' 'abcd' 'ab"cd' 'ab""cd' $'ab\tcd' $'ab\t\tcd' \
+    'ab\cd' 'ab\\cd' 'abcde' 'abccde' 'abde' 'unrelated' |
+    jq -Rnc '[inputs] | to_entries[] |
+        {step_id:("d"+((.key+1)|tostring)),type:"thought",thought:.value}' > "$oracle_rows"
+jq -r '.thought' "$oracle_rows" > "$WORK/decoded-fields"
+decoded_oracle() {
+    local label="$1" pattern="$2" expected actual rc
+    expected=$(grep -nE -- "$pattern" "$WORK/decoded-fields"); rc=$?
+    if (( rc > 1 )); then bad "$label: decoded grep error"; return; fi
+    expected=$(printf '%s\n' "$expected" | sed -E 's/^([0-9]+):/d\1:thought:1:/')
+    actual=$(TRAJ_DIR="$oracle_dir" traj search -E "$pattern" --field thought); rc=$?
+    if (( rc > 1 )); then bad "$label: traj error" "$actual"; return; fi
+    [[ "$actual" == "$expected" ]] && ok "$label agrees with decoded grep" ||
+        bad "$label differs from decoded grep" "expected=[$expected] actual=[$actual]"
+}
+decoded_oracle "no matches" "not-in-any-field"
+# Test zero, one and two occurrences, including escaped literals handled
+# by the translator's backslash branch. Nonmatching rows guard precision.
+for quantifier in '?' '*' '+' '{2}' '{0,2}'; do
+    decoded_oracle "quote $quantifier" "ab\"${quantifier}cd"
+    decoded_oracle "escaped quote $quantifier" "ab\\\"${quantifier}cd"
+    decoded_oracle "tab $quantifier" $'ab\t'"${quantifier}cd"
+    decoded_oracle "backslash $quantifier" "ab\\\\${quantifier}cd"
+done
+for class in '[[.c.]]' '[[=c=]]' '[[:alpha:]]'; do
+    for quantifier in '' '?' '*' '+' '{2}' '{0,2}'; do
+        decoded_oracle "class $class $quantifier" "ab${class}${quantifier}de"
+    done
+done
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

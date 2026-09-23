@@ -1296,7 +1296,7 @@ _traj_prefilter_regex() {
     # tight prefilter.
     local p="$1"
     local rest="$p"
-    local line out i n c nxt k j neg complex raw
+    local line out i n c nxt k j neg complex raw delimiter
     local -a pieces=()
     while :; do
         line="${rest%%$'\n'*}"
@@ -1312,7 +1312,11 @@ _traj_prefilter_regex() {
                     s|W|S) out+='(.|\\.|\\u[0-9a-f]{4})' ;;
                     b|B|'<'|'>') : ;;
                     [0-9]) out+='.*' ;;
-                    *) _jq_image "$nxt"; _ere_quote "$REPLY"; out+="$REPLY" ;;
+                    *) _jq_image "$nxt"; _ere_quote "$REPLY"
+                       # An escaped character is one regex atom, even when
+                       # its serialized image occupies several characters.
+                       if (( ${#REPLY} > 1 )); then REPLY="($REPLY)"; fi
+                       out+="$REPLY" ;;
                 esac
             elif [[ "$c" == '.' ]]; then
                 out+='(.|\\.|\\u[0-9a-f]{4})'; i=$((i+1))
@@ -1326,10 +1330,15 @@ _traj_prefilter_regex() {
                     if [[ "${line:k:1}" == '\' ]]; then
                         k=$((k+2))
                     elif [[ "${line:k:1}" == '[' ]]; then
-                        if [[ "${line:k+1:1}" == ':' ]]; then
+                        delimiter="${line:k+1:1}"
+                        if [[ "$delimiter" == ':' || "$delimiter" == '.' || "$delimiter" == '=' ]]; then
                             j=$((k+2))
-                            while (( j+1 < n )) && [[ "${line:j:2}" != ':]' ]]; do j=$((j+1)); done
-                            if (( j+1 < n )); then complex=1; k=$((j+2)); else k=$((k+1)); fi
+                            while (( j+1 < n )) && [[ "${line:j:2}" != "$delimiter]" ]]; do j=$((j+1)); done
+                            # Do not leave an inner terminator's ] behind as
+                            # a required literal. If parsing is uncertain,
+                            # admit every candidate; decoded grep is the judge.
+                            if (( j+1 >= n )); then REPLY=""; return; fi
+                            complex=1; k=$((j+2))
                         else
                             complex=1; k=$((k+1))
                         fi
@@ -1352,7 +1361,9 @@ _traj_prefilter_regex() {
                  || "$c" == '+' || "$c" == '?' || "$c" == '{' || "$c" == '}' ]]; then
                 out+="$c"; i=$((i+1))
             else
-                _jq_image "$c"; _ere_quote "$REPLY"; out+="$REPLY"; i=$((i+1))
+                _jq_image "$c"; _ere_quote "$REPLY"
+                if (( ${#REPLY} > 1 )); then REPLY="($REPLY)"; fi
+                out+="$REPLY"; i=$((i+1))
             fi
         done
         pieces+=("$out")
