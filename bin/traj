@@ -1258,14 +1258,18 @@ cmd_search() {
         local blob_base
         blob_base="$(dirname "$_sf")"
 
-        # Rows whose inline text can match are collected with one grep; text
-        # that was spilled to a blob file is searched in a separate pass below
-        # (a blob row keeps only the first STDOUT_INLINE_LIMIT bytes inline).
-        # Before this, every _ref row was kept as a candidate and re-parsed
-        # with several jq and grep calls per row per field, so a pattern
-        # matching nothing still walked every blob row: ~859 rows here at
-        # ~60ms each, ~52s of silence, past the 30s inactivity watchdog
-        # (2026-09-23; the same shape killed a 136K-row search 2026-09-09).
+        # Two prefilters, one per pass. The row pass below searches rows whose
+        # serialized text already matches the pattern and that carry no blob
+        # reference. The reference pass after it searches every row with a
+        # *_ref key, because matching serialized JSON is not the same as
+        # matching a decoded field: an anchored or quoted pattern can match
+        # the decoded text while never matching the escaped row, so reference
+        # rows cannot be prefiltered on the pattern at all. Before this,
+        # every _ref row was re-parsed with several jq and grep calls per row
+        # per field, so a pattern matching nothing still walked every blob
+        # row: ~859 rows here at ~60ms each, ~52s of silence, past the 30s
+        # inactivity watchdog (2026-09-23; the same shape killed a 136K-row
+        # search 2026-09-09).
         local _cand _pre
         _cand=$(mktemp) || die "search: mktemp failed"
         _pre=("$grep_mode")
@@ -1276,32 +1280,18 @@ cmd_search() {
             grep "${_pre[@]}" -e "$pattern" -- "$_sf" > "$_cand" || true
         fi
 
-        # Row pass over the inline candidates, in row order.
+        # Row pass: inline candidates that carry no reference, in row order.
+        # Reference rows are left entirely to the reference pass, so a row is
+        # never searched twice.
         while IFS= read -r row; do
+            if [[ "$row" == *'_ref":'* ]]; then continue; fi
             local step_id
             step_id=$(printf '%s' "$row" | jq -r '.step_id // empty')
             [[ -n "$step_id" ]] || continue
 
             for f in $fields_to_search; do
                 local content=""
-
-                # stdout/stderr with an existing blob: the blob pass below
-                # already searched the full text, and the inline copy is only
-                # a truncated prefix of it, so searching it again would print
-                # the same match twice.
-                local ref_key="${f}_ref"
-                local ref_val
-                ref_val=$(printf '%s' "$row" | jq -r ".${ref_key} // empty" 2>/dev/null)
-
-                if [[ -n "$ref_val" ]] && [[ -f "$blob_base/$ref_val" ]]; then
-                    if [[ "$f" == "stdout" || "$f" == "stderr" ]]; then
-                        continue
-                    fi
-                    content=$(cat "$blob_base/$ref_val")
-                else
-                    content=$(printf '%s' "$row" | jq -r ".${f} // empty")
-                fi
-
+                content=$(printf '%s' "$row" | jq -r ".${f} // empty")
                 [[ -n "$content" ]] || continue
 
                 # Search the content.
@@ -1321,47 +1311,67 @@ cmd_search() {
         done < "$_cand"
         rm -f "$_cand"
 
-        # Blob pass. One jq over the ref rows (still prefiltered by grep, so a
-        # big log is not re-parsed) extracts each stdout/stderr blob ref in
-        # row order, and every ref'd file is grepped directly. Only fields
-        # being searched are resolved.
-        local _want_out_ref=0 _want_err_ref=0
-        case " $fields_to_search " in *" stdout "*) _want_out_ref=1 ;; esac
-        case " $fields_to_search " in *" stderr "*) _want_err_ref=1 ;; esac
-        if [[ "$_want_out_ref" -eq 1 || "$_want_err_ref" -eq 1 ]]; then
-            local _jq_branches=""
-            [[ "$_want_out_ref" -eq 1 ]] && _jq_branches+='(if ((.stdout_ref // "")) != "" then [(.step_id // ""), "stdout", .stdout_ref] else empty end)'
-            if [[ "$_want_err_ref" -eq 1 ]]; then
-                [[ -n "$_jq_branches" ]] && _jq_branches+=', '
-                _jq_branches+='(if ((.stderr_ref // "")) != "" then [(.step_id // ""), "stderr", .stderr_ref] else empty end)'
-            fi
-            local _refs
-            _refs=$(mktemp) || die "search: mktemp failed"
-            if [[ "$tail_n" -gt 0 ]]; then
-                tail -n "$tail_n" -- "$_sf" | grep -F -e '_ref":' | jq -r "($_jq_branches) | @tsv" > "$_refs" || true
-            else
-                grep -F -e '_ref":' -- "$_sf" | jq -r "($_jq_branches) | @tsv" > "$_refs" || true
-            fi
-            local _sid _fld _ref _blob _m _ml
-            while IFS=$'\t' read -r _sid _fld _ref; do
-                [[ -n "$_sid" && -n "$_ref" ]] || continue
-                _blob="$blob_base/$_ref"
-                # A missing blob file: the row pass falls back to the inline text.
-                [[ -f "$_blob" ]] || continue
-                _m=$(grep "${grep_args[@]}" -- "$pattern" "$_blob" 2>/dev/null || true)
-                [[ -n "$_m" ]] || continue
-                if [[ "$recursive" -eq 1 ]]; then
-                    while IFS= read -r _ml; do
-                        printf '%s:%s:%s:%s\n' "$_traj_hex" "$_sid" "$_fld" "$_ml"
-                    done <<< "$_m"
-                else
-                    while IFS= read -r _ml; do
-                        printf '%s:%s:%s\n' "$_sid" "$_fld" "$_ml"
-                    done <<< "$_m"
-                fi
-            done < "$_refs"
-            rm -f "$_refs"
+        # Reference pass, batched. One jq over the prefiltered reference rows
+        # emits, for every searched field of every row, one metadata line
+        # (step id, field, ref, line count of the decoded text) followed by
+        # the decoded text itself; the line count is what tells the reader
+        # where the text ends, so the stream stays in sync whatever the text
+        # contains, and no per-row jq is ever spawned. A field whose blob file
+        # exists is searched in the blob, which holds the full text while the
+        # inline copy is only a truncated prefix; a field whose blob is
+        # missing falls back to the decoded inline text; a field with no ref
+        # of its own is searched inline, which is what keeps a merge row's
+        # content searchable.
+        local -a _refpre
+        _refpre=(-F)
+        [[ -n "$case_flag" ]] && _refpre+=(-i)
+        local _refrows _chunks _fl_json _sep
+        _refrows=$(mktemp) || die "search: mktemp failed"
+        _chunks=$(mktemp) || die "search: mktemp failed"
+        if [[ "$tail_n" -gt 0 ]]; then
+            tail -n "$tail_n" -- "$_sf" | grep "${_refpre[@]}" -e '_ref":' > "$_refrows" || true
+        else
+            grep "${_refpre[@]}" -e '_ref":' -- "$_sf" > "$_refrows" || true
         fi
+        _fl_json="" _sep=""
+        for f in $fields_to_search; do
+            _fl_json+="$_sep\"$f\""
+            _sep=","
+        done
+        _fl_json="[$_fl_json]"
+        jq -r --argjson fl "$_fl_json" '
+            ($fl[]) as $f |
+            ((.[$f] // "") | if type == "string" then . else tostring end) as $c |
+            (.[$f + "_ref"] // "") as $r |
+            select($c != "" or $r != "") |
+            "\(.step_id // "")\u001f\($f)\u001f\($r)\u001f\($c | split("\n") | length)\n\($c)"
+        ' "$_refrows" > "$_chunks" 2>/dev/null || true
+        local _csid _cfld _cref _cn _k _bl _buf _first _m _ml
+        while IFS=$'\x1f' read -r _csid _cfld _cref _cn; do
+            [[ "$_cn" =~ ^[0-9]+$ ]] || break
+            _buf="" _first=1
+            for (( _k=0; _k<_cn; _k++ )); do
+                IFS= read -r _bl || _bl=""
+                if (( _first )); then _buf="$_bl" _first=0; else _buf+=$'\n'"$_bl"; fi
+            done
+            [[ -n "$_csid" ]] || continue
+            if [[ -n "$_cref" && -f "$blob_base/$_cref" ]]; then
+                _m=$(grep "${grep_args[@]}" -- "$pattern" "$blob_base/$_cref" 2>/dev/null || true)
+            elif [[ -n "$_buf" ]]; then
+                _m=$(printf '%s\n' "$_buf" | grep "${grep_args[@]}" -- "$pattern" 2>/dev/null || true)
+            else
+                _m=""
+            fi
+            [[ -n "$_m" ]] || continue
+            while IFS= read -r _ml; do
+                if [[ "$recursive" -eq 1 ]]; then
+                    printf '%s:%s:%s:%s\n' "$_traj_hex" "$_csid" "$_cfld" "$_ml"
+                else
+                    printf '%s:%s:%s\n' "$_csid" "$_cfld" "$_ml"
+                fi
+            done <<< "$_m"
+        done < "$_chunks"
+        rm -f "$_refrows" "$_chunks"
     done <<< "$_search_files"
 }
 

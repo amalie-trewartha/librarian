@@ -24,6 +24,9 @@ printf '{"step_id":"s5","type":"shell-output","stderr":"[blob]","stderr_ref":"bl
 printf '{"step_id":"s6","type":"shell-output","stdout":"phantom fallback text","stdout_ref":"blobs/gone.txt","ts":"2026-01-01T00:00:06Z"}\n' >> "$T"
 printf 'needle at line one\nneedle also at line two\n' > "$WORK/trajectories/$TRAJ_ID/blobs/b4.txt"
 printf '{"step_id":"s7","type":"shell-output","stdout":"needle at line one","stdout_ref":"blobs/b4.txt","ts":"2026-01-01T00:00:07Z"}\n' >> "$T"
+printf '{"step_id":"s8","type":"shell-output","stdout":"plain first\\nneedle second line","stdout_ref":"blobs/gone3.txt","ts":"2026-01-01T00:00:08Z"}\n' >> "$T"
+printf '{"step_id":"s9","type":"shell-output","stdout":"tail says \\"needle\\" in quotes","stdout_ref":"blobs/gone4.txt","ts":"2026-01-01T00:00:09Z"}\n' >> "$T"
+printf '{"step_id":"s10","type":"merge","content":"needle result","from_traj":"kid","from_step":"k1","from_traj_ref":"../kid/trajectory.jsonl","ts":"2026-01-01T00:00:10Z"}\n' >> "$T"
 
 out=$(traj search "Dr. Claw")
 [[ "$out" == "s1:cmd:"* ]] && [[ $(printf '%s\n' "$out" | grep -c .) -eq 1 ]] && ok "a literal match is found in the row's field" || bad "literal match" "$out"
@@ -31,10 +34,10 @@ out=$(traj search -i "dr. claw")
 [[ "$out" == "s1:cmd:"* ]] && ok "-i is honoured by the prefilter" || bad "-i" "$out"
 out=$(traj search "RISE paper")
 [[ "$out" == "s3:stdout:"* ]] && ok "text that lives in a blob is still searched" || bad "blob search" "$out"
-out=$(traj search "Dr. Claw" --tail 2)
-[[ -z "$out" ]] && ok "--tail 2 does not reach an older row" || bad "--tail bounds" "$out"
-out=$(traj search "phantom fallback" --tail 2)
-[[ "$out" == "s6:stdout:"* ]] && ok "--tail 2 still finds a recent row" || bad "--tail recent" "$out"
+out=$(traj search "Dr. Claw" --tail 5)
+[[ -z "$out" ]] && ok "--tail 5 does not reach an older row" || bad "--tail bounds" "$out"
+out=$(traj search "phantom fallback" --tail 5)
+[[ "$out" == "s6:stdout:"* ]] && ok "--tail 5 still finds a recent row" || bad "--tail recent" "$out"
 out=$(traj search -E 'Dr\. (Claw|Paw)')
 [[ "$out" == "s1:cmd:"* ]] && ok "-E regex works through the prefilter" || bad "-E" "$out"
 traj search "x" --tail abc >/dev/null 2>&1 && bad "--tail rejects non-numbers" || ok "--tail rejects non-numbers"
@@ -47,6 +50,19 @@ out=$(traj search "needle")
 [[ $(printf '%s\n' "$out" | grep -c '^s7:stdout:') -eq 2 ]] && ok "a match in blob and truncated inline prints once, from the blob" || bad "no double print" "$out"
 out=$(traj search "RISE paper" --field cmd)
 [[ -z "$out" ]] && ok "--field cmd skips blob stdout" || bad "field filter with blobs" "$out"
+
+out=$(traj search -E '^needle' --field stdout)
+[[ "$out" == *"s7:stdout:1:needle at line one"* && "$out" == *"s7:stdout:2:needle also at line two"* && "$out" == *"s8:stdout:2:needle second line"* ]] && ok "an anchored pattern reaches a decoded field behind a missing blob" || bad "anchored decode" "$out"
+out=$(traj search '"needle"' --field stdout)
+[[ "$out" == 's9:stdout:1:tail says "needle" in quotes' ]] && ok "a quoted literal matches decoded text the row escapes" || bad "quoted literal" "$out"
+out=$(traj search -E '^needle' --field content)
+[[ "$out" == "s10:content:1:needle result" ]] && ok "a structural reference row's inline content is searched" || bad "merge content" "$out"
+out=$(traj search -E '^needle' --field stdout --tail 4)
+[[ "$out" == *"s8:stdout:2:needle second line"* ]] && ok "--tail 4 reaches the decoded fallback row" || bad "--tail decode" "$out"
+out=$(traj search -E '^needle' --field stdout --tail 2)
+[[ -z "$out" ]] && ok "--tail 2 bounds the decoded fallback" || bad "--tail decode bounds" "$out"
+out=$(traj search -E '^needle' --field cmd)
+[[ -z "$out" ]] && ok "--field cmd leaves decoded stdout alone" || bad "decoded field filter" "$out"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]
