@@ -1258,22 +1258,25 @@ cmd_search() {
         local blob_base
         blob_base="$(dirname "$_sf")"
 
-        # Only rows that can match are parsed: one grep over the file keeps the
-        # rows containing the pattern, plus rows whose searched text lives in
-        # a blob (a *_ref field), and --tail N looks at the last N rows only.
-        # Before this every row went through several jq calls (136K rows on
-        # Audel: killed by timeout, 2026-09-09).
+        # Rows whose inline text can match are collected with one grep; text
+        # that was spilled to a blob file is searched in a separate pass below
+        # (a blob row keeps only the first STDOUT_INLINE_LIMIT bytes inline).
+        # Before this, every _ref row was kept as a candidate and re-parsed
+        # with several jq and grep calls per row per field, so a pattern
+        # matching nothing still walked every blob row: ~859 rows here at
+        # ~60ms each, ~52s of silence, past the 30s inactivity watchdog
+        # (2026-09-23; the same shape killed a 136K-row search 2026-09-09).
         local _cand _pre
         _cand=$(mktemp) || die "search: mktemp failed"
         _pre=("$grep_mode")
         [[ -n "$case_flag" ]] && _pre+=("$case_flag")
         if [[ "$tail_n" -gt 0 ]]; then
-            tail -n "$tail_n" -- "$_sf" | grep "${_pre[@]}" -e "$pattern" -e '_ref":' > "$_cand" || true
+            tail -n "$tail_n" -- "$_sf" | grep "${_pre[@]}" -e "$pattern" > "$_cand" || true
         else
-            grep "${_pre[@]}" -e "$pattern" -e '_ref":' -- "$_sf" > "$_cand" || true
+            grep "${_pre[@]}" -e "$pattern" -- "$_sf" > "$_cand" || true
         fi
 
-        # Iterate over each candidate row.
+        # Row pass over the inline candidates, in row order.
         while IFS= read -r row; do
             local step_id
             step_id=$(printf '%s' "$row" | jq -r '.step_id // empty')
@@ -1282,12 +1285,18 @@ cmd_search() {
             for f in $fields_to_search; do
                 local content=""
 
-                # For stdout/stderr, check if there's a blob and use that for full search.
+                # stdout/stderr with an existing blob: the blob pass below
+                # already searched the full text, and the inline copy is only
+                # a truncated prefix of it, so searching it again would print
+                # the same match twice.
                 local ref_key="${f}_ref"
                 local ref_val
                 ref_val=$(printf '%s' "$row" | jq -r ".${ref_key} // empty" 2>/dev/null)
 
                 if [[ -n "$ref_val" ]] && [[ -f "$blob_base/$ref_val" ]]; then
+                    if [[ "$f" == "stdout" || "$f" == "stderr" ]]; then
+                        continue
+                    fi
                     content=$(cat "$blob_base/$ref_val")
                 else
                     content=$(printf '%s' "$row" | jq -r ".${f} // empty")
@@ -1311,6 +1320,48 @@ cmd_search() {
             done
         done < "$_cand"
         rm -f "$_cand"
+
+        # Blob pass. One jq over the ref rows (still prefiltered by grep, so a
+        # big log is not re-parsed) extracts each stdout/stderr blob ref in
+        # row order, and every ref'd file is grepped directly. Only fields
+        # being searched are resolved.
+        local _want_out_ref=0 _want_err_ref=0
+        case " $fields_to_search " in *" stdout "*) _want_out_ref=1 ;; esac
+        case " $fields_to_search " in *" stderr "*) _want_err_ref=1 ;; esac
+        if [[ "$_want_out_ref" -eq 1 || "$_want_err_ref" -eq 1 ]]; then
+            local _jq_branches=""
+            [[ "$_want_out_ref" -eq 1 ]] && _jq_branches+='(if ((.stdout_ref // "")) != "" then [(.step_id // ""), "stdout", .stdout_ref] else empty end)'
+            if [[ "$_want_err_ref" -eq 1 ]]; then
+                [[ -n "$_jq_branches" ]] && _jq_branches+=', '
+                _jq_branches+='(if ((.stderr_ref // "")) != "" then [(.step_id // ""), "stderr", .stderr_ref] else empty end)'
+            fi
+            local _refs
+            _refs=$(mktemp) || die "search: mktemp failed"
+            if [[ "$tail_n" -gt 0 ]]; then
+                tail -n "$tail_n" -- "$_sf" | grep -F -e '_ref":' | jq -r "($_jq_branches) | @tsv" > "$_refs" || true
+            else
+                grep -F -e '_ref":' -- "$_sf" | jq -r "($_jq_branches) | @tsv" > "$_refs" || true
+            fi
+            local _sid _fld _ref _blob _m _ml
+            while IFS=$'\t' read -r _sid _fld _ref; do
+                [[ -n "$_sid" && -n "$_ref" ]] || continue
+                _blob="$blob_base/$_ref"
+                # A missing blob file: the row pass falls back to the inline text.
+                [[ -f "$_blob" ]] || continue
+                _m=$(grep "${grep_args[@]}" -- "$pattern" "$_blob" 2>/dev/null || true)
+                [[ -n "$_m" ]] || continue
+                if [[ "$recursive" -eq 1 ]]; then
+                    while IFS= read -r _ml; do
+                        printf '%s:%s:%s:%s\n' "$_traj_hex" "$_sid" "$_fld" "$_ml"
+                    done <<< "$_m"
+                else
+                    while IFS= read -r _ml; do
+                        printf '%s:%s:%s\n' "$_sid" "$_fld" "$_ml"
+                    done <<< "$_m"
+                fi
+            done < "$_refs"
+            rm -f "$_refs"
+        fi
     done <<< "$_search_files"
 }
 
