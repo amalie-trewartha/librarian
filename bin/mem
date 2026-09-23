@@ -117,8 +117,10 @@ parse_filename() {
 
 action_add() {
     # A flag mem add does not know (Audel wrote `--content` twice on
-    # 2026-09-05) must not become the memory's first word.
-    if [[ "${1:-}" == --* ]]; then
+    # 2026-09-05; a `-h` slip stored a literal `-h` memory on 2026-09-22)
+    # must not become the memory's first word, however many dashes it
+    # carries. Text that truly starts with a dash goes in on stdin.
+    if [[ "${1:-}" == -* ]]; then
         die "add: unknown option '$1'. mem add takes only --type, --until, --schedule and --tz, then the text:
   mem add [--type TYPE] [--until YYYY-MM-DD] [--schedule \"HH:MM ...\" [--tz ZONE]] <text>      (or the text on stdin)"
     fi
