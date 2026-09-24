@@ -134,21 +134,39 @@ oracle_dir="$WORK/decoded-oracle"
 mkdir -p "$oracle_dir/$TRAJ_ID"
 oracle_rows="$oracle_dir/$TRAJ_ID/trajectory.jsonl"
 printf '%s\n' 'abcd' 'ab"cd' 'ab""cd' $'ab\tcd' $'ab\t\tcd' \
-    'ab\cd' 'ab\\cd' 'abcde' 'abccde' 'abde' 'unrelated' |
+    'ab\cd' 'ab\\cd' 'abcde' 'abccde' 'abde' 'unrelated' \
+    'café' '日本語' '🙂' 'cafe' '日本' |
     jq -Rnc '[inputs] | to_entries[] |
         {step_id:("d"+((.key+1)|tostring)),type:"thought",thought:.value}' > "$oracle_rows"
 jq -r '.thought' "$oracle_rows" > "$WORK/decoded-fields"
 decoded_oracle() {
-    local label="$1" pattern="$2" expected actual rc
-    expected=$(grep -nE -- "$pattern" "$WORK/decoded-fields"); rc=$?
+    local label="$1" pattern="$2" mode="${3:--E}" expected actual rc
+    expected=$(grep -n "$mode" -- "$pattern" "$WORK/decoded-fields"); rc=$?
     if (( rc > 1 )); then bad "$label: decoded grep error"; return; fi
     expected=$(printf '%s\n' "$expected" | sed -E 's/^([0-9]+):/d\1:thought:1:/')
-    actual=$(TRAJ_DIR="$oracle_dir" traj search -E "$pattern" --field thought); rc=$?
+    if [[ "$mode" == '-F' ]]; then
+        actual=$(TRAJ_DIR="$oracle_dir" traj search "$pattern" --field thought); rc=$?
+    else
+        actual=$(TRAJ_DIR="$oracle_dir" traj search -E "$pattern" --field thought); rc=$?
+    fi
     if (( rc > 1 )); then bad "$label: traj error" "$actual"; return; fi
     [[ "$actual" == "$expected" ]] && ok "$label agrees with decoded grep" ||
         bad "$label differs from decoded grep" "expected=[$expected] actual=[$actual]"
 }
 decoded_oracle "no matches" "not-in-any-field"
+# Bash 3.2 reports negative byte values for non-ASCII characters in
+# _jq_image's C-locale printf. These must not become control escapes.
+# Run this suite with /bin/bash on macOS in C and en_US.UTF-8 locales.
+for mode in -F -E; do
+    for text in 'café' '日本語' '🙂'; do
+        decoded_oracle "non-ASCII $mode $text" "$text" "$mode"
+    done
+done
+# Backslash does not portably escape a closing bracket inside a class.
+# Let the host's decoded grep define the semantics, including a zero
+# occurrence that must not gain a required literal opening bracket.
+decoded_oracle "backslash before class terminator" 'ab[c\]de'
+decoded_oracle "optional backslash class" 'ab[\]?cd'
 # Test zero, one and two occurrences, including escaped literals handled
 # by the translator's backslash branch. Nonmatching rows guard precision.
 for quantifier in '?' '*' '+' '{2}' '{0,2}'; do

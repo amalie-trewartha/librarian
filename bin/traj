@@ -1225,7 +1225,9 @@ _jq_image() {
     elif [[ "$c" == $'\f' ]]; then REPLY='\f'
     else
         LC_ALL=C printf -v code '%d' "'$c"
-        if (( code < 32 || code == 127 )); then
+        # Bash 3.2 can report a negative value for a high-bit byte.
+        # Only ASCII controls are escaped; preserve non-ASCII text as-is.
+        if (( (code >= 0 && code < 32) || code == 127 )); then
             LC_ALL=C printf -v REPLY '\\u%04x' "$code"
         else
             REPLY="$c"
@@ -1287,10 +1289,10 @@ _traj_prefilter_regex() {
     # match; \w is kept because jq never escapes word characters. Nodes
     # the translator cannot make tight are widened, never dropped: \b and
     # friends are zero-width and vanish, a backreference becomes .*, a
-    # class it cannot parse becomes the any-character superset, and an
-    # unterminated class is the literal text GNU grep takes it for. Only
-    # a trailing backslash, which makes the decoded grep itself error,
-    # yields the empty pattern. Every branch widens or preserves the
+    # class it cannot parse bypasses the prefilter, and an unterminated
+    # class is the literal text GNU grep takes it for. A trailing backslash,
+    # which makes the decoded grep itself error, also yields the empty
+    # pattern. Every branch widens or preserves the
     # candidate set, so none can silently drop a row the search should
     # return, and the widening stays local so common patterns keep a
     # tight prefilter.
@@ -1328,7 +1330,10 @@ _traj_prefilter_regex() {
                 if [[ "${line:k:1}" == ']' ]]; then k=$((k+1)); fi
                 while (( k < n )) && [[ "${line:k:1}" != ']' ]]; do
                     if [[ "${line:k:1}" == '\' ]]; then
-                        k=$((k+2))
+                        # Backslash in a bracket expression is not a portable
+                        # escape (BSD grep may end the class at the next ]).
+                        # Do not guess where it ends: bypass the prefilter.
+                        REPLY=""; return
                     elif [[ "${line:k:1}" == '[' ]]; then
                         delimiter="${line:k+1:1}"
                         if [[ "$delimiter" == ':' || "$delimiter" == '.' || "$delimiter" == '=' ]]; then
