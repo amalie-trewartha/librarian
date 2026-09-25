@@ -82,3 +82,36 @@ check "namer: un-cited block draws no namer line" \
 
 printf '%d passed, %d failed\n' "$pass" "$fail"
 (( fail == 0 ))
+
+# 5. Census-deleted namer: deleting the citing block mid-scan must not
+# break the context build, and the cited window must still emit with no
+# orphaned namer line for it. (A deleted citing block may also be re-sealed
+# from the trajectory on the next build, which is the census keeping the
+# staircase intact; the guarantee under test is only "no error, no namer
+# line for a window whose citing block is gone".)
+cp "$M" "$WORK/m.bak"
+rm "$M"
+OUT2=$(recap nmrr0001 --traj_dir "$TRAJ_ROOT" --fanout 2 --raw-tail 2 --context 2>/dev/null)
+rc=$?
+printf '%s\n' "$OUT2" > "$WORK/out2.txt"
+check "census-deleted namer: context build still succeeds" test "$rc" -eq 0
+check "census-deleted namer: cited window still emitted" \
+    bash -c "grep -q 'steps 0.8' '$WORK/out2.txt'"
+# namer line for W exists only if a block file holding its key exists; the
+# snapshot at scan time (M absent) means none. If M was re-sealed with its
+# original summary, its summary carries no citation, so W draws no line
+# either way; assert exactly that.
+check "census-deleted namer: no namer line for a window with no citing block" \
+    bash -c "! grep -qF 'corrects/supersedes it] the resend loop claim is corrected' '$WORK/out2.txt'"
+
+# 6. Corrupt namer file (truncated JSON): jq fails per-file and is swallowed;
+# build succeeds and the corrupt block contributes no namer line.
+printf '{"summary":"trunc' > "$M"
+OUT3=$(recap nmrr0001 --traj_dir "$TRAJ_ROOT" --fanout 2 --raw-tail 2 --context 2>/dev/null)
+printf '%s\n' "$OUT3" > "$WORK/out3.txt"
+check "corrupt namer block: build succeeds" test $? -eq 0
+check "corrupt namer block: no namer line from unreadable file" \
+    bash -c "! grep -qF 'namer of the window above' '$WORK/out3.txt'"
+
+printf '%d passed, %d failed\n' "$pass" "$fail"
+(( fail == 0 ))
