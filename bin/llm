@@ -586,6 +586,11 @@ get_model_max_tokens() {
         # (2026-09-16, finish_reason length at zero visible characters).
         # OpenRouter reports a 943K completion ceiling.
         z-ai/glm-5*) echo 64000 ;;
+        # Xiaomi MiMo (via OpenRouter): thinks by default and its thinking
+        # counts against max_tokens; 53 of 3,272 Audel calls stopped at 16384
+        # (2026-09-22 to 09-25), 11 of them after 15K+ thinking tokens.
+        # OpenRouter reports a 131K completion ceiling.
+        xiaomi/mimo*) echo 64000 ;;
         */*) echo 16384 ;;
         *)
             # Conservative fallback for unknown models. openai-compatible

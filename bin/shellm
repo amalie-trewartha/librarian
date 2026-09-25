@@ -1703,6 +1703,36 @@ call_llm() {
 # Code extraction from LLM response
 # ---------------------------------------------------------------------------
 
+# script_parses SCRIPT — true when SCRIPT is complete, valid bash. Never runs
+# model code or startup files. Bash 3.2 silently accepts an unclosed heredoc
+# under -n, so an unmatched ) is appended too: if that also parses, the
+# trailer was swallowed as heredoc data and the script is incomplete.
+script_parses() {
+    local diagnostics
+    diagnostics=$(printf '%s\n' "$1" | BASH_ENV='' ENV='' bash --noprofile --norc -n 2>&1) &&
+        [[ -z "$diagnostics" ]] &&
+        ! { printf '%s\n)\n' "$1" | BASH_ENV='' ENV='' bash --noprofile --norc -n 2>/dev/null; }
+}
+
+# strip_markup_suffix — drop tool-call closing markup from the END of a script
+# on stdin: closing-tag lines, one-line extra parameters
+# (<parameter=timeout>30</parameter>), then the closing tags that end the last
+# code line. Only the suffix: a closing tag inside a heredoc or quoted string
+# earlier in the script is literal data.
+strip_markup_suffix() {
+    awk '
+        function blank(s) { return s ~ /^[[:space:]]*$/ }
+        { lines[++n] = $0 }
+        END {
+            close_run = "(<\\/(tool_call|function|parameter|bash|invoke|function_calls)>[[:space:]]*)+$"
+            while (n > 0 && (blank(lines[n]) || lines[n] ~ ("^[[:space:]]*" close_run) ||
+                            lines[n] ~ /^[[:space:]]*<parameter=[A-Za-z_]+>[^<]*<\/parameter>[[:space:]]*$/)) n--
+            if (n > 0 && sub(close_run, "", lines[n]))
+                while (n > 0 && blank(lines[n])) n--
+            for (i = 1; i <= n; i++) print lines[i]
+        }'
+}
+
 # normalize_toolcall_markup RESPONSE — Qwen-family models sometimes answer in
 # their native tool-call markup instead of a fence:
 #   <tool_call>            <tool_call>              <tool_call>
@@ -1712,60 +1742,111 @@ call_llm() {
 #   </tool_call>           </parameter> …
 # (also the hybrid "<function=bash> … </bash>"). Run as-is, the first line is a
 # bash syntax error and the whole turn is wasted (4 of 46 responses on Custos,
-# 2026-09-09). When a response has NO fence but does have this markup, lift
-# the code inside the outer tags into a ```bash fence so it executes, and
-# tell the model on stderr what happened so it learns the fence. Real fences
-# win. Ambiguous wrappers are left alone rather than risking script data
-# becoming commands.
+# 2026-09-09). MiMo writes the same markup inline: the opening tags lead the
+# first code line and the closing tags end the last one, with the command
+# parameter named command, cmd or code, sometimes followed by a one-line
+# <parameter=timeout>…</parameter> (1,642 of 3,272 Audel replies, 09-22 to
+# 09-25, none lifted before). When a response has NO fence but does have this
+# markup, lift the code inside the outer tags into a ```bash fence so it
+# executes, and tell the model on stderr what happened so it learns the
+# fence. Real fences win. Ambiguous wrappers are left alone rather than
+# risking script data becoming commands. Returns 0 when lifted, 2 when lifted
+# but later calls were dropped, 1 when the response is returned unchanged.
 normalize_toolcall_markup() {
-    local response="$1"
+    local response="$1" markup="$1"
     case "$response" in
         *"<tool_call>"*|*"<function="*|*"<bash>"*) ;;
         *) printf '%s' "$response"; return 1 ;;
     esac
+    # MiMo sometimes glues a stray fence to the markup ("```<tool_call>…",
+    # closed by a lone ``` line). That is markup, not a fence: drop the two
+    # fence marks, but only when no real fence comes before it.
+    case "$markup" in
+        *'```<tool_call>'*|*'```<function=bash>'*)
+            markup=$(printf '%s\n' "$markup" | awk '
+                !seen && /^```<(tool_call|function=bash)>/ { sub(/^```/, ""); glued = 1 }
+                /^```/ { seen = 1 }
+                { lines[++n] = $0 }
+                END {
+                    while (n > 0 && lines[n] ~ /^[[:space:]]*$/) n--
+                    if (glued && n > 0 && lines[n] ~ /^```[[:space:]]*$/) n--
+                    for (i = 1; i <= n; i++) print lines[i]
+                }') ;;
+    esac
     # Consume the whole response: grep -q can give printf SIGPIPE, making a
     # matching fence look absent under pipefail on larger responses.
-    if printf '%s\n' "$response" | grep -E '^```|```(bash|shell|sh)[[:space:]]*$' >/dev/null; then
+    if printf '%s\n' "$markup" | grep -E '^```|```(bash|shell|sh)[[:space:]]*$' >/dev/null; then
         printf '%s' "$response"; return 1
     fi
-    local lifted diagnostics
-    lifted=$(printf '%s\n' "$response" | awk -v sq="'" '
+    local body lifted first
+    body=$(printf '%s\n' "$markup" | awk -v sq="'" '
+        # Drop the run of opening tags that leads a line; what is left is code.
+        function strip_open(s) {
+            while (match(s, /^[[:space:]]*<(tool_call|function=bash|bash|parameter=(command|cmd|code|commands|script|block))>/))
+                s = substr(s, RSTART + RLENGTH)
+            return s
+        }
+        function blank(s) { return s ~ /^[[:space:]]*$/ }
+        # Shell syntax that means a line is code, not prose.
+        function shellish(s) { return s ~ /[<>|$;&=]/ || index(s, "\\") }
         BEGIN { started = 0; body = 0; ambiguous = 0; n = 0 }
+        # MiMo also appends the markup to a prose sentence on the same line
+        # ("…look at the evidence first.<tool_call><function=bash>…"). Accept
+        # that only when the prefix ends a sentence and has no shell syntax,
+        # so a quoted or redirected literal tag is never taken for markup.
+        !started && match($0, /<(tool_call|function=bash)>/) && RSTART > 1 {
+            pre = substr($0, 1, RSTART - 1)
+            if (pre ~ /[.:!?][[:space:]]*$/ && !shellish(pre)) $0 = substr($0, RSTART)
+        }
         !started {
-            if ($0 ~ /^[[:space:]]*<(tool_call|function=bash|bash)>[[:space:]]*$/) {
+            if ($0 ~ /^[[:space:]]*<(tool_call|function=bash|bash)>/) {
                 started = 1
-            } else if (index($0, sq) || $0 ~ /["`\\<>]/) {
+                rest = strip_open($0)
+                if (!blank(rest)) { body = 1; lines[++n] = rest }
+            } else if ((index($0, sq) || $0 ~ /["`\\<>]/) &&
+                       !($0 ~ /[.:!?)][[:space:]]*$/ && !shellish($0))) {
                 # Permit simple prose before the wrapper, but never scan past
                 # a quote, continuation, or redirection into possible data.
+                # A finished sentence with no shell syntax is prose even when
+                # it has an apostrophe or a `backticked` word.
                 ambiguous = 1
             }
             next
         }
         !body {
-            if ($0 ~ /^[[:space:]]*<(function=bash|parameter=command|bash)>[[:space:]]*$/ ||
-                $0 ~ /^[[:space:]]*$/) next
+            rest = strip_open($0)
+            if (blank(rest)) next
             body = 1
+            lines[++n] = rest
+            next
         }
         { lines[++n] = $0 }
         END {
             if (ambiguous || !started) exit
-            # Strip only the suffix, not tags within the script. In particular,
-            # a closing tag inside a heredoc or quoted string is literal data.
-            while (n > 0 && (lines[n] ~ /^[[:space:]]*<\/(tool_call|function|parameter|bash)>[[:space:]]*$/ ||
-                            lines[n] ~ /^[[:space:]]*$/)) n--
             for (i = 1; i <= n; i++) print lines[i]
         }')
-    if [[ "$lifted" =~ [^[:space:]] ]]; then
-        # Reject syntax errors without executing model code or startup files.
-        # Bash 3.2 silently accepts an unclosed heredoc under -n. Appending an
-        # unmatched ) must fail: if it succeeds, the trailer was swallowed as
-        # heredoc data and the candidate is incomplete. Newer bash warns too.
-        if diagnostics=$(printf '%s\n' "$lifted" | BASH_ENV='' ENV='' bash --noprofile --norc -n 2>&1) &&
-            [[ -z "$diagnostics" ]] &&
-            ! { printf '%s\n)\n' "$lifted" | BASH_ENV='' ENV='' bash --noprofile --norc -n 2>/dev/null; }; then
-            printf '%s' $'```bash\n'"$lifted"$'\n```'
-            return 0
-        fi
+    # Several calls in one reply: run only the first, as with fenced blocks,
+    # and return 2 so extract_code tells the model the rest was dropped. The
+    # first call ends at the first line closing a call, and only counts when
+    # another call opens after it and the first parses on its own; a cut
+    # inside a heredoc or quoted string never parses.
+    # MiMo usually opens the next call on the same line the last one closes.
+    first=$(printf '%s\n' "$body" | awk '
+        !cut && match($0, /<\/(function|tool_call)>[[:space:]]*<(tool_call|function=bash)>/) {
+            l[++n] = substr($0, 1, RSTART - 1); cut = n; more = 1; next
+        }
+        { l[++n] = $0 }
+        !cut && /<\/(function|tool_call)>[[:space:]]*$/ { cut = n; next }
+        cut && /^[[:space:]]*<(tool_call|function=bash)>/ { more = 1 }
+        END { if (cut && more) for (i = 1; i <= cut; i++) print l[i] }' | strip_markup_suffix)
+    if [[ "$first" =~ [^[:space:]] ]] && script_parses "$first"; then
+        printf '%s' $'```bash\n'"$first"$'\n```'
+        return 2
+    fi
+    lifted=$(printf '%s\n' "$body" | strip_markup_suffix)
+    if [[ "$lifted" =~ [^[:space:]] ]] && script_parses "$lifted"; then
+        printf '%s' $'```bash\n'"$lifted"$'\n```'
+        return 0
     fi
     printf '%s' "$response"
     return 1
@@ -1774,10 +1855,12 @@ normalize_toolcall_markup() {
 extract_code() {
     local response="$1"
     local toolcall_lifted=0
-    local _normalized
-    if _normalized=$(normalize_toolcall_markup "$response"); then
+    local _normalized _rc calls_dropped=0
+    _rc=0; _normalized=$(normalize_toolcall_markup "$response") || _rc=$?
+    if [[ "$_rc" -ne 1 ]]; then
         response="$_normalized"
         toolcall_lifted=1
+        [[ "$_rc" -eq 2 ]] && calls_dropped=1
     fi
 
     # Extract the FIRST fenced code block (```bash, ```sh, or bare ```).
@@ -1881,6 +1964,20 @@ extract_code() {
     truncation_signal=$(cat "$truncation_file" 2>/dev/null || true)
     rm -f "$truncation_file"
 
+    # MiMo often opens a real ```bash fence and still ends the code with its
+    # tool-call closing tags ("done</parameter></function></tool_call>"), a
+    # syntax error that killed 263 fenced replies on Audel (09-22 to 09-25).
+    # Strip that suffix only when it turns a broken script into a valid one.
+    if [[ "$toolcall_lifted" -eq 0 && "$code" == *"</"* ]]; then
+        local _trimmed
+        _trimmed=$(printf '%s\n' "$code" | strip_markup_suffix)
+        if [[ "$_trimmed" != "$code" && "$_trimmed" =~ [^[:space:]] ]] &&
+            ! script_parses "$code" && script_parses "$_trimmed"; then
+            code="$_trimmed"
+            toolcall_lifted=1
+        fi
+    fi
+
     # If no fenced blocks at all, use the whole response as code.
     # Strip [cmd]/[thought] markers that the model may emit instead of fences.
     local no_fence=0
@@ -1898,7 +1995,7 @@ extract_code() {
     # Prepend notices to stderr. Stderr is captured and shown back to the model
     # on its next turn, so these teach it what shellm did with its last reply.
     # Prepend rather than append so a notice fires even if the code exits early.
-    if [[ "$truncation_signal" == *TRUNCATED* ]]; then
+    if [[ "$truncation_signal" == *TRUNCATED* || "$calls_dropped" -eq 1 ]]; then
         code=$'echo "[rest of model response truncated after first code block]" >&2\n'"$code"
     fi
     if [[ "$toolcall_lifted" -eq 1 ]]; then
