@@ -149,6 +149,11 @@ SHELLM_INACTIVITY_MAX="${SHELLM_INACTIVITY_MAX:-900}"
 # actively producing output (a runaway loop resets the inactivity counter every
 # check, so silence-based watchdogs never catch it). 0 disables the guard.
 SHELLM_MAX_OUTPUT_SIZE="${SHELLM_MAX_OUTPUT_SIZE:-104857600}"
+# Kill a block that has run this many seconds, however it behaves. A command
+# that prints a heartbeat while it waits on something that never finishes
+# passes every other guard (Audel 2026-09-25: a scan blocked 3.5 h reading a
+# fifo behind an `echo; sleep 5` loop). 0 disables the guard.
+SHELLM_MAX_EXEC_TIME="${SHELLM_MAX_EXEC_TIME:-3600}"
 SHELLM_BEACON_INTERVAL="${SHELLM_BEACON_INTERVAL:-5}"
 VERBOSE=0
 QUIET=0
@@ -355,6 +360,8 @@ Environment:
                           has a live nested shellm run (default: 900)
   SHELLM_MAX_OUTPUT_SIZE  Bytes of output before killing a command that keeps
                           producing output (default: 104857600; 0 disables)
+  SHELLM_MAX_EXEC_TIME    Seconds before killing a block no matter what it is
+                          doing (default: 3600; 0 disables)
   SHELLM_BEACON_INTERVAL  Seconds between activity beacon touches (default: 5)
   SHELLM_WORKDIR          (Internal) Working directory for current run
 
@@ -536,6 +543,17 @@ build_inactivity_feedback() {
 
     # A runaway command that kept producing output was not idle and not at a
     # prompt, so none of the interactive/nested advice below applies.
+    if [[ "$reason" == "wall" ]]; then
+        printf 'Execution was KILLED after running for %s seconds, the limit for one block\n' "$timeout"
+        printf '(it was still producing output, so something in it was waiting forever or\n'
+        printf 'the work is too big for one block).\n'
+        printf '\nLast output before the kill:\n%s\n' "$last_output"
+        printf '\nCheck what the block was waiting on (a pipe, a fifo, a lock, the network)\n'
+        printf 'and bound it with timeout. Split long work across steps: start it in the\n'
+        printf 'background with output in a file, then check the file in a later step.\n'
+        return 0
+    fi
+
     if [[ "$reason" == "output" ]]; then
         printf 'Execution was KILLED after its output grew past %s bytes\n' "$timeout"
         printf '(a command producing unbounded output, e.g. an infinite loop).\n'
@@ -2075,7 +2093,7 @@ cat /tmp/approach_a.txt /tmp/approach_b.txt
 
 Always redirect a sub-run's stdout and stderr to a file, as above. A backgrounded sub-run that writes to the pipes it inherited loses its output once the step that started it ends.
 
-A sub-run is silent while its own model call is thinking, and the inactivity watchdog knows about that: while a sub-run is alive the block is treated as working, so waiting on sub-runs does not get you killed at SHELLM_INACTIVITY_TIMEOUT. The limit that still applies is SHELLM_INACTIVITY_MAX (default 900s) of no output at all from the block, so size sub-work to finish inside it. For longer work, give each sub-run a smaller task, cap it with `--max-iterations`, or start it in one step and read its output file in a later step rather than waiting here.
+A sub-run is silent while its own model call is thinking, and the inactivity watchdog knows about that: while a sub-run is alive the block is treated as working, so waiting on sub-runs does not get you killed at SHELLM_INACTIVITY_TIMEOUT. The limit that still applies is SHELLM_INACTIVITY_MAX (default 900s) of no output at all from the block, so size sub-work to finish inside it. No block may run longer than SHELLM_MAX_EXEC_TIME (default 3600s) even while it prints. For longer work, give each sub-run a smaller task, cap it with `--max-iterations`, or start it in one step and read its output file in a later step rather than waiting here.
 
 Pass context to sub-runs with `-f FILE` or via stdin. Always give sub-runs a clear, self-contained task description — they have no memory of your conversation.
 
@@ -3042,6 +3060,7 @@ exit \$__shellm_rc
             local last_beacon=""
             local kill_reason=""
             local kill_limit=""
+            local started=$SECONDS
             while kill -0 "$exec_pid" 2>/dev/null; do
                 sleep 1
                 local cur_size
@@ -3070,6 +3089,9 @@ exit \$__shellm_rc
                 if [[ "$SHELLM_MAX_OUTPUT_SIZE" -gt 0 && "$cur_size" -ge "$SHELLM_MAX_OUTPUT_SIZE" ]]; then
                     kill_reason="output"
                     kill_limit="$SHELLM_MAX_OUTPUT_SIZE"
+                elif [[ "$SHELLM_MAX_EXEC_TIME" -gt 0 && $((SECONDS - started)) -ge "$SHELLM_MAX_EXEC_TIME" ]]; then
+                    kill_reason="wall"
+                    kill_limit="$SHELLM_MAX_EXEC_TIME"
                 elif [[ "$stale_seconds" -ge "$SHELLM_INACTIVITY_TIMEOUT" ]]; then
                     kill_reason="idle"
                     kill_limit="$SHELLM_INACTIVITY_TIMEOUT"
