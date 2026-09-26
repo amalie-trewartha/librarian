@@ -3,15 +3,11 @@
 #
 # Usage: tests/test_rollup_supersession_prompt.sh
 #
-# Sealed summary windows are frozen: when a later window corrects a claim an
-# earlier window stated, nothing links the two, so a pass that reads only the
-# stale window inherits the wrong conclusion (observed live 2026-09-25: a
-# "channel noise" summary and its "resend loop" correction sat side by side in
-# sibling windows with no pointer between them). Prompt v5 teaches the rollup
-# model to cite the child window it supersedes by quoting that child's
-# "[id,...]" prefix verbatim, so a reader can fan out to namers mechanically.
-# This pins that the instruction actually reaches the model and that v5 is
-# stamped into sealed blocks.
+# Prompt v5 lets a parent summary cite an earlier child by its exact
+# "[id,...]" prefix, but only when the earlier claim and correcting evidence
+# are both supplied in the same input. It cannot link separately sealed
+# siblings absent from that input. These tests inspect actual tier-2 calls,
+# including two disjoint ranges, without claiming to test model compliance.
 #
 # The `llm` CLI is stubbed (canned rollup JSON, calls logged): no network.
 
@@ -36,6 +32,10 @@ cat > "$WORK/bin/llm" <<'STUB'
 #!/usr/bin/env bash
 input=$(cat)
 printf 'SYSTEM\n%s\nUSER\n%s\n---\n' "$*" "$input" >> "$LLM_LOG"
+case "$input" in
+    *'[old00001,old00002]'*) printf '%s\n' "$input" > "$LLM_LOG.old-input" ;;
+    *'[new00001,new00002]'*) printf '%s\n' "$input" > "$LLM_LOG.new-input" ;;
+esac
 printf '{"summary":"rollup ok","themes":["testing"],"step_ids":["st000001"]}'
 STUB
 chmod +x "$WORK/bin/llm"
@@ -63,20 +63,62 @@ check "prompt: supersession citation instruction sent" \
 check "prompt: child [id,...] prefix explained" \
     grep -q 'quoting its "\[id,\.\.\.\]" prefix' "$LLM_LOG"
 
-# 3. Tier >= 2 input lines carry the [id,...] prefix the instruction cites.
-#    (FANOUT 10 with 12 signal steps builds only t1; force tier-2 input shape
-#    by checking the prefix join in the source is what the prompt describes.)
-check "input: child prefix uses [id,id] join" \
-    grep -qF '"[" + (.step_ids | join(",")) + "] " + .summary' "$REPO/bin/recap"
+# Both sides of a correction must be visible in the same model input.
+check "prompt: correction requires shared input" \
+    grep -q 'correcting evidence is also present in this input' "$LLM_LOG"
+check "prompt: unseen prefixes forbidden" \
+    grep -q 'do not invent or infer a prefix for an unseen window' "$LLM_LOG"
 
 # 4. Sealed blocks are stamped with prompt_version 5.
-blk=$(find "$TRAJ_ROOT/supe0001/rollups" -name '*.json' | head -1)
-check "sealed block exists" test -n "$blk"
+blk="$TRAJ_ROOT/supe0001/rollups/t1/000000000000-000000000010.json"
+check "sealed block exists" test -f "$blk"
 check "sealed block stamped prompt_version 5" \
     jq -e '.prompt_version == 5' "$blk"
 
 # 5. The stub was actually called (log has at least one CALL/SYSTEM record).
 check "rollup model invoked" grep -q '^SYSTEM$' "$LLM_LOG"
+
+# 6. Supply 20 sealed children across two disjoint tier-2 ranges. The
+# correction in [100,200) cannot see the claim in [0,100). Preseeding t1
+# makes the summaries deterministic; recap itself constructs the t2 inputs.
+mkdir -p "$TRAJ_ROOT/scope001/rollups/t1"
+GJ="$TRAJ_ROOT/scope001/trajectory.jsonl"
+printf '{"type":"trajectory","step_id":"scope001-root","ts":"t0"}\n' > "$GJ"
+for ((i=1; i<=200; i++)); do
+    printf '{"type":"thought","step_id":"sc%06d","ts":"t1","content":"fixture step %d"}\n' "$i" "$i" >> "$GJ"
+done
+for ((i=0; i<20; i++)); do
+    summary="I recorded unrelated work."
+    ids='["other001","other002"]'
+    case "$i" in
+        0) summary="I attributed the issue to channel noise."
+           ids='["old00001","old00002"]' ;;
+        10) summary="I corrected the channel noise diagnosis: the cause was a resend loop."
+            ids='["new00001","new00002"]' ;;
+    esac
+    file=$(printf '%s/scope001/rollups/t1/%012d-%012d.json' "$TRAJ_ROOT" "$((i*10))" "$((i*10+10))")
+    jq -nc --arg summary "$summary" --argjson ids "$ids" \
+        --argjson start "$((i*10))" --argjson end "$((i*10+10))" \
+        '{tier:1,start:$start,end:$end,n:10,summary:$summary,step_ids:$ids,prompt_version:5}' > "$file"
+done
+check "scope: tier-2 generation succeeds" \
+    recap scope001 --traj_dir "$TRAJ_ROOT" --backfill
+check "input: first parent has exact child prefix and claim" \
+    grep -qxF '[old00001,old00002] I attributed the issue to channel noise.' "$LLM_LOG.old-input"
+check "input: second parent has exact correction child prefix" \
+    grep -qxF '[new00001,new00002] I corrected the channel noise diagnosis: the cause was a resend loop.' "$LLM_LOG.new-input"
+check "input: first parent receives ten children" \
+    test "$(wc -l < "$LLM_LOG.old-input" | tr -d ' ')" = 10
+check "input: second parent receives ten children" \
+    test "$(wc -l < "$LLM_LOG.new-input" | tr -d ' ')" = 10
+check_not "scope: correction absent from earlier parent" \
+    grep -qF 'resend loop' "$LLM_LOG.old-input"
+check_not "scope: earlier claim IDs absent from correcting parent" \
+    grep -qF 'old00001' "$LLM_LOG.new-input"
+check_not "scope: earlier claim text absent from correcting parent" \
+    grep -qF 'I attributed the issue to channel noise.' "$LLM_LOG.new-input"
+check "scope: second tier-2 block sealed" \
+    test -f "$TRAJ_ROOT/scope001/rollups/t2/000000000100-000000000200.json"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 exit $((fail > 0))

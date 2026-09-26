@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
 # test_rollup_namer_read_half.sh — emitted windows carry their namers beside them
 #
-# The v5 _ROLLUP_SYSTEM (write half, PR 138) teaches the rollup model to quote
-# the "[id,...]" prefix of the child window it supersedes. The read half lives
-# in _ctx_emit_seg: after printing a window, _ctx_emit_namers greps sibling
-# block files for that window's own prefix and prints any namer's summary one
-# hop deep, marked, never expanded further. Blocks are sealed by a stubbed
-# llm, then their summaries are rewritten to carry citations, so the test
-# exercises the real seal paths and the real grep, no hand-built fixtures.
+# The writer can cite a child only when it sees the child and correcting
+# evidence together. Here citations are planted to test just the reader.
+# The reader takes a bounded snapshot of recent deterministic block paths,
+# then emits matching summaries one hop deep within its byte allowance.
 #
 # Fixture: 16 rows, --fanout 2 --raw-tail 2 seals t3[0,8) t2[8,12) t1[12,14).
 # M (t2) cites W (t3); N (t1) cites M (t2). Expect exactly two namer lines:
@@ -54,8 +51,8 @@ N=$(printf '%s/t1/%012d-%012d.json' "$R" 12 14)
 check "blocks sealed at expected paths" test -f "$W" -a -f "$M" -a -f "$N"
 [[ -f "$W" && -f "$M" && -f "$N" ]] || { printf 'sealing failed\n'; exit 1; }
 
-# Rewrite summaries to carry citations (the v5 prompt makes the model do this;
-# here the text is planted so the read half can be tested without the model).
+# Plant existing citations to isolate the reader, not claim that the writer
+# can connect separately sealed siblings.
 WKEY=$(jq -r '"[" + (.step_ids | join(",")) + "]"' "$W")
 MKEY=$(jq -r '"[" + (.step_ids | join(",")) + "]"' "$M")
 jq --arg k "$WKEY" '.summary = ("the resend loop claim is corrected: " + $k + " was wrong")' "$M" > "$M.tmp" && mv "$M.tmp" "$M"
@@ -66,11 +63,11 @@ printf '%s\n' "$OUT" > "$WORK/out.txt"
 
 # 1. W's namer M appears, marked, with its summary.
 check "namer: citing window appears beside the window it corrects" \
-    bash -c "grep -qF 'corrects/supersedes it] the resend loop claim is corrected' '$WORK/out.txt'" 
+    bash -c "grep -qF 'cites it] the resend loop claim is corrected' '$WORK/out.txt'"
 
 # 2. M's namer N appears too (N is emitted on its own; its namer line follows M's own emission).
 check "namer: second citation visible when its target is emitted" \
-    bash -c "grep -qF 'corrects/supersedes it] second window, cites' '$WORK/out.txt'" 
+    bash -c "grep -qF 'cites it] second window, cites' '$WORK/out.txt'"
 
 # 3. One-hop bound: exactly two namer lines, no chain expansion from W through M to N.
 n=$(grep -c 'namer of the window above' <<<"$OUT")
@@ -78,10 +75,7 @@ check "bound: exactly one namer line per citation, no recursive expansion" test 
 
 # 4. Blocks without a namer print no marker of their own (N has no namer; marker count already 2).
 check "namer: un-cited block draws no namer line" \
-    bash -c "! grep -qF 'corrects/supersedes it] seed summary' '$WORK/out.txt'" 
-
-printf '%d passed, %d failed\n' "$pass" "$fail"
-(( fail == 0 ))
+    bash -c "! grep -qF 'cites it] seed summary' '$WORK/out.txt'"
 
 # 5. Census-deleted namer: deleting the citing block mid-scan must not
 # break the context build, and the cited window must still emit with no
@@ -102,14 +96,15 @@ check "census-deleted namer: cited window still emitted" \
 # original summary, its summary carries no citation, so W draws no line
 # either way; assert exactly that.
 check "census-deleted namer: no namer line for a window with no citing block" \
-    bash -c "! grep -qF 'corrects/supersedes it] the resend loop claim is corrected' '$WORK/out2.txt'"
+    bash -c "! grep -qF 'cites it] the resend loop claim is corrected' '$WORK/out2.txt'"
 
 # 6. Corrupt namer file (truncated JSON): jq fails per-file and is swallowed;
 # build succeeds and the corrupt block contributes no namer line.
 printf '{"summary":"trunc' > "$M"
 OUT3=$(recap nmrr0001 --traj_dir "$TRAJ_ROOT" --fanout 2 --raw-tail 2 --context 2>/dev/null)
+rc=$?
 printf '%s\n' "$OUT3" > "$WORK/out3.txt"
-check "corrupt namer block: build succeeds" test $? -eq 0
+check "corrupt namer block: build succeeds" test "$rc" -eq 0
 check "corrupt namer block: no namer line from unreadable file" \
     bash -c "! grep -qF 'namer of the window above' '$WORK/out3.txt'"
 
