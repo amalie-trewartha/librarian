@@ -48,7 +48,8 @@ resource "aws_iam_role_policy_attachment" "dlm" {
 }
 
 resource "aws_dlm_lifecycle_policy" "backup" {
-  description        = "shellm-${var.subdomain} root volume: daily 14, weekly 8, copies in ${var.backup_copy_region}"
+  # DLM allows only letters, digits, spaces, _ and - here.
+  description        = "shellm-${var.subdomain} root volume daily 14 weekly 8 copies in ${var.backup_copy_region}"
   execution_role_arn = aws_iam_role.dlm.arn
   state              = "ENABLED"
 
