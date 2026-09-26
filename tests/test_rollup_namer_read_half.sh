@@ -90,7 +90,7 @@ rc=$?
 printf '%s\n' "$OUT2" > "$WORK/out2.txt"
 check "census-deleted namer: context build still succeeds" test "$rc" -eq 0
 check "census-deleted namer: cited window still emitted" \
-    bash -c "grep -q 'steps 0.8' '$WORK/out2.txt'"
+    bash -c "grep -qF 'steps 0–8' '$WORK/out2.txt'"
 # namer line for W exists only if a block file holding its key exists; the
 # snapshot at scan time (M absent) means none. If M was re-sealed with its
 # original summary, its summary carries no citation, so W draws no line
