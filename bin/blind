@@ -20,13 +20,13 @@ set -euo pipefail
 
 die() { printf 'blind: error: %s\n' "$*" >&2; exit 1; }
 
-role="" out="" model="${BLIND_MODEL:-${SHELLM_MODEL:-}}" files=() words=()
+role="" out="" model="${BLIND_MODEL:-${SHELLM_MODEL:-}}" model_from_flag=0 files=() words=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --role) role="${2:?--role needs a name}"; shift 2 ;;
         -f) files+=("${2:?-f needs a file}"); shift 2 ;;
         --out) out="${2:?--out needs a file}"; shift 2 ;;
-        -m|--model) model="${2:?--model needs a model}"; shift 2 ;;
+        -m|--model) model="${2:?--model needs a model}"; model_from_flag=1; shift 2 ;;
         -h|--help) sed -n '3,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) words+=("$1"); shift ;;
     esac
@@ -40,6 +40,15 @@ project="${PROJECT_DIR:-}"
 [[ -z "$project" && -f project/charter.md ]] && project="$PWD/project"
 [[ -z "$project" && -f "${SHELLM_WORKDIR:-/nonexistent}/project/charter.md" ]] && project="$SHELLM_WORKDIR/project"
 [[ -n "$project" && -d "$project" ]] || die "no project/ directory here (set PROJECT_DIR)"
+
+# Per-role model: BLIND_MODEL_<ROLE> (BLIND_MODEL_COLDEYES, ..._ADVERSARY,
+# ..._EXPLORER, ..._HELPER) beats BLIND_MODEL, so cold-eyes review can run on
+# another model family while adversarial checks stay on the main model. An
+# explicit -m beats both.
+if [[ -n "$role" && "$model_from_flag" != 1 ]]; then
+    _rv="BLIND_MODEL_$(printf '%s' "$role" | tr '[:lower:]-' '[:upper:]_')"
+    [[ -n "${!_rv:-}" ]] && model="${!_rv}"
+fi
 
 prompt=""
 if [[ -n "$role" ]]; then

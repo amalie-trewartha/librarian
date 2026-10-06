@@ -426,6 +426,12 @@ has "delegate caps its steps" "$out" "--max-iterations 15"
 has "delegate uses the helper role" "$out" "1"
 out=$(cd "$ID/workdir" && PATH="$FAKE:$PATH" SHELLM_MODEL=claude-opus-5-5 SHELLM_FAST_MODEL=claude-sonnet-5-5 delegate "x" 2>/dev/null)
 has "delegate prefers the deployment's fast model" "$out" "--model claude-sonnet-5-5"
+out=$(cd "$ID/workdir" && PATH="$FAKE:$PATH" BLIND_MODEL=main-x BLIND_MODEL_COLDEYES=bedrock-converse/us.meta.llama4 blind --role coldeyes 2>/dev/null)
+has "per-role model for cold-eyes" "$out" "--model bedrock-converse/us.meta.llama4"
+out=$(cd "$ID/workdir" && PATH="$FAKE:$PATH" BLIND_MODEL=main-x BLIND_MODEL_COLDEYES=bedrock-converse/us.meta.llama4 blind --role adversary "x" 2>/dev/null)
+has "other roles keep BLIND_MODEL" "$out" "--model main-x"
+out=$(cd "$ID/workdir" && PATH="$FAKE:$PATH" BLIND_MODEL_HELPER=should-not-win delegate -m cheap-y "x" 2>/dev/null)
+has "an explicit -m beats the per-role model" "$out" "--model cheap-y"
 out=$(cd "$ID/workdir" && PATH="$FAKE:$PATH" DELEGATE_MODEL=bedrock-converse/amazon.nova-lite-v1:0 delegate "x" 2>/dev/null)
 has "DELEGATE_MODEL wins" "$out" "--model bedrock-converse/amazon.nova-lite-v1:0"
 out=$(cd "$ID/workdir" && PATH="$FAKE:$PATH" LLM_USAGE_LEDGER="$WORK/wl.jsonl" PROJECT_LEDGER_MARK=1 PROJECT_WAKE_TOKENS=1000 delegate "x" 2>&1); rc=$?
