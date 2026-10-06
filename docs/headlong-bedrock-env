@@ -1,1 +1,113 @@
-../tools/headlong-bedrock-env
+#!/usr/bin/env bash
+set -euo pipefail
+
+# headlong-bedrock-env — write a new install's Headlong .env from an aws.env.
+#
+#   headlong-bedrock-env AWS_ENV [--force] [--check] [--app DIR]
+#                        [--model ID] [--fast-model ID] [--coldeyes ID]
+#
+# AWS_ENV is a file of KEY=VALUE lines with AWS_REGION and either
+# AWS_BEARER_TOKEN_BEDROCK (a Bedrock API key) or AWS_ACCESS_KEY_ID +
+# AWS_SECRET_ACCESS_KEY (+ AWS_SESSION_TOKEN). It writes, under the state home
+# (HEADLONG_HOME, default ~/.headlong):
+#
+#   bedrock-token  the bearer key alone (mode 600). llm re-reads it on every
+#                  call, so a rotated key is installed by overwriting it.
+#   .env           models, region and settings (mode 600). It points at the
+#                  token file instead of holding the key. IAM keys cannot be
+#                  read from a file, so they go into .env itself.
+#   app_dir        the checkout (--app, default: the checkout this script is in)
+#
+# Model ids default to cross-region profiles that work through InvokeModel in
+# every region of the geography (us. for US and Canada, eu. for Europe). Pass
+# --model/--fast-model to choose others. --coldeyes sets a cross-family model
+# for the weekly cold-eyes review. --check makes one tiny call per model. An
+# existing .env is kept unless --force (it is then backed up first). No secret
+# is printed.
+
+die() { printf 'headlong-bedrock-env: error: %s\n' "$*" >&2; exit 1; }
+
+src="" force=0 check=0 app="" model="" fast="" coldeyes=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --force) force=1; shift ;;
+        --check) check=1; shift ;;
+        --app) app="${2:?--app needs a directory}"; shift 2 ;;
+        --model) model="${2:?--model needs an id}"; shift 2 ;;
+        --fast-model) fast="${2:?--fast-model needs an id}"; shift 2 ;;
+        --coldeyes) coldeyes="${2:?--coldeyes needs an id}"; shift 2 ;;
+        -h|--help) sed -n '3,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -*) die "unknown option $1" ;;
+        *) src="$1"; shift ;;
+    esac
+done
+[[ -n "$src" && -f "$src" ]] || die "give the aws.env file (headlong-bedrock-env --help)"
+
+# Read the values in a subshell so nothing leaks into this script's env.
+read_var() { ( set -a; . "$src" >/dev/null 2>&1; set +a; printf '%s' "${!1:-}" ); }
+region=$(read_var AWS_REGION); token=$(read_var AWS_BEARER_TOKEN_BEDROCK)
+akid=$(read_var AWS_ACCESS_KEY_ID); secret=$(read_var AWS_SECRET_ACCESS_KEY); session=$(read_var AWS_SESSION_TOKEN)
+[[ -n "$region" ]] || die "$src has no AWS_REGION"
+[[ -n "$token" || ( -n "$akid" && -n "$secret" ) ]] \
+    || die "$src needs AWS_BEARER_TOKEN_BEDROCK, or AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
+
+case "$region" in
+    us-*|ca-*) geo=us ;;
+    eu-*) geo=eu ;;
+    *) geo="" ;;
+esac
+if [[ -z "$model" || -z "$fast" ]] && [[ -z "$geo" ]]; then
+    die "no default model ids for region $region: pass --model and --fast-model (see docs/project-mode-setup.md, step 3)"
+fi
+model="${model:-$geo.anthropic.claude-opus-5-5}"
+fast="${fast:-$geo.anthropic.claude-haiku-4-5-20251001-v1:0}"
+
+home="${HEADLONG_HOME:-$HOME/.headlong}"
+here="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
+app="${app:-$(dirname "$here")}"
+mkdir -p "$home"
+if [[ -f "$home/.env" && "$force" -ne 1 ]]; then
+    die "$home/.env exists; pass --force to replace it (a backup is kept)"
+fi
+[[ -f "$home/.env" ]] && cp -p "$home/.env" "$home/.env.bak.$(date +%Y%m%d%H%M%S)"
+
+umask 077
+{
+    printf '# Written by headlong-bedrock-env from %s on %s\n' "$(basename "$src")" "$(date -u +%Y-%m-%d)"
+    printf 'SHELLM_MODEL=%s\n' "$model"
+    printf 'SHELLM_FAST_MODEL=%s\n' "$fast"
+    printf 'AWS_REGION=%s\n' "$region"
+    if [[ -n "$token" ]]; then
+        printf '%s\n' "$token" > "$home/bedrock-token"
+        printf '# The key itself is in this file; overwrite it to rotate (no restart).\n'
+        printf 'AWS_BEARER_TOKEN_BEDROCK_FILE=%s\n' "$home/bedrock-token"
+    else
+        printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' "$akid" "$secret"
+        [[ -n "$session" ]] && printf 'AWS_SESSION_TOKEN=%s\n' "$session"
+    fi
+    printf '# Run the agent'"'"'s commands in a Docker sandbox; refuse to run without one.\n'
+    printf 'SHELLM_REQUIRE_DOCKER=1\nHEADLONG_UNSANDBOXED=0\n'
+    printf 'HEADLONG_TZ=UTC\n'
+    printf '# Cost estimates use first-party list prices; 1.1 covers the Bedrock regional premium.\n'
+    printf 'LLM_PRICE_SCALE=1.1\n'
+    if [[ -n "$coldeyes" ]]; then
+        printf 'BLIND_MODEL_COLDEYES=%s\n' "$coldeyes"
+    else
+        printf '# Weekly cold-eyes reviews on another model family, if enabled for the account:\n'
+        printf '# BLIND_MODEL_COLDEYES=bedrock-converse/us.meta.llama4-maverick-17b-instruct-v1:0\n'
+    fi
+} > "$home/.env"
+printf '%s\n' "$app" > "$home/app_dir"
+
+printf 'Wrote %s/.env (models %s, %s; region %s)\n' "$home" "$model" "$fast" "$region"
+[[ -n "$token" ]] && printf 'Wrote %s/bedrock-token (mode 600)\n' "$home"
+[[ -z "$token" ]] && printf 'IAM keys are in %s/.env (mode 600)\n' "$home"
+
+if [[ "$check" -eq 1 ]]; then
+    llm_bin="$app/bin/llm"; [[ -x "$llm_bin" ]] || llm_bin=$(command -v llm)
+    for m in "$model" "$fast" ${coldeyes:+"$coldeyes"}; do
+        printf 'check %s: ' "$m"
+        HEADLONG_HOME="$home" LLM_USAGE_LEDGER=/dev/null LLM_MAX_RETRIES=0 \
+            "$llm_bin" -t 16 -m "$m" "Reply with one word: ready" 2>&1 | tail -n 1
+    done
+fi

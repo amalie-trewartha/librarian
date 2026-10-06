@@ -88,7 +88,7 @@ If your credentials are in an `aws.env` file (`AWS_REGION` plus
 `AWS_BEARER_TOKEN_BEDROCK`, or IAM keys), one command writes everything:
 
 ```bash
-headlong-bedrock-env ~/aws.env --check
+~/headlong/docs/headlong-bedrock-env ~/aws.env --check
 # optional: --coldeyes bedrock-converse/us.meta.llama4-maverick-17b-instruct-v1:0
 ```
 
