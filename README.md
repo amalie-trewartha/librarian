@@ -206,7 +206,8 @@ schedules daily and weekly rituals, including a cold-eyes review by an
 agent that cannot see the mind's log. It enforces a token budget, slows
 the mind to a rest pace when it reports that it is blocked or done, and
 commits the project files to git after every wake. See
-[design/long_autonomy.md](design/long_autonomy.md).
+[design/long_autonomy.md](design/long_autonomy.md), and
+[docs/project-mode-setup.md](docs/project-mode-setup.md) to set one up.
 
 ## Local models
 

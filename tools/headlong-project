@@ -185,7 +185,7 @@ EOF
     [[ -n "$total" ]] && printf '  run cap:  %s tokens in total\n' "$total"
     [[ "$scale" != 1 ]] && printf '  clock:    %sx real time: the %s-day run takes %s real hours\n' "$scale" "$days" $(( days * 24 / scale ))
     printf '  ends:     %s (move it with: headlong-project deadline %s --days N)\n' "$(date -d "@$end_at" '+%Y-%m-%d %H:%M %Z' 2>/dev/null || date -r "$end_at" '+%Y-%m-%d %H:%M %Z')" "$name"
-    printf 'Restart the mind to pick it up: %s stop; %s start\n' "$name" "$name"
+    printf 'Restart the mind to pick it up: persona %s stop; persona %s start\n' "$name" "$name"
 }
 
 cmd_update_pristine() {
