@@ -390,6 +390,10 @@ out=$(PATH="$FAKE:$PATH" LLM_USAGE_LEDGER="$WORK/wl.jsonl" PROJECT_LEDGER_MARK=1
 out=$(cd "$P" && PATH="$FAKE:$PATH" PROJECT_DIR="$P" blind --role coldeyes 2>/dev/null); rc=$?
 eq "coldeyes works from inside project/" "$rc" 0
 has "role files resolved against the workspace" "$out" "./project/spec.md"
+mkdir -p "$P/project/reviews"   # a stray project/project/ must not be taken for the project
+out=$(cd "$P" && PATH="$FAKE:$PATH" blind --role adversary "x" 2>&1); rc=$?
+eq "from inside project/, the project is found despite a stray project/project/" "$rc" 0
+rm -rf "$P/project"
 (cd "$P" && PATH="$FAKE:$PATH" PROJECT_DIR="$P" blind --role coldeyes --out project/reviews/inside.md >/dev/null 2>&1)
 [[ -f "$P/reviews/inside.md" && ! -e "$P/project" ]] && ok "--out project/... from inside project/ lands in project/reviews" || bad "--out project/... from inside project/ lands in project/reviews"
 rm -f "$P/reviews/inside.md"

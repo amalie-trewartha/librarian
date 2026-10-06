@@ -32,9 +32,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# The project is the directory holding charter.md: the current directory when
+# a caller has cd'd into it, else ./project, else the workdir's project/. (A
+# bare "-d project" test picked up a stray project/project/ on a live run.)
 project="${PROJECT_DIR:-}"
-[[ -z "$project" && -d project ]] && project="$PWD/project"
-[[ -z "$project" && -d "${SHELLM_WORKDIR:-/nonexistent}/project" ]] && project="$SHELLM_WORKDIR/project"
+[[ -z "$project" && -f charter.md && -d roles ]] && project="$PWD"
+[[ -z "$project" && -f project/charter.md ]] && project="$PWD/project"
+[[ -z "$project" && -f "${SHELLM_WORKDIR:-/nonexistent}/project/charter.md" ]] && project="$SHELLM_WORKDIR/project"
 [[ -n "$project" && -d "$project" ]] || die "no project/ directory here (set PROJECT_DIR)"
 
 prompt=""
