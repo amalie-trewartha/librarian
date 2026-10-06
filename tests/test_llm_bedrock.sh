@@ -107,7 +107,11 @@ msgs='[{"role":"user","content":"first"},{"role":"assistant","content":"reply"},
 AWS_BEARER_TOKEN_BEDROCK=t LLM_API_URL="$URL" llm --no-stream -M "$msgs" -m anthropic.claude-opus-5-5 >/dev/null 2>&1
 r=$(cat "$(last)")
 eq_n=$(jq '[.body.messages[] | (if (.content|type)=="array" then .content[] else empty end) | select(.cache_control)] | length' <<<"$r")
-[[ "$eq_n" == 1 ]] && ok "exactly one message breakpoint, on the last block" || bad "exactly one message breakpoint" "got $eq_n"
+[[ "$eq_n" == 2 ]] && ok "two message breakpoints: the last two messages" || bad "two message breakpoints" "got $eq_n"
+has "breakpoint on the previous reply (stable across steps)" "$(jq -c '.body.messages[-2].content' <<<"$r")" 'cache_control'
+hasnt "no breakpoint on older messages" "$(jq -c '.body.messages[0].content' <<<"$r")" 'cache_control'
+nbp=$(jq '[.. | objects | select(has("cache_control"))] | length' <<<"$r")
+(( nbp <= 4 )) && ok "at most 4 breakpoints per request ($nbp)" || bad "at most 4 breakpoints" "$nbp"
 has "earlier messages untouched" "$(jq -c '.body.messages[0].content' <<<"$r")" '"first"'
 AWS_BEARER_TOKEN_BEDROCK=t LLM_PROMPT_CACHE=0 LLM_API_URL="$URL" llm --no-stream -s "sys" -m anthropic.claude-opus-5-5 "hello" >/dev/null 2>&1
 hasnt "LLM_PROMPT_CACHE=0 turns breakpoints off" "$(jq -c '.body' "$(last)")" 'cache_control'

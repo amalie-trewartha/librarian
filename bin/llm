@@ -699,11 +699,14 @@ supports_gemini_thinking() {
 # Payload builders (one per provider)
 # ---------------------------------------------------------------------------
 
-# Prompt caching on Anthropic-format providers. Two explicit breakpoints:
-# the system prompt, and the last block of the last message. Across the steps
-# of one shellm run the conversation only grows, so each request reads the
-# previous request's prefix from the cache and pays full price only for what
-# is new. Headlong sent no cache_control before, so every step re-sent its
+# Prompt caching on Anthropic-format providers. Three explicit breakpoints:
+# the system prompt, the second-to-last message and the last message. Across
+# the steps of one shellm run the conversation grows, but shellm shows only
+# the newest output whole and trims it once it is no longer newest, so the
+# previous request's last message changes and a breakpoint there alone never
+# matches again (live blind runs cached only their system prompt). The
+# second-to-last message (the previous reply) does not change afterwards, so
+# each request reads everything up to it from the cache. Headlong sent no cache_control before, so every step re-sent its
 # whole 20K-40K token context at full price. Explicit breakpoints, because
 # Bedrock does not support the top-level automatic form.
 # LLM_PROMPT_CACHE=0 turns it off.
@@ -714,12 +717,11 @@ _anthropic_cache_breakpoints() {
       def mark: . + {cache_control: {type: "ephemeral"}};
       (if (.system | type) == "string" and (.system | length) > 0
        then .system = [{type: "text", text: .system} | mark] else . end)
-      | (if (.messages | length) > 0 then
-           .messages[-1].content |= (
-             if type == "string" then [{type: "text", text: .} | mark]
-             elif type == "array" and length > 0 then .[-1] |= mark
-             else . end)
-         else . end)'
+      | def mark_content: if type == "string" then [{type: "text", text: .} | mark]
+                         elif type == "array" and length > 0 then .[-1] |= mark
+                         else . end;
+        (if (.messages | length) > 0 then .messages[-1].content |= mark_content else . end)
+      | (if (.messages | length) > 1 then .messages[-2].content |= mark_content else . end)'
 }
 
 build_payload_anthropic() {
