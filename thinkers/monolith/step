@@ -294,7 +294,7 @@ if [[ "$project_mode" -eq 1 ]]; then
     if _project_over_budget; then
         if [[ ! -f "$state_dir/project_budget_paused" ]]; then
             : > "$state_dir/project_budget_paused"
-            jq -nc --arg c "token budget reached (24h: $(_project_tokens_24h) of ${PROJECT_DAILY_TOKENS:-no cap}; run: $(_project_tokens_total) of ${PROJECT_TOTAL_TOKENS:-no cap}); wakes skip the model until usage falls" \
+            jq -nc --arg c "budget reached (last project day: $(_project_fmt "$(_project_tokens_24h)") of $(_project_fmt "$(_project_cap_daily)"); run: $(_project_fmt "$(_project_tokens_total)") of $(_project_fmt "$(_project_cap_total)")); wakes skip the model until usage falls" \
                 '{type:"idle", source:"monolith", reason:"budget", content:$c}' | traj append >/dev/null 2>&1 || true
         fi
         _project_write_summary || true
@@ -485,7 +485,11 @@ if [[ "$project_mode" -eq 1 ]]; then
     # blind, inside the sandbox, sums the ledger past this mark and refuses
     # to start once the wake has spent its ceiling.
     project_wake_ceiling=$(_project_wake_ceiling) || project_wake_ceiling=0
-    shellm_flags+=(--var "PROJECT_LEDGER_MARK=$project_ledger_before" --var "PROJECT_WAKE_TOKENS=$project_wake_ceiling")
+    # The unit and the cache weight travel with the ceiling, so blind and
+    # delegate inside the sandbox count spend the way this step does.
+    project_budget_unit=$(_project_unit)
+    shellm_flags+=(--var "PROJECT_LEDGER_MARK=$project_ledger_before" --var "PROJECT_WAKE_TOKENS=$project_wake_ceiling"
+        --var "PROJECT_BUDGET_UNIT=$project_budget_unit" --var "PROJECT_CACHE_READ_WEIGHT=${PROJECT_CACHE_READ_WEIGHT:-0.1}")
 fi
 
 # shellm writes its run header's step_id here, so a fallback idle can carry
@@ -553,6 +557,7 @@ SHELLM_NO_BANNER=1 \
     SHELLM_WAKE="$wake_reason" \
     SHELLM_RUN_ID_OUT="$run_id_file" \
     SHELLM_TOKEN_BUDGET="${project_wake_ceiling:-0}" SHELLM_TOKEN_MARK="$project_ledger_before" \
+    PROJECT_BUDGET_UNIT="${project_budget_unit:-tokens}" \
     shellm --model "$run_model" --traj "$TRAJ_ID" --context-scope run \
     "${shellm_flags[@]}" ${project_iter_flags[@]+"${project_iter_flags[@]}"} \
     --prompt-file "$prompt_file_tmp" >"$run_out_tmp" 2>"$run_err_tmp" || run_rc=$?
@@ -706,7 +711,7 @@ if [[ "$project_mode" -eq 1 ]]; then
     project_floor=$(_project_delay_floor "$project_wake_tok" 2>/dev/null) || project_floor=0
     [[ "$project_floor" =~ ^[0-9]+$ ]] || project_floor=0
     if (( project_floor > next_delay )); then
-        printf '  project floor: next wake in %ss (this wake used %s tokens; pace, budget or STATE)\n' "$project_floor" "$project_wake_tok" >&2
+        printf '  project floor: next wake in %ss (this wake used %s; pace, budget or STATE)\n' "$project_floor" "$(_project_fmt "$project_wake_tok")" >&2
         next_delay=$project_floor
     fi
     _project_number_questions || true

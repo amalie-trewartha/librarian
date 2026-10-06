@@ -312,7 +312,42 @@ Read from the environment or the identity's `.env`:
 | `PROJECT_STALL_HOURS` | 12 | Hours without a journal change before STALL |
 | `PROJECT_JOURNAL_ENTRIES` | 5 | Journal entries shown per wake |
 | `PROJECT_MEMORY_MAX` / `PROJECT_SPEC_MAX` | 14000 / 16000 | Bytes of each shown per wake |
-| `BLIND_MODEL` | `SHELLM_MODEL` | Model for blind subagents (a different model family makes a stronger reviewer) |
+| `BLIND_MODEL` | `SHELLM_MODEL` | Model for blind reviewers and explorers. A different model family makes a more independent reviewer; on Bedrock, `bedrock-converse/<model id>` reaches non-Claude models |
+| `DELEGATE_MODEL` | `SHELLM_FAST_MODEL`, else the matching Haiku | Model for `delegate` helpers |
+| `DELEGATE_MAX_ITERATIONS` | 15 | Steps per delegate run |
+| `PROJECT_CACHE_READ_WEIGHT` | 0.1 | Weight of a cache-read token in token budgets (about its price relative to fresh input) |
+| `PROJECT_DAILY_USD` / `PROJECT_TOTAL_USD` / `PROJECT_WAKE_USD` | unset (`init --daily-usd`, `--total-usd`) | Budgets in estimated dollars instead of tokens. They replace the token caps when set |
+| `LLM_PRICE_SCALE` | 1 | Scales the per-call cost estimate (list prices are first-party; e.g. 1.1 for a Bedrock regional endpoint) |
+| `PROJECT_FALLBACK_USD_PER_MTOK` | 5 | Dollar rate assumed for a call with no cost estimate (an unpriced model) |
+
+## What a budget counts
+
+`llm --spend` is the one definition, shared by project mode, `blind`,
+`delegate` and `shellm`.
+- **Token budgets** count input plus output, with cache reads weighted by
+  `PROJECT_CACHE_READ_WEIGHT` (0.1). The live runs counted cache reads in
+  full, which made a mostly cached run read as about 4x its cost.
+- **Dollar budgets** (`--daily-usd`, `--total-usd`) sum the `cost_usd`
+  estimate that `llm` writes on each ledger record: list prices per model,
+  with cache writes at 1.25x input and cache reads at their own rate. Dollars
+  are the unit to use when cheaper models are in play: a Haiku delegate's
+  tokens cost a quarter of Opus's, but a token budget counts them the same.
+
+## Subagents: reviewers and delegates
+
+- **`blind`** runs reviewers and explorers on `BLIND_MODEL`. Pointing it at a
+  different model family than the agent it reviews makes the review more
+  independent: two Claude models share blind spots that a Llama or a Nova
+  model may not. On Bedrock, `bedrock-converse/<model id>` reaches those
+  through the Converse API (non-streaming; thinking settings do not apply).
+  This is verified against a mock server only, pending a working key.
+- **`delegate`** runs a helper on a cheaper model, for mechanical,
+  checkable chores: pulling values out of a long source, unit conversion,
+  searching or summarizing a document. The helper role cites file and line
+  for every value, and the charter requires the agent to check those lines
+  before using a result. Review, judgment calls, and numbers headed into
+  `project-memory.md` stay with the main model and `blind`. A delegate counts
+  against the same per-wake budget as `blind`.
 
 ## Reference material
 

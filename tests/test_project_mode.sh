@@ -223,7 +223,7 @@ has "questions --closed: default" "$out" "DEFAULT USED (no human answer)"
 hasnt "questions --closed hides the open banner" "$out" "OPEN QUESTION"
 out=$(PROJECT_NOW="$PROJECT_NOW" "$REPO/tools/headlong-project" status "$ID" 2>&1)
 has "status leads with open questions" "$(printf '%s' "$out" | head -1)" "OPEN QUESTION(S) FOR A HUMAN"
-has "status shows the budget from .env" "$out" "(cap 2000000); whole run:"
+has "status shows the budget from .env" "$out" "(cap 2000000 tokens); whole run:"
 sed -i 's/^\(### Q5 .*STATUS: \)answered/\1moot/' "$P/questions.md"   # tidy for what follows
 
 # ── STATE, budget and the delay floor ────────────────────────────────────────
@@ -247,7 +247,7 @@ printf '{"ts":"%s","in_tok":900,"out_tok":100}\n{"ts":"%s","in_tok":500000,"out_
     "$ts_recent" "$ts_old" "$ts_recent" > "$ID/usage/llm.jsonl"
 eq "tokens counted over 24h only" "$(_project_tokens_24h)" 9000
 PROJECT_DAILY_TOKENS=10000
-has "budget warning near the cap" "$(_project_signals)" "BUDGET: 9000 of 10000"
+has "budget warning near the cap" "$(_project_signals)" "BUDGET: 9000 tokens of 10000 tokens"
 PROJECT_DAILY_TOKENS=8000
 has "budget spent signal" "$(_project_signals)" "BUDGET SPENT"
 eq "budget floor" "$(_project_delay_floor)" 1800
@@ -257,7 +257,7 @@ PROJECT_PACE=0 eq "PROJECT_PACE=0 turns pacing off" "$(PROJECT_PACE=0 _project_d
 lines=$(_project_ledger_lines)
 printf '{"ts":"%s","provider":"anthropic","in_tok":100,"out_tok":50,"cache_tok":2000}\n{"ts":"%s","provider":"openai","in_tok":3000,"out_tok":50,"cache_tok":2000}\n' \
     "$ts_recent" "$ts_recent" >> "$ID/usage/llm.jsonl"
-eq "wake tokens: Anthropic cache reads added, OpenAI's already in in_tok" "$(_project_tokens_after "$lines")" 5200
+eq "wake spend: cache reads at a tenth (Anthropic 100+50+200, OpenAI 3000+50-1800)" "$(_project_tokens_after "$lines")" 1600
 unset PROJECT_DAILY_TOKENS
 
 # ── stall ────────────────────────────────────────────────────────────────────
@@ -341,7 +341,7 @@ eq "wake ceiling: explicit setting wins" "$(PROJECT_WAKE_TOKENS=1234 _project_wa
 has "wake budget signal" "$(_project_signals)" "WAKE BUDGET: about 500000 tokens"
 PROJECT_TOTAL_TOKENS=6000
 _project_over_budget && bad "under the run cap" || ok "under the run cap"
-has "run budget warning past 70%" "$(_project_signals)" "RUN BUDGET: 5007 of the 6000"
+has "run budget warning past 70%" "$(_project_signals)" "RUN BUDGET: 5007 tokens of the 6000 tokens"
 PROJECT_TOTAL_TOKENS=5000
 _project_over_budget && ok "over the run cap" || bad "over the run cap"
 eq "budget rest scaled" "$(_project_delay_floor 0)" 75
@@ -349,6 +349,21 @@ printf 'blocked\nx\n' > "$P/STATE"; unset PROJECT_TOTAL_TOKENS
 printf 'eval\n' > "$P/daily/2026-10-01.md"   # the project day that closed is done
 eq "rest floor scaled" "$(_project_delay_floor 0)" 150
 printf 'active\n' > "$P/STATE"
+# Dollar budgets: the unit switches, and cost_usd is what counts.
+printf '{"ts":"%s","provider":"bedrock-invoke","in_tok":100,"out_tok":0,"cost_usd":0.30}\n{"ts":"%s","provider":"bedrock-invoke","in_tok":100,"out_tok":0,"cost_usd":0.25}\n' \
+    "$(TZ=UTC date -u -d "@$((S0 + 3000))" +%Y-%m-%dT%H:%M:%SZ)" "$(TZ=UTC date -u -d "@$((S0 + 5000))" +%Y-%m-%dT%H:%M:%SZ)" > "$ID/usage/llm.jsonl"
+unset PROJECT_DAILY_TOKENS
+PROJECT_DAILY_USD=1
+eq "a dollar cap switches the unit" "$(_project_unit)" usd
+eq "spend in micro-dollars" "$(_project_tokens_total)" 550000
+eq "spend formats as dollars" "$(_project_fmt "$(_project_tokens_total)")" '$0.55'
+eq "daily dollar cap in micro-dollars" "$(_project_cap_daily)" 1000000
+eq "wake ceiling: half the daily dollar cap" "$(_project_wake_ceiling)" 500000
+has "wake budget signal in dollars" "$(_project_signals)" 'WAKE BUDGET: about $0.50'
+PROJECT_TOTAL_USD=0.5
+_project_over_budget && ok "over a dollar run cap" || bad "over a dollar run cap"
+unset PROJECT_DAILY_USD PROJECT_TOTAL_USD
+eq "no dollar caps: back to tokens" "$(_project_unit)" tokens
 unset PROJECT_DAILY_TOKENS PROJECT_TIME_SCALE PROJECT_REAL_NOW
 PROJECT_NOW=$(ep '2026-10-06 09:00')
 rm -f "$ID/project-pristine/end_at"
@@ -384,7 +399,7 @@ has "coldeyes gets its default files" "$out" "./project/deliverable.md ./project
 out=$(PATH="$FAKE:$PATH" LLM_USAGE_LEDGER="$WORK/wl.jsonl" PROJECT_LEDGER_MARK=1 PROJECT_WAKE_TOKENS=1000 \
     bash -c 'printf "{\"in_tok\":99999}\n{\"in_tok\":600,\"out_tok\":500}\n" > "$LLM_USAGE_LEDGER"; blind --role explorer "x"' 2>&1); rc=$?
 [[ $rc -ne 0 ]] && ok "blind refuses once the wake spent its ceiling" || bad "blind refuses once the wake spent its ceiling" "$out"
-has "refusal says what to do" "$out" "this wake has spent its token budget (1100 of 1000"
+has "refusal says what to do" "$out" "this wake has spent its budget (110% of its share"
 out=$(PATH="$FAKE:$PATH" LLM_USAGE_LEDGER="$WORK/wl.jsonl" PROJECT_LEDGER_MARK=1 PROJECT_WAKE_TOKENS=5000 blind --role explorer "x" 2>/dev/null); rc=$?
 [[ $rc -eq 0 ]] && ok "blind runs while the wake is under its ceiling" || bad "blind runs while the wake is under its ceiling"
 out=$(cd "$P" && PATH="$FAKE:$PATH" PROJECT_DIR="$P" blind --role coldeyes 2>/dev/null); rc=$?
@@ -397,6 +412,24 @@ rm -rf "$P/project"
 (cd "$P" && PATH="$FAKE:$PATH" PROJECT_DIR="$P" blind --role coldeyes --out project/reviews/inside.md >/dev/null 2>&1)
 [[ -f "$P/reviews/inside.md" && ! -e "$P/project" ]] && ok "--out project/... from inside project/ lands in project/reviews" || bad "--out project/... from inside project/ lands in project/reviews"
 rm -f "$P/reviews/inside.md"
+# delegate: blind with the helper role on a cheaper model.
+cat > "$FAKE/shellm" <<'EOF'
+#!/usr/bin/env bash
+echo "args: $*"
+pf=""; while [[ $# -gt 0 ]]; do [[ "$1" == --prompt-file ]] && pf="$2"; shift; done
+grep -c 'smaller, cheaper model' "$pf" || true
+EOF
+chmod +x "$FAKE/shellm"
+out=$(cd "$ID/workdir" && PATH="$FAKE:$PATH" SHELLM_MODEL=us.anthropic.claude-opus-5-5 delegate -f project/project-memory.md "List the values" 2>/dev/null)
+has "delegate picks the matching cheap model" "$out" "--model us.anthropic.claude-haiku-4-5-20251001-v1:0"
+has "delegate caps its steps" "$out" "--max-iterations 15"
+has "delegate uses the helper role" "$out" "1"
+out=$(cd "$ID/workdir" && PATH="$FAKE:$PATH" SHELLM_MODEL=claude-opus-5-5 SHELLM_FAST_MODEL=claude-sonnet-5-5 delegate "x" 2>/dev/null)
+has "delegate prefers the deployment's fast model" "$out" "--model claude-sonnet-5-5"
+out=$(cd "$ID/workdir" && PATH="$FAKE:$PATH" DELEGATE_MODEL=bedrock-converse/amazon.nova-lite-v1:0 delegate "x" 2>/dev/null)
+has "DELEGATE_MODEL wins" "$out" "--model bedrock-converse/amazon.nova-lite-v1:0"
+out=$(cd "$ID/workdir" && PATH="$FAKE:$PATH" LLM_USAGE_LEDGER="$WORK/wl.jsonl" PROJECT_LEDGER_MARK=1 PROJECT_WAKE_TOKENS=1000 delegate "x" 2>&1); rc=$?
+[[ $rc -ne 0 ]] && ok "delegate respects the wake budget" || bad "delegate respects the wake budget" "$out"
 has "blind runs are gitignored" "$(git -C "$P" status --porcelain)" "reviews/claim.md"
 hasnt "blind scratch is not committed" "$(git -C "$P" status --porcelain)" ".blind"
 cd /

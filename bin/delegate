@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# delegate — hand a simple, checkable task to a cheaper model.
+#
+#   delegate [-f FILE]... [--out FILE] [-m MODEL] "task"
+#
+# Runs like `blind` (an isolated subagent that sees only the files given, with
+# the same per-wake budget check), with the helper role and a cheaper model:
+# DELEGATE_MODEL, else SHELLM_FAST_MODEL, else the Haiku that matches the
+# main model's naming (Anthropic, Bedrock, or a Bedrock cross-region
+# profile). For extraction, unit conversion, summarizing or searching a long
+# source: work where the answer can be checked against the file:line the
+# helper cites. Not for review, judgment, or numbers that enter the record
+# unchecked. DELEGATE_MAX_ITERATIONS (default 15) caps its steps.
+
+model="${DELEGATE_MODEL:-${SHELLM_FAST_MODEL:-}}"
+if [[ -z "$model" ]]; then
+    case "${SHELLM_MODEL:-}" in
+        us.anthropic.*|global.anthropic.*|eu.anthropic.*|jp.anthropic.*|apac.anthropic.*|au.anthropic.*)
+                            model="${SHELLM_MODEL%%.*}.anthropic.claude-haiku-4-5-20251001-v1:0" ;;
+        anthropic.*)        model="anthropic.claude-haiku-4-5" ;;
+        claude-*)           model="claude-haiku-4-5" ;;
+        *)                  model="${SHELLM_MODEL:-}" ;;
+    esac
+fi
+[[ "${1:-}" == -h || "${1:-}" == --help ]] && { sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
+args=()
+[[ -n "$model" ]] && args=(--model "$model")
+export BLIND_MAX_ITERATIONS="${DELEGATE_MAX_ITERATIONS:-15}"
+exec "$(dirname "$(realpath "$0")")/blind" --role helper ${args[@]+"${args[@]}"} "$@"

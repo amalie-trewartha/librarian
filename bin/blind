@@ -62,13 +62,11 @@ if [[ "$out" == project/* ]]; then out="$(dirname "$project")/$out"; fi
 # A wake's token ceiling covers its subagents (PROJECT_WAKE_TOKENS, with the
 # ledger position the wake started at in PROJECT_LEDGER_MARK; both set by the
 # monolith). Refuse before spending anything once it is used up.
-if [[ "${PROJECT_WAKE_TOKENS:-0}" =~ ^[1-9][0-9]*$ && -f "${LLM_USAGE_LEDGER:-}" ]]; then
-    spent=$(tail -n +"$(( ${PROJECT_LEDGER_MARK:-0} + 1 ))" "$LLM_USAGE_LEDGER" | jq -Rn '[inputs | fromjson? // empty
-        | (.in_tok // 0) + (.out_tok // 0)
-          + (if (.provider == "anthropic" or .provider == "opencode" or .provider == "bedrock" or .provider == "bedrock-invoke") then (.cache_tok // 0) else 0 end)]
-        | add // 0' 2>/dev/null) || spent=0
+if [[ "${PROJECT_WAKE_TOKENS:-0}" =~ ^[1-9][0-9]*$ ]]; then
+    spent=$(llm --spend --after "${PROJECT_LEDGER_MARK:-0}" 2>/dev/null) || spent=0
+    [[ "$spent" =~ ^[0-9]+$ ]] || spent=0
     if (( spent >= PROJECT_WAKE_TOKENS )); then
-        die "this wake has spent its token budget ($spent of $PROJECT_WAKE_TOKENS, subagents included). Record what you have, set FINAL, and run the subagent next wake."
+        die "this wake has spent its budget ($(( spent * 100 / PROJECT_WAKE_TOKENS ))% of its share, subagents included). Record what you have, set FINAL, and run the subagent next wake."
     fi
 fi
 

@@ -6,7 +6,8 @@ set -euo pipefail
 #
 #   headlong-project init <identity> --spec FILE [--charter FILE]
 #                         [--days N | --end YYYY-MM-DD] [--daily-tokens N]
-#                         [--total-tokens N] [--time-scale N] [--reference FILE]...
+#                         [--total-tokens N] [--daily-usd X] [--total-usd X]
+#                         [--time-scale N] [--reference FILE]...
 #                         [--keep-persona] [--force]
 #   headlong-project status <identity>       open questions first, then health
 #   headlong-project questions <identity> [--open|--closed|--all]
@@ -33,6 +34,10 @@ set -euo pipefail
 # exemplar of the expected end product, under project/reference/. Wakes list
 # it by name; the agent reads it when useful.
 # --total-tokens caps the whole run (PROJECT_TOTAL_TOKENS; default none).
+# Token budgets count cache reads at PROJECT_CACHE_READ_WEIGHT (0.1). With
+# --daily-usd / --total-usd the budget is in estimated dollars instead
+# (PROJECT_DAILY_USD / PROJECT_TOTAL_USD), so a cheaper model also costs less
+# budget; dollar caps replace the token caps.
 # --time-scale N runs the project clock N times faster than real time
 # (PROJECT_TIME_SCALE), for accelerated test runs: --days 8 --time-scale 24
 # is an eight-day project in eight hours.
@@ -79,7 +84,7 @@ _end_epoch() {
 }
 
 cmd_init() {
-    local ident="" spec="" charter="" keep=0 force=0 tokens=2000000 days=14 end="" total="" scale=1
+    local ident="" spec="" charter="" keep=0 force=0 tokens=2000000 days=14 end="" total="" scale=1 dusd="" tusd=""
     local -a refs=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -88,6 +93,8 @@ cmd_init() {
             --daily-tokens) tokens="${2:?--daily-tokens needs a number}"; shift 2 ;;
             --days) days="${2:?--days needs a number}"; shift 2 ;;
             --total-tokens) total="${2:?--total-tokens needs a number}"; shift 2 ;;
+            --daily-usd) dusd="${2:?--daily-usd needs an amount}"; shift 2 ;;
+            --total-usd) tusd="${2:?--total-usd needs an amount}"; shift 2 ;;
             --time-scale) scale="${2:?--time-scale needs a number}"; shift 2 ;;
             --reference) refs+=("${2:?--reference needs a file}"); shift 2 ;;
             --end) end="${2:?--end needs YYYY-MM-DD}"; shift 2 ;;
@@ -100,6 +107,8 @@ cmd_init() {
     local id; id=$(_resolve "$ident")
     [[ "$tokens" =~ ^[0-9]+$ ]] || die "--daily-tokens must be a number (0 = no cap)"
     [[ -z "$total" || "$total" =~ ^[0-9]+$ ]] || die "--total-tokens must be a number"
+    [[ -z "$dusd" || "$dusd" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "--daily-usd must be an amount like 50 or 12.5"
+    [[ -z "$tusd" || "$tusd" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "--total-usd must be an amount like 500"
     [[ "$scale" =~ ^[1-9][0-9]*$ ]] || die "--time-scale must be a positive whole number"
     [[ "$scale" == 1 || -z "$end" ]] || die "--end is a calendar date; with --time-scale use --days"
     local end_at; end_at=$(_end_epoch "$days" "$end")
@@ -160,13 +169,19 @@ EOF
     fi
     touch "$id/.env"
     {
-        grep -vE '^(PROJECT_DAILY_TOKENS|PROJECT_TOTAL_TOKENS|PROJECT_TIME_SCALE)=' "$id/.env" || true
+        grep -vE '^(PROJECT_DAILY_TOKENS|PROJECT_TOTAL_TOKENS|PROJECT_DAILY_USD|PROJECT_TOTAL_USD|PROJECT_TIME_SCALE)=' "$id/.env" || true
         printf 'PROJECT_DAILY_TOKENS=%s\n' "$tokens"
         if [[ -n "$total" ]]; then printf 'PROJECT_TOTAL_TOKENS=%s\n' "$total"; fi
+        if [[ -n "$dusd" ]]; then printf 'PROJECT_DAILY_USD=%s\n' "$dusd"; fi
+        if [[ -n "$tusd" ]]; then printf 'PROJECT_TOTAL_USD=%s\n' "$tusd"; fi
         if [[ "$scale" != 1 ]]; then printf 'PROJECT_TIME_SCALE=%s\n' "$scale"; fi
     } > "$id/.env.tmp" && mv "$id/.env.tmp" "$id/.env"
     printf 'Project mode is set up for %s.\n  files:    %s\n  pristine: %s (edit there, then run update-pristine)\n' "$name" "$pd" "$pp"
-    printf '  budget:   %s tokens per 24h (PROJECT_DAILY_TOKENS in %s/.env)\n' "$tokens" "$id"
+    if [[ -n "$dusd$tusd" ]]; then
+        printf '  budget:   estimated dollars: %s per project day, %s for the run (in %s/.env)\n' "${dusd:+\$$dusd}" "${tusd:+\$$tusd}" "$id"
+    else
+        printf '  budget:   %s tokens per 24h, cache reads counted at a tenth (PROJECT_DAILY_TOKENS in %s/.env)\n' "$tokens" "$id"
+    fi
     [[ -n "$total" ]] && printf '  run cap:  %s tokens in total\n' "$total"
     [[ "$scale" != 1 ]] && printf '  clock:    %sx real time: the %s-day run takes %s real hours\n' "$scale" "$days" $(( days * 24 / scale ))
     printf '  ends:     %s (move it with: headlong-project deadline %s --days N)\n' "$(date -d "@$end_at" '+%Y-%m-%d %H:%M %Z' 2>/dev/null || date -r "$end_at" '+%Y-%m-%d %H:%M %Z')" "$name"
@@ -196,7 +211,7 @@ _load() {
     while IFS= read -r kv; do
         k="${kv%%=*}"
         [[ -n "${!k:-}" ]] || export "$kv"
-    done < <(grep -E '^(PROJECT_[A-Z_]+|HEADLONG_TZ)=[^ ]*$' "$ID/.env" 2>/dev/null || true)
+    done < <(grep -E '^(PROJECT_[A-Z_]+|HEADLONG_TZ|LLM_PRICE_SCALE)=[^ ]*$' "$ID/.env" 2>/dev/null || true)
     # shellcheck disable=SC1091
     source "$APP/thinkers/_lib/project.sh"
 }
@@ -345,8 +360,10 @@ cmd_status() {
     else
         printf 'last successful model call: none yet\n'
     fi
-    printf 'tokens in the last project day: %s (cap %s); whole run: %s (cap %s)\n' "$(_project_tokens_24h)" "${PROJECT_DAILY_TOKENS:-none}" \
-        "$(_project_tokens_total)" "${PROJECT_TOTAL_TOKENS:-none}"
+    local cd ct
+    cd=$(_project_cap_daily); ct=$(_project_cap_total)
+    printf 'spend in the last project day: %s (cap %s); whole run: %s (cap %s)\n' "$(_project_fmt "$(_project_tokens_24h)")" \
+        "$( (( cd > 0 )) && _project_fmt "$cd" || printf none)" "$(_project_fmt "$(_project_tokens_total)")" "$( (( ct > 0 )) && _project_fmt "$ct" || printf none)"
     if [[ -d "$pd/.git" ]]; then
         printf 'recent commits:\n'
         git -C "$pd" log --format='  %ad %s' --date=format:'%m-%d %H:%M' -n 8 2>/dev/null || true

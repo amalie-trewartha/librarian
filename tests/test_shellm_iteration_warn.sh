@@ -25,8 +25,11 @@ bad() { fail=$((fail+1)); printf 'FAIL %s%s\n' "$1" "${2:+ — $2}"; }
 
 mkdir -p "$WORK/home" "$WORK/wd"
 cp -R "$REPO/bin" "$WORK/toolbin"
+cp "$REPO/bin/llm" "$WORK/toolbin/llm-real"
 cat > "$WORK/toolbin/llm" <<'STUB'
 #!/usr/bin/env bash
+# Budget accounting is the real llm's (--spend); only model calls are stubbed.
+[[ "${1:-}" == --spend ]] && exec "$(dirname "$0")/llm-real" "$@"
 main_loop=0 msgs_file="" prev=""
 for a in "$@"; do
     [[ "$a" == "--thinking" ]] && main_loop=1
@@ -85,7 +88,7 @@ LLM_USAGE_LEDGER="$WORK/ledger.jsonl" SHELLM_TOKEN_BUDGET=2500 SHELLM_TOKEN_MARK
 calls=$(cat "$WORK/stub/calls" 2>/dev/null || echo 0)
 [[ "$calls" -eq 3 ]] && ok "token budget stops the run past 120% (3 calls of 1000 vs 2500)" || bad "token budget stops the run" "calls=$calls"
 if note_in 2 | grep -q 'token budget'; then bad "no token notice below 80%"; else ok "no token notice below 80%"; fi
-note_in 3 | grep -qF 'used 2000 of its 2500 token budget' && ok "token notice from 80%" || bad "token notice from 80%" "$(note_in 3 | tail -c 300)"
+note_in 3 | grep -qF 'used 80% of its budget' && ok "token notice from 80%" || bad "token notice from 80%" "$(note_in 3 | tail -c 300)"
 grep -q 'Token budget for this run spent' "$WORK/err" && ok "the stop is logged" || bad "the stop is logged"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

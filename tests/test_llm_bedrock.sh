@@ -46,6 +46,12 @@ class H(http.server.BaseHTTPRequestHandler):
         json.dump({"path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": json.loads(body)},
                   open(f"{out}/req-{n}.json", "w"))
         req = json.loads(body)
+        if self.path.endswith("/converse"):
+            resp = {"output": {"message": {"role": "assistant", "content": [{"text": "converse hello"}]}}, "stopReason": "end_turn",
+                    "usage": {"inputTokens": 50, "outputTokens": 5, "cacheReadInputTokens": 10, "cacheWriteInputTokens": 2}}
+            b = json.dumps(resp).encode()
+            self.send_response(200); self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b); return
         usage = {"input_tokens": 120, "output_tokens": 7, "cache_read_input_tokens": 3000, "cache_creation_input_tokens": 500}
         if req.get("stream"):
             self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()
@@ -176,6 +182,51 @@ has "invoke uses the token file too" "$(jq -r '.headers.authorization' "$(last)"
 masked=$(AWS_BEARER_TOKEN_BEDROCK_FILE="$WORK/tokfile" bash -c '
     source <(sed -n "/^_shellm_bedrock_bearer() {/,/^}/p;/^redact_sensitive() {/,/^}/p" "$1"); redact_sensitive "a tok-file-B b"' _ "$REPO/bin/shellm")
 hasnt "shellm masks the token from the file" "$masked" "tok-file-B"
+
+# ── cost estimate on the ledger ─────────────────────────────────────────────
+# Mock usage: 120 fresh input + 500 cache-write (in_tok 620), 7 out, 3000 cache
+# read. Opus 5.5 list: $4 in, $20 out, $0.20 cache read, writes 1.25x input:
+# 120*4 + 500*5 + 7*20 + 3000*0.2 = 3720 micro-dollars.
+AWS_BEARER_TOKEN_BEDROCK=t LLM_API_URL="$URL" llm --no-stream -m anthropic.claude-opus-5-5 "x" >/dev/null 2>&1
+rec=$(tail -1 "$LLM_USAGE_LEDGER")
+has "cache writes recorded apart" "$rec" '"cache_write_tok":500'
+eqv() { if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1" "got $2, want $3"; fi; }
+eqv "cost estimate at list prices" "$(jq -r '.cost_usd' <<<"$rec")" "0.00372"
+AWS_BEARER_TOKEN_BEDROCK=t LLM_PRICE_SCALE=1.1 LLM_API_URL="$URL" llm --no-stream -m anthropic.claude-opus-5-5 "x" >/dev/null 2>&1
+eqv "LLM_PRICE_SCALE scales it" "$(tail -1 "$LLM_USAGE_LEDGER" | jq -r '.cost_usd')" "0.004092"
+AWS_BEARER_TOKEN_BEDROCK=t LLM_API_URL="$INV" llm -m us.anthropic.claude-haiku-4-5-20251001-v1:0 "x" >/dev/null 2>&1
+eqv "profile ids map to the base model price (Haiku: 120+625+35+300)" "$(tail -1 "$LLM_USAGE_LEDGER" | jq -r '.cost_usd')" "0.00108"
+
+# ── bedrock-converse: any Bedrock model ─────────────────────────────────────
+CV="http://127.0.0.1:$(cat "$WORK/port")/model/us.meta.llama4-maverick-17b-instruct-v1:0/converse"
+out=$(AWS_BEARER_TOKEN_BEDROCK=tok-cv LLM_API_URL="$CV" llm --thinking -s "sys prompt" -m bedrock-converse/us.meta.llama4-maverick-17b-instruct-v1:0 "hello" 2>"$WORK/cv.err"); rc=$?
+eqv "converse call succeeds" "$rc" 0
+has "converse response text" "$out" "converse hello"
+r=$(cat "$(last)")
+has "converse: bearer in Authorization" "$(jq -r '.headers.authorization' <<<"$r")" "Bearer tok-cv"
+has "converse: messages as content blocks" "$(jq -c '.body.messages[-1]' <<<"$r")" '{"role":"user","content":[{"text":"hello"}]}'
+has "converse: system as blocks" "$(jq -c '.body.system' <<<"$r")" '[{"text":"sys prompt"}]'
+eqv "converse: default output cap" "$(jq -r '.body.inferenceConfig.maxTokens' <<<"$r")" 8192
+hasnt "converse: no Anthropic fields" "$(jq -c '.body' <<<"$r")" 'anthropic_version'
+has "converse: thinking dropped with a note" "$(cat "$WORK/cv.err")" "bedrock-converse ignores --thinking"
+rec=$(tail -1 "$LLM_USAGE_LEDGER")
+has "converse: ledger provider" "$rec" '"provider":"bedrock-converse"'
+has "converse: input includes cache writes (50+2)" "$rec" '"in_tok":52'
+has "converse: cache reads recorded" "$rec" '"cache_tok":10'
+hasnt "converse: no cost estimate for an unpriced model" "$rec" 'cost_usd'
+out=$(AWS_REGION=us-west-2 llm -m bedrock-converse/amazon.nova-pro-v1:0 "x" 2>&1)
+has "converse: names Bedrock credentials when missing" "$out" "Bedrock needs AWS_BEARER_TOKEN_BEDROCK"
+
+# ── llm --spend: what budgets count ──────────────────────────────────────────
+SL="$WORK/spend.jsonl"
+printf '%s\n' '{"ts":"2026-10-01T00:00:00Z","provider":"bedrock-invoke","in_tok":1000,"out_tok":100,"cache_tok":10000,"cost_usd":0.01}' \
+  '{"ts":"2026-10-02T00:00:00Z","provider":"openai","in_tok":5000,"out_tok":100,"cache_tok":4000}' > "$SL"
+eqv "spend in tokens: cache reads at a tenth (1000+100+1000 + 1000+100+400)" "$(llm --spend --ledger "$SL")" 3600
+eqv "spend weight is configurable" "$(PROJECT_CACHE_READ_WEIGHT=1 llm --spend --ledger "$SL")" 16200
+eqv "spend --after skips lines" "$(llm --spend --ledger "$SL" --after 1)" 1500
+eqv "spend --since filters by time" "$(llm --spend --ledger "$SL" --since 2026-10-02T00:00:00Z)" 1500
+eqv "spend in usd: cost_usd, else tokens at the fallback rate (10000 + 1500*5)" "$(PROJECT_BUDGET_UNIT=usd llm --spend --ledger "$SL")" 17500
+eqv "spend of a missing ledger is 0" "$(llm --spend --ledger "$WORK/none.jsonl")" 0
 
 # ── shellm masks AWS secrets ─────────────────────────────────────────────────
 masked=$(AWS_SECRET_ACCESS_KEY=sekret/xyz AWS_BEARER_TOKEN_BEDROCK=tok-123 bash -c '

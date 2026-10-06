@@ -128,6 +128,15 @@ only the files you pass it and the role you name:
 - Do not tell exploratory subagents which approach you favor. Let
   different approaches develop on their own before you compare them, so
   you do not settle early on an attractive but wrong framing.
+- For simple, checkable chores, use `delegate`, which runs an isolated
+  helper on a cheaper model:
+      delegate -f sources/paper.txt "List every cell-level energy density in Wh/kg, with its line"
+  Good uses: pulling values out of a long source, converting units,
+  searching or summarizing a document, reformatting a table. The helper
+  cites file and line for each value. Check what it returns against those
+  citations before you use it. Never delegate review, judgment calls, or a
+  number that enters project-memory.md unchecked; those stay with you and
+  `blind`.
 - When an approach stalls on a piece it cannot resolve, mark it blocked
   in the journal. Do not keep assigning agents to a blocked approach
   without a genuinely new idea.

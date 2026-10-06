@@ -254,7 +254,7 @@ Options:
   -M, --messages JSON      Messages array JSON, e.g. [{"role":"user","content":"hi"}]
   --messages-file F        Read messages array JSON from file
   --no-stream              Disable streaming (streaming is on by default)
-  --provider NAME          Provider: anthropic, bedrock, bedrock-invoke, openai, gemini, openrouter,
+  --provider NAME          Provider: anthropic, bedrock, bedrock-invoke, bedrock-converse, openai, gemini, openrouter,
                            opencode, opencode-go, openai-compatible, or
                            adapter (needs LLM_ADAPTER)
   --or-only SLUGS          Pin routing to these provider slugs
@@ -281,6 +281,8 @@ Models:
               cross-region profile; non-streaming). Region from AWS_REGION;
               auth AWS_BEARER_TOKEN_BEDROCK, or AWS_ACCESS_KEY_ID +
               AWS_SECRET_ACCESS_KEY (+ AWS_SESSION_TOKEN), SigV4-signed
+              bedrock-converse/<model id> (any Bedrock model, e.g. a Llama
+              or Nova reviewer, through the Converse API; non-streaming)
   OpenCode:   opencode-go/* (Go subscription, OpenAI wire format)
               opencode/*  (Zen pay-per-token, Anthropic wire format)
   Compatible: any model name, via --provider openai-compatible and
@@ -375,6 +377,49 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# Spend: one definition of what a budget counts, shared by project mode, blind
+# and shellm (they all call `llm --spend`).
+# ---------------------------------------------------------------------------
+# Unit (LLM_SPEND_UNIT, else PROJECT_BUDGET_UNIT): "tokens" (default) counts
+# tokens with cache reads weighted by PROJECT_CACHE_READ_WEIGHT (default 0.1,
+# roughly their price relative to fresh input); "usd" sums the cost_usd
+# estimate llm writes on each ledger record, in micro-dollars, falling back to
+# PROJECT_FALLBACK_USD_PER_MTOK (default 5) per million weighted tokens for a
+# record without one. Anthropic-format providers report cache reads apart from
+# in_tok; OpenAI-format in_tok already includes them.
+#   llm --spend [--after N] [--since ISO-TS] [--ledger FILE]
+_llm_spend() {
+    local after=0 since="" ledger="${LLM_USAGE_LEDGER:-}"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --after) after="${2:?}"; shift 2 ;;
+            --since) since="${2:?}"; shift 2 ;;
+            --ledger) ledger="${2:?}"; shift 2 ;;
+            *) echo "llm: --spend: unknown option $1" >&2; exit 2 ;;
+        esac
+    done
+    if [[ -z "$ledger" ]]; then
+        if [[ -n "${IDENTITY_DIR:-}" ]]; then ledger="$IDENTITY_DIR/usage/llm.jsonl"; else ledger="$_llm_home/usage/llm.jsonl"; fi
+    fi
+    [[ -f "$ledger" ]] || { echo 0; exit 0; }
+    [[ "$after" =~ ^[0-9]+$ ]] || after=0
+    local unit="${LLM_SPEND_UNIT:-${PROJECT_BUDGET_UNIT:-tokens}}"
+    tail -n +"$(( after + 1 ))" "$ledger" | jq -Rn \
+        --arg since "$since" --arg unit "$unit" \
+        --argjson w "${PROJECT_CACHE_READ_WEIGHT:-0.1}" \
+        --argjson fb "${PROJECT_FALLBACK_USD_PER_MTOK:-5}" '
+        def apart: (.provider // "") as $p
+            | ($p == "anthropic" or $p == "opencode" or ($p | startswith("bedrock")));
+        def wtok: (.in_tok // 0) + (.out_tok // 0)
+            + (if apart then (.cache_tok // 0) * $w
+               else ((.cache_tok // 0) * ($w - 1)) end);
+        [inputs | fromjson? // empty | select($since == "" or (.ts // "") >= $since)
+         | if $unit == "usd" then ((.cost_usd // (wtok * $fb / 1e6)) * 1e6) else wtok end]
+        | add // 0 | floor' 2>/dev/null || echo 0
+}
+if [[ "${1:-}" == --spend ]]; then shift; _llm_spend "$@"; exit 0; fi
+
+# ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
 
@@ -467,6 +512,10 @@ detect_provider() {
         # scoped to one (a short-term Bedrock token is region-bound).
         us.anthropic.*|global.anthropic.*|eu.anthropic.*|jp.anthropic.*|apac.anthropic.*|au.anthropic.*)
                                          echo "bedrock-invoke" ;;
+        # Any Bedrock model (Llama, Mistral, Nova, DeepSeek, gpt-oss, ...)
+        # through the model-agnostic Converse API: bedrock-converse/<model id>.
+        # A reviewer from a different model family than the agent it reviews.
+        bedrock-converse/*)              echo "bedrock-converse" ;;
         # Vendor-prefixed names (z-ai/glm-5.2, meta-llama/..., etc.) are
         # OpenRouter's model-naming convention.
         */*)                             echo "openrouter" ;;
@@ -479,7 +528,8 @@ if [[ -z "$LLM_PROVIDER" ]]; then
 fi
 # InvokeModel streams in AWS event-stream framing, which this tool does not
 # parse; bedrock-invoke always asks for a whole response.
-if [[ "$LLM_PROVIDER" == bedrock-invoke ]]; then LLM_STREAM=0; fi
+if [[ "$LLM_PROVIDER" == bedrock-invoke || "$LLM_PROVIDER" == bedrock-converse ]]; then LLM_STREAM=0; fi
+[[ "$LLM_PROVIDER" == bedrock-converse ]] && LLM_MODEL="${LLM_MODEL#bedrock-converse/}"
 
 # An environment-supplied provider reroutes every call in the process tree,
 # so it must never do it silently: when it disagrees with what the model
@@ -556,6 +606,9 @@ fi
 # Used as the default when -t/--max-tokens is not given.
 get_model_max_tokens() {
     local model="$1"
+    # Converse serves many families with their own output caps; a moderate
+    # default that fits the common ones, LLM_MAX_TOKENS to override.
+    if [[ "${LLM_PROVIDER:-}" == bedrock-converse ]]; then echo "${LLM_CONVERSE_MAX_TOKENS:-8192}"; return; fi
     # Bedrock ids are the first-party ids behind an anthropic. prefix.
     if [[ "$model" == anthropic.* ]]; then get_model_max_tokens "${model#anthropic.}"; return; fi
     # InvokeModel is non-streaming here: keep a response well inside the
@@ -868,6 +921,23 @@ build_payload_openai-compatible() { build_payload_openai; }
 # model included; only the endpoint and the auth differ (get_url_headers).
 build_payload_bedrock() { build_payload_anthropic; }
 
+# Converse: messages as {role, content: [{text}]}, system as [{text}], the cap
+# in inferenceConfig. Thinking and effort are model-specific there, so they
+# are dropped with a note rather than guessed.
+build_payload_bedrock-converse() {
+    if [[ "$LLM_THINKING" -eq 1 || -n "$LLM_EFFORT" ]]; then
+        echo "llm: note: bedrock-converse ignores --thinking/--effort (model-specific)" >&2
+    fi
+    [[ -n "$LLM_JSON_SCHEMA" ]] && echo "llm: --json-schema ignored: not supported for provider bedrock-converse" >&2
+    printf '%s' "$LLM_MESSAGES" | jq --arg system "$LLM_SYSTEM" --argjson max_tokens "$LLM_MAX_TOKENS" '
+        def blocks: if type == "string" then [{text: .}]
+                    elif type == "array" then [ .[] | if type == "string" then {text: .} elif .type == "text" then {text: .text} else empty end ]
+                    else [] end;
+        {messages: [ .[] | select(.role == "user" or .role == "assistant") | {role, content: (.content | blocks)} ],
+         inferenceConfig: {maxTokens: $max_tokens}}
+        + (if $system == "" then {} else {system: [{text: $system}]} end)'
+}
+
 # InvokeModel takes the Messages body with the model in the URL instead,
 # anthropic_version in the body, and no stream flag (its streaming variant
 # uses AWS event-stream framing, so this provider is non-streaming).
@@ -983,9 +1053,10 @@ get_url_headers() {
                 die "Bedrock needs AWS_BEARER_TOKEN_BEDROCK (or AWS_BEARER_TOKEN_BEDROCK_FILE), or AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (plus AWS_SESSION_TOKEN for temporary credentials)"
             fi
             ;;
-        bedrock-invoke)
-            local _iregion="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
-            url="${LLM_API_URL:-https://bedrock-runtime.${_iregion}.amazonaws.com/model/${LLM_MODEL}/invoke}"
+        bedrock-invoke|bedrock-converse)
+            local _iregion="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}" _iop=invoke
+            [[ "$LLM_PROVIDER" == bedrock-converse ]] && _iop=converse
+            url="${LLM_API_URL:-https://bedrock-runtime.${_iregion}.amazonaws.com/model/${LLM_MODEL}/${_iop}}"
             headers=(-H "content-type: application/json" -H "accept: application/json")
             local _btok; _btok=$(_bedrock_bearer)
             if [[ -n "$_btok" ]]; then
@@ -1070,6 +1141,7 @@ extract_text_opencode-go() { extract_text_openai; }
 extract_text_opencode() { extract_text_anthropic; }
 extract_text_bedrock() { extract_text_anthropic; }
 extract_text_bedrock-invoke() { extract_text_anthropic; }
+extract_text_bedrock-converse() { jq -r '[.output.message.content[]? | .text // empty] | join("")' 2>/dev/null; }
 
 # ---------------------------------------------------------------------------
 # Response failure checks (non-streaming)
@@ -1105,6 +1177,7 @@ check_response_opencode-go() { check_response_openai; }
 check_response_opencode() { check_response_anthropic; }
 check_response_bedrock() { check_response_anthropic; }
 check_response_bedrock-invoke() { check_response_anthropic; }
+check_response_bedrock-converse() { jq -r 'if (.output.message // null) == null and (.message // null) != null then .message else empty end' 2>/dev/null; }
 
 # Truncation is its own silent failure mode: a 200 whose finish reason says
 # the output hit max_tokens looks complete to a caller reading stdout, and on
@@ -1132,6 +1205,7 @@ check_truncated_opencode-go() { check_truncated_openai; }
 check_truncated_opencode() { check_truncated_anthropic; }
 check_truncated_bedrock() { check_truncated_anthropic; }
 check_truncated_bedrock-invoke() { check_truncated_anthropic; }
+check_truncated_bedrock-converse() { jq -r 'if .stopReason == "max_tokens" then "max_tokens" else empty end' 2>/dev/null; }
 
 # Shared by the non-streaming path and the streaming handlers (stderr passes
 # straight through the handler subshell, so this works from either).
@@ -1158,8 +1232,9 @@ _llm_served_by=""
 _llm_truncated=0
 write_usage() {
     jq -nc --arg i "${1:-}" --arg o "${2:-}" --arg t "${3:-}" --arg c "${4:-}" --arg e "${5:-}" \
-        --arg p "$_llm_served_by" --arg tr "$_llm_truncated" '
+        --arg p "$_llm_served_by" --arg tr "$_llm_truncated" --arg cw "${_llm_cache_write:-0}" '
         {}
+        + (if ($cw | test("^[1-9][0-9]*$")) then {cache_write_tok: ($cw | tonumber)} else {} end)
         + (if ($i | test("^[0-9]+$")) then {in_tok: ($i | tonumber)} else {} end)
         + (if ($o | test("^[0-9]+$")) then {out_tok: ($o | tonumber)} else {} end)
         + (if ($t | test("^[0-9]+$")) then {think_tok: ($t | tonumber)} else {} end)
@@ -1192,14 +1267,43 @@ if [[ -z "$_llm_ledger" ]]; then
 fi
 _llm_identity="${IDENTITY_NAME:-}"
 [[ -z "$_llm_identity" && -n "${IDENTITY_DIR:-}" ]] && _llm_identity=$(basename "$IDENTITY_DIR")
+# List prices, USD per million tokens: "input output cache-read" (cache writes
+# are 1.25x input). First-party Claude API rates from the claude-api skill's
+# model table (cached 2026-09-25); partner platforms price separately, so
+# LLM_PRICE_SCALE scales the estimate (e.g. 1.1 for a Bedrock regional
+# endpoint). Unknown models get no estimate. Bedrock and profile ids
+# (anthropic., us.anthropic., version suffixes) map to the base model.
+_llm_price() {
+    local m="${1#*anthropic.}"
+    case "$m" in
+        claude-fable-5-1*|claude-mythos-5-1*) echo "10 50 0.25" ;;
+        claude-fable-5*|claude-mythos-5*)     echo "10 50 1" ;;
+        claude-opus-5-5*)                     echo "4 20 0.2" ;;
+        claude-opus-5*|claude-opus-4-[5-8]*)  echo "5 25 0.5" ;;
+        claude-sonnet-5*)                     echo "2 10 0.2" ;;
+        claude-sonnet-4-6*|claude-sonnet-4-5*) echo "3 15 0.3" ;;
+        claude-haiku-4-5*)                    echo "1 5 0.1" ;;
+        *) echo "" ;;
+    esac
+}
+
 _llm_ledger_append() {
     local rec
     [[ -s "$LLM_USAGE_FILE" ]] || return 0
     rec=$(jq -c 'select(type == "object" and length > 0)' "$LLM_USAGE_FILE" 2>/dev/null | head -1) || return 0
     [[ -n "$rec" ]] || return 0
     mkdir -p "$(dirname "$_llm_ledger")" 2>/dev/null || return 0
-    jq -nc --argjson u "$rec" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)"         --arg provider "$LLM_PROVIDER" --arg model "$LLM_MODEL"         --arg identity "$_llm_identity" --arg run_id "${LLM_RUN_ID:-${SHELLM_RUN_STEP_ID:-}}" '
+    local _price; _price=$(_llm_price "$LLM_MODEL")
+    jq -nc --argjson u "$rec" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)"         --arg provider "$LLM_PROVIDER" --arg model "$LLM_MODEL"         --arg identity "$_llm_identity" --arg run_id "${LLM_RUN_ID:-${SHELLM_RUN_STEP_ID:-}}" \
+        --arg price "$_price" --argjson scale "${LLM_PRICE_SCALE:-1}" '
         {ts: $ts, provider: $provider, model: $model} + $u
+        + (if $price == "" then {} else
+             ($price | split(" ") | map(tonumber)) as [$pi, $po, $pc]
+             | ($u.cache_tok // 0) as $c | ($u.cache_write_tok // 0) as $w
+             | (if ($provider == "anthropic" or $provider == "opencode" or ($provider | startswith("bedrock")))
+                then ($u.in_tok // 0) - $w else ($u.in_tok // 0) - $c - $w end) as $fresh
+             | {cost_usd: ((($fresh * $pi + $w * $pi * 1.25 + ($u.out_tok // 0) * $po + $c * $pc) / 1e6 * $scale) * 1e6 | round / 1e6)}
+           end)
         + (if $identity == "" then {} else {identity: $identity} end)
         + (if $run_id == "" then {} else {run_id: $run_id} end)'         >> "$_llm_ledger" 2>/dev/null || true
     return 0
@@ -1257,6 +1361,7 @@ stream_anthropic() {
                     # (1.25x) price but reports apart from input_tokens; fold
                     # them in so the ledger and budgets count them.
                     _u_in=$(printf '%s' "$json" | jq -r '.message.usage | if .input_tokens == null then empty else .input_tokens + (.cache_creation_input_tokens // 0) end' 2>/dev/null) || _u_in=""
+                    _llm_cache_write=$(printf '%s' "$json" | jq -r '.message.usage.cache_creation_input_tokens // 0' 2>/dev/null) || _llm_cache_write=0
                     _u_cache=$(printf '%s' "$json" | jq -r '.message.usage.cache_read_input_tokens // empty' 2>/dev/null) || _u_cache=""
                     ;;
                 *'"message_delta"'*)
@@ -1689,7 +1794,10 @@ else
 
     case "$LLM_PROVIDER" in
         # opencode (Zen) speaks the Anthropic wire protocol, usage shape included.
-        anthropic|opencode|bedrock|bedrock-invoke) _u=$(jq -r '[(if .usage.input_tokens == null then "" else .usage.input_tokens + (.usage.cache_creation_input_tokens // 0) end), (.usage.output_tokens // ""), "", (.usage.cache_read_input_tokens // "")] | map(tostring) | join("\u001f")' "$local_resp" 2>/dev/null) || _u="" ;;
+        anthropic|opencode|bedrock|bedrock-invoke) _llm_cache_write=$(jq -r '.usage.cache_creation_input_tokens // 0' "$local_resp" 2>/dev/null) || _llm_cache_write=0
+                   _u=$(jq -r '[(if .usage.input_tokens == null then "" else .usage.input_tokens + (.usage.cache_creation_input_tokens // 0) end), (.usage.output_tokens // ""), "", (.usage.cache_read_input_tokens // "")] | map(tostring) | join("\u001f")' "$local_resp" 2>/dev/null) || _u="" ;;
+        bedrock-converse) _llm_cache_write=$(jq -r '.usage.cacheWriteInputTokens // 0' "$local_resp" 2>/dev/null) || _llm_cache_write=0
+                   _u=$(jq -r '[(if .usage.inputTokens == null then "" else .usage.inputTokens + (.usage.cacheWriteInputTokens // 0) end), (.usage.outputTokens // ""), "", (.usage.cacheReadInputTokens // "")] | map(tostring) | join("\u001f")' "$local_resp" 2>/dev/null) || _u="" ;;
         gemini)    _u=$(jq -r '[(.usageMetadata.promptTokenCount // ""), (.usageMetadata.candidatesTokenCount // ""), (.usageMetadata.thoughtsTokenCount // ""), (.usageMetadata.cachedContentTokenCount // "")] | map(tostring) | join("\u001f")' "$local_resp" 2>/dev/null) || _u="" ;;
         *)         _u=$(jq -r '[(.usage.prompt_tokens // ""), (.usage.completion_tokens // ""), (.usage.completion_tokens_details.reasoning_tokens // ""), (.usage.prompt_tokens_details.cached_tokens // "")] | map(tostring) | join("\u001f")' "$local_resp" 2>/dev/null) || _u="" ;;
     esac

@@ -108,7 +108,8 @@ edit them under `project/`, because the next wake restores them.
 `headlong-project status <name>` is the health check, and `ada status`
 leads with open questions. Init sets a 2M tokens/day budget
 (`PROJECT_DAILY_TOKENS`) and a 14-day end (`headlong-project deadline`
-moves it). Humans answer questions with `headlong-project answer`. Do not
+moves it). Budgets can be in tokens (cache reads weighted at a tenth) or in
+estimated dollars (`--daily-usd`, `--total-usd`). Humans answer questions with `headlong-project answer`. Do not
 write Answer lines yourself: provenance comes from git authorship.
 
 ## Sharp edges

@@ -748,7 +748,7 @@ _build_shellm_flags() {
     # mounted at the same path in Docker; IDENTITY_DIR itself is not passed.
     printf '%s\n' "--var" "LLM_USAGE_LEDGER=${LLM_USAGE_LEDGER:-$(_abs_path "$identity_dir")/usage/llm.jsonl}"
     local _bv
-    for _bv in BLIND_MODEL BLIND_MAX_ITERATIONS; do
+    for _bv in BLIND_MODEL BLIND_MAX_ITERATIONS DELEGATE_MODEL DELEGATE_MAX_ITERATIONS SHELLM_FAST_MODEL; do
         [[ -n "${!_bv:-}" ]] && printf '%s\n' "--var" "$_bv=${!_bv}"
     done
 
@@ -790,7 +790,7 @@ _build_shellm_flags() {
     # running mind in README.md and the stock identity prompt: a host-only tool
     # silently disappears when shellm switches to Docker.
     local cmd
-    for cmd in mem traj skills context llm shellm chat recap blind; do
+    for cmd in mem traj skills context llm shellm chat recap blind delegate; do
         local path
         path=$(command -v "$cmd" 2>/dev/null) || continue
         printf '%s\n' "--bin" "$path"

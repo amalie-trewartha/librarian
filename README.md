@@ -176,6 +176,7 @@ experiment with.
 | **recap** | Summarizes a trajectory into themes and episodes |
 | **shellm-docker** | Constrained docker facade staged into sandbox containers for generated code |
 | **blind** | Runs a subagent that cannot see the mind's trajectory, for unbiased review and exploration |
+| **delegate** | Hands a simple, checkable task to an isolated helper on a cheaper model |
 | **glob** / **view** / **put** / **sub** | Small file tools the agent uses instead of the sharp edges of coreutils |
 
 Optional integrations live in [contrib](contrib/README.md), including the opt-in [OpenCode coding experiment](contrib/opencode/README.md).

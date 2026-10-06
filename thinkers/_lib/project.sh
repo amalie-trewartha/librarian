@@ -304,45 +304,49 @@ _project_commit_outside() {
 # ---------------------------------------------------------------------------
 # Token budget
 # ---------------------------------------------------------------------------
-# Every token processed: in + out, plus cached input on Anthropic-format
-# providers, whose in_tok leaves cache reads out (OpenAI-format in_tok already
-# includes them). The same 1M means the same work on any provider.
-_PJ_TOK_JQ='(.in_tok // 0) + (.out_tok // 0) + (if (.provider == "anthropic" or .provider == "opencode" or .provider == "bedrock" or .provider == "bedrock-invoke") then (.cache_tok // 0) else 0 end)'
+# What budgets count is defined once, in `llm --spend` (bin/llm): tokens with
+# cache reads weighted by PROJECT_CACHE_READ_WEIGHT (default 0.1, about their
+# price relative to fresh input), or, when a dollar cap is set, estimated
+# dollars from each call's cost_usd (micro-dollars internally). Before this,
+# cache reads counted in full and a mostly cached run read as about 4x its
+# cost; and a token is not a token across models, which dollars fix (a
+# cheap delegate saves budget only when the budget is in dollars).
 _project_ledger() { printf '%s' "${LLM_USAGE_LEDGER:-$IDENTITY_DIR/usage/llm.jsonl}"; }
-_project_tokens_24h() {
-    local ledger cutoff
-    ledger=$(_project_ledger)
-    [[ -f "$ledger" ]] || { printf '0'; return 0; }
-    # The budget day is a project day: 86400 real seconds, or less when scaled.
-    cutoff=$(TZ=UTC _pj_date $(( $(_pj_real) - 86400 / $(_pj_scale) )) '%Y-%m-%dT%H:%M:%SZ')
-    tail -n "${PROJECT_LEDGER_TAIL:-200000}" "$ledger" | jq -Rn --arg c "$cutoff" \
-        "[inputs | fromjson? // empty | select((.ts // \"\") >= \$c) | $_PJ_TOK_JQ] | add // 0" 2>/dev/null \
-        || printf '0'
+_project_unit() {
+    if [[ "${PROJECT_DAILY_USD:-}${PROJECT_TOTAL_USD:-}${PROJECT_WAKE_USD:-}" =~ [1-9] ]]; then printf 'usd'; else printf 'tokens'; fi
 }
-# Ledger line count now, and tokens on the lines after a given count: the
+_pj_usd_micro() { awk -v v="${1:-0}" 'BEGIN { if (v+0 > 0) printf "%d", v * 1000000; else printf "0" }'; }
+# Caps in budget units (tokens, or micro-dollars when the unit is usd); 0 = none.
+_project_cap_daily() {
+    if [[ "$(_project_unit)" == usd ]]; then _pj_usd_micro "${PROJECT_DAILY_USD:-0}"
+    else local c="${PROJECT_DAILY_TOKENS:-0}"; [[ "$c" =~ ^[0-9]+$ ]] || c=0; printf '%s' "$c"; fi
+}
+_project_cap_total() {
+    if [[ "$(_project_unit)" == usd ]]; then _pj_usd_micro "${PROJECT_TOTAL_USD:-0}"
+    else local c="${PROJECT_TOTAL_TOKENS:-0}"; [[ "$c" =~ ^[0-9]+$ ]] || c=0; printf '%s' "$c"; fi
+}
+_project_fmt() {  # _project_fmt <units> -> "1234567 tokens" or "$12.34"
+    if [[ "$(_project_unit)" == usd ]]; then awk -v v="${1:-0}" 'BEGIN { printf "$%.2f", v / 1000000 }'
+    else printf '%s tokens' "${1:-0}"; fi
+}
+_pj_spend() { PROJECT_BUDGET_UNIT="$(_project_unit)" llm --spend --ledger "$(_project_ledger)" "$@" 2>/dev/null || printf '0'; }
+# Spend over the last project day (86400 real seconds, or less when scaled).
+_project_tokens_24h() {
+    _pj_spend --since "$(TZ=UTC _pj_date $(( $(_pj_real) - 86400 / $(_pj_scale) )) '%Y-%m-%dT%H:%M:%SZ')"
+}
+# Ledger line count now, and spend on the lines after a given count: the
 # step brackets its run with these to learn what one wake cost.
 _project_ledger_lines() { local l; l=$(_project_ledger); [[ -f "$l" ]] && wc -l < "$l" | tr -d ' ' || printf '0'; }
-_project_tokens_after() {  # _project_tokens_after <line-count>
-    local l; l=$(_project_ledger)
-    [[ -f "$l" ]] || { printf '0'; return 0; }
-    tail -n +"$(( ${1:-0} + 1 ))" "$l" | jq -Rn "[inputs | fromjson? // empty | $_PJ_TOK_JQ] | add // 0" 2>/dev/null || printf '0'
-}
-# Tokens since the project started: the whole-run total.
-_project_tokens_total() {
-    local ledger since
-    ledger=$(_project_ledger)
-    [[ -f "$ledger" ]] || { printf '0'; return 0; }
-    since=$(TZ=UTC _pj_date "$(_project_started_at)" '%Y-%m-%dT%H:%M:%SZ')
-    jq -Rn --arg c "$since" "[inputs | fromjson? // empty | select((.ts // \"\") >= \$c) | $_PJ_TOK_JQ] | add // 0" "$ledger" 2>/dev/null \
-        || printf '0'
-}
-# Over budget: the 24h cap (PROJECT_DAILY_TOKENS) or the whole-run cap
-# (PROJECT_TOTAL_TOKENS). The step skips the model call entirely while over,
-# so a cap is hard up to the one wake that crossed it.
+_project_tokens_after() { _pj_spend --after "${1:-0}"; }  # _project_tokens_after <line-count>
+# Spend since the project started: the whole-run total.
+_project_tokens_total() { _pj_spend --since "$(TZ=UTC _pj_date "$(_project_started_at)" '%Y-%m-%dT%H:%M:%SZ')"; }
+# Over budget: the daily cap or the whole-run cap. The step skips the model
+# call entirely while over, so a cap is hard up to the wake that crossed it.
 _project_over_budget() {
-    local cap="${PROJECT_DAILY_TOKENS:-0}" total="${PROJECT_TOTAL_TOKENS:-0}"
-    if [[ "$total" =~ ^[0-9]+$ ]] && (( total > 0 )) && (( $(_project_tokens_total) >= total )); then return 0; fi
-    [[ "$cap" =~ ^[0-9]+$ ]] && (( cap > 0 )) || return 1
+    local cap total
+    cap=$(_project_cap_daily); total=$(_project_cap_total)
+    if (( total > 0 )) && (( $(_project_tokens_total) >= total )); then return 0; fi
+    (( cap > 0 )) || return 1
     (( $(_project_tokens_24h) >= cap ))
 }
 
@@ -511,22 +515,24 @@ _project_signals() {
     esac
     local wceil; wceil=$(_project_wake_ceiling)
     if (( wceil > 0 )); then
-        printf -- '- WAKE BUDGET: about %s tokens for this whole wake, blind subagents included. One model step here costs roughly 20K to 40K tokens, and a blind run 100K to 400K; blind refuses to start once the wake has spent its share. Run at most one blind subagent per wake unless the budget clearly allows more.\n' "$wceil"
+        printf -- '- WAKE BUDGET: about %s for this whole wake, subagents included. One model step here costs roughly 20K to 40K tokens (with cache reads counted at a fraction), and a blind run 100K to 400K; blind and delegate refuse to start once the wake has spent its share. Run at most one blind subagent per wake unless the budget clearly allows more; a delegate on a cheaper model costs a fraction.\n' "$(_project_fmt "$wceil")"
     fi
-    local total="${PROJECT_TOTAL_TOKENS:-0}" tused
-    if [[ "$total" =~ ^[0-9]+$ ]] && (( total > 0 )); then
+    local total tused
+    total=$(_project_cap_total)
+    if (( total > 0 )); then
         tused=$(_project_tokens_total)
         if (( tused * 10 >= total * 7 )); then
-            printf -- '- RUN BUDGET: %s of the %s tokens for the whole run are spent. Spend the rest where it most improves the deliverable; leave enough for the final ritual.\n' "$tused" "$total"
+            printf -- '- RUN BUDGET: %s of the %s for the whole run are spent. Spend the rest where it most improves the deliverable; leave enough for the final ritual.\n' "$(_project_fmt "$tused")" "$(_project_fmt "$total")"
         fi
     fi
-    local cap="${PROJECT_DAILY_TOKENS:-0}" used
-    if [[ "$cap" =~ ^[0-9]+$ ]] && (( cap > 0 )); then
+    local cap used
+    cap=$(_project_cap_daily)
+    if (( cap > 0 )); then
         used=$(_project_tokens_24h)
         if (( used >= cap )); then
-            printf -- '- BUDGET SPENT: %s of %s tokens used in the last 24h. Wakes are slowed until usage falls. Do only rituals and the cheapest essential work; prefer idle.\n' "$used" "$cap"
+            printf -- '- BUDGET SPENT: %s of %s used in the last project day. Wakes are slowed until usage falls. Do only rituals and the cheapest essential work; prefer idle.\n' "$(_project_fmt "$used")" "$(_project_fmt "$cap")"
         elif (( used * 10 >= cap * 8 )); then
-            printf -- '- BUDGET: %s of %s daily tokens used (24h window). Favor cheap, high-value steps.\n' "$used" "$cap"
+            printf -- '- BUDGET: %s of %s for the day used. Favor cheap, high-value steps.\n' "$(_project_fmt "$used")" "$(_project_fmt "$cap")"
         fi
     fi
     return 0
@@ -537,11 +543,12 @@ _project_signals() {
 # of the whole-run cap. A step cap bounds one model run, not a wake: on the
 # first live run one wake started two blind explorers and spent 1.3M tokens.
 _project_wake_ceiling() {
-    local w="${PROJECT_WAKE_TOKENS:-}" cap="${PROJECT_DAILY_TOKENS:-0}" total="${PROJECT_TOTAL_TOKENS:-0}" left
-    if [[ ! "$w" =~ ^[0-9]+$ ]]; then
-        w=0; [[ "$cap" =~ ^[0-9]+$ ]] && (( cap > 0 )) && w=$(( cap / 2 ))
-    fi
-    if [[ "$total" =~ ^[0-9]+$ ]] && (( total > 0 )); then
+    local w cap total left
+    if [[ "$(_project_unit)" == usd ]]; then w=$(_pj_usd_micro "${PROJECT_WAKE_USD:-0}"); (( w > 0 )) || w=""
+    else w="${PROJECT_WAKE_TOKENS:-}"; fi
+    cap=$(_project_cap_daily); total=$(_project_cap_total)
+    if [[ ! "$w" =~ ^[0-9]+$ ]]; then w=$(( cap / 2 )); fi
+    if (( total > 0 )); then
         left=$(( total - $(_project_tokens_total) )); (( left < 0 )) && left=0
         if (( w == 0 || left < w )); then w=$left; fi
     fi
@@ -552,13 +559,14 @@ _project_wake_ceiling() {
 # the budget floor when spent, the rest floor when STATE is blocked or done
 # and nothing (ritual, matured default) needs doing.
 _project_delay_floor() {  # _project_delay_floor [tokens-this-wake]
-    local cap="${PROJECT_DAILY_TOKENS:-0}" wake_tok="${1:-0}" floor=0
+    local cap wake_tok="${1:-0}" floor=0
+    cap=$(_project_cap_daily)
     [[ "$wake_tok" =~ ^[0-9]+$ ]] || wake_tok=0
     if _project_over_budget; then floor=$(_pj_real_span "${PROJECT_BUDGET_REST:-1800}"); fi
     # Pacing: a wake that cost T tokens waits T/cap of a day, so a mind that is
     # busy around the clock spends the daily cap evenly instead of burning it
     # by noon and sleeping until the window rolls. PROJECT_PACE=0 turns it off.
-    if [[ "${PROJECT_PACE:-1}" != 0 && "$cap" =~ ^[0-9]+$ ]] && (( cap > 0 )); then
+    if [[ "${PROJECT_PACE:-1}" != 0 ]] && (( cap > 0 )); then
         local pace=$(( wake_tok * 86400 / cap / $(_pj_scale) ))
         (( pace > floor )) && floor=$pace
     fi
