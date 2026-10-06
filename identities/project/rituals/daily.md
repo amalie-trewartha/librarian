@@ -1,5 +1,8 @@
 Daily ritual for {{date}}. This is the one function of this wake, and it
-outranks normal work. Carry out all four steps, in order:
+outranks normal work. It is bookkeeping, not research: do it in a few
+steps (aim for five or fewer), touch only what changed today, and get back
+to the work. (A cold-eyes review of an earlier run judged its week two
+thirds process and one third substance.) Carry out all four steps, in order:
 
 1. Curate project/journal.md. Merge or trim redundant entries from today.
    For each entry marked done, check that it meets the definition of done

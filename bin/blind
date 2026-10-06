@@ -70,8 +70,15 @@ trap 'rm -rf "$work/files"' EXIT
 mkdir -p "$work/files"
 listing=""
 for f in ${files[@]+"${files[@]}"}; do
+    # Role files name paths like project/spec.md, relative to the workspace
+    # that holds project/. Resolve them from there too, so a caller who has
+    # cd'd into project/ still gets them (a live weekly ritual lost a review
+    # run to "no such file: project/spec.md").
+    if [[ ! -f "$f" && "$f" != /* && -f "$(dirname "$project")/$f" ]]; then
+        f="$(dirname "$project")/$f"
+    fi
     [[ -f "$f" ]] || die "no such file: $f"
-    rel="${f#"$PWD"/}"; rel="${rel#/}"; rel="${rel#./}"
+    rel="${f#"$(dirname "$project")"/}"; rel="${rel#"$PWD"/}"; rel="${rel#/}"; rel="${rel#./}"
     mkdir -p "$work/files/$(dirname "$rel")"
     cp "$f" "$work/files/$rel"
     listing="${listing}- $rel

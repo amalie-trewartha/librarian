@@ -6,7 +6,7 @@ set -euo pipefail
 #
 #   headlong-project init <identity> --spec FILE [--charter FILE]
 #                         [--days N | --end YYYY-MM-DD] [--daily-tokens N]
-#                         [--total-tokens N] [--time-scale N]
+#                         [--total-tokens N] [--time-scale N] [--reference FILE]...
 #                         [--keep-persona] [--force]
 #   headlong-project status <identity>       open questions first, then health
 #   headlong-project questions <identity> [--open|--closed|--all]
@@ -29,6 +29,9 @@ set -euo pipefail
 # `deadline` shows it, or moves it (a human decision, like the spec).
 # --daily-tokens sets PROJECT_DAILY_TOKENS in the identity's .env (default
 # 2000000): a 24h cap on tokens processed, and the basis for pacing wakes.
+# --reference FILE (repeatable) adds read-only reference material, such as an
+# exemplar of the expected end product, under project/reference/. Wakes list
+# it by name; the agent reads it when useful.
 # --total-tokens caps the whole run (PROJECT_TOTAL_TOKENS; default none).
 # --time-scale N runs the project clock N times faster than real time
 # (PROJECT_TIME_SCALE), for accelerated test runs: --days 8 --time-scale 24
@@ -77,6 +80,7 @@ _end_epoch() {
 
 cmd_init() {
     local ident="" spec="" charter="" keep=0 force=0 tokens=2000000 days=14 end="" total="" scale=1
+    local -a refs=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --spec) spec="${2:?--spec needs a file}"; shift 2 ;;
@@ -85,6 +89,7 @@ cmd_init() {
             --days) days="${2:?--days needs a number}"; shift 2 ;;
             --total-tokens) total="${2:?--total-tokens needs a number}"; shift 2 ;;
             --time-scale) scale="${2:?--time-scale needs a number}"; shift 2 ;;
+            --reference) refs+=("${2:?--reference needs a file}"); shift 2 ;;
             --end) end="${2:?--end needs YYYY-MM-DD}"; shift 2 ;;
             --keep-persona) keep=1; shift ;;
             --force) force=1; shift ;;
@@ -100,6 +105,7 @@ cmd_init() {
     local end_at; end_at=$(_end_epoch "$days" "$end")
     [[ -n "$spec" && -f "$spec" ]] || die "--spec FILE is required (the project brief, verbatim)"
     [[ -z "$charter" || -f "$charter" ]] || die "no such charter: $charter"
+    local r; for r in ${refs[@]+"${refs[@]}"}; do [[ -f "$r" ]] || die "no such reference file: $r"; done
     [[ -d "$TEMPLATE" ]] || die "template not found: $TEMPLATE"
     local name pd pp today
     name=$(grep '^name=' "$id/info.txt" | cut -d= -f2-)
@@ -120,12 +126,14 @@ cmd_init() {
     sed "s/{{date}}/$today/g" "${charter:-$TEMPLATE/charter.md}" > "$pp/charter.md"
     cp "$spec" "$pp/spec.md"
     cp -R "$TEMPLATE/roles" "$TEMPLATE/rituals" "$pp/"
+    mkdir -p "$pp/reference"
+    for r in ${refs[@]+"${refs[@]}"}; do cp "$r" "$pp/reference/"; done
     date +%s > "$pp/started_at"
     printf '%s\n' "$end_at" > "$pp/end_at"
-    cp -R "$pp/charter.md" "$pp/spec.md" "$pp/roles" "$pd/"
+    cp -R "$pp/charter.md" "$pp/spec.md" "$pp/roles" "$pp/reference" "$pd/"
     # Files read-only, directories left writable: the guard must be able to
     # restore a deleted role, and a human must be able to remove the project.
-    find "$pd/charter.md" "$pd/spec.md" "$pd/roles" "$pp/charter.md" "$pp/spec.md" "$pp/roles" "$pp/rituals" \
+    find "$pd/charter.md" "$pd/spec.md" "$pd/roles" "$pd/reference" "$pp/charter.md" "$pp/spec.md" "$pp/roles" "$pp/rituals" "$pp/reference" \
         -type f -exec chmod a-w {} +
     printf '.blind/\n' > "$pd/.gitignore"
     for f in daily reports reviews explorations model skills/project skills/generic free-time; do : > "$pd/$f/.keep"; done
@@ -169,11 +177,12 @@ cmd_update_pristine() {
     local id pd pp
     id=$(_resolve "${1:-}"); pd="$id/workdir/project"; pp="$id/project-pristine"
     [[ -d "$pp" ]] || die "$id is not in project mode"
-    chmod -R u+w "$pd/charter.md" "$pd/spec.md" "$pd/roles" 2>/dev/null || true
-    rm -rf "$pd/roles"
-    cp -R "$pp/charter.md" "$pp/spec.md" "$pp/roles" "$pd/"
-    find "$pd/charter.md" "$pd/spec.md" "$pd/roles" -type f -exec chmod a-w {} +
-    printf 'Pushed charter, spec and roles from %s into %s.\n' "$pp" "$pd"
+    mkdir -p "$pp/reference"
+    chmod -R u+w "$pd/charter.md" "$pd/spec.md" "$pd/roles" "$pd/reference" 2>/dev/null || true
+    rm -rf "$pd/roles" "$pd/reference"
+    cp -R "$pp/charter.md" "$pp/spec.md" "$pp/roles" "$pp/reference" "$pd/"
+    find "$pd/charter.md" "$pd/spec.md" "$pd/roles" "$pd/reference" -type f -exec chmod a-w {} +
+    printf 'Pushed charter, spec, roles and reference from %s into %s.\n' "$pp" "$pd"
 }
 
 # Load the project library for an identity: env, PROJECT_* settings from the
@@ -271,7 +280,7 @@ cmd_answer() {
     kind=$(_project_question_rows | awk -F'\037' -v id="$qid" '$1 == id {print $2}')
     [[ -n "$kind" ]] || die "no question $qid in $q (see: headlong-project questions $IDENTITY_NAME)"
     [[ "$kind" == open || "$kind" == human-waiting ]] || printf 'note: %s is already closed (%s); recording the answer anyway, and the agent will see it.\n' "$qid" "$kind" >&2
-    local line="Answer: $text (human, $(date -u +%Y-%m-%d))" tmp
+    local line="Answer: $text (human, $(_pj_date "$(_pj_now)" %F))" tmp
     tmp=$(mktemp)
     # Replace the entry's Answer line, or add one at the end of the entry,
     # ahead of the blank lines that separate it from the next.

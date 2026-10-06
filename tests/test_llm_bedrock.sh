@@ -160,9 +160,22 @@ out=$(AWS_REGION=us-west-1 llm -m us.anthropic.claude-opus-5-5 "hi" 2>&1)
 has "invoke: no credentials names Bedrock" "$out" "Bedrock needs AWS_BEARER_TOKEN_BEDROCK"
 has "invoke: ledger provider" "$(tail -1 "$LLM_USAGE_LEDGER")" '"provider":"bedrock-invoke"'
 
+# ── rotation: a token file, re-read on every call ────────────────────────────
+printf 'tok-file-A\n' > "$WORK/tokfile"
+AWS_BEARER_TOKEN_BEDROCK=tok-env AWS_BEARER_TOKEN_BEDROCK_FILE="$WORK/tokfile" LLM_API_URL="$URL" llm --no-stream -m anthropic.claude-opus-5-5 "x" >/dev/null 2>&1
+has "token file wins over the env var" "$(jq -r '.headers["x-api-key"]' "$(last)")" "tok-file-A"
+printf 'tok-file-B\n' > "$WORK/tokfile"
+AWS_BEARER_TOKEN_BEDROCK=tok-env AWS_BEARER_TOKEN_BEDROCK_FILE="$WORK/tokfile" LLM_API_URL="$URL" llm --no-stream -m anthropic.claude-opus-5-5 "x" >/dev/null 2>&1
+has "a rotated token file is used on the next call" "$(jq -r '.headers["x-api-key"]' "$(last)")" "tok-file-B"
+AWS_BEARER_TOKEN_BEDROCK_FILE="$WORK/tokfile" LLM_API_URL="$INV" llm -m us.anthropic.claude-opus-5-5 "x" >/dev/null 2>&1
+has "invoke uses the token file too" "$(jq -r '.headers.authorization' "$(last)")" "Bearer tok-file-B"
+masked=$(AWS_BEARER_TOKEN_BEDROCK_FILE="$WORK/tokfile" bash -c '
+    source <(sed -n "/^_shellm_bedrock_bearer() {/,/^}/p;/^redact_sensitive() {/,/^}/p" "$1"); redact_sensitive "a tok-file-B b"' _ "$REPO/bin/shellm")
+hasnt "shellm masks the token from the file" "$masked" "tok-file-B"
+
 # ── shellm masks AWS secrets ─────────────────────────────────────────────────
 masked=$(AWS_SECRET_ACCESS_KEY=sekret/xyz AWS_BEARER_TOKEN_BEDROCK=tok-123 bash -c '
-    source <(sed -n "/^redact_sensitive() {/,/^}/p" "$1"); redact_sensitive "a sekret/xyz b tok-123 c"' _ "$REPO/bin/shellm")
+    source <(sed -n "/^_shellm_bedrock_bearer() {/,/^}/p;/^redact_sensitive() {/,/^}/p" "$1"); redact_sensitive "a sekret/xyz b tok-123 c"' _ "$REPO/bin/shellm")
 hasnt "shellm masks the secret key" "$masked" "sekret/xyz"
 hasnt "shellm masks the bearer token" "$masked" "tok-123"
 

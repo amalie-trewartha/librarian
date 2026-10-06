@@ -397,6 +397,14 @@ truncate_output() {
     fi
 }
 
+# The Bedrock bearer token, re-read from AWS_BEARER_TOKEN_BEDROCK_FILE when
+# set (rotation without a restart; see bin/llm _bedrock_bearer).
+_shellm_bedrock_bearer() {
+    local f="${AWS_BEARER_TOKEN_BEDROCK_FILE:-}" t=""
+    if [[ -n "$f" && -r "$f" ]]; then t=$(tr -d ' \r\n' < "$f"); fi
+    printf '%s' "${t:-${AWS_BEARER_TOKEN_BEDROCK:-}}"
+}
+
 redact_sensitive() {
     local input="$1"
     local output="$input"
@@ -409,6 +417,11 @@ redact_sensitive() {
     # pattern-match, so only value-based masking can catch it.
     if [[ -n "${LLM_API_KEY:-}" ]]; then
         output="${output//${LLM_API_KEY}/<redacted-api-key>}"
+    fi
+
+    local _bt; _bt=$(_shellm_bedrock_bearer)
+    if [[ -n "$_bt" ]]; then
+        output="${output//${_bt}/<redacted-api-key>}"
     fi
 
     local _key_var
@@ -2854,13 +2867,37 @@ run_loop() {
             [[ -n "$_prompt_step_id" ]] && _ctx_args+=(--pin "$_prompt_step_id")
         fi
         messages_json=$(context "${_ctx_args[@]}" 2>/dev/null) || messages_json='[]'
-        # Near a --max-iterations cap, say so, or the run is cut off mid-task
-        # with no FINAL and no handoff. Appended to the last user turn only,
-        # so the cached prefix is untouched.
+        # Near a --max-iterations cap, or near the run's token budget, say so,
+        # or the run is cut off mid-task with no FINAL and no handoff.
+        # SHELLM_TOKEN_BUDGET (tokens processed, counted on the usage ledger
+        # past line SHELLM_TOKEN_MARK) is set by project mode to the wake's
+        # ceiling: a step cap alone bounds a wake loosely once each step
+        # re-sends 50K tokens (a live daily ritual spent 762K in 15 steps).
+        # Warn from 80%; past 120%, stop before the next model call. Appended
+        # to the last user turn only, so the cached prefix is untouched.
+        local _notice=""
         if [[ -n "$SHELLM_MAX_ITERATIONS" ]] \
             && (( SHELLM_MAX_ITERATIONS - iteration < ${SHELLM_ITERATION_WARN:-3} )); then
-            local _left=$(( SHELLM_MAX_ITERATIONS - iteration + 1 )) _warned
-            _warned=$(printf '%s' "$messages_json" | jq --arg n "[harness: this is step $iteration of at most $SHELLM_MAX_ITERATIONS in this run ($_left left, this one included). Wrap up now: record what you have and set FINAL with your handoff before the run is cut off.]" '
+            _notice="This is step $iteration of at most $SHELLM_MAX_ITERATIONS in this run ($(( SHELLM_MAX_ITERATIONS - iteration + 1 )) left, this one included)."
+        fi
+        if [[ "${SHELLM_TOKEN_BUDGET:-0}" =~ ^[1-9][0-9]*$ ]]; then
+            local _tl="${LLM_USAGE_LEDGER:-${IDENTITY_DIR:+$IDENTITY_DIR/usage/llm.jsonl}}" _ts=0
+            if [[ -n "$_tl" && -f "$_tl" ]]; then
+                _ts=$(tail -n +"$(( ${SHELLM_TOKEN_MARK:-0} + 1 ))" "$_tl" | jq -Rn '[inputs | fromjson? // empty
+                    | (.in_tok // 0) + (.out_tok // 0)
+                      + (if (.provider == "anthropic" or .provider == "opencode" or .provider == "bedrock" or .provider == "bedrock-invoke") then (.cache_tok // 0) else 0 end)]
+                    | add // 0' 2>/dev/null) || _ts=0
+            fi
+            if (( _ts * 10 >= SHELLM_TOKEN_BUDGET * 12 )); then
+                progress "\033[1;31mToken budget for this run spent ($_ts of $SHELLM_TOKEN_BUDGET); stopping before the next model call\033[0m"
+                break
+            elif (( _ts * 10 >= SHELLM_TOKEN_BUDGET * 8 )); then
+                _notice="${_notice:+$_notice }This run has used $_ts of its $SHELLM_TOKEN_BUDGET token budget and will be stopped past $(( SHELLM_TOKEN_BUDGET * 12 / 10 ))."
+            fi
+        fi
+        if [[ -n "$_notice" ]]; then
+            local _warned
+            _warned=$(printf '%s' "$messages_json" | jq --arg n "[harness: $_notice Wrap up now: record what you have and set FINAL with your handoff before the run is cut off.]" '
                 if length > 0 and .[-1].role == "user" and (.[-1].content | type) == "string"
                 then .[-1].content += "\n\n" + $n else . + [{role: "user", content: $n}] end' 2>/dev/null) || _warned=""
             [[ -n "$_warned" ]] && messages_json="$_warned"
@@ -3015,7 +3052,7 @@ exit \$__shellm_rc
             ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
             # Amazon Bedrock credentials and region, for llm calls in
             # generated code (nested shellm runs, blind reviewers).
-            AWS_BEARER_TOKEN_BEDROCK="${AWS_BEARER_TOKEN_BEDROCK:-}"
+            AWS_BEARER_TOKEN_BEDROCK="$(_shellm_bedrock_bearer)"
             AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}"
             AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}"
             AWS_SESSION_TOKEN="${AWS_SESSION_TOKEN:-}"

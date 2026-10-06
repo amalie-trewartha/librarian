@@ -30,6 +30,7 @@ Each file has one job. Do not blur them.
 |---|---|---|---|
 | charter.md (this file) | Identity, rules, escalation conditions | Human only | Never by you |
 | spec.md | The project brief exactly as given | Human only | Never by you |
+| reference/ | Reference material from the humans, such as an exemplar of the expected end product | Human only | Read when useful |
 | addenda.md | Your refinements to your own process | You | Weekly at most, bias against |
 | project-memory.md | Scope, boundaries, assumptions, data sources, standing decisions | You, as a formal record | On real decisions only |
 | deliverable.md | The current answer to the spec, kept usable at all times | You | Whenever the answer improves |

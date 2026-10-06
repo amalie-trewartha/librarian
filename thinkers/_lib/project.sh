@@ -102,7 +102,7 @@ _project_guard() {
     [[ -d "$p" ]] || return 0
     while IFS= read -r f; do
         rel="${f#"$p"/}"
-        case "$rel" in charter.md|spec.md|roles/*) ;; *) continue ;; esac
+        case "$rel" in charter.md|spec.md|roles/*|reference/*) ;; *) continue ;; esac
         if ! cmp -s "$f" "$d/$rel"; then
             mkdir -p "$(dirname "$d/$rel")"
             chmod u+w "$d/$rel" 2>/dev/null || true
@@ -405,6 +405,9 @@ _project_section() {
     printf '\n\nProject specification (project/spec.md, read-only, verbatim from the humans):\n\n'
     head -c "$spec_max" "$d/spec.md" 2>/dev/null
     (( $(wc -c < "$d/spec.md" 2>/dev/null || echo 0) > spec_max )) && printf '\n[... spec continues; read project/spec.md for the rest]'
+    local refs
+    refs=$(cd "$d" 2>/dev/null && find reference -type f ! -name '.*' 2>/dev/null | sort | tr '\n' ' ')
+    [[ -n "$refs" ]] && printf '\n\nReference material from the humans (read-only; read a file when it would help, not every wake): %s' "$refs"
     printf '\n\nProject memory (project/project-memory.md, your formal record):\n\n'
     head -c "$mem_max" "$d/project-memory.md" 2>/dev/null
     (( $(wc -c < "$d/project-memory.md" 2>/dev/null || echo 0) > mem_max )) && printf '\n[... cut at %s bytes; read project/project-memory.md for the rest, and consider tightening it]' "$mem_max"

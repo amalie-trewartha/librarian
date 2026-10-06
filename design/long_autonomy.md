@@ -296,7 +296,8 @@ Read from the environment or the identity's `.env`:
 | `PROJECT_DAILY_TOKENS` | 2000000 (set by init) | 24h cap on tokens processed, from the usage ledger |
 | `PROJECT_PACE` | 1 | Pace wakes by their cost (0 turns pacing off) |
 | `PROJECT_TOTAL_TOKENS` | unset (`init --total-tokens`) | Cap on tokens for the whole run |
-| `PROJECT_WAKE_TOKENS` | half the daily cap | Tokens one wake may spend, blind subagents included |
+| `PROJECT_WAKE_TOKENS` | half the daily cap | Tokens one wake may spend. `blind` refuses past it, and the wake's own run is warned from 80% and stopped past 120% (shellm `SHELLM_TOKEN_BUDGET`) |
+| `AWS_BEARER_TOKEN_BEDROCK_FILE` | unset | A file holding the Bedrock bearer token, re-read on every call. Overwrite it to rotate a key with no restart (short-term tokens last at most 12h) |
 | `PROJECT_TIME_SCALE` | 1 (`init --time-scale`) | Run the project clock N times faster than real time, for tests |
 | `PROJECT_MAX_ITERATIONS` | 25 | Steps per wake |
 | `BLIND_MAX_ITERATIONS` | 30 | Steps per blind subagent |
@@ -312,6 +313,13 @@ Read from the environment or the identity's `.env`:
 | `PROJECT_JOURNAL_ENTRIES` | 5 | Journal entries shown per wake |
 | `PROJECT_MEMORY_MAX` / `PROJECT_SPEC_MAX` | 14000 / 16000 | Bytes of each shown per wake |
 | `BLIND_MODEL` | `SHELLM_MODEL` | Model for blind subagents (a different model family makes a stronger reviewer) |
+
+## Reference material
+
+`headlong-project init --reference FILE` (repeatable) copies files such as
+an exemplar of the expected end product into `project/reference/`.
+They are read-only and restored if edited, like the charter. Each wake
+lists them by name only, so a long exemplar is not re-sent on every wake.
 
 ## Operator runbook
 

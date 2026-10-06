@@ -42,7 +42,8 @@ printf 'I am {{identity_name}}, a curious companion.\n' > "$ID/core_identity_pro
 printf '# Brief\nEstimate the levelized cost of green hydrogen in Texas in 2030.\n' > "$WORK/spec.md"
 
 # ── init ─────────────────────────────────────────────────────────────────────
-out=$("$REPO/tools/headlong-project" init "$ID" --spec "$WORK/spec.md" 2>&1); rc=$?
+printf '# An exemplar LCA\nGoal and scope...\n' > "$WORK/exemplar.md"
+out=$("$REPO/tools/headlong-project" init "$ID" --spec "$WORK/spec.md" --reference "$WORK/exemplar.md" 2>&1); rc=$?
 eq "init succeeds" "$rc" 0
 P="$ID/workdir/project"
 for f in charter.md spec.md deliverable.md project-memory.md journal.md questions.md addenda.md STATE roles/adversary.md roles/coldeyes.md roles/explorer.md; do
@@ -73,6 +74,9 @@ restored=$(_project_guard)
 eq "guard reports the edited charter" "$restored" "charter.md"
 has "guard restored the charter" "$(cat "$P/charter.md")" "Standards for claims"
 eq "guard is quiet when intact" "$(_project_guard)" ""
+[[ -f "$P/reference/exemplar.md" && ! -w "$P/reference/exemplar.md" ]] && ok "reference copied read-only" || bad "reference copied read-only"
+chmod u+w "$P/reference/exemplar.md"; echo changed > "$P/reference/exemplar.md"
+eq "guard restores edited reference" "$(_project_guard)" "reference/exemplar.md"
 rm -f "$P/roles/adversary.md"
 eq "guard restores a deleted role" "$(_project_guard)" "roles/adversary.md"
 has "guard signal names the file" "$(_project_signals "$restored")" "GUARD: these read-only files"
@@ -85,6 +89,8 @@ has "section has the spec" "$sec" "green hydrogen in Texas"
 has "section has the journal tail" "$sec" "first source"
 has "section has the project clock" "$sec" "Project clock: day"
 has "section has STATE" "$sec" "STATE: active"
+has "section lists reference material by name" "$sec" "reference/exemplar.md"
+hasnt "section does not inline reference material" "$sec" "Goal and scope..."
 
 # ── rituals ──────────────────────────────────────────────────────────────────
 ep() { date -u -d "$1" +%s; }
@@ -376,6 +382,9 @@ out=$(PATH="$FAKE:$PATH" LLM_USAGE_LEDGER="$WORK/wl.jsonl" PROJECT_LEDGER_MARK=1
 has "refusal says what to do" "$out" "this wake has spent its token budget (1100 of 1000"
 out=$(PATH="$FAKE:$PATH" LLM_USAGE_LEDGER="$WORK/wl.jsonl" PROJECT_LEDGER_MARK=1 PROJECT_WAKE_TOKENS=5000 blind --role explorer "x" 2>/dev/null); rc=$?
 [[ $rc -eq 0 ]] && ok "blind runs while the wake is under its ceiling" || bad "blind runs while the wake is under its ceiling"
+out=$(cd "$P" && PATH="$FAKE:$PATH" PROJECT_DIR="$P" blind --role coldeyes 2>/dev/null); rc=$?
+eq "coldeyes works from inside project/" "$rc" 0
+has "role files resolved against the workspace" "$out" "./project/spec.md"
 has "blind runs are gitignored" "$(git -C "$P" status --porcelain)" "reviews/claim.md"
 hasnt "blind scratch is not committed" "$(git -C "$P" status --porcelain)" ".blind"
 cd /

@@ -922,6 +922,18 @@ add_auth_header() {
     headers+=(-K "$_llm_auth_file")
 }
 
+# Bedrock bearer token: AWS_BEARER_TOKEN_BEDROCK_FILE, re-read on every call,
+# wins over AWS_BEARER_TOKEN_BEDROCK. Short-term Bedrock tokens last at most
+# 12 hours, so a run of weeks must survive rotation: overwrite the file, and
+# the next call uses the new token with no restart. (A live run's final
+# ritual died on HTTP 403 when its token was replaced: the old value was
+# pinned in the dispatcher's environment.)
+_bedrock_bearer() {
+    local f="${AWS_BEARER_TOKEN_BEDROCK_FILE:-}" t=""
+    if [[ -n "$f" && -r "$f" ]]; then t=$(tr -d ' \r\n' < "$f"); fi
+    printf '%s' "${t:-${AWS_BEARER_TOKEN_BEDROCK:-}}"
+}
+
 get_url_headers() {
     case "$LLM_PROVIDER" in
         anthropic)
@@ -952,8 +964,9 @@ get_url_headers() {
             url="${LLM_API_URL:-https://bedrock-mantle.${_region}.api.aws/anthropic/v1/messages}"
             headers=(-H "content-type: application/json"
                      -H "anthropic-version: 2023-06-01")
-            if [[ -n "${AWS_BEARER_TOKEN_BEDROCK:-}" ]]; then
-                add_auth_header "x-api-key: $AWS_BEARER_TOKEN_BEDROCK"
+            local _btok; _btok=$(_bedrock_bearer)
+            if [[ -n "$_btok" ]]; then
+                add_auth_header "x-api-key: $_btok"
             elif [[ -n "${AWS_ACCESS_KEY_ID:-}" && -n "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
                 _llm_auth_file=$(mktemp "${TMPDIR:-/tmp}/llm-auth.XXXXXX")
                 {
@@ -965,15 +978,16 @@ get_url_headers() {
                 } > "$_llm_auth_file"
                 headers+=(-K "$_llm_auth_file")
             else
-                die "Bedrock needs AWS_BEARER_TOKEN_BEDROCK, or AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (plus AWS_SESSION_TOKEN for temporary credentials)"
+                die "Bedrock needs AWS_BEARER_TOKEN_BEDROCK (or AWS_BEARER_TOKEN_BEDROCK_FILE), or AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (plus AWS_SESSION_TOKEN for temporary credentials)"
             fi
             ;;
         bedrock-invoke)
             local _iregion="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
             url="${LLM_API_URL:-https://bedrock-runtime.${_iregion}.amazonaws.com/model/${LLM_MODEL}/invoke}"
             headers=(-H "content-type: application/json" -H "accept: application/json")
-            if [[ -n "${AWS_BEARER_TOKEN_BEDROCK:-}" ]]; then
-                add_auth_header "Authorization: Bearer $AWS_BEARER_TOKEN_BEDROCK"
+            local _btok; _btok=$(_bedrock_bearer)
+            if [[ -n "$_btok" ]]; then
+                add_auth_header "Authorization: Bearer $_btok"
             elif [[ -n "${AWS_ACCESS_KEY_ID:-}" && -n "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
                 _llm_auth_file=$(mktemp "${TMPDIR:-/tmp}/llm-auth.XXXXXX")
                 {
@@ -985,7 +999,7 @@ get_url_headers() {
                 } > "$_llm_auth_file"
                 headers+=(-K "$_llm_auth_file")
             else
-                die "Bedrock needs AWS_BEARER_TOKEN_BEDROCK, or AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (plus AWS_SESSION_TOKEN for temporary credentials)"
+                die "Bedrock needs AWS_BEARER_TOKEN_BEDROCK (or AWS_BEARER_TOKEN_BEDROCK_FILE), or AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (plus AWS_SESSION_TOKEN for temporary credentials)"
             fi
             ;;
         opencode)

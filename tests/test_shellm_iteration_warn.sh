@@ -39,6 +39,7 @@ n=0
 n=$((n + 1))
 printf '%s\n' "$n" > "$LLM_STUB_DIR/calls"
 [[ -n "$msgs_file" ]] && cp "$msgs_file" "$LLM_STUB_DIR/msgs-$n.json"
+[[ -n "${LLM_USAGE_LEDGER:-}" && "$LLM_USAGE_LEDGER" != /dev/null ]] && printf '{"in_tok":1000,"out_tok":0}\n' >> "$LLM_USAGE_LEDGER"
 if [[ "$LLM_STUB_MODE" == finish && "$n" -ge 2 ]]; then printf '```bash\nFINAL=done\n```\n'; exit 0; fi
 printf '```bash\necho working %s\n```\n' "$n"
 STUB
@@ -77,6 +78,15 @@ run_shellm finish --max-iterations 10
 rc=$?
 [[ "$rc" -eq 0 ]] && ok "run that finishes well inside its cap succeeds" || bad "run that finishes well inside its cap succeeds" "rc=$rc"
 if note_in 2 | grep -q 'harness: this is step'; then bad "no notice when far from the cap"; else ok "no notice when far from the cap"; fi
+
+# ── token budget: warn from 80%, stop past 120% ──────────────────────────────
+printf '{"in_tok":99999}\n' > "$WORK/ledger.jsonl"     # before the mark: not counted
+LLM_USAGE_LEDGER="$WORK/ledger.jsonl" SHELLM_TOKEN_BUDGET=2500 SHELLM_TOKEN_MARK=1 run_shellm loop --max-iterations 10
+calls=$(cat "$WORK/stub/calls" 2>/dev/null || echo 0)
+[[ "$calls" -eq 3 ]] && ok "token budget stops the run past 120% (3 calls of 1000 vs 2500)" || bad "token budget stops the run" "calls=$calls"
+if note_in 2 | grep -q 'token budget'; then bad "no token notice below 80%"; else ok "no token notice below 80%"; fi
+note_in 3 | grep -qF 'used 2000 of its 2500 token budget' && ok "token notice from 80%" || bad "token notice from 80%" "$(note_in 3 | tail -c 300)"
+grep -q 'Token budget for this run spent' "$WORK/err" && ok "the stop is logged" || bad "the stop is logged"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
