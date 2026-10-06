@@ -162,6 +162,11 @@ cmp -s "$WORK/q.before" "$P/questions.md" && ok "numbering is idempotent" || bad
 git -C "$P" add -A >/dev/null; git -C "$P" -c user.name=ada -c user.email=a@x commit -qm "ids" >/dev/null
 q=$(_project_questions | tr '\037' '\t')
 hasnt "the template's format example is not a question" "$q" "short title"
+cp "$P/questions.md" "$WORK/q.saved"
+printf '\n### 2026-10-04 — Unnumbered, written mid-wake — STATUS: open\nBlocking: no\nDefault-by: 2026-10-30\nAnswer:\n' >> "$P/questions.md"
+has "an unnumbered question with no answer is open, not human-answered" "$(_project_question_rows | tr '\037' '\t')" "Q?	open	Unnumbered"
+hasnt "no bogus HUMAN ANSWER signal for it" "$(_project_signals)" "HUMAN ANSWER"
+cp "$WORK/q.saved" "$P/questions.md"
 has "questions parsed with id, title, status, blocking, default-by" "$q" "Q1	Discount rate	open	yes	2026-10-05"
 eq "placeholder Answer counts as no answer" "$(printf '%s\n' "$q" | grep '^Q1' | cut -f7)" ""
 sig=$(_project_signals)

@@ -208,7 +208,10 @@ _project_question_rows() {
     local humans id t st b db df an rs op al kind detail
     humans=" $(_project_human_answers | tr '\n' ' ') "
     while IFS=$'\037' read -r id t st b db df an rs op al; do
-        local h=0; [[ "$humans" == *" $id "* ]] && h=1
+        # A human answer needs an id and answer text: an unnumbered question
+        # (written mid-wake, stamped at the next wake) matched an empty id
+        # here and showed as "answered by a human" on a live run.
+        local h=0; [[ -n "$id" && -n "$an" && "$humans" == *" $id "* ]] && h=1
         case "$st" in
             open) if (( h )); then kind=human-waiting; detail="human answer: $an"; else kind=open
                   detail="blocking: $b; default-by: ${db:-MISSING}; default: ${df:-none given}"; fi ;;
