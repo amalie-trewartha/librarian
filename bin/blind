@@ -50,6 +50,10 @@ fi
 
 }Task: ${words[*]}"
 [[ -n "$prompt" ]] || die "nothing to do: give --role and/or a prompt"
+# --out project/... is relative to the workspace that holds project/, like the
+# role files: from inside project/ it otherwise lands in project/project/ (a
+# live weekly ritual's cold-eyes review did, and had to be recovered).
+if [[ "$out" == project/* ]]; then out="$(dirname "$project")/$out"; fi
 
 # A wake's token ceiling covers its subagents (PROJECT_WAKE_TOKENS, with the
 # ledger position the wake started at in PROJECT_LEDGER_MARK; both set by the

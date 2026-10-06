@@ -390,6 +390,9 @@ out=$(PATH="$FAKE:$PATH" LLM_USAGE_LEDGER="$WORK/wl.jsonl" PROJECT_LEDGER_MARK=1
 out=$(cd "$P" && PATH="$FAKE:$PATH" PROJECT_DIR="$P" blind --role coldeyes 2>/dev/null); rc=$?
 eq "coldeyes works from inside project/" "$rc" 0
 has "role files resolved against the workspace" "$out" "./project/spec.md"
+(cd "$P" && PATH="$FAKE:$PATH" PROJECT_DIR="$P" blind --role coldeyes --out project/reviews/inside.md >/dev/null 2>&1)
+[[ -f "$P/reviews/inside.md" && ! -e "$P/project" ]] && ok "--out project/... from inside project/ lands in project/reviews" || bad "--out project/... from inside project/ lands in project/reviews"
+rm -f "$P/reviews/inside.md"
 has "blind runs are gitignored" "$(git -C "$P" status --porcelain)" "reviews/claim.md"
 hasnt "blind scratch is not committed" "$(git -C "$P" status --porcelain)" ".blind"
 cd /
