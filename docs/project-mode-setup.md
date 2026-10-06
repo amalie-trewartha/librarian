@@ -65,7 +65,8 @@ interview does not set up Bedrock.
    Opus 5.5 and Claude Haiku 4.5, and optionally a non-Claude reviewer
    such as Llama 4 Maverick.
 3. **Store a bearer key in a file**, not in an environment variable, so you
-   can rotate it later without a restart:
+   can rotate it later without a restart. `headlong-bedrock-env` (step 4)
+   does this for you, or by hand:
 
    ```bash
    mkdir -p ~/.headlong
@@ -83,7 +84,25 @@ and use `claude-opus-5-5` and `claude-haiku-4-5` as the models in step 4.
 
 ## 4. Configure
 
-Write `~/.headlong/.env` (adjust the region and models):
+If your credentials are in an `aws.env` file (`AWS_REGION` plus
+`AWS_BEARER_TOKEN_BEDROCK`, or IAM keys), one command writes everything:
+
+```bash
+headlong-bedrock-env ~/aws.env --check
+# optional: --coldeyes bedrock-converse/us.meta.llama4-maverick-17b-instruct-v1:0
+```
+
+It writes three files and checks the models:
+- the key to `~/.headlong/bedrock-token`, mode 600;
+- `~/.headlong/.env`, which points at the token file and picks
+  cross-region model ids for your region (`us.` or `eu.`);
+- `~/.headlong/app_dir`.
+
+With `--check`, it makes one tiny call per model. It never prints a secret
+and will not overwrite an existing `.env` without `--force`. Then you can
+delete `aws.env`, and skip to "Check that the models answer" below.
+
+Or write `~/.headlong/.env` by hand (adjust the region and models):
 
 ```bash
 cat > ~/.headlong/.env <<EOF

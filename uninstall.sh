@@ -29,7 +29,7 @@ IDENTITIES="ask"      # ask | keep | delete
 # here too so this script works standalone, after the checkout is gone;
 # tests/test_uninstall.sh checks the two lists agree.
 TOOLS=(shellm shellm-docker skills mem llm context traj thinkers chat recap blind delegate
-       shellm-docker-broker identity shellm-explore headlong-skills headlong-init headlong-killall headlong-project persona headlong-web
+       shellm-docker-broker identity shellm-explore headlong-skills headlong-init headlong-killall headlong-project headlong-bedrock-env persona headlong-web
        headlong-slack-bridge headlong-telegram-bridge headlong-tui)
 
 _usage() {
