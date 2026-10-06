@@ -61,6 +61,9 @@ if [[ ! -d "$APP/identities/project" ]]; then
     done
 fi
 TEMPLATE="${HEADLONG_PROJECT_TEMPLATE:-$APP/identities/project}"
+# Use this checkout's tools (llm --spend above all): another program named
+# llm earlier on PATH, such as the Python llm CLI, broke spend reporting.
+export PATH="$APP/bin:$APP/tools:$PATH"
 
 _resolve() {
     local t="${1:?identity name or path required}"
