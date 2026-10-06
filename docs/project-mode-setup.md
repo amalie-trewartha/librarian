@@ -214,6 +214,14 @@ readable history of the run.
 
 ## Troubleshooting
 
+- **`Cannot detect provider for model '…'`, or another wrong-tool error:**
+  another program with the same name is running instead of Headlong's.
+  Typically that's the Python `llm` CLI, or an older Headlong install.
+  `type -a llm` lists them in PATH order. Re-running `./install.sh
+  --symlinks` fixes it: it moves older Headlong copies and any other `llm`
+  found ahead of `~/.local/bin` out of the way (renamed
+  `<name>.pre-headlong-<date>`, so it can be undone). It warns about any
+  other same-named program without touching it. Run `hash -r` afterwards.
 - **`API error (HTTP 403): Authentication failed`:** the key is invalid or
   expired. Put a new one in the token file. The mind recovers on its own,
   because failed wakes back off and cost nothing.

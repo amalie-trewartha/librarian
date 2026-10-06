@@ -353,6 +353,12 @@ Options:
   --init         After installing, run `headlong-init` to bootstrap a first
                  identity and start the local dash (the curl|bash one-liner
                  does this by default)
+  --keep-conflicts
+                 Only warn about commands earlier on PATH that shadow the
+                 installed ones. By default, older Headlong copies and any
+                 other llm found ahead of the install directory are moved
+                 aside (renamed <name>.pre-headlong-<date>, no sudo); other
+                 same-named programs are left alone with a warning.
   --uninstall    Remove Headlong from this machine (runs uninstall.sh; see
                  uninstall.sh --help for its options)
   -h, --help     Show this help
@@ -377,9 +383,17 @@ _install_tools() {
     else
         echo "==> Installing tools into $PREFIX"
     fi
+    local stamp; stamp=$(date +%Y%m%d%H%M%S)
     for tool in "${TOOLS[@]}"; do
         dir=bin
         [[ -f "tools/$tool" ]] && dir=tools
+        # Something already at our path that is not Headlong (pipx puts the
+        # Python llm CLI in ~/.local/bin too): keep it, renamed, rather than
+        # overwrite it silently.
+        if [[ ( -e "$PREFIX/$tool" || -L "$PREFIX/$tool" ) ]] && ! _is_headlong_copy "$PREFIX/$tool"; then
+            mv "$PREFIX/$tool" "$PREFIX/$tool.pre-headlong-$stamp"
+            echo "  Kept the existing $PREFIX/$tool as $PREFIX/$tool.pre-headlong-$stamp"
+        fi
         if [[ "$SYMLINKS" -eq 1 ]]; then
             ln -sf "$(pwd)/$dir/$tool" "$PREFIX/$tool"
             echo "  Linked $tool → $PREFIX/$tool"
@@ -389,6 +403,64 @@ _install_tools() {
             echo "  Installed $tool → $PREFIX/$tool"
         fi
     done
+}
+
+# A command earlier on PATH with the same name as one of ours wins over the
+# fresh install: an older Headlong copy under another prefix, or another
+# program called llm (the Python llm CLI) made `llm` run the wrong tool and
+# fail with "Cannot detect provider". Walk the PATH entries ahead of $PREFIX:
+#   - an older Headlong copy (it mentions headlong or shellm, or links into a
+#     checkout) and any llm are moved aside to <name>.pre-headlong-<date>,
+#     reversibly and without sudo;
+#   - anything else with one of our generic names (chat, context, mem, ...)
+#     is left alone, with a warning.
+# --keep-conflicts (HEADLONG_REPLACE_CONFLICTS=0) only warns.
+REPLACE_CONFLICTS="${HEADLONG_REPLACE_CONFLICTS:-1}"
+_is_headlong_copy() {
+    local f="$1" target
+    target=$(realpath "$f" 2>/dev/null) || target="$f"
+    [[ -f "$(dirname "$target")/shellm" && -f "$(dirname "$target")/../install.sh" ]] && return 0
+    head -n 80 "$target" 2>/dev/null | grep -qiE 'headlong|shellm'
+}
+_resolve_shadowing() {
+    local ours dir tool cand stamp moved=0 warned=0 before=1 entry
+    local -a ahead=()
+    # PATH entries ahead of $PREFIX. If $PREFIX is not on PATH yet, the rc
+    # line _ensure_path adds prepends it, so nothing shadows it in new shells.
+    local IFS=:
+    for entry in $PATH; do
+        [[ -n "$entry" ]] || continue
+        if [[ "$(realpath "$entry" 2>/dev/null)" == "$(realpath "$PREFIX" 2>/dev/null)" ]]; then before=0; break; fi
+        ahead+=("$entry")
+    done
+    unset IFS
+    [[ "$before" -eq 0 ]] || return 0
+    stamp=$(date +%Y%m%d%H%M%S)
+    for tool in "${TOOLS[@]}"; do
+        ours="$PREFIX/$tool"
+        for dir in ${ahead[@]+"${ahead[@]}"}; do
+            cand="$dir/$tool"
+            [[ -e "$cand" || -L "$cand" ]] || continue
+            [[ "$(realpath "$cand" 2>/dev/null)" == "$(realpath "$ours" 2>/dev/null)" ]] && continue
+            if [[ "$tool" == llm ]] || _is_headlong_copy "$cand"; then
+                if [[ "$REPLACE_CONFLICTS" == 1 && -w "$dir" ]]; then
+                    mv "$cand" "$cand.pre-headlong-$stamp"
+                    echo "  Moved aside $cand (it shadowed $ours) → $cand.pre-headlong-$stamp"
+                    moved=$((moved + 1))
+                else
+                    echo "Warning: $cand shadows $ours. Remove or rename it (it may need sudo), or put $PREFIX earlier on PATH." >&2
+                    warned=$((warned + 1))
+                fi
+            else
+                echo "Warning: $cand (not Headlong) shadows $ours; left alone. Put $PREFIX earlier on PATH to use Headlong's $tool." >&2
+                warned=$((warned + 1))
+            fi
+        done
+    done
+    if (( moved > 0 )); then
+        echo "  Moved $moved shadowing command(s) aside. Run 'hash -r' (or open a new shell) so this one picks up the change."
+    fi
+    return 0
 }
 
 _install_tui() {
@@ -553,6 +625,7 @@ main() {
             --prefix)   PREFIX="${2:?--prefix requires a path}"; shift 2 ;;
             --init)     RUN_INIT=1; shift ;;
             --no-init)  RUN_INIT=0; shift ;;
+            --keep-conflicts) REPLACE_CONFLICTS=0; shift ;;
             --uninstall) shift; exec bash "$script_dir/uninstall.sh" "$@" ;;
             --help|-h)  _usage; exit 0 ;;
             *) echo "Unknown option: $1 (try --help)" >&2; exit 1 ;;
@@ -620,6 +693,7 @@ main() {
     _install_skills
     _install_thinkers
     _ensure_path
+    _resolve_shadowing
 
     if [[ "$RUN_INIT" -eq 1 ]]; then
         echo
