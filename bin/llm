@@ -1670,7 +1670,9 @@ else
     done
 
     if [[ "$http_code" -ge 400 || "$http_code" == "000" ]]; then
-        error_msg=$(jq -r '.error.message // .message // empty' "$local_resp" 2>/dev/null || true)
+        # .Message: AWS services (Bedrock) capitalize it; without it a revoked
+        # key showed only "API error (HTTP 403)".
+        error_msg=$(jq -r '.error.message // .message // .Message // empty' "$local_resp" 2>/dev/null || true)
         rm -f "$local_resp"
         _llm_note error "$http_code" "${error_msg:-HTTP $http_code}"
         if [[ -n "$error_msg" ]]; then

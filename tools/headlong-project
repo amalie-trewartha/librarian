@@ -336,6 +336,15 @@ cmd_status() {
         "$(find "$pd/daily" -name '*.md' | wc -l | tr -d ' ')" \
         "$(find "$pd/reports" -name 'week-*.md' | wc -l | tr -d ' ')" \
         "$(find "$pd/reviews" -name '*.md' | wc -l | tr -d ' ')"
+    # Health: a dead key or an outage otherwise looks like a quiet agent.
+    local last_ok
+    last_ok=$(tail -n 1 "$(_project_ledger)" 2>/dev/null | jq -r '.ts // empty' 2>/dev/null) || last_ok=""
+    if [[ -n "$last_ok" ]]; then
+        local lo_s; lo_s=$(date -u -d "$last_ok" +%s 2>/dev/null || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$last_ok" +%s 2>/dev/null) || lo_s=""
+        printf 'last successful model call: %s%s\n' "$last_ok" "${lo_s:+ ($(( ($(date +%s) - lo_s) / 60 )) min ago, real time)}"
+    else
+        printf 'last successful model call: none yet\n'
+    fi
     printf 'tokens in the last project day: %s (cap %s); whole run: %s (cap %s)\n' "$(_project_tokens_24h)" "${PROJECT_DAILY_TOKENS:-none}" \
         "$(_project_tokens_total)" "${PROJECT_TOTAL_TOKENS:-none}"
     if [[ -d "$pd/.git" ]]; then
