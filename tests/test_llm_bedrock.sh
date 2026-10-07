@@ -46,6 +46,12 @@ class H(http.server.BaseHTTPRequestHandler):
         json.dump({"path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": json.loads(body)},
                   open(f"{out}/req-{n}.json", "w"))
         req = json.loads(body)
+        if "REFUSE-ME" in body and not req.get("stream"):
+            resp = {"type": "message", "role": "assistant", "content": [], "stop_reason": "refusal",
+                    "stop_details": {"type": "refusal", "category": "cyber"}, "usage": {"input_tokens": 50, "output_tokens": 3}}
+            b = json.dumps(resp).encode()
+            self.send_response(200); self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b); return
         if self.path.endswith("/converse"):
             resp = {"output": {"message": {"role": "assistant", "content": [{"text": "converse hello"}]}}, "stopReason": "end_turn",
                     "usage": {"inputTokens": 50, "outputTokens": 5, "cacheReadInputTokens": 10, "cacheWriteInputTokens": 2}}
@@ -227,6 +233,14 @@ eqv "spend --after skips lines" "$(llm --spend --ledger "$SL" --after 1)" 1500
 eqv "spend --since filters by time" "$(llm --spend --ledger "$SL" --since 2026-10-02T00:00:00Z)" 1500
 eqv "spend in usd: cost_usd, else tokens at the fallback rate (10000 + 1500*5)" "$(PROJECT_BUDGET_UNIT=usd llm --spend --ledger "$SL")" 17500
 eqv "spend of a missing ledger is 0" "$(llm --spend --ledger "$WORK/none.jsonl")" 0
+
+# ── refusals ─────────────────────────────────────────────────────────────────
+before=$(wc -l < "$LLM_USAGE_LEDGER")
+out=$(AWS_BEARER_TOKEN_BEDROCK=t LLM_API_URL="$INV" llm -m us.anthropic.claude-opus-5-5 "REFUSE-ME please" 2>&1); rc=$?
+[[ $rc -ne 0 ]] && ok "a refusal fails instead of returning empty text" || bad "a refusal fails instead of returning empty text" "$out"
+has "the refusal is named, with its category" "$out" "model declined the request (stop_reason refusal, category cyber)"
+eqv "a refusal is not retried" "$(grep -c 'transient API failure' <<<"$out")" 0
+eqv "the refused call's usage is still on the ledger" "$(( $(wc -l < "$LLM_USAGE_LEDGER") - before ))" 1
 
 # ── shellm masks AWS secrets ─────────────────────────────────────────────────
 masked=$(AWS_SECRET_ACCESS_KEY=sekret/xyz AWS_BEARER_TOKEN_BEDROCK=tok-123 bash -c '

@@ -1368,6 +1368,9 @@ stream_anthropic() {
                     if [[ "$(printf '%s' "$json" | jq -r '.delta.stop_reason // empty' 2>/dev/null)" == "max_tokens" ]]; then
                         warn_truncated
                     fi
+                    if [[ "$(printf '%s' "$json" | jq -r '.delta.stop_reason // empty' 2>/dev/null)" == "refusal" ]]; then
+                        echo "llm: warning: model declined the request (stop_reason refusal, category $(printf '%s' "$json" | jq -r '.delta.stop_details.category // "unspecified"' 2>/dev/null))" >&2
+                    fi
                     # Output count grows across deltas; each write overwrites
                     # the previous, so the last delta wins.
                     if [[ "$json" == *'"output_tokens"'* ]]; then
@@ -1808,6 +1811,14 @@ else
         write_usage "$_u_in" "$_u_out" "$_u_think" "$_u_cache"
     fi
     _llm_ledger_append
+    # A safety classifier can decline a request: HTTP 200, stop_reason
+    # "refusal", no text. Returned as empty, it made shellm retry the same
+    # request eight times (live run 4). Say so, with the category, and fail.
+    _refusal=$(jq -r 'if .stop_reason == "refusal" then ((.stop_details.category // "unspecified") | tostring) else empty end' "$local_resp" 2>/dev/null) || _refusal=""
+    if [[ -n "$_refusal" ]]; then
+        rm -f "$local_resp"
+        die "model declined the request (stop_reason refusal, category $_refusal); the same request will be declined again"
+    fi
 
     if [[ "$LLM_RAW" -eq 1 ]]; then
         cat "$local_resp"
