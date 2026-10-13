@@ -11,9 +11,11 @@ title = "librarian"
 [extend]
 useDefault = true
 
-[[allowlists]]
-description = "Root commit carried a developer .env (2026-04-07). Triaged 2026-08-21: keys rotated/revoked."
-commits = ["531a18fc3516808475e84075051fc9cdd6db44c7"]
+# The root commit carried a developer .env (2026-04-07, upstream). It was
+# purged from history with git-filter-repo on 2026-10-13, before the first
+# push to this repository, so there is no finding left to allowlist. The
+# keys it held were triaged 2026-08-21 as rotated/revoked; they remain
+# exposed in the public headlong repositories this project was forked from.
 
 [[allowlists]]
 description = "Fake OpenAI key used as a test fixture in web/tests"
@@ -33,5 +35,5 @@ regex = '''api\.telegram\.org/bot([0-9]{5,16}:A[A-Za-z0-9_\-]{34})'''
 keywords = ["api.telegram.org"]
 
 [[allowlists]]
-description = "Real Telegram bot token in telegram/tests/test_logging.py (2026-09-03). Rotated 2026-09-04 (old token returns 401); fixture replaced with a fake."
-commits = ["44fe2f48491f66d59f8a7aa7b265cccded3df995"]
+description = "Real Telegram bot token in telegram/tests/test_logging.py (2026-09-03). Rotated 2026-09-04 (old token returns 401); fixture replaced with a fake. The commit was 44fe2f4 before the 2026-10-13 history rewrite."
+commits = ["701bbb915f1ee71568b8c53d6d711cbe6c7c891e"]
