@@ -19,7 +19,7 @@ memory system that gives the project its name is `librarian/`
 | systemd units `headlong-*` | `librarian-*` | `deploy/migrate-units.sh` migrates headlong-* (and shelly-*) units, drop-ins and wrappers; `headlong-thinkersctl` stays as a symlink and the sudoers rule permits both |
 | `tui/headlong` crate `headlong-tui` | `tui/librarian`, `librarian-tui` | `bin/chat` and `bin/thinkers` fall back to a `headlong-tui` binary |
 | `design/headlong.md` | `design/framework.md` | |
-| `https://headlong.ai/install.sh` | `https://raw.githubusercontent.com/amalie-trewartha/Librarian/main/install.sh` | the hosted Headlong installer installs Headlong |
+| `https://headlong.ai/install.sh` | `https://raw.githubusercontent.com/amalie-trewartha/librarian/main/install.sh` | the hosted Headlong installer installs Headlong |
 
 Older `SHELLM_*` framework spellings are honored only where they were
 before the rename (`SHELLM_HOME`, the bridge identity/state vars, `env.py`).

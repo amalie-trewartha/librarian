@@ -8,6 +8,7 @@ __pycache__/
 .memories/
 .skills/
 .skillsrc
+.vagrant/
 
 # Identity instances are runtime data (logs, trajectories, memories, etc.)
 .identities/

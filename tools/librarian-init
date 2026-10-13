@@ -1571,8 +1571,8 @@ Commands
   Something broken?    $PERSONA_CMD bugreport   (bundle to attach to a report)
   Everything else      $PERSONA_CMD --help
   Not on PATH yet?     $PERSONA_PATH
-  Read-only status     curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/Librarian/main/status.sh | bash
-  Uninstall            curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/Librarian/main/uninstall.sh | bash
+  Read-only status     curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/status.sh | bash
+  Uninstall            curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/uninstall.sh | bash
 EOF
 
 # The one-liner (`curl | bash`) runs in a child process, so the shell the user
