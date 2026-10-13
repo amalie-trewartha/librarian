@@ -1,0 +1,158 @@
+import json
+import os
+import unittest
+from pathlib import Path
+
+from helpers import StoreCase
+from headlong_librarian import db, exchange, model
+
+
+class ExportImportTest(StoreCase):
+    def test_markdown_export_is_mem_shaped(self):
+        s = self.skill("eigen trick", ["pkg:colcon", "area:build-system"], project="p-1")
+        out = self.ident / "librarian" / "export"
+        rep = exchange.export_store(self.store, out, "md")
+        self.assertEqual(rep["written"], 1)
+        files = list(out.glob("lib-*.md"))
+        self.assertEqual(len(files), 1)
+        self.assertRegex(files[0].name, r"^lib-skill-[0-9A-Z]{26}\.md$")
+        text = files[0].read_text()
+        self.assertTrue(text.startswith("---\n"))
+        fm = {}
+        for line in text.split("---")[1].strip().splitlines():
+            k, _, v = line.partition(":")
+            fm[k.strip()] = v.strip().strip('"')
+        self.assertEqual(fm["id"], s)
+        self.assertEqual(fm["type"], "skill")
+        self.assertEqual(fm["status"], "probationary")
+        self.assertIn("pkg:colcon", fm["tags"])
+        # Stale files are removed on the next export.
+        (out / "lib-skill-00000000000000000000000000.md").write_text("x")
+        exchange.export_store(self.store, out, "md")
+        self.assertFalse((out / "lib-skill-00000000000000000000000000.md").exists())
+
+    def test_json_roundtrip_preserves_ids_tags_edges_status(self):
+        a = self.skill("eigen trick", ["pkg:colcon"], project="p-1")
+        b = self.skill("eigen trick two", ["pkg:colcon"], body="Fix: use `-DEigen3_DIR=/usr/x`; verified 2026-09-20.", project="p-1", supersedes=a)
+        self.episode("success", [b])
+        out = self.ident / "exp"
+        exchange.export_store(self.store, out, "json")
+        lines = (out / "nodes.jsonl").read_text().splitlines()
+        self.assertEqual(len(lines), 3)
+        fresh_path = self.ident / "fresh.sqlite"
+        fresh = db.Store.open(fresh_path, create=True)
+        with fresh.write():
+            model.seed_vocab(fresh)
+        # Import the JSON into a fresh store.
+        tmp = self.ident / "nodes.json"
+        tmp.write_text(json.dumps({"nodes": [json.loads(l) for l in lines]}))
+        rep = exchange.import_json(fresh, tmp, None, None, False)
+        self.assertEqual(rep.rejected, [], rep.rejected)
+        nb = model.get_node(fresh, b)
+        self.assertIsNotNone(nb)
+        self.assertEqual(nb.status, "active")
+        self.assertEqual(set(nb.tags), set(self.node(b).tags))
+        # The supersession survives the round trip as a relationship, not as a copied status.
+        self.assertEqual(model.get_node(fresh, a).status, "superseded")
+        self.assertIn(("supersedes", a), {(e["type"], e["to"]) for e in nb.edges})
+        fresh.close()
+
+    def test_import_preferences(self):
+        p = self.ident / "values.md"
+        p.write_text("# Review\n- Prefer small reviewable PRs over large feature branches.\n- Safety-relevant uncertainty is reported, not smoothed over.\n\n# Nonsense heading\n- Prefer boring tools.\n")
+        rep = exchange.import_preferences(self.store, p, ["team:robotics-sw"])
+        self.assertEqual(len(rep.stored), 3)
+        nodes = model.nodes_where(self.store, "type = 'preference'")
+        self.assertTrue(all(n.status == "active" for n in nodes))
+        self.assertTrue(all("team:robotics-sw" in n.tags for n in nodes))
+        self.assertTrue(any("area:review" in n.tags for n in nodes))
+        self.assertTrue(all(n.provenance["author"] == "human" for n in nodes))
+        self.assertIn("small reviewable PRs", nodes[0].body)
+
+    def test_import_skills_and_addenda(self):
+        d = self.ident / "skills" / "project"
+        d.mkdir(parents=True)
+        (d / "colcon.md").write_text("# Build with the vendored Eigen\n\nRun `colcon build --cmake-args -DEigen3_DIR=/opt/eigen`. Verified 2026-09-01.\n")
+        (d / "generated.md").write_text(exchange.GENERATED.format(id="X") + "\n# mirror\n")
+        rep = exchange.import_skills(self.store, d, "p-1", False)
+        self.assertEqual(len(rep.stored), 1)
+        n = self.node(rep.stored[0])
+        self.assertEqual(n.project, "p-1")
+        self.assertEqual(n.provenance["method"], "import")
+        add = self.ident / "addenda.md"
+        add.write_text("# Addenda\n\n### 2026-09-20 — scaffold first\nTrigger: x\nObservation: y\nChange: I write the test scaffold before the first feature commit.\nScope: general\n\n### 2026-09-27 — read reviews\nChange: I read the cold-eyes review before planning the week.\n")
+        rep = exchange.import_addenda(self.store, add, "p-1")
+        self.assertEqual(len(rep.stored), 2)
+        w = model.nodes_where(self.store, "type = 'identity_working'")
+        self.assertTrue(any("scaffold" in n.summary for n in w))
+        # A generated mirror imports nothing.
+        add.write_text("# Addenda to the charter (working identity)\n\nGenerated by `librarian export`: ...\n")
+        self.assertEqual(exchange.import_addenda(self.store, add, "p-1").stored, [])
+
+    def test_project_mirrors(self):
+        self.core("I flag uncertainty.")
+        self.working("I scaffold first.")
+        self.skill("eigen trick", ["pkg:colcon"], project="p-1")
+        self.skill("generic trick", ["pkg:git", "scope:generic"])
+        self.skill("other project trick", ["pkg:x"], project="p-2")
+        self.decision("chose parquet", ["pkg:parquet"], project="p-1")
+        pd = self.ident / "workdir" / "project"
+        (pd / "skills" / "project").mkdir(parents=True)
+        (pd / "skills" / "project" / "hand-written.md").write_text("# mine\nkeep me\n")
+        rep = exchange.export_store(self.store, self.ident / "librarian" / "export", "md", pd, "p-1")
+        self.assertEqual(rep["project"]["skills_project"], 1)
+        self.assertEqual(rep["project"]["skills_generic"], 1)
+        self.assertTrue((pd / "skills" / "project" / "hand-written.md").exists())
+        self.assertTrue(any(exchange.GENERATED_RE.search(p.read_text()) for p in (pd / "skills" / "project").glob("*.md")))
+        add = (pd / "addenda.md").read_text()
+        self.assertIn("I scaffold first.", add)
+        self.assertIn("I flag uncertainty.", add)
+        digest = (pd / "librarian.md").read_text()
+        self.assertIn("## Decisions (1)", digest)
+        self.assertIn("chose parquet", digest)
+        self.assertIn("## Stats", digest)
+
+
+class StatsEvalTest(StoreCase):
+    def test_stats_shape_and_precision(self):
+        from headlong_librarian import pack
+
+        a = self.skill("eigen trick", ["pkg:colcon"], project="p-1")
+        b = self.skill("unused trick about colcon paths", ["pkg:colcon"], project="p-1")
+        pk = pack.build(self.store, pack.PackRequest(task="eigen", tags=["pkg:colcon"], project="p-1", phase="debugging", budget=3000, use_llm=False))
+        self.episode("success", [a], request_ids=[pk.request_id])
+        s = exchange.stats(self.store)
+        self.assertEqual(s["nodes"]["total"], 3)
+        # Both task entries were logged under the pack and cited by the closed episode (log rows credit), so precision is 1.0.
+        self.assertEqual(s["pack_precision"], 1.0)
+        self.assertEqual(s["packs"], 1)
+        self.assertIn("suggestions", s)
+        self.assertEqual(s["librarian_spend"], {})
+
+    def test_eval_set(self):
+        a = self.skill("colcon picks the system Eigen: set Eigen3_DIR", ["pkg:colcon", "pkg:eigen", "area:build-system"], project="p-1")
+        self.skill("pandas groupby observed flag", ["pkg:pandas"], project="p-2")
+        d = self.ident / "eval"
+        d.mkdir()
+        (d / "case1.json").write_text(json.dumps({"id": "colcon", "task": "colcon build fails with Eigen link errors", "tags": ["pkg:colcon", "pkg:eigen"], "phase": "debugging", "budget": 2000, "expected": [a]}))
+        rep = exchange.run_eval(self.store, d)
+        self.assertEqual(rep["n"], 1)
+        self.assertEqual(rep["cases"][0]["recall"], 1.0)
+        self.assertEqual(rep["cases"][0]["missed"], [])
+        self.assertEqual(rep["macro_precision"], 1.0)
+
+    def test_shipped_eval_set_recall(self):
+        """The frozen eval set in tests/eval is the ranking regression test."""
+        here = Path(__file__).resolve().parent
+        seed = here / "fixtures" / "seed.json"
+        if not seed.exists():
+            self.skipTest("no seed fixture")
+        rep = exchange.import_json(self.store, seed, None, None, False)
+        self.assertEqual(rep.rejected, [], rep.rejected)
+        ev = exchange.run_eval(self.store, here / "eval", use_llm=False)
+        self.assertGreaterEqual(ev["n"], 3)
+        self.assertGreaterEqual(ev["macro_recall"], 0.9, ev)
+
+
+if __name__ == "__main__":
+    unittest.main()

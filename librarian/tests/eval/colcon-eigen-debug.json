@@ -1,0 +1,1 @@
+{"id": "colcon-eigen-debug", "task": "colcon build fails with Eigen link errors after a clean build on Humble", "tags": ["pkg:colcon", "pkg:eigen", "ctx:debugging"], "project": "p-0600", "phase": "debugging", "budget": 3000, "expected": ["01J9SEED00000000000000SK01"], "acceptable": ["01J9SEED00000000000000SK02"]}

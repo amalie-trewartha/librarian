@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# tools/librarian — the Librarian memory store and context packer (librarian/).
+#
+# A thin wrapper: the implementation is the stdlib-only Python package in
+# librarian/src/headlong_librarian. The same file runs on the host (from the
+# monolith step and headlong-project) and inside the shellm sandbox, where it
+# is bind-mounted alone at /usr/local/bin/librarian. There the package is
+# reached through HEADLONG_LIBRARIAN_SRC, which _build_shellm_flags passes as
+# a --var (which also mounts the directory); on the host the wrapper finds the
+# package next to itself.
+#
+# Usage: librarian [--store PATH] [--text] <command> ...   (librarian --help)
+set -euo pipefail
+
+src="${HEADLONG_LIBRARIAN_SRC:-}"
+if [[ -z "$src" || ! -d "$src/headlong_librarian" ]]; then
+    here="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")")" && pwd)"
+    for cand in "$here/../librarian/src" "$here/../app/librarian/src"; do
+        if [[ -d "$cand/headlong_librarian" ]]; then src="$(cd "$cand" && pwd)"; break; fi
+    done
+fi
+[[ -n "$src" && -d "$src/headlong_librarian" ]] || {
+    printf 'librarian: cannot find the headlong_librarian package (set HEADLONG_LIBRARIAN_SRC=<checkout>/librarian/src)\n' >&2
+    exit 2
+}
+command -v python3 >/dev/null 2>&1 || { printf 'librarian: python3 is required\n' >&2; exit 2; }
+export PYTHONPATH="$src${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m headlong_librarian "$@"

@@ -1,0 +1,1 @@
+{"id": "pint-sandbox", "task": "ModuleNotFoundError: No module named 'pint' when running the model script in the sandbox", "tags": ["pkg:pint", "pkg:python", "ctx:debugging"], "project": "p-0600", "phase": "debugging", "budget": 3000, "expected": ["01J9SEED00000000000000SK04"], "acceptable": ["01J9SEED00000000000000SK07", "01J9SEED00000000000000EP02"]}

@@ -16,6 +16,7 @@ web/src/headlong_web/static/
 web/viewer/build/
 web/viewer/node_modules/
 web/.venv/
+librarian/.venv/
 web/viewer/.react-router/
 .web-push/
 

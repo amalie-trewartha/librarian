@@ -1,0 +1,1 @@
+{"id": "parquet-review", "task": "Reviewing the storage choice for episode logs: parquet versus sqlite, write latency and columnar analysis", "tags": ["pkg:parquet", "area:data-pipeline", "ctx:reviewing"], "project": "p-0600", "phase": "reviewing", "budget": 3000, "expected": ["01J9SEED00000000000000DC01"], "acceptable": ["01J9SEED00000000000000SK05"]}
