@@ -145,7 +145,7 @@ open-access paper converted to markdown.
 cd ~/headlong
 identity new cns
 headlong-project init cns --spec ~/brief.md --reference ~/exemplar.md \
-    --days 14 --daily-usd 15 --total-usd 200
+    --preferences ~/team-values.md --days 14 --daily-usd 15 --total-usd 200
 ```
 
 The `init` options:
@@ -159,6 +159,14 @@ The `init` options:
     cache reads at a tenth.
 - **`--reference FILE`:** read-only material, such as an exemplar,
   repeatable.
+- **`--preferences FILE`:** the group's stated values, one bullet each, in
+  your own words. They become active preference nodes in the agent's
+  memory store (the Librarian, [design/librarian.md](../design/librarian.md))
+  and appear in every wake's memory pack when relevant. Repeatable. Add
+  more later with `headlong-project preferences cns add "..."`.
+- **`--fresh-memory`:** start the memory store over. By default it is kept
+  across projects, so skills and retrospectives from an earlier run carry
+  into the next one.
 - **`--time-scale N`:** runs the project clock N times faster, for tests
   only. For example, `--days 42 --time-scale 42` is six project weeks in
   24 hours.
@@ -174,7 +182,10 @@ headlong-project status cns       # health, deadline, spend, questions
 persona cns stop                  # pause; start again to resume
 ```
 
-`status` leads with any open questions for you. To answer one:
+`status` leads with any open questions for you, and with any items in the
+Librarian's check-in queue: proposed core-identity changes, a working-habit
+edit the agent was refused, a disputed pair of memories, a new `area:` tag.
+To answer a question:
 
 ```bash
 headlong-project questions cns                       # open and closed questions
@@ -185,7 +196,22 @@ Every question carries a default and a date. If nobody answers by then,
 the agent applies the default and records it. You never have to answer,
 but the agent applies an answer on its next wake.
 
+Decide a queue item (applied as you, committed to `project/` as author
+`human`):
+
+```bash
+headlong-project queue cns                  # list
+headlong-project queue cns approve Q7       # or reject Q7 "a short reason"
+```
+
 Other controls:
+- **Probe the identity:** `headlong-project probe cns` asks the agent's own
+  model the probe prompts with only its identity nodes loaded and compares
+  the answers with the previous run; drift traced to a working-identity edit
+  reverts it and queues a note. The weekly ritual does this every fourth week.
+- **Look at the memory store:** `headlong-project librarian cns stats`,
+  `... search --tags pkg:x --text "..."`, `... queue list`. The dashboard's
+  Memories page shows the same nodes.
 - **Rotate the key:** overwrite `~/.headlong/bedrock-token`. The next call
   uses the new key, with no restart.
 - **Move the deadline:** `headlong-project deadline cns --days 21`. This
@@ -208,6 +234,9 @@ with one commit per wake. Read in this order:
    default closed it.
 4. `reports/week-NN.md`: weekly reports.
 5. `reviews/`: cold-eyes and adversarial reviews.
+6. `librarian.md`: the project's memory digest, with every decision,
+   retrospective, skill and episode and how each closed. `addenda.md` and
+   `skills/` are mirrors of the same store.
 
 `git -C ~/headlong/.identities/cns/workdir/project log --oneline` is a
 readable history of the run.
@@ -240,6 +269,13 @@ readable history of the run.
   persona cns start
   ```
 
+- **No memory pack in the wakes (`status` says `librarian: no store`, or
+  the prompt shows the plain project excerpt):** the identity predates the
+  Librarian, `librarian` is not on PATH, or `HEADLONG_LIBRARIAN=0`. Run
+  `headlong-project init ... ` again to create the store (existing project
+  files are moved aside only with `--force`), or check
+  `.identities/cns/run/librarian.log` and the `error` steps with
+  `section:"librarian"` in the mind log for a failing librarian.
 - **Spend flat and status shows a budget pause:** a cap was reached. Wakes
   skip the model until usage falls back under the cap.
 - **Panic button:** `headlong-killall` stops every Headlong process on

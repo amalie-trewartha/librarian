@@ -193,6 +193,7 @@ Everything you run *around* the mind lives in `tools/`:
 | **headlong-web** | The dashboard, where you watch a mind think in the browser |
 | **headlong-slack-bridge** / **headlong-telegram-bridge** | Slack and Telegram connectors into the same inner experience |
 | **headlong-project** | Puts an identity into project mode for weeks of unattended research ([design](design/long_autonomy.md)) |
+| **librarian** | The memory store and context packer for project-mode minds: typed, tagged memories with provenance, a budgeted pack every wake, outcome-based confirmation ([design](design/librarian.md)) |
 | **headlong-killall** | Panic button that stops every Headlong-related process |
 | **pr-committee** | Multi-model pull request review, used on this repo |
 
@@ -205,7 +206,11 @@ file in which every question carries a dated default. The runtime then
 schedules daily and weekly rituals, including a cold-eyes review by an
 agent that cannot see the mind's log. It enforces a token budget, slows
 the mind to a rest pace when it reports that it is blocked or done, and
-commits the project files to git after every wake. See
+commits the project files to git after every wake. Memory is the Librarian
+(`librarian/`, [design/librarian.md](design/librarian.md)): a per-identity
+store of skills, decisions, retrospectives, group preferences and a two-tier
+identity, packed into every wake within a token budget and confirmed by
+what the wake measurably produced, not by the agent's opinion. See
 [design/long_autonomy.md](design/long_autonomy.md), and
 [docs/project-mode-setup.md](docs/project-mode-setup.md) to set one up.
 

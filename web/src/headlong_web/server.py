@@ -544,7 +544,8 @@ def create_app(
     def identity_memory(identity_id: str, name: str) -> dict:
         identity = _identity_or_404(root, identity_id)
         safety.checked_name(name, safety.MEMORY_NAME_RE)
-        memory_path = safety.contained_path(identity.path / "memories", name)
+        base = memories.memory_path(identity.path, name).parent
+        memory_path = safety.contained_path(base, name)
         if not memory_path.is_file():
             raise HTTPException(status_code=404, detail="Memory not found")
         return {"name": name, "content": memory_path.read_text(encoding="utf-8", errors="replace")}

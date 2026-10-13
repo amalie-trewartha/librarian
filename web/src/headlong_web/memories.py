@@ -114,16 +114,31 @@ def _sort_key(info: dict[str, Any]) -> tuple[float, str]:
     return float(info["mtime"]), info["name"]
 
 
+LIBRARIAN_EXPORT = Path("librarian") / "export"
+
+
+def memory_path(identity_dir: Path, name: str) -> Path:
+    """Where a memory file lives: ``mem`` files under memories/, librarian
+    mirrors (``lib-*.md``) under librarian/export/."""
+    if name.startswith("lib-"):
+        return identity_dir / LIBRARIAN_EXPORT / name
+    return identity_dir / "memories" / name
+
+
 def list_memories(identity_dir: Path) -> list[dict[str, Any]]:
-    mem_dir = identity_dir / "memories"
-    if not mem_dir.is_dir():
-        return []
     result = []
-    for path in mem_dir.glob("*.md"):
-        try:
-            result.append(memory_info(path))
-        except OSError:
-            # A file may disappear while a live identity is updating it.
+    sources = ((identity_dir / "memories", "mem"), (identity_dir / LIBRARIAN_EXPORT, "librarian"))
+    for mem_dir, source in sources:
+        if not mem_dir.is_dir():
             continue
+        pattern = "lib-*.md" if source == "librarian" else "*.md"
+        for path in mem_dir.glob(pattern):
+            try:
+                info = memory_info(path)
+            except OSError:
+                # A file may disappear while a live identity is updating it.
+                continue
+            info["source"] = source
+            result.append(info)
     result.sort(key=_sort_key, reverse=True)
     return result

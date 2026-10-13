@@ -51,6 +51,9 @@ deterministic shell, in the monolith step, around the model's run:
 | Blocked or done | Model writes `STATE`. The runtime turns it into a rest pace (one wake an hour) |
 | Stall | Runtime: STATE is active but `journal.md` unchanged for 12h raises STALL |
 | Versioning | Runtime: `git commit` of `project/` after every wake, with FINAL as the message |
+| Memory pack | Runtime: `librarian runtime pre` builds a budgeted pack from the store every wake (design/librarian.md) |
+| Episode outcome and credit | Runtime: `librarian runtime post` decides the outcome from artifacts (ritual file, adversary verdict, rc, journal diff) and credits the memories the wake cited |
+| Consolidation, decay, late outcomes | Runtime: on the daily ritual (merge, generalize, disputes, promote, decay) and the weekly ritual (non-recurrence and human-correction upgrades, probes every fourth week) |
 | Doing the work, curating, reviewing | Model, one function per wake, from `prompt-project.md` |
 
 Rituals keyed to output files fail safe. A ritual killed by a crash or a
@@ -63,13 +66,13 @@ skipped because a timer fired while the mind was busy.
 |---|---|
 | §1 Who Am I (immutable) | `project/charter.md`. Shown on every wake, ahead of the persona, and restored if edited. Rewritten for zero human contact (see below). |
 | Spec inside project-memory | Split out to `project/spec.md` (read-only), so "do not silently reinterpret" is enforced, not only requested |
-| §2 Addenda | `project/addenda.md`, tended in the weekly ritual |
+| §2 Addenda | The librarian's working identity (`librarian identity edit`, rate-limited, checked against the human-approved core); `project/addenda.md` is its mirror |
 | §3 Project memory | `project/project-memory.md`. Data rows carry an "Adversary review" column, plus a section for interpretation calls made without a human |
 | §4 Journal | `project/journal.md`. Every work wake must append an entry. The last 5 entries are in every wake prompt. |
 | §5 Daily eval | `project/daily/DATE.md`. Writing it is what clears the daily ritual. |
 | §6 Questions | `project/questions.md`, with Q ids and `Default:`, `Default-by:`, `Answer:` and `Resolution:` lines the runtime reads. Open questions lead every human status view, and `questions-summary.md` lists how each closed. |
 | §7 Progress report | `project/reports/week-NN.md`, with a new section listing every call made without a human |
-| §8, §9 Skills | `project/skills/project/` and `project/skills/generic/`. Headlong's `mem` store still holds cross-project lessons. |
+| §8, §9 Skills | Skill nodes in the librarian store, probationary until an outcome confirms them; `project/skills/project/` and `skills/generic/` are generated mirrors. The store is per identity, so lessons cross projects. |
 | §10 Restart prompt | Unnecessary: every wake is a restart. Charter, spec, memory, journal tail and questions summary go into each prompt. |
 | §11 Every-2-hours refresh | Same reason. The context is rebuilt from the files on every wake, so it cannot go stale. |
 | §12 Daily bundle | `rituals/daily.md`, injected when due (after `PROJECT_DAILY_AT`, 21:00 local by default) |
@@ -319,6 +322,10 @@ Read from the environment or the identity's `.env`:
 | `PROJECT_DAILY_USD` / `PROJECT_TOTAL_USD` / `PROJECT_WAKE_USD` | unset (`init --daily-usd`, `--total-usd`) | Budgets in estimated dollars instead of tokens. They replace the token caps when set |
 | `LLM_PRICE_SCALE` | 1 | Scales the per-call cost estimate (list prices are first-party; e.g. 1.1 for a Bedrock regional endpoint) |
 | `PROJECT_FALLBACK_USD_PER_MTOK` | 5 | Dollar rate assumed for a call with no cost estimate (an unpriced model) |
+| `HEADLONG_LIBRARIAN` | 1 | 0 turns the librarian hooks off; wakes get the plain project excerpt |
+| `HEADLONG_LIBRARIAN_SRC` | `<app>/librarian/src` (set by init) | The librarian package, mounted read-only into the sandbox |
+| `LIBRARIAN_PACK_TOKENS` | 8000 | Memory pack budget per wake, in estimated tokens |
+| `LIBRARIAN_MODEL`, `LIBRARIAN_MODEL_<ROLE>`, `LIBRARIAN_LLM` | tier defaults | Models for the librarian's optional stages, per role; `LIBRARIAN_LLM=0` skips them all (design/librarian.md) |
 
 ## What a budget counts
 
@@ -381,6 +388,12 @@ At the end of the run, read in this order:
 5. `reviews/`
 
 ## Known limits
+
+- The librarian package directory is mounted read-only into the sandbox,
+  but the store itself is writable from inside it (the mind's own
+  `librarian` calls need that). A deliberate direct edit of the SQLite file
+  would show up as nodes without the gate's provenance; see
+  design/librarian.md for what the runtime does and does not check.
 
 - The guard is tamper-evident, not tamper-proof. The mind can reach
   `project-pristine/` inside its sandbox. A deliberate edit there would

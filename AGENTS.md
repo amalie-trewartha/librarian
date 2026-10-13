@@ -96,6 +96,14 @@ Replies take 15 to 45 seconds while the monolith thinker wakes.
   and thinker templates that new identities are seeded from.
 - `<app>/.identities/<name>/` — the identity: persona, memories,
   trajectory, `run/dispatcher.pid`, and its `activate` script.
+- `<identity>/librarian/store.sqlite` — the Librarian memory store for
+  project-mode minds (design/librarian.md), with a markdown mirror under
+  `librarian/export/`. The code is the stdlib-only Python package in
+  `librarian/`, called through `tools/librarian`; the monolith step calls
+  `librarian runtime pre` and `runtime post` around every project wake.
+  `project/addenda.md`, `project/skills/**` and `project/librarian.md` are
+  generated mirrors of the store: never edit them, propose through
+  `librarian` instead.
 
 ## Project mode
 
@@ -111,6 +119,13 @@ leads with open questions. Init sets a 2M tokens/day budget
 moves it). Budgets can be in tokens (cache reads weighted at a tenth) or in
 estimated dollars (`--daily-usd`, `--total-usd`). Humans answer questions with `headlong-project answer`. Do not
 write Answer lines yourself: provenance comes from git authorship.
+Memory in project mode is the Librarian (design/librarian.md): every wake
+gets a budgeted context pack from `<identity>/librarian/store.sqlite`, the
+runtime closes an episode with an outcome derived from artifacts, and the
+human check-in queue (`headlong-project queue <name>`) decides core-identity
+changes. `headlong-project init --preferences FILE` seeds the group's
+stated values. The 20,000-line cloc cap on `bin/` + `thinkers/` is checked
+in CI; `librarian/`, `tools/` and `tests/` are not counted.
 
 ## Sharp edges
 

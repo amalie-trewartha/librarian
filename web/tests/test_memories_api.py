@@ -106,7 +106,30 @@ def test_memories_endpoint_returns_metadata_sorted_by_created(tmp_path: Path):
         "type": "preference",
         "created": "2026-08-20 09:00:00",
         "slug": "newer",
+        "source": "mem",
     }
+
+
+def test_memories_endpoint_includes_librarian_mirror(tmp_path: Path):
+    """librarian export writes lib-*.md under librarian/export; the page lists
+    and serves them beside mem files."""
+    root, identity = _identity_root(tmp_path)
+    export = identity / "librarian" / "export"
+    export.mkdir(parents=True)
+    name = "lib-skill-01J9W8K2M3N4P5Q6R7S8T9V0WX.md"
+    (export / name).write_text(
+        "---\nid: 01J9W8K2M3N4P5Q6R7S8T9V0WX\nsummary: colcon eigen trick\ntype: skill\n"
+        "created: 2026-09-14 18:41:07\nstatus: active\ntags: \"pkg:colcon, pkg:eigen\"\n---\n\ncolcon eigen trick\n\nSet Eigen3_DIR.\n"
+    )
+    (export / "notes.md").write_text("---\nsummary: not a mirror\n---\n")
+    client = TestClient(create_app(root))
+    payload = client.get("/api/identities/.identities~keeper/memories").json()
+    mirrors = [item for item in payload if item["source"] == "librarian"]
+    assert [item["name"] for item in mirrors] == [name]
+    assert mirrors[0]["type"] == "skill"
+    body = client.get(f"/api/identities/.identities~keeper/memories/{name}")
+    assert body.status_code == 200
+    assert "Set Eigen3_DIR." in body.json()["content"]
 
 
 def test_memories_endpoint_handles_missing_directory(tmp_path: Path):
