@@ -74,6 +74,16 @@ _project_end_at() {
     [[ "$e" =~ ^[0-9]+$ ]] && printf '%s' "$e"
     return 0
 }
+# The final ritual is done once reports/final.md has been written at or after
+# the end. A final.md drafted before the end is only a draft: on the fourth live
+# run the agent assembled it early, and the existence check skipped the whole
+# ritual, final cold-eyes review included.
+_project_final_done() {
+    local f e m
+    f="$(_project_dir)/reports/final.md"; [[ -f "$f" ]] || return 1
+    e=$(_project_end_at); [[ -n "$e" ]] || return 0
+    m=$(_pj_mtime "$f"); [[ -n "$m" ]] && (( m >= e ))
+}
 # Where the run is against its deadline: build (first half), harden (second
 # half), final (the last 15% or 2 days, whichever is longer), ended.
 _project_phase() {  # _project_phase [epoch]
@@ -353,7 +363,8 @@ _project_over_budget() {
 # The ritual due now, if any, as "<kind> <arg>": "weekly 03", "daily
 # 2026-10-05", "freetime 02 <until-epoch>". Weekly outranks daily outranks
 # free time. Empty when nothing is due. Done-ness is the existence of the
-# ritual's output file, so a ritual cut short by a crash is simply due again.
+# ritual's output file (for final, one written after the end), so a ritual
+# cut short by a crash is simply due again.
 _project_due_ritual() {
     local d now start at at_m now_m bdate week prev fdir started
     d=$(_project_dir); now=$(_pj_now); start=$(_project_started_at)
@@ -362,7 +373,7 @@ _project_due_ritual() {
     local phase; phase=$(_project_phase "$now")
     # Past the end, the final ritual is the only one: then the run rests.
     if [[ "$phase" == ended ]]; then
-        [[ -f "$d/reports/final.md" ]] || printf 'final final'
+        _project_final_done || printf 'final final'
         return 0
     fi
     if (( 10#$week >= 2 )) && [[ ! -f "$d/reports/week-$prev.md" ]]; then
@@ -572,7 +583,7 @@ _project_delay_floor() {  # _project_delay_floor [tokens-this-wake]
     fi
     local st; st=$(_project_state)
     # A run past its end with the final report written rests like done.
-    [[ "$(_project_phase)" == ended && -f "$(_project_dir)/reports/final.md" ]] && st=done
+    [[ "$(_project_phase)" == ended ]] && _project_final_done && st=done
     case "$st" in
         blocked|done)
             # Capture, then match: `_project_signals | grep -q` under pipefail
@@ -597,7 +608,7 @@ _project_delay_floor() {  # _project_delay_floor [tokens-this-wake]
 _project_should_skip_rest() {
     [[ "${1:-}" == reactive ]] && return 1
     local st; st=$(_project_state)
-    [[ "$(_project_phase)" == ended && -f "$(_project_dir)/reports/final.md" ]] && st=done-final
+    [[ "$(_project_phase)" == ended ]] && _project_final_done && st=done-final
     case "$st" in blocked|done|done-final) ;; *) return 1 ;; esac
     [[ -n "$(_project_due_ritual)" ]] && return 1
     local sig; sig=$(_project_signals)

@@ -296,7 +296,11 @@ eq "phase: ended" "$(_project_phase)" ended
 eq "final ritual due at the end, ahead of weekly and daily" "$(_project_due_ritual)" "final final"
 has "final ritual instructions" "$(_project_signals)" "project/reviews/final.md"
 has "run ended signal" "$(_project_signals)" "THE RUN HAS ENDED"
+printf 'draft\n' > "$P/reports/final.md"
+touch -d "@$(( $(_project_end_at) - 3600 ))" "$P/reports/final.md"
+eq "a final.md drafted before the end leaves the final ritual due" "$(_project_due_ritual)" "final final"
 printf 'final\n' > "$P/reports/final.md"
+touch -d "@$PROJECT_NOW" "$P/reports/final.md"
 printf 'active\n' > "$P/STATE"
 eq "after the end and the final report, the mind rests" "$(_project_delay_floor)" 3600
 _project_should_skip_rest spontaneous && ok "finished run: timer wakes skip the model" || bad "finished run: timer wakes skip the model"

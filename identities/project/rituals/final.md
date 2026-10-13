@@ -1,7 +1,8 @@
 Final ritual: the run's end date has passed. This is the one function of
 this wake (or of several, if it needs them), and it outranks everything
 except a human answer. The runtime counts it done when
-project/reports/final.md exists.
+project/reports/final.md has been written after the end date. A final.md
+drafted before the end is only a draft: start from it, but do every step.
 
 1. Final cold-eyes review. If project/reviews/final.md does not exist,
    create it with:
