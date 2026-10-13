@@ -36,11 +36,13 @@ check() { local label="$1"; shift; if "$@" >/dev/null 2>&1; then ok "$label"; el
 check_not() { local label="$1"; shift; if "$@" >/dev/null 2>&1; then bad "$label"; else ok "$label"; fi; }
 
 # --- 5. tool lists agree -----------------------------------------------------
-eval "$(grep -E '^(BIN|AUX)_TOOLS=' "$REPO/install.sh")"
-INSTALL_LIST=$(printf '%s\n' "${BIN_TOOLS[@]}" "${AUX_TOOLS[@]}" librarian-tui | sort)
+# LEGACY_TOOLS (the Headlong-era names) install like any other tool, so
+# uninstall has to take them away again; they belong in the expected list.
+eval "$(grep -E '^(BIN|AUX|LEGACY)_TOOLS=' "$REPO/install.sh")"
+INSTALL_LIST=$(printf '%s\n' "${BIN_TOOLS[@]}" "${AUX_TOOLS[@]}" "${LEGACY_TOOLS[@]}" librarian-tui | sort)
 # eval, not `source <(...)`: empty under bash 3.2 (macOS /bin/bash).
 UNINSTALL_LIST=$(bash -c 'eval "$(sed -n "/^TOOLS=(/,/)/p" "$1")"; printf "%s\n" "${TOOLS[@]}" | sort' _ "$REPO/uninstall.sh")
-check "uninstall.sh TOOLS == install.sh BIN+AUX+librarian-tui" test "$INSTALL_LIST" = "$UNINSTALL_LIST"
+check "uninstall.sh TOOLS == install.sh BIN+AUX+LEGACY+librarian-tui" test "$INSTALL_LIST" = "$UNINSTALL_LIST"
 
 # --- fixture: a one-liner-shaped install ---------------------------------
 make_install() {  # make_install <home>
