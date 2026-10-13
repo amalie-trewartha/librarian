@@ -162,13 +162,17 @@ hasnt "an answered suggestion is not repeated" "$(cat "$WORK/prompt")" "- LIBRAR
 # ── 5. daily ritual: maintenance once, ritual file closes success ───────────
 now=$(date +%s)
 printf '%s\n' "$(( now - 2 * 86400 ))" > "$ID/project-pristine/started_at"   # two project days in: the daily ritual is due
-day=$(date -u -d "@$(( now - 86400 ))" +%F 2>/dev/null || date -u -r "$(( now - 86400 ))" +%F)
-run_step STUB_RITUAL_FILE="daily/$day.md" STUB_JOURNAL="daily"
+# The day the ritual closes is the date of the latest PROJECT_DAILY_AT
+# boundary at or before now, so with the 21:00 default it is yesterday until
+# 21:00 UTC and today after it — the run's wall clock decided whether this
+# section passed. Pin the boundary to 00:00: it is then always today's date.
+day=$(date -u -d "@$now" +%F 2>/dev/null || date -u -r "$now" +%F)
+run_step PROJECT_DAILY_AT=00:00 STUB_RITUAL_FILE="daily/$day.md" STUB_JOURNAL="daily"
 EP6=$(last_episode)
 has "a written ritual file closes success" "$(episode_outcome "$EP6")" "success | ritual daily output written"
 rows=$(IDENTITY_DIR="$ID" python3 -c "import sqlite3,sys; c=sqlite3.connect('$ID/librarian/store.sqlite'); print(c.execute(\"select count(*) from maintenance where kind='daily'\").fetchone()[0])")
 eq "daily maintenance ran once" "$rows" 1
-run_step STUB_JOURNAL="another"
+run_step PROJECT_DAILY_AT=00:00 STUB_JOURNAL="another"
 rows=$(python3 -c "import sqlite3; c=sqlite3.connect('$ID/librarian/store.sqlite'); print(c.execute(\"select count(*) from maintenance where kind='daily'\").fetchone()[0])")
 eq "a second wake adds no maintenance row" "$rows" 1
 
