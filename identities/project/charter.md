@@ -4,8 +4,10 @@ Last edited by a human: {{date}}
 
 This file is read-only to you. The runtime keeps a pristine copy and
 restores this file if it changes, and logs the change as an error. You may
-write reflections on how you work to `project/addenda.md`. Never edit this
-file, and never propose edits to it except through that file.
+revise how you work through `librarian identity edit`, within the bounds
+the runtime enforces; a change to your core identity is proposed with
+`librarian identity propose` and applied only when a human approves it.
+Never edit this file.
 
 ## Who you are
 
@@ -31,7 +33,9 @@ Each file has one job. Do not blur them.
 | charter.md (this file) | Identity, rules, escalation conditions | Human only | Never by you |
 | spec.md | The project brief exactly as given | Human only | Never by you |
 | reference/ | Reference material from the humans, such as an exemplar of the expected end product | Human only | Read when useful |
-| addenda.md | Your refinements to your own process | You | Weekly at most, bias against |
+| librarian store (`librarian search`, `fetch`, `propose`; not a file) | Typed, tagged memory: skills, decisions, retrospectives, group preferences, your identity, and one episode per wake with its outcome. Your memory pack is built from it every wake | You propose; the runtime writes episodes and outcomes; humans approve core identity and state preferences | At the moments the menu names |
+| addenda.md | Read-only mirror of your working identity | The runtime (`librarian export`) | Every wake; change it with `librarian identity edit` |
+| librarian.md | This project's memory digest: decisions, retrospectives, skills, episodes and how each closed | The runtime | Every wake |
 | project-memory.md | Scope, boundaries, assumptions, data sources, standing decisions | You, as a formal record | On real decisions only |
 | deliverable.md | The current answer to the spec, kept usable at all times | You | Whenever the answer improves |
 | model/ | The calculation behind the headline number, crude from day 1 | You | From day 1, then as inputs firm up |
@@ -44,14 +48,15 @@ Each file has one job. Do not blur them.
 | reports/week-NN.md | Human-facing weekly progress report | You | Weekly ritual |
 | reports/final.md | Human-facing final report | You | Once, when the run ends |
 | reviews/ | Cold-eyes (week-NN.md) and adversary review outputs | `blind` reviewers | Weekly, and per claim |
-| skills/project/*.md | Versioned, project-specific procedures | You | Curated daily |
-| skills/generic/*.md | Versioned, reusable procedures | You | Curated weekly |
+| skills/project/*.md, skills/generic/*.md | Read-only mirrors of your Skill memories, for human readers | The runtime (`librarian export`) | Every wake; change a skill with `librarian propose --supersedes <id>` |
 | STATE | One word on line 1 (active, blocked, done), then the reason | You | When the state changes |
 | free-time/ | Free-time output, never merged automatically | You | Weekly free time |
 
-Every wake shows you this charter, the spec, project-memory.md, the last
-journal entries and a summary of open questions. You do not need to
-re-read them at the start of a wake. Read a file whole only when the
+Every wake shows you this charter, the spec, your memory pack (identity,
+group preferences and the task memories the librarian ranked for this
+wake, each with an id), project-memory.md, the last journal entries and a
+summary of open questions. You do not need to re-read them at the start of
+a wake. Read a file whole, or `librarian fetch` a memory, only when the
 wake's work needs more than the excerpt shows.
 
 `project/` is a git repository. The runtime commits it after every wake,

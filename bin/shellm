@@ -1145,7 +1145,13 @@ docker_setup() {
         extra_mounts+=(-v "$abs_dir:$abs_dir:ro")
     done
 
-    # Mount directories referenced by --var values
+    # Mount directories referenced by --var values. A var named in
+    # SHELLM_RO_VARS (comma-separated) mounts read-only: the librarian's
+    # package directory travels this way and the mind must not edit it.
+    local _ro_vars=""
+    for _ev in "${_SHELLM_EXTRA_VARS[@]+"${_SHELLM_EXTRA_VARS[@]}"}"; do
+        [[ "${_ev%%=*}" == SHELLM_RO_VARS ]] && _ro_vars=",${_ev#*=},"
+    done
     for _ev in "${_SHELLM_EXTRA_VARS[@]+"${_SHELLM_EXTRA_VARS[@]}"}"; do
         local _val="${_ev#*=}"
         [[ -d "$_val" ]] || continue
@@ -1157,7 +1163,11 @@ docker_setup() {
         done
         [[ "$already" -eq 1 ]] && continue
         seen_dirs+=("$abs_dir")
-        extra_mounts+=(-v "$abs_dir:$abs_dir")
+        if [[ "$_ro_vars" == *",${_ev%%=*},"* ]]; then
+            extra_mounts+=(-v "$abs_dir:$abs_dir:ro")
+        else
+            extra_mounts+=(-v "$abs_dir:$abs_dir")
+        fi
     done
 
     # Mount symlink targets: scan all mounted dirs for symlinks pointing outside.

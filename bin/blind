@@ -113,8 +113,13 @@ iters="${BLIND_MAX_ITERATIONS:-30}"
 [[ "$iters" =~ ^[1-9][0-9]*$ ]] || iters=30
 printf 'blind: %s run in %s\n' "${role:-adhoc}" "${work#"$PWD"/}" >&2
 
+# No librarian for a blind run: the memory pack would hand the adversary the
+# favored approach and the explorer the prior decisions, which is exactly the
+# independence this tool exists to protect. Verdicts flow back through the
+# runtime's outcome rule instead.
 answer=$(cd "$work/files" && env -u _SHELLM_PARENT_TRAJ_ID -u _SHELLM_PARENT_RUN -u _SHELLM_ROOT_RUNDIR \
     -u TRAJ_ID -u ROOT_TRAJ_ID -u SHELLM_TRIGGER_STEP_ID -u SHELLM_RUN_ID_OUT \
+    HEADLONG_LIBRARIAN=0 LIBRARIAN_STORE=/nonexistent/librarian.sqlite \
     shellm -q --max-iterations "$iters" ${model_args[@]+"${model_args[@]}"} ${env_args[@]+"${env_args[@]}"} \
     --workdir "$work/files" --traj-dir "$work/traj" --prompt-file "$work/prompt.md") \
     || die "subagent failed (rc=$?); its trajectory is in $work/traj"

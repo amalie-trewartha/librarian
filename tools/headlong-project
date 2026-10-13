@@ -4,7 +4,7 @@ set -euo pipefail
 # headlong-project — put an identity into project mode for a long unattended
 # research run, and report on it (design/long_autonomy.md).
 #
-#   headlong-project init <identity> --spec FILE [--charter FILE]
+#   headlong-project init <identity> --spec FILE [--charter FILE] [--preferences FILE]... [--fresh-memory]
 #                         [--days N | --end YYYY-MM-DD] [--daily-tokens N]
 #                         [--total-tokens N] [--daily-usd X] [--total-usd X]
 #                         [--time-scale N] [--reference FILE]...
@@ -14,6 +14,10 @@ set -euo pipefail
 #   headlong-project answer <identity> <Qn> "<answer>"   (or the answer on stdin)
 #   headlong-project banner <identity>       just the open-questions block
 #   headlong-project deadline <identity> [--days N | --end YYYY-MM-DD]
+#   headlong-project queue <identity> [list|approve|reject <id> [note]]
+#   headlong-project probe <identity>
+#   headlong-project preferences <identity> [list|add "<text>"]
+#   headlong-project librarian <identity> <librarian args...>
 #   headlong-project update-pristine <identity>
 #
 # <identity> is a name under <app>/.identities/ or a path to an identity dir.
@@ -87,8 +91,8 @@ _end_epoch() {
 }
 
 cmd_init() {
-    local ident="" spec="" charter="" keep=0 force=0 tokens=2000000 days=14 end="" total="" scale=1 dusd="" tusd=""
-    local -a refs=()
+    local ident="" spec="" charter="" keep=0 force=0 tokens=2000000 days=14 end="" total="" scale=1 dusd="" tusd="" fresh=0
+    local -a refs=() prefs=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --spec) spec="${2:?--spec needs a file}"; shift 2 ;;
@@ -100,6 +104,8 @@ cmd_init() {
             --total-usd) tusd="${2:?--total-usd needs an amount}"; shift 2 ;;
             --time-scale) scale="${2:?--time-scale needs a number}"; shift 2 ;;
             --reference) refs+=("${2:?--reference needs a file}"); shift 2 ;;
+            --preferences) prefs+=("${2:?--preferences needs a file}"); shift 2 ;;
+            --fresh-memory) fresh=1; shift ;;
             --end) end="${2:?--end needs YYYY-MM-DD}"; shift 2 ;;
             --keep-persona) keep=1; shift ;;
             --force) force=1; shift ;;
@@ -118,6 +124,7 @@ cmd_init() {
     [[ -n "$spec" && -f "$spec" ]] || die "--spec FILE is required (the project brief, verbatim)"
     [[ -z "$charter" || -f "$charter" ]] || die "no such charter: $charter"
     local r; for r in ${refs[@]+"${refs[@]}"}; do [[ -f "$r" ]] || die "no such reference file: $r"; done
+    for r in ${prefs[@]+"${prefs[@]}"}; do [[ -f "$r" ]] || die "no such preferences file: $r"; done
     [[ -d "$TEMPLATE" ]] || die "template not found: $TEMPLATE"
     local name pd pp today
     name=$(grep '^name=' "$id/info.txt" | cut -d= -f2-)
@@ -142,6 +149,10 @@ cmd_init() {
     for r in ${refs[@]+"${refs[@]}"}; do cp "$r" "$pp/reference/"; done
     date +%s > "$pp/started_at"
     printf '%s\n' "$end_at" > "$pp/end_at"
+    # The project id tags every memory this run writes to the librarian store.
+    local title; title=$(grep -m1 '^# ' "$spec" | sed 's/^# *//' | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-' | sed 's/^-*//; s/-*$//; s/--*/-/g' | cut -c1-32)
+    printf 'p-%s-%s\n' "$(date -u +%Y%m%d)" "${title:-project}" > "$pp/project_id"
+    cp "$TEMPLATE/probes.md" "$pp/probes.md" 2>/dev/null || true
     cp -R "$pp/charter.md" "$pp/spec.md" "$pp/roles" "$pp/reference" "$pd/"
     # Files read-only, directories left writable: the guard must be able to
     # restore a deleted role, and a human must be able to remove the project.
@@ -149,6 +160,29 @@ cmd_init() {
         -type f -exec chmod a-w {} +
     printf '.blind/\n' > "$pd/.gitignore"
     for f in daily reports reviews explorations model skills/project skills/generic free-time; do : > "$pd/$f/.keep"; done
+    # The librarian store: identity-scoped, so it carries memories across
+    # projects (--fresh-memory wipes it). Core identity is seeded from the
+    # template, stated group values from --preferences, as human-authored.
+    local lib_note="librarian not on PATH; no memory store"
+    if command -v librarian >/dev/null 2>&1; then
+        if [[ "$fresh" -eq 1 && -d "$id/librarian" ]]; then
+            mv "$id/librarian" "$id/librarian.old-$(date +%Y%m%d%H%M%S)"
+        fi
+        local existed=0; [[ -f "$id/librarian/store.sqlite" ]] && existed=1
+        local -a seed_args=(); (( existed )) || seed_args=(--seed "$TEMPLATE/identity-core.md")
+        if IDENTITY_DIR="$id" IDENTITY_NAME="$name" HEADLONG_LIBRARIAN_SRC="$APP/librarian/src" librarian -q init \
+            ${seed_args[@]+"${seed_args[@]}"} \
+            --import-skills "$pd/skills" --import-addenda "$pd/addenda.md" --project "$(cat "$pp/project_id")"; then
+            for r in ${prefs[@]+"${prefs[@]}"}; do
+                IDENTITY_DIR="$id" HEADLONG_LIBRARIAN_SRC="$APP/librarian/src" librarian -q import --preferences "$r" \
+                    --tags "team:$(basename "${r%.*}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-')" --author human || true
+            done
+            IDENTITY_DIR="$id" HEADLONG_LIBRARIAN_SRC="$APP/librarian/src" librarian -q export --project-dir "$pd" --project "$(cat "$pp/project_id")" || true
+            lib_note="$id/librarian/store.sqlite ($( (( existed )) && printf 'kept from earlier projects' || printf 'new; core identity seeded'))${prefs[*]:+; preferences: ${#prefs[@]} file(s)}"
+        else
+            lib_note="librarian init failed; the wake falls back to the plain project excerpt"
+        fi
+    fi
     if command -v git >/dev/null 2>&1; then
         git -C "$pd" init -q
         git -C "$pd" add -A
@@ -172,14 +206,16 @@ EOF
     fi
     touch "$id/.env"
     {
-        grep -vE '^(PROJECT_DAILY_TOKENS|PROJECT_TOTAL_TOKENS|PROJECT_DAILY_USD|PROJECT_TOTAL_USD|PROJECT_TIME_SCALE)=' "$id/.env" || true
+        grep -vE '^(PROJECT_DAILY_TOKENS|PROJECT_TOTAL_TOKENS|PROJECT_DAILY_USD|PROJECT_TOTAL_USD|PROJECT_TIME_SCALE|HEADLONG_LIBRARIAN_SRC|LIBRARIAN_PACK_TOKENS)=' "$id/.env" || true
         printf 'PROJECT_DAILY_TOKENS=%s\n' "$tokens"
+        printf 'HEADLONG_LIBRARIAN_SRC=%s\n' "$APP/librarian/src"
+        printf 'LIBRARIAN_PACK_TOKENS=%s\n' "${LIBRARIAN_PACK_TOKENS:-8000}"
         if [[ -n "$total" ]]; then printf 'PROJECT_TOTAL_TOKENS=%s\n' "$total"; fi
         if [[ -n "$dusd" ]]; then printf 'PROJECT_DAILY_USD=%s\n' "$dusd"; fi
         if [[ -n "$tusd" ]]; then printf 'PROJECT_TOTAL_USD=%s\n' "$tusd"; fi
         if [[ "$scale" != 1 ]]; then printf 'PROJECT_TIME_SCALE=%s\n' "$scale"; fi
     } > "$id/.env.tmp" && mv "$id/.env.tmp" "$id/.env"
-    printf 'Project mode is set up for %s.\n  files:    %s\n  pristine: %s (edit there, then run update-pristine)\n' "$name" "$pd" "$pp"
+    printf 'Project mode is set up for %s.\n  files:    %s\n  pristine: %s (edit there, then run update-pristine)\n  memory:   %s\n' "$name" "$pd" "$pp" "$lib_note"
     if [[ -n "$dusd$tusd" ]]; then
         printf '  budget:   estimated dollars: %s per project day, %s for the run (in %s/.env)\n' "${dusd:+\$$dusd}" "${tusd:+\$$tusd}" "$id"
     else
@@ -214,7 +250,8 @@ _load() {
     while IFS= read -r kv; do
         k="${kv%%=*}"
         [[ -n "${!k:-}" ]] || export "$kv"
-    done < <(grep -E '^(PROJECT_[A-Z_]+|HEADLONG_TZ|LLM_PRICE_SCALE)=[^ ]*$' "$ID/.env" 2>/dev/null || true)
+    done < <(grep -E '^(PROJECT_[A-Z_]+|LIBRARIAN_[A-Z_]+|HEADLONG_LIBRARIAN[A-Z_]*|HEADLONG_TZ|LLM_PRICE_SCALE)=[^ ]*$' "$ID/.env" 2>/dev/null || true)
+    [[ -n "${HEADLONG_LIBRARIAN_SRC:-}" ]] || export HEADLONG_LIBRARIAN_SRC="$APP/librarian/src"
     # shellcheck disable=SC1091
     source "$APP/thinkers/_lib/project.sh"
 }
@@ -260,7 +297,61 @@ cmd_deadline() {
     fi
 }
 
-cmd_banner() { _load "${1:-}"; _project_question_banner brief; }
+_lib() { IDENTITY_DIR="$ID" librarian "$@"; }  # the librarian CLI for the loaded identity
+_lib_on() { command -v librarian >/dev/null 2>&1 && [[ -f "$ID/librarian/store.sqlite" ]]; }
+
+cmd_banner() {
+    _load "${1:-}"; _project_question_banner brief
+    if _lib_on; then
+        local n; n=$(_lib queue list 2>/dev/null | jq 'length' 2>/dev/null) || n=0
+        (( n > 0 )) && printf '!!! Librarian check-in queue: %s item(s) need a human — headlong-project queue %s\n' "$n" "$IDENTITY_NAME"
+    fi
+    return 0
+}
+
+# Human decisions on the librarian's check-in queue (core identity proposals,
+# refused working edits, disputes, new area: tags). Decisions are applied
+# with author human and committed to project/ like an answer.
+cmd_queue() {
+    local ident="${1:-}" action="${2:-list}" qid="${3:-}"; shift $(( $# > 3 ? 3 : $# ))
+    _load "$ident"; _lib_on || die "no librarian store for $IDENTITY_NAME"
+    case "$action" in
+        list) _lib --text queue list --status "${qid:-pending}" ;;
+        approve|reject)
+            [[ -n "$qid" ]] || die "usage: headlong-project queue <identity> approve|reject <id> [note]"
+            _lib --text queue "$action" "$qid" ${1:+--note "$*"}
+            _lib -q export --project-dir "$PD" --project "$(cat "$ID/project-pristine/project_id" 2>/dev/null)" || true
+            if [[ -d "$PD/.git" ]]; then
+                git -C "$PD" add -A >/dev/null 2>&1 || true
+                git -C "$PD" -c user.name=human -c user.email=human@headlong.local commit -q -m "human ${action}d librarian queue item $qid" >/dev/null 2>&1 || true
+            fi ;;
+        *) die "usage: headlong-project queue <identity> [list|approve|reject] [id] [note]" ;;
+    esac
+}
+
+# Identity consistency probes: answers from the agent's own model with only
+# its identity nodes loaded, compared with the previous run.
+cmd_probe() {
+    _load "${1:-}"; _lib_on || die "no librarian store for $IDENTITY_NAME"
+    local set="$ID/project-pristine/probes.md"; [[ -f "$set" ]] || set="$TEMPLATE/probes.md"
+    _lib --text probe run --set "$set" --auto-revert
+}
+
+# A stated group value, the human's own words, as an active preference node.
+cmd_preferences() {
+    local ident="${1:-}" action="${2:-list}"; shift $(( $# > 2 ? 2 : $# ))
+    _load "$ident"; _lib_on || die "no librarian store for $IDENTITY_NAME"
+    case "$action" in
+        list) _lib --text search --type preference --limit 50 --no-log ;;
+        add)
+            local text="$*"; [[ -n "$text" ]] || text=$(cat); [[ -n "$text" ]] || die "empty preference"
+            _lib --text propose --type preference --summary "$(printf '%s' "$text" | cut -c1-200)" --body "$text" --tags team:stated --author human --status active ;;
+        *) die 'usage: headlong-project preferences <identity> [list|add "<text>"]' ;;
+    esac
+}
+
+# Any librarian command against the identity's store, for humans.
+cmd_librarian() { _load "${1:-}"; shift; _lib_on || die "no librarian store for $IDENTITY_NAME"; _lib "$@"; }
 
 cmd_questions() {
     local ident="" which=all
@@ -367,6 +458,14 @@ cmd_status() {
     cd=$(_project_cap_daily); ct=$(_project_cap_total)
     printf 'spend in the last project day: %s (cap %s); whole run: %s (cap %s)\n' "$(_project_fmt "$(_project_tokens_24h)")" \
         "$( (( cd > 0 )) && _project_fmt "$cd" || printf none)" "$(_project_fmt "$(_project_tokens_total)")" "$( (( ct > 0 )) && _project_fmt "$ct" || printf none)"
+    if _lib_on; then
+        local st; st=$(_lib stats --project "$(cat "$ID/project-pristine/project_id" 2>/dev/null)" 2>/dev/null) || st=""
+        if [[ -n "$st" ]]; then
+            printf 'librarian: %s\n' "$(printf '%s' "$st" | jq -r '"\(.nodes.total) nodes (\(.nodes.by_status.active // 0) active, \(.nodes.by_status.probationary // 0) probationary); packs \(.packs); precision \(.pack_precision // "n/a"); queue \(.queue_pending); captures open \(.pending_capture)"' 2>/dev/null)"
+        fi
+    else
+        printf 'librarian: no store\n'
+    fi
     if [[ -d "$pd/.git" ]]; then
         printf 'recent commits:\n'
         git -C "$pd" log --format='  %ad %s' --date=format:'%m-%d %H:%M' -n 8 2>/dev/null || true
@@ -381,6 +480,10 @@ case "${1:-}" in
     banner) shift; cmd_banner "$@" ;;
     deadline) shift; cmd_deadline "$@" ;;
     update-pristine) shift; cmd_update_pristine "$@" ;;
+    queue) shift; cmd_queue "$@" ;;
+    probe) shift; cmd_probe "$@" ;;
+    preferences) shift; cmd_preferences "$@" ;;
+    librarian) shift; cmd_librarian "$@" ;;
     ""|-h|--help|help) sed -n '3,40p' "$0" | sed 's/^# \{0,1\}//' ;;
-    *) die "unknown command '$1' (init, status, questions, answer, banner, deadline, update-pristine)" ;;
+    *) die "unknown command '$1' (init, status, questions, answer, banner, deadline, update-pristine, queue, probe, preferences, librarian)" ;;
 esac

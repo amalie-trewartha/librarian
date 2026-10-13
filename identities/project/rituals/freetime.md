@@ -6,7 +6,7 @@ Nothing here is evaluated.
 
 Put everything you make under project/free-time/week-{{week}}/. Nothing
 there is merged into skills automatically. If something would be useful
-as a reusable skill, propose it in project/addenda.md instead of adding it
+as a reusable skill, propose it with `librarian propose --type skill --tags scope:generic ...` (it enters probationary and the gate checks it) instead of adding it
 directly.
 
 Before the window closes, write project/free-time/week-{{week}}/report.md:

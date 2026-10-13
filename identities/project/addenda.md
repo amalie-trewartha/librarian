@@ -1,15 +1,11 @@
-# Addenda to the charter
+# Addenda to the charter (working identity)
 
-Append-only. Each entry proposes a refinement to how you work. It does not
-change the rules in charter.md. Bias heavily toward NOT adding an entry:
-most weeks should add nothing.
+This file is a read-only mirror. The runtime regenerates it every wake from
+the librarian store (`librarian export`): the core identity a human
+approved, then the working identity you maintain.
 
-## Entry format
-### YYYY-MM-DD — one-line title
-Trigger: what happened that prompted this
-Observation: what you noticed about your own process
-Change: what you will do differently, specifically
-Scope: this project only, or how you work in general
-Confidence: low | medium | high that this is an improvement
-
----
+To change how you work: `librarian identity edit --summary "..." --body
+"..." --occasion weekly --reason "..." --episodes <id>`. At most one edit
+per project week and one per accepted repeated-failure suggestion; an edit
+that contradicts a core commitment is refused and queued for a human. Bias
+heavily toward NOT editing: most weeks should change nothing.

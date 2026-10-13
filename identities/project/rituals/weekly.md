@@ -8,13 +8,15 @@ report.
        blind --role coldeyes --out project/reviews/week-{{week}}.md
    The reviewer sees only spec.md, project-memory.md, journal.md and
    questions.md. Do not add your own commentary to its file.
-2. Curate project/skills/generic/. Promote a project skill only if it is
-   genuinely project-agnostic, and reword away any project-specific
-   assumptions first. Lean toward cutting.
-3. Introspect on project/addenda.md. For each entry, ask whether it has
-   actually changed your behavior or is only aspirational. Cut what is not
-   doing real work. Add an entry only for a specific pattern that recurred
-   in the past week, not a one-off. When in doubt, add nothing.
+2. Promote a project skill to generic only if it is genuinely
+   project-agnostic: `librarian propose --type skill --tags scope:generic
+   ... --supersedes <project skill id>`, reworded away from any
+   project-specific assumption. Lean toward cutting.
+3. Introspect on your working identity (`librarian identity list
+   --working`). For each node, ask whether it has actually changed your
+   behavior or is only aspirational. Retire or supersede with `librarian
+   identity edit --occasion weekly ...` (one edit per week at most). When in
+   doubt, change nothing.
 4. Bring project/deliverable.md up to date with everything learned this
    week, including the cold-eyes findings you accept.
 5. Write project/reports/week-{{week}}.md with these sections:
@@ -29,7 +31,9 @@ report.
    - Open questions: blocking ones first, each with its Default-by date
      and the default that will apply.
    - Self-assessed confidence: what you are sure of and what is tentative.
-   - Changes to skills and addenda: what changed and why, or "none".
+   - Changes to memory and working identity: what `librarian stats --week
+     {{week}}` shows (memories proposed, confirmed, disputed; suggestions
+     accepted), what changed and why, or "none".
    - Cold-eyes review result: a summary of reviews/week-{{week}}.md,
      including anything it flagged that you disagree with and why. Turn
      each finding you accept into a journal entry with Status: in-progress.

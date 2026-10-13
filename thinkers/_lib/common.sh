@@ -787,11 +787,21 @@ _build_shellm_flags() {
         fi
     done < <(collect_skill_vars "$identity_dir")
 
+    # Librarian (librarian/): the package directory travels as a --var so shellm
+    # mounts it; SHELLM_RO_VARS makes that mount read-only. Model-tier settings
+    # follow so the mind's own `librarian` calls resolve the same models.
+    local _lv
+    for _lv in HEADLONG_LIBRARIAN_SRC HEADLONG_LIBRARIAN LIBRARIAN_MODEL LIBRARIAN_LLM LIBRARIAN_PACK_TOKENS \
+               LIBRARIAN_MODEL_RANK LIBRARIAN_MODEL_JUDGE LIBRARIAN_MODEL_DRAFT LIBRARIAN_MODEL_CORE_CHECK LIBRARIAN_MODEL_PROBE_ANSWER; do
+        [[ -n "${!_lv:-}" ]] && printf '%s\n' "--var" "$_lv=${!_lv}"
+    done
+    [[ -n "${HEADLONG_LIBRARIAN_SRC:-}" ]] && printf '%s\n' "--var" "SHELLM_RO_VARS=HEADLONG_LIBRARIAN_SRC"
+
     # Standard binaries. Keep this in sync with the tools promised to the
     # running mind in README.md and the stock identity prompt: a host-only tool
     # silently disappears when shellm switches to Docker.
     local cmd
-    for cmd in mem traj skills context llm shellm chat recap blind delegate; do
+    for cmd in mem traj skills context llm shellm chat recap blind delegate librarian; do
         local path
         path=$(command -v "$cmd" 2>/dev/null) || continue
         printf '%s\n' "--bin" "$path"

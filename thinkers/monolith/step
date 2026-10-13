@@ -276,6 +276,7 @@ fi
 # signals: rituals due, matured question defaults, stall, budget, STATE.
 project_section=""
 project_hints=""
+librarian_pack=""
 if [[ "$project_mode" -eq 1 ]]; then
     # Edits since the last wake are a human's (the answer to a question, an
     # edited file): commit them as author "human" before this wake touches
@@ -314,7 +315,17 @@ if [[ "$project_mode" -eq 1 ]]; then
         exit 0
     fi
     project_hints=$(_prompt_section project-signals _project_signals "$project_restored") || project_hints=""
-    project_section=$(_prompt_section project _project_section) || project_section=""
+    # The librarian (librarian/, design/librarian.md) builds this wake's memory
+    # pack and runs the day's maintenance; without a store or the tool it prints
+    # nothing and the section falls back to today's excerpt. Its signal lines
+    # (CAPTURE, LIBRARIAN SUGGESTION) join the routing signals.
+    if [[ "${HEADLONG_LIBRARIAN:-1}" != 0 ]] && command -v librarian >/dev/null 2>&1; then
+        librarian_pack=$(printf '%s' "$project_hints" | _prompt_section librarian librarian runtime pre \
+            --ritual "$(_project_due_ritual)" --phase "$(_project_phase)" --budget "${LIBRARIAN_PACK_TOKENS:-8000}") || librarian_pack=""
+        [[ -s "$state_dir/librarian_signals" ]] && project_hints="${project_hints}$(cat "$state_dir/librarian_signals")
+"
+    fi
+    project_section=$(_prompt_section project _project_section "$librarian_pack") || project_section=""
 fi
 # The query for related memories is the wake's own material: the real hints
 # (before the placeholder below) and the last three stream steps.
@@ -360,7 +371,7 @@ done < <(_build_shellm_flags "$IDENTITY_DIR" "$run_dir")
 # someone runs `recap --backfill` once. _life_context degrades to empty on any
 # error. See design/tiered_memory.md.
 life_section=""
-if [[ "${MONOLITH_TIERED_MEMORY:-1}" == "1" ]]; then
+if [[ "${MONOLITH_TIERED_MEMORY:-1}" == "1" && -z "$librarian_pack" ]]; then
     _lc=$(_life_context) || _lc=""
     [[ -n "$_lc" ]] && life_section="Your life so far (tiered summary, oldest→newest). A record of what happened, not a rule for what comes next: past stretches of waiting, restraint, or one line of research do not bind this wakeup.
 $_lc
@@ -373,7 +384,7 @@ fi
 # so the next wake shows different ones. See design/related_memories.md.
 related_section=""
 related_shown=""
-if [[ "$RELATED_MEMORIES" -gt 0 ]]; then
+if [[ "$RELATED_MEMORIES" -gt 0 && -z "$librarian_pack" ]]; then
     _rm=$(_related_memories "$related_query" "$related_prev" "$RELATED_MEMORIES" 2>/dev/null) || _rm=""
     if [[ -n "$_rm" ]]; then
         related_shown=$(printf '%s\n' "$_rm" | sed -n 's/^- \([^ ]*\) \[.*/\1/p')
@@ -570,6 +581,14 @@ run_response=$(cat "$run_out_tmp" 2>/dev/null) || run_response=""
 rm -f "$run_out_tmp"
 run_err_tail=$(grep -v '^[[:space:]]*$' "$run_err_tmp" 2>/dev/null | tail -n 3 | cut -c1-300 | tr '\n' ' ' | sed 's/ $//') || run_err_tail=""
 rm -f "$run_err_tmp"
+# Librarian: close this wake's episode from its artifacts (rc, stderr, FINAL,
+# the project diff, the run's steps), credit the memories it cited, feed the
+# progress triggers, and refresh the mirrors before the commit below. Keyed on
+# the request file the pre hook wrote, so a wake without a pack closes nothing.
+if [[ "$project_mode" -eq 1 && -f "$state_dir/librarian_request.json" ]] && command -v librarian >/dev/null 2>&1; then
+    printf '%s' "$run_response" | librarian runtime post --rc "$run_rc" --run-id "$(cat "$run_id_file" 2>/dev/null)" \
+        --stderr-tail "$run_err_tail" >/dev/null 2>>"$state_dir/librarian.log" || true
+fi
 
 # Anything still alive in this step's session is a process the run left
 # behind (setsid gives each step its own session on Linux; on macOS the
