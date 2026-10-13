@@ -1,12 +1,12 @@
 {
   "display_information": {
-    "name": "Headlong Alerts",
-    "description": "Box alerts for the Headlong personas (dispatcher death, silence, instance checks). Posts only; hears nothing.",
+    "name": "Librarian Alerts",
+    "description": "Box alerts for the Librarian personas (dispatcher death, silence, instance checks). Posts only; hears nothing.",
     "background_color": "#2b2b2b"
   },
   "features": {
     "bot_user": {
-      "display_name": "headlong-alerts",
+      "display_name": "librarian-alerts",
       "always_online": false
     }
   },

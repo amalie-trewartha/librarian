@@ -54,7 +54,7 @@ export PATH="$WORK/toolbin:$PATH"
 export LLM_COUNT="$WORK/count"
 export LLM_SCRIPT="$WORK/script"
 export HOME="$WORK/home"
-export HEADLONG_HOME="$WORK/home/.headlong"
+export LIBRARIAN_HOME="$WORK/home/.librarian"
 export ANTHROPIC_API_KEY="test-key"
 export SHELLM_MODEL="test-model"
 export SHELLM_BEACON_INTERVAL=1
@@ -129,7 +129,7 @@ else
     bad "nested run past SHELLM_INACTIVITY_MAX is killed" "$(tail -3 "$WORK/err")"
 fi
 # The feedback the model sees is a trajectory step, not terminal output.
-ceiling_traj=("$HEADLONG_HOME/trajectories"/*ceiling-case/trajectory.jsonl)
+ceiling_traj=("$LIBRARIAN_HOME/trajectories"/*ceiling-case/trajectory.jsonl)
 if grep -q 'A nested shellm run was still alive' "${ceiling_traj[@]}" 2>/dev/null; then
     ok "kill feedback names the sub-run, not an interactive prompt"
 else

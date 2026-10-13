@@ -1,7 +1,7 @@
 import unittest
 
 from helpers import StoreCase
-from headlong_librarian import lifecycle, model, queue
+from librarian import lifecycle, model, queue
 
 
 class CreditTest(StoreCase):
@@ -43,7 +43,7 @@ class CreditTest(StoreCase):
         self.assertEqual(self.node(a).confidence, 0.5)
 
     def test_cited_from_request_log_task_rows_and_fetch_only(self):
-        from headlong_librarian import pack
+        from librarian import pack
 
         a = self.skill("eigen trick", ["pkg:colcon"], project="p-1")
         c = self.core("core line")
@@ -188,7 +188,7 @@ class ConsolidateTest(StoreCase):
         b = self.skill("widget calibration via the cal-tool flag", ["pkg:widget"], body="Run `cal-tool --fast`; verified 2026-09-03.", provenance={"author": "main", "episode": ep})
         for n in (a, b):
             self.activate(n)
-        from headlong_librarian import llm as llmmod
+        from librarian import llm as llmmod
 
         class Fake:
             model = "fake-main"
@@ -216,7 +216,7 @@ class ConsolidateTest(StoreCase):
         rep = lifecycle.consolidate(self.store, only=["generalize"], use_llm=False)
         self.assertEqual(rep["steps"]["generalize"]["skipped"], "skipped_no_model")
         self.assertEqual(len(rep["steps"]["generalize"]["groups"]), 1)
-        from headlong_librarian import llm as llmmod
+        from librarian import llm as llmmod
 
         class Fake:
             model = "fake-main"

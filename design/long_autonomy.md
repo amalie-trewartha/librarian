@@ -3,18 +3,18 @@
 Status: implemented (opt-in), not yet exercised against a real model.
 Code: `thinkers/_lib/project.sh`,
 `thinkers/monolith/prompt-project.md`, the project hooks in
-`thinkers/monolith/step`, `bin/blind`, `tools/headlong-project`, and the
+`thinkers/monolith/step`, `bin/blind`, `tools/librarian-project`, and the
 templates in `identities/project/`. Test: `tests/test_project_mode.sh`.
 
 ## The problem
 
-Headlong was built for a persistent companion. Many people talk to it, it
+Librarian was built for a persistent companion. Many people talk to it, it
 picks its own interests, and conversation keeps it pointed somewhere.
 Take the people away and give it one research project for two or more
 weeks, and four things go wrong:
 
 1. **Drift.** The stock persona and menu reward curiosity: `think`,
-   `values`, `share`, "explore Headlong itself". With no one steering, the
+   `values`, `share`, "explore Librarian itself". With no one steering, the
    mind wanders off the project or circles over it.
 2. **No discipline over claims.** Nothing separates a sourced number from
    a plausible one. Nothing makes the mind attack its own results, and no
@@ -29,10 +29,10 @@ weeks, and four things go wrong:
 The CNS Bot prompt library (`CNS_Bot_Prompt_Library.md`) answers 1 and 2
 with a fixed charter, a file-based project record and daily and weekly
 rituals. It assumes weekly human check-ins and a scheduler around the
-model. Headlong already has the scheduler (the dispatcher and the
+model. Librarian already has the scheduler (the dispatcher and the
 monolith's backoff), a context that is rebuilt on every wake, and
 trajectories that keep everything. Project mode combines the two: the
-CNS discipline, carried out by Headlong's runtime rather than by prompts
+CNS discipline, carried out by Librarian's runtime rather than by prompts
 on a timer.
 
 ## Design principle: the runtime decides, the model does
@@ -60,7 +60,7 @@ Rituals keyed to output files fail safe. A ritual killed by a crash or a
 budget stop is simply still due on the next wake. A ritual is never
 skipped because a timer fired while the mind was busy.
 
-## Mapping the CNS library onto Headlong
+## Mapping the CNS library onto Librarian
 
 | CNS library | Project mode |
 |---|---|
@@ -82,7 +82,7 @@ skipped because a timer fired while the mind was busy.
 | Adversarial subagents | `blind --role adversary`, required before a number enters project-memory |
 | Independent exploration | `blind --role explorer`, never told the favored approach |
 | Versioning note | Automatic: `project/` is a git repo, committed every wake |
-| "Display on the second monitor" | `STATE`, the weekly report and `headlong-project status`. The dashboard shows the trajectory as before. |
+| "Display on the second monitor" | `STATE`, the weekly report and `librarian-project status`. The dashboard shows the trajectory as before. |
 
 ## Departures from the vision document, and why
 
@@ -95,7 +95,7 @@ skipped because a timer fired while the mind was busy.
   The thread then stays blocked, and the report says so. This keeps the
   library's "stop rather than guess" rule while still ending every block.
   The alternatives were stalling for two weeks or guessing silently.
-- **Subagents are blind by construction.** In Headlong, a nested `shellm`
+- **Subagents are blind by construction.** In Librarian, a nested `shellm`
   forks its parent's trajectory, so a "subagent" sees the whole mind log,
   including the parent's favored approach and its self-assessment. That
   quietly defeats §1's subagent rules and §14's isolation. `bin/blind`
@@ -104,17 +104,17 @@ skipped because a timer fired while the mind was busy.
   given. Its runs stay in `project/.blind/` (gitignored) for audit.
 - **No separate refresh prompts.** The library's restart and
   every-2-hours prompts exist because a long-lived chat context goes
-  stale. Headlong builds a fresh context on every wake, so the charter is
+  stale. Librarian builds a fresh context on every wake, so the charter is
   never more than one wake old.
 - **The menu changes.** `prompt-project.md` replaces think, values, share,
   recall and goals with ritual, work, verify, explore, decide, question,
   default, plan and rest. The responder still answers anyone who
   messages, but the monolith sends no unprompted messages. The weekly
   report is how the agent talks to humans.
-- **Persona replaced.** `headlong-project init` swaps the curious-companion
+- **Persona replaced.** `librarian-project init` swaps the curious-companion
   persona for a short research persona (the old one is kept as
   `core_identity_prompt.md.pre-project`). The stock persona's "explore
-  your own workspace and Headlong itself" competes with the charter.
+  your own workspace and Librarian itself" competes with the charter.
   `--keep-persona` opts out.
 
 ## The deadline and the deliverable
@@ -126,7 +126,7 @@ declare itself blocked on day 4. Two things make the run converge on a
 result:
 
 - **An end date** (`project-pristine/end_at`, set by `init --days N`
-  (default 14) or `--end DATE`, moved by `headlong-project deadline`).
+  (default 14) or `--end DATE`, moved by `librarian-project deadline`).
   Every wake shows "day X of N", the time left and the phase:
   - **build**: the first half,
   - **harden**: the second half, which stresses checking over new scope,
@@ -153,15 +153,15 @@ Humans may look in every few days, with no guarantee. Questions are
 built for both cases.
 
 - **Visible while open.** Every open question leads `ada status` and
-  `headlong-project status`, flagged with `!!!`. Each shows its Q id,
+  `librarian-project status`, flagged with `!!!`. Each shows its Q id,
   whether it is blocking, its default and when the default applies, and
   the command to answer it.
 - **Easy to find once closed.** `project/questions-summary.md` is
   regenerated every wake. It lists open questions first, then a table of
   closed ones and how each closed: human answer, default (with the
-  default used) or moot. `headlong-project questions <name> --closed`
+  default used) or moot. `librarian-project questions <name> --closed`
   prints the same.
-- **Provable human answers.** A human answers with `headlong-project
+- **Provable human answers.** A human answers with `librarian-project
   answer <name> Q3 "..."` or by editing questions.md. Either way the
   change is committed as author "human": the command commits it, and the
   monolith commits all edits made between wakes as "human" before the
@@ -281,7 +281,7 @@ token count suggests.
   - A wake's cost was unbounded once it started subagents.
   - Budget caps were soft.
   - Resting cost a model call every project hour.
-  - Headlong sent no prompt-caching markers at all.
+  - Librarian sent no prompt-caching markers at all.
   - Bedrock was not supported, and `us-west-1` has no `bedrock-mantle`
     endpoint (hence `bedrock-invoke`).
 - **What it taught:** the agent spent its budget on scoping and literature
@@ -295,7 +295,7 @@ Read from the environment or the identity's `.env`:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `HEADLONG_PROJECT_MODE` | 1 | 0 turns project mode off without deleting files |
+| `LIBRARIAN_PROJECT_MODE` | 1 | 0 turns project mode off without deleting files |
 | `PROJECT_DAILY_TOKENS` | 2000000 (set by init) | 24h cap on tokens processed, from the usage ledger |
 | `PROJECT_PACE` | 1 | Pace wakes by their cost (0 turns pacing off) |
 | `PROJECT_TOTAL_TOKENS` | unset (`init --total-tokens`) | Cap on tokens for the whole run |
@@ -309,7 +309,7 @@ Read from the environment or the identity's `.env`:
 | `PROJECT_DELIVERABLE_STALE_HOURS` | 48 | Hours before an unchanged deliverable is flagged |
 | `PROJECT_BUDGET_REST` | 1800 | Minimum delay in seconds while over budget |
 | `PROJECT_REST` | 3600 | Minimum delay in seconds while blocked or done |
-| `PROJECT_DAILY_AT` | 21:00 | Local time (`HEADLONG_TZ`) that closes a project day |
+| `PROJECT_DAILY_AT` | 21:00 | Local time (`LIBRARIAN_TZ`) that closes a project day |
 | `PROJECT_FREETIME` | 1 | Weekly free time on or off |
 | `PROJECT_FREETIME_DAY` | 5 | Day within the project week (0-based) when free time opens |
 | `PROJECT_STALL_HOURS` | 12 | Hours without a journal change before STALL |
@@ -322,8 +322,8 @@ Read from the environment or the identity's `.env`:
 | `PROJECT_DAILY_USD` / `PROJECT_TOTAL_USD` / `PROJECT_WAKE_USD` | unset (`init --daily-usd`, `--total-usd`) | Budgets in estimated dollars instead of tokens. They replace the token caps when set |
 | `LLM_PRICE_SCALE` | 1 | Scales the per-call cost estimate (list prices are first-party; e.g. 1.1 for a Bedrock regional endpoint) |
 | `PROJECT_FALLBACK_USD_PER_MTOK` | 5 | Dollar rate assumed for a call with no cost estimate (an unpriced model) |
-| `HEADLONG_LIBRARIAN` | 1 | 0 turns the librarian hooks off; wakes get the plain project excerpt |
-| `HEADLONG_LIBRARIAN_SRC` | `<app>/librarian/src` (set by init) | The librarian package, mounted read-only into the sandbox |
+| `LIBRARIAN_MEMORY` | 1 | 0 turns the librarian hooks off; wakes get the plain project excerpt |
+| `LIBRARIAN_SRC` | `<app>/librarian/src` (set by init) | The librarian package, mounted read-only into the sandbox |
 | `LIBRARIAN_PACK_TOKENS` | 8000 | Memory pack budget per wake, in estimated tokens |
 | `LIBRARIAN_MODEL`, `LIBRARIAN_MODEL_<ROLE>`, `LIBRARIAN_LLM` | tier defaults | Models for the librarian's optional stages, per role; `LIBRARIAN_LLM=0` skips them all (design/librarian.md) |
 
@@ -358,7 +358,7 @@ Read from the environment or the identity's `.env`:
 
 ## Reference material
 
-`headlong-project init --reference FILE` (repeatable) copies files such as
+`librarian-project init --reference FILE` (repeatable) copies files such as
 an exemplar of the expected end product into `project/reference/`.
 They are read-only and restored if edited, like the charter. Each wake
 lists them by name only, so a long exemplar is not re-sent on every wake.
@@ -366,19 +366,19 @@ lists them by name only, so a long exemplar is not re-sent on every wake.
 ## Operator runbook
 
 ```bash
-headlong-project init ada --spec brief.md --days 14   # sets a 2M tokens/day budget
+librarian-project init ada --spec brief.md --days 14   # sets a 2M tokens/day budget
 ada stop; ada start
 ada status                                     # open questions first, every time
-headlong-project status ada                    # deadline, deliverable, budget, commits
-headlong-project answer ada Q3 "Use 2024 USD"  # the agent applies it next wake
-headlong-project questions ada --closed        # how every closed question closed
-headlong-project deadline ada --days 21        # move the end (reopens a finished run)
+librarian-project status ada                    # deadline, deliverable, budget, commits
+librarian-project answer ada Q3 "Use 2024 USD"  # the agent applies it next wake
+librarian-project questions ada --closed        # how every closed question closed
+librarian-project deadline ada --days 21        # move the end (reopens a finished run)
 git -C .identities/ada/workdir/project log     # the whole run, one commit per wake
 ```
 
 To change the charter or spec mid-run (a human decision), edit
 `.identities/ada/project-pristine/` and run
-`headlong-project update-pristine ada`.
+`librarian-project update-pristine ada`.
 
 At the end of the run, read in this order:
 1. `reports/final.md`

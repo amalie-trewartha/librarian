@@ -1,9 +1,9 @@
-# Headlong Terminal Bench 2.0 Evaluation Report (v2)
+# Librarian Terminal Bench 2.0 Evaluation Report (v2)
 
 **Date:** 2026-05-02  
 **Model:** claude-opus-4-7  
 **Settings:** effort=max, max-iterations=1000, --env local  
-**Agent:** HeadlongAgent (shellm with headlong persona + skills via -f)  
+**Agent:** LibrarianAgent (shellm with librarian persona + skills via -f)  
 **Skills:** mem, web-research, file-tools, skill-author  
 **Harness:** harbor with ShellmDockerEnvironment  
 **Runtime:** 7h 38m 37s  
@@ -25,8 +25,8 @@
 | Run | Tasks | Passed | Rate | [cmd] waste | Notes |
 |-----|-------|--------|------|-------------|-------|
 | shellm run 1 (partial) | 60/89 | 23 | 38.3% | 0% | Cancelled early |
-| headlong run 1 (partial) | 20/89 | 7 | 35.0% | 62.7% | Before context fix |
-| **headlong run 2 (full)** | **89/89** | **36** | **40.4%** | **0%** | **Context fix applied** |
+| librarian run 1 (partial) | 20/89 | 7 | 35.0% | 62.7% | Before context fix |
+| **librarian run 2 (full)** | **89/89** | **36** | **40.4%** | **0%** | **Context fix applied** |
 
 ## Passing Tasks (36)
 

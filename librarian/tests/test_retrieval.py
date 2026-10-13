@@ -2,7 +2,7 @@ import os
 import unittest
 
 from helpers import StoreCase
-from headlong_librarian import model, pack, rank, recall
+from librarian import model, pack, rank, recall
 
 
 class RecallTest(StoreCase):
@@ -216,7 +216,7 @@ class PackTest(StoreCase):
         self.assertIn("UNTRUSTED", joined)
 
     def test_working_under_conflict_not_rendered(self):
-        from headlong_librarian import queue
+        from librarian import queue
 
         with self.store.write():
             queue.enqueue(self.store, "working_conflict", {"node_id": self.w1, "summary": "x", "core_id": self.c1})

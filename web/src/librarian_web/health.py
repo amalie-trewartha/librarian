@@ -28,9 +28,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from statistics import median
 
-from headlong_web.activity import _iso
-from headlong_web.llm_health import _parse_ts
-from headlong_web import trajectory
+from librarian_web.activity import _iso
+from librarian_web.llm_health import _parse_ts
+from librarian_web import trajectory
 
 WINDOW_DAYS = 7
 RECENT_ROWS = 20

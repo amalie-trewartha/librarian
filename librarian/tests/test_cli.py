@@ -5,7 +5,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
 from helpers import StoreCase
-from headlong_librarian import cli
+from librarian import cli
 
 
 class CliCase(StoreCase):

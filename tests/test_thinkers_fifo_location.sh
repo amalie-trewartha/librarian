@@ -59,7 +59,7 @@ sleep 2
 
 fifo=$(head -n 1 "$RUN/fifo_path" 2>/dev/null || true)
 case "$fifo" in
-    /tmp/headlong-dispatch.*/dispatch.fifo)
+    /tmp/librarian-dispatch.*/dispatch.fifo)
         if [[ -p "$fifo" ]]; then ok "fifo_path names a fifo under /tmp"
         else bad "fifo_path names a fifo under /tmp" "not a fifo: $fifo"; fi ;;
     *) bad "fifo_path names a fifo under /tmp" "got '$fifo'" ;;

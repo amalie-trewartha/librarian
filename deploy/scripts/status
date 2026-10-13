@@ -21,16 +21,16 @@ if [[ "$state" == "running" ]]; then
     # Telegram is enabled post-hoc via /etc/shellm/telegram.env, which does
     # NOT survive a rebuild — on the slack stack a missing env is worth a
     # loud reminder, on other stacks telegram only shows when installed.
-    # Units are headlong-* after the rename migration and shelly-* before it;
+    # Units are librarian-* after the rename migration and shelly-* before it;
     # a box can be on either side, and this is the first command the
     # incident runbook reaches for, so resolve the live name rather than
     # reporting a healthy service as missing.
     unit_resolver='
         u() {
-            if [ -f "/etc/systemd/system/headlong-$1.service" ]; then echo "headlong-$1"
+            if [ -f "/etc/systemd/system/librarian-$1.service" ]; then echo "librarian-$1"
             else echo "shelly-$1"; fi
         }
-        has() { [ -f "/etc/systemd/system/headlong-$1.service" ] || [ -f "/etc/systemd/system/shelly-$1.service" ]; }
+        has() { [ -f "/etc/systemd/system/librarian-$1.service" ] || [ -f "/etc/systemd/system/shelly-$1.service" ]; }
     '
     telegram_check='
         if has telegram-bridge; then

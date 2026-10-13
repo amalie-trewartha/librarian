@@ -1,9 +1,9 @@
-# Headlong Terminal Bench 2.0 Evaluation Report
+# Librarian Terminal Bench 2.0 Evaluation Report
 
 **Date:** 2026-05-01
 **Model:** claude-opus-4-7
 **Settings:** effort=max, max-iterations=1000, --env local
-**Agent:** HeadlongAgent (shellm with headlong persona baked in via -f)
+**Agent:** LibrarianAgent (shellm with librarian persona baked in via -f)
 **Harness:** harbor with ShellmDockerEnvironment (cgroup v2 fix)
 
 ## Results Summary
@@ -74,18 +74,18 @@ If we eliminate the `[cmd]` bug completely:
 
 A fix was committed locally (`29843bc`) that strips `[cmd]`/`[thought]` in `extract_code()`, but it wasn't fully effective in the container environment during this run.
 
-## Comparison: Headlong vs Shellm
+## Comparison: Librarian vs Shellm
 
-Of the 20 tasks headlong attempted, we can compare against shellm's previous run:
+Of the 20 tasks librarian attempted, we can compare against shellm's previous run:
 
 | Outcome | Tasks |
 |---------|-------|
 | Both passed | log-summary-date-ranges, merge-diff-arc-agi-task, portfolio-optimization, prove-plus-comm |
-| Headlong only | break-filter-js-from-html, feal-linear-cryptanalysis, reshard-c4-data |
+| Librarian only | break-filter-js-from-html, feal-linear-cryptanalysis, reshard-c4-data |
 | Shellm only | largest-eigenval, modernize-scientific-stack, password-recovery |
-| Not yet run by headlong | 15 tasks that shellm passed |
+| Not yet run by librarian | 15 tasks that shellm passed |
 
-**Headlong passed 3 tasks that shellm failed** (break-filter-js-from-html, feal-linear-cryptanalysis, reshard-c4-data), suggesting the headlong persona adds value for certain task types. However, headlong also failed 3 that shellm passed, and the incomplete run makes definitive comparison difficult.
+**Librarian passed 3 tasks that shellm failed** (break-filter-js-from-html, feal-linear-cryptanalysis, reshard-c4-data), suggesting the librarian persona adds value for certain task types. However, librarian also failed 3 that shellm passed, and the incomplete run makes definitive comparison difficult.
 
 ## Recommendations
 
@@ -101,7 +101,7 @@ Of the 20 tasks headlong attempted, we can compare against shellm's previous run
 
 4. **Fix the `[cmd]` format confusion at the source.** The model emits `[cmd]` because it learned this format from the traj system. Add explicit instructions to the system prompt: "Never emit `[cmd]` or `[thought]` markers in your code blocks — these are internal format markers, not bash commands."
 
-5. **Run headlong natively instead of through shellm.** The current harness uses `shellm --env local -f prompt.txt` with headlong's persona baked in. Running `headlong send` directly would give access to memory, skills, and conversation history. The blocker was the API key not propagating through headlong's Docker env — fix the env var forwarding in headlong's shellm invocation.
+5. **Run librarian natively instead of through shellm.** The current harness uses `shellm --env local -f prompt.txt` with librarian's persona baked in. Running `librarian send` directly would give access to memory, skills, and conversation history. The blocker was the API key not propagating through librarian's Docker env — fix the env var forwarding in librarian's shellm invocation.
 
 6. **Retry on empty/thinking-only responses.** When the API returns only thinking with no text, retry immediately instead of treating it as an error.
 
@@ -111,4 +111,4 @@ Of the 20 tasks headlong attempted, we can compare against shellm's previous run
 
 8. **Add task-specific context.** For tasks with known patterns (git tasks → check reflog, ML tasks → check GPU, etc.), add brief hints to the prompt.
 
-9. **Use the headlong persona more effectively.** The current harness bakes a minimal headlong persona into the prompt. A richer persona with learned skills for common terminal-bench patterns could improve performance.
+9. **Use the librarian persona more effectively.** The current harness bakes a minimal librarian persona into the prompt. A richer persona with learned skills for common terminal-bench patterns could improve performance.

@@ -47,8 +47,8 @@ printf 'data: [DONE]\n'
 EOF
 chmod +x "$WORK/bin/curl"
 export PATH="$WORK/bin:$PATH"
-export HEADLONG_HOME="$WORK/home"
-mkdir -p "$HEADLONG_HOME"
+export LIBRARIAN_HOME="$WORK/home"
+mkdir -p "$LIBRARIAN_HOME"
 export STUB_LINES_SENT="$WORK/sent"
 export LLM_RETRIES=0
 export LLM_USAGE_LEDGER="$WORK/ledger.jsonl"

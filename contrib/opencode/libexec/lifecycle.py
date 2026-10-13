@@ -11,7 +11,7 @@ import sys
 import tempfile
 
 PACKAGE = Path(__file__).resolve().parent.parent
-OWNER = 'headlong-contrib-opencode-v1\n'
+OWNER = 'librarian-contrib-opencode-v1\n'
 
 
 def fail(message):
@@ -54,7 +54,7 @@ def lock(path, operation):
 def validate_identity(path):
     identity = path.resolve(strict=True)
     if not identity.is_dir() or not (identity / 'core_identity_prompt.md').is_file():
-        fail('expected an existing Headlong identity with core_identity_prompt.md')
+        fail('expected an existing Librarian identity with core_identity_prompt.md')
     for name in ['extensions', 'skills']:
         child = identity / name
         if child.is_symlink() or (exists(child) and not child.is_dir()):
@@ -195,5 +195,5 @@ if __name__ == '__main__':
     try:
         sys.exit(main())
     except (RuntimeError, OSError) as error:
-        print('headlong-opencode: ' + str(error), file=sys.stderr)
+        print('librarian-opencode: ' + str(error), file=sys.stderr)
         sys.exit(2)

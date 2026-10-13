@@ -5,7 +5,7 @@ import time
 import unittest
 
 from helpers import StoreCase, T0
-from headlong_librarian import db
+from librarian import db
 
 
 class ClockTest(StoreCase):

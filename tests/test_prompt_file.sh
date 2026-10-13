@@ -38,7 +38,7 @@ chmod +x "$WORK/toolbin/llm"
 
 export PATH="$WORK/toolbin:$PATH"
 export HOME="$WORK/home"
-export HEADLONG_HOME="$WORK/home/.headlong"
+export LIBRARIAN_HOME="$WORK/home/.librarian"
 export ANTHROPIC_API_KEY="test-key"
 export SHELLM_MODEL="test-model"
 export SHELLM_ENV=local
@@ -68,7 +68,7 @@ else
     bad "300KB prompt runs via --prompt-file" "rc=$rc: $(tail -2 "$WORK/err" | tr '\n' ' ')"
 fi
 
-if grep -rq "$MARK" "$HEADLONG_HOME" 2>/dev/null; then
+if grep -rq "$MARK" "$LIBRARIAN_HOME" 2>/dev/null; then
     ok "prompt text reached the trajectory"
 else
     bad "prompt text reached the trajectory"

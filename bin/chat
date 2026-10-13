@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (bin/librarian-env).
+for _le in "$(dirname "${BASH_SOURCE[0]}")/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/bin/librarian-env"; do
+    # shellcheck source=/dev/null
+    if [[ -f "$_le" ]]; then . "$_le"; break; fi
+done; unset _le
+
 set -euo pipefail
 
 # chat — Send and receive messages on an activated identity's trajectory
@@ -19,7 +25,7 @@ CHATRC="${CHATRC:-./.chatrc}"
 
 # Read a key from the chatrc file. Returns empty string if not found.
 # Surrounding whitespace is trimmed to match the web server's parsing
-# (_chatrc_default_from in web/src/headlong_web/server.py).
+# (_chatrc_default_from in web/src/librarian_web/server.py).
 _chatrc_get() {
     local key="$1" value
     [[ -f "$CHATRC" ]] || return 0
@@ -39,7 +45,7 @@ _chat_append() {
 }
 
 # Slack target grammar. This string is a copy of NAME_RE_TEXT in
-# slack/src/headlong_slack/naming.py and slack/tests/test_naming.py asserts the
+# slack/src/librarian_slack/naming.py and slack/tests/test_naming.py asserts the
 # two are identical, so chat cannot accept a name the bridge would drop (the
 # bridge dropped 23 of Audel's 74 sends in one week with no error, 2026-09-09;
 # design/outbound_delivery.md). Edit both or CI fails.
@@ -869,8 +875,8 @@ cmd_thread_key() {
 
 cmd_repl() {
     # Prefer the renamed TUI binary; fall back to a pre-rename build.
-    if command -v headlong-tui >/dev/null 2>&1; then
-        exec headlong-tui "$@"
+    if { command -v librarian-tui >/dev/null 2>&1 || command -v headlong-tui >/dev/null 2>&1; }; then
+        exec "$(command -v librarian-tui 2>/dev/null || command -v headlong-tui)" "$@"
     fi
     exec shellm-tui "$@"
 }

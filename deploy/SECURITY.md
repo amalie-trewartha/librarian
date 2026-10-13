@@ -1,6 +1,6 @@
 # Security posture of the chat integrations
 
-This doc summarizes how each way of talking to a Headlong identity is
+This doc summarizes how each way of talking to a Librarian identity is
 secured. It covers the Slack bridge (`slack/`), the phone chat PWA
 (`web/`, served behind Cloudflare Access), and the Telegram bridge
 (`telegram/`). Read
@@ -29,22 +29,22 @@ its own namespace, so the channels cannot leak into each other's
 transport, though the shared mind means content can still cross.
 
 Each bridge has a kill switch that mutes the channel without touching
-the agent. For Slack it is `systemctl stop headlong-slack-bridge`, for the
+the agent. For Slack it is `systemctl stop librarian-slack-bridge`, for the
 phone chat it is disabling the Cloudflare Access app, and for Telegram
-it is `systemctl stop headlong-telegram-bridge`.
+it is `systemctl stop librarian-telegram-bridge`.
 
 ## Runtime sandbox and the bridge tokens
 
-Every wake runs inside `headlong-thinkers@<identity>.service`, and that
+Every wake runs inside `librarian-thinkers@<identity>.service`, and that
 unit carries a sandbox drop-in (`deploy/thinkers-sandbox.sh`, on by
-default, `HEADLONG_SANDBOX=0` in the root `.env` turns it off at the
-next `headlong-thinkersctl restart`). Inside it the whole filesystem is
+default, `LIBRARIAN_SANDBOX=0` in the root `.env` turns it off at the
+next `librarian-thinkersctl restart`). Inside it the whole filesystem is
 read-only except the shellm home (tool caches, state), the identity's
 own directory (memories, prompts, thinker copies, workdir, its clone of
 the repo), and `/tmp` and `/var/tmp`. The app checkout is read-only, so a
 wake cannot edit `bin/`, `thinkers/`, `tools/`, `deploy/` or the root
 `.env` in place, cannot create another identity beside its own. `sudo` stays limited to
-the `headlong-thinkersctl` wrapper, as before, so a mind can still
+the `librarian-thinkersctl` wrapper, as before, so a mind can still
 restart itself the documented way. The rules apply to anything
 the wake backgrounds too, because they are mount rules on the unit's
 namespace, not checks in the tools. The mind keeps full sovereignty
@@ -52,13 +52,13 @@ over its own identity directory; contributions to the runtime go
 through its clone and pull requests.
 
 The Slack bridge's tokens live in `.env.bridge`, loaded by
-`headlong-slack-bridge.service` only and marked inaccessible in the
+`librarian-slack-bridge.service` only and marked inaccessible in the
 sandbox, so a wake cannot read them (`deploy/split-bridge-env.sh` moves
 them there; the box user data and `update.sh` run it, so a rebuild or a
 re-pushed `.env` lands in the same place). Telegram already had this
 shape: its token is root-owned in `/etc/shellm/telegram.env` and the
 bridge runs as a separate user. The box alert scripts post with
-`HEADLONG_ALERT_TOKEN` from the root `.env`; the split seeds it as a
+`LIBRARIAN_ALERT_TOKEN` from the root `.env`; the split seeds it as a
 copy of the bot token so alerts keep working, and the split is only
 complete once that is replaced with a token from a dedicated alert-only
 app. Until then a wake that reads `.env` still holds a token that can

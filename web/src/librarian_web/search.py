@@ -13,7 +13,7 @@ log". scope="all" searches everything.
 
 from typing import Any
 
-from headlong_web.trajectory import MACHINERY_TYPES
+from librarian_web.trajectory import MACHINERY_TYPES
 
 _FIELD_CAP = 16 * 1024
 _SNIPPET_RADIUS = 60

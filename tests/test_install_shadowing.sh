@@ -5,14 +5,14 @@
 # Usage: tests/test_install_shadowing.sh
 #
 # Ahead of the install directory on PATH: another llm (the Python llm CLI's
-# shape) and an older Headlong copy are moved aside to *.pre-headlong-*, and
+# shape) and an older Librarian copy are moved aside to *.pre-headlong-*, and
 # an unrelated program with one of our generic names is left alone with a
-# warning. A non-Headlong file at the install path itself is kept, renamed,
+# warning. A non-Librarian file at the install path itself is kept, renamed,
 # before it is replaced. --keep-conflicts only warns. Runs install.sh against
 # a throwaway HOME; no network, no docker.
 
 set -uo pipefail
-unset IDENTITY_DIR IDENTITY_NAME HEADLONG_HOME SHELLM_HOME PREFIX SYMLINKS 2>/dev/null
+unset IDENTITY_DIR IDENTITY_NAME LIBRARIAN_HOME SHELLM_HOME PREFIX SYMLINKS 2>/dev/null
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(dirname "$HERE")"
 
@@ -43,18 +43,18 @@ setup
 out=$(run_install); rc=$?
 [[ $rc -eq 0 ]] && ok "install succeeds" || bad "install succeeds" "rc=$rc: $(printf '%s' "$out" | tail -5)"
 [[ ! -e "$E/llm" ]] && ls "$E"/llm.pre-headlong-* >/dev/null 2>&1 && ok "a shadowing llm is moved aside" || bad "a shadowing llm is moved aside"
-[[ ! -e "$E/mem" ]] && ls "$E"/mem.pre-headlong-* >/dev/null 2>&1 && ok "an older Headlong copy ahead on PATH is moved aside" || bad "an older Headlong copy ahead on PATH is moved aside"
+[[ ! -e "$E/mem" ]] && ls "$E"/mem.pre-headlong-* >/dev/null 2>&1 && ok "an older Librarian copy ahead on PATH is moved aside" || bad "an older Librarian copy ahead on PATH is moved aside"
 [[ -e "$E/chat" ]] && ok "an unrelated same-named program is left alone" || bad "an unrelated same-named program is left alone"
-has "and it is warned about" "$out" "$E/chat (not Headlong) shadows"
+has "and it is warned about" "$out" "$E/chat (not Librarian) shadows"
 has "the moves are reported" "$out" "Moved aside $E/llm"
 has "hash -r is suggested" "$out" "hash -r"
-ls "$P"/context.pre-headlong-* >/dev/null 2>&1 && ok "a non-Headlong file at the install path is kept, renamed" || bad "a non-Headlong file at the install path is kept, renamed"
-[[ "$(readlink "$P/context")" == "$REPO/bin/context" ]] && ok "and replaced by Headlong's" || bad "and replaced by Headlong's" "$(readlink "$P/context")"
-[[ "$(cd "$WORK/home" && env -i PATH="$E:$P:/usr/bin:/bin" bash -c 'command -v llm')" == "$P/llm" ]] && ok "llm now resolves to Headlong's" || bad "llm now resolves to Headlong's"
+ls "$P"/context.pre-headlong-* >/dev/null 2>&1 && ok "a non-Librarian file at the install path is kept, renamed" || bad "a non-Librarian file at the install path is kept, renamed"
+[[ "$(readlink "$P/context")" == "$REPO/bin/context" ]] && ok "and replaced by Librarian's" || bad "and replaced by Librarian's" "$(readlink "$P/context")"
+[[ "$(cd "$WORK/home" && env -i PATH="$E:$P:/usr/bin:/bin" bash -c 'command -v llm')" == "$P/llm" ]] && ok "llm now resolves to Librarian's" || bad "llm now resolves to Librarian's"
 
 out=$(run_install); rc=$?
 [[ $rc -eq 0 ]] && ok "re-running is safe" || bad "re-running is safe"
-[[ "$(ls "$P"/context.pre-headlong-* 2>/dev/null | wc -l)" -eq 1 ]] && ok "re-running does not back up Headlong's own links" || bad "re-running does not back up Headlong's own links"
+[[ "$(ls "$P"/context.pre-headlong-* 2>/dev/null | wc -l)" -eq 1 ]] && ok "re-running does not back up Librarian's own links" || bad "re-running does not back up Librarian's own links"
 
 setup
 out=$(run_install --keep-conflicts)

@@ -11,7 +11,7 @@ the file is never touched.
 import tracemalloc
 from pathlib import Path
 
-from headlong_web import logs
+from librarian_web import logs
 
 
 def _write_log(identity: Path, lines: list[str]) -> Path:

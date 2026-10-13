@@ -3,7 +3,7 @@
 Playbook for changing something structural on a box that is running a mind
 (renaming systemd units, moving paths, changing users). Written after the
 2026-08-19 `shellm-*` -> `shelly-*` unit rename, and used again for
-the 2026-08 `shelly-*` -> `headlong-*` rename (which deliberately skipped
+the 2026-08 `shelly-*` -> `librarian-*` rename (which deliberately skipped
 the compat step — see the header of deploy/migrate-units.sh for what that
 trades away).
 
@@ -118,7 +118,7 @@ against the rename.
 - Dispatcher log shows a **clean** stop (`caught SIGTERM from a deliberate
   stop — exiting clean`). An unclean exit means `Restart=on-failure` and
   the Slack death alert are about to fire.
-- No alert fallback log (`/var/tmp/headlong-thinkers-alert.log`) — its
+- No alert fallback log (`/var/tmp/librarian-thinkers-alert.log`) — its
   presence means a Slack post failed.
 - Trajectory has a fresh step with a timestamp after the restart.
 - Drop-in values still applied.
@@ -142,3 +142,7 @@ chat.
   Check for collisions between incoming files and the box's dirty paths —
   a `--ff-only` pull only fails if they overlap.
 - Never read the mind log whole; tail only (800M+).
+
+## 2026-10-13: headlong-* → librarian-*
+
+The framework was renamed Librarian with back-compat (design/rename-to-librarian.md). `deploy/migrate-units.sh` now migrates `headlong-*` units (and the silence service/timer), moves `headlong-web.service.d`, rewrites `HEADLONG_*` to `LIBRARIAN_*` in drop-ins, and keeps `headlong-thinkersctl` as a symlink the sudoers rule still permits. `update.sh` refuses to run while `headlong-*` units are installed.

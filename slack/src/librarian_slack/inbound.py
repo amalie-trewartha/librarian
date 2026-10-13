@@ -81,7 +81,7 @@ class InboundMessage:
     # First @mention in a thread: drain worker prepends capped prior lines.
     # Bolt must not wait on conversations.replies.
     backfill: bool = False
-    # Posted by another Headlong persona's bot (config.peer_bot_users).
+    # Posted by another Librarian persona's bot (config.peer_bot_users).
     is_peer: bool = False
 
 
@@ -504,7 +504,7 @@ class Inbound:
         # to another persona, not a person, and that the exchange is bounded.
         who = self.names.user(msg.user)
         if msg.is_peer:
-            who = f"{who}, a Headlong persona like you, not a person"
+            who = f"{who}, a Librarian persona like you, not a person"
         header = (
             f"(Slack: {who} in {self.names.place(msg.channel)}"
             f" — reply with: chat reply {msg.from_name})"

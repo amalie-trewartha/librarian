@@ -191,7 +191,7 @@ A question closes in exactly one of three ways, and its Resolution line
 says which:
 
 - **Human answer.** A human writes the Answer line, by hand or with
-  `headlong-project answer`. The runtime tells you (HUMAN ANSWER). Apply
+  `librarian-project answer`. The runtime tells you (HUMAN ANSWER). Apply
   it ahead of other work, including any downstream work it changes. Then
   write `Resolution: <date> human answer applied: <what changed>` and mark
   it `STATUS: answered`. A human answer outranks a default you already

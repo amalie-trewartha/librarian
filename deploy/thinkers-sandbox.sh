@@ -1,28 +1,46 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (same mapping as bin/librarian-env).
+if [[ -z "${LIBRARIAN_MEMORY+x}" && -n "${HEADLONG_LIBRARIAN+x}" ]]; then export LIBRARIAN_MEMORY="$HEADLONG_LIBRARIAN"; fi
+if [[ -z "${LIBRARIAN_SRC+x}" && -n "${HEADLONG_LIBRARIAN_SRC+x}" ]]; then export LIBRARIAN_SRC="$HEADLONG_LIBRARIAN_SRC"; fi
+for _le_hv in $(compgen -A variable HEADLONG_ 2>/dev/null); do
+    case "$_le_hv" in HEADLONG_LIBRARIAN|HEADLONG_LIBRARIAN_SRC) continue ;; esac
+    _le_lv="LIBRARIAN_${_le_hv#HEADLONG_}"
+    if [[ -z "${!_le_lv+x}" ]]; then export "$_le_lv=${!_le_hv}"; fi
+done
+unset _le_hv _le_lv
+if [[ -z "${LIBRARIAN_HOME:-}" && -n "${HOME:-}" && ! -d "$HOME/.librarian" && -d "$HOME/.headlong" ]]; then
+    export LIBRARIAN_HOME="$HOME/.headlong"
+fi
+if [[ -z "${LIBRARIAN_THINKERS_TEMPLATES:-}" && -n "${HOME:-}" ]]; then
+    if [[ ! -d "$HOME/.librarian-thinkers" && -d "$HOME/.headlong-thinkers" ]]; then
+        export LIBRARIAN_THINKERS_TEMPLATES="$HOME/.headlong-thinkers"
+    fi
+fi
+
 set -euo pipefail
 
 # deploy/thinkers-sandbox.sh — install or remove the runtime sandbox drop-in
-# for headlong-thinkers@<identity>.service, from one flag.
+# for librarian-thinkers@<identity>.service, from one flag.
 #
 # Usage:
 #   thinkers-sandbox.sh install APP_DIR [SHELLM_HOME] [UNIT_DIR]   write/remove the drop-in; prints installed|removed|unchanged
 #   thinkers-sandbox.sh render  APP_DIR [SHELLM_HOME]              print the drop-in that install would write
 #   thinkers-sandbox.sh status  APP_DIR [SHELLM_HOME] [UNIT_DIR]   print on|off (flag) and present|absent (drop-in)
 #
-# Flag: HEADLONG_SANDBOX in APP_DIR/.env (or the environment, which wins).
-# Default ON. Set HEADLONG_SANDBOX=0 and re-run deploy/update.sh to remove
+# Flag: LIBRARIAN_SANDBOX in APP_DIR/.env (or the environment, which wins).
+# Default ON. Set LIBRARIAN_SANDBOX=0 and re-run deploy/update.sh to remove
 # the drop-in; the change reaches a running mind at its next
-# `headlong-thinkersctl restart <identity>`.
+# `librarian-thinkersctl restart <identity>`.
 #
 # What the sandbox does. Every wake runs inside the thinkers unit's cgroup,
 # so these mount rules apply to the run and to anything it backgrounds:
 #
 #   the whole filesystem       read-only   (ProtectSystem=strict)
-#   the shellm home            writable    (tool caches, ~/.headlong state, backups)
+#   the shellm home            writable    (tool caches, ~/.librarian state, backups)
 #   the app checkout           read-only   (bin, thinkers, tools, deploy, .env)
 #   the identity directory     writable    (memories, prompts, thinker copies,
 #                                            workdir, its own clone of the repo;
-#                                            at HEADLONG_IDENTITIES_DIR/<name>
+#                                            at LIBRARIAN_IDENTITIES_DIR/<name>
 #                                            when the root was moved out)
 #   /tmp and /var/tmp          writable    (shared with the bridges, so a file
 #                                            the mind writes for `chat send-file`
@@ -31,7 +49,7 @@ set -euo pipefail
 #                                            deploy/split-bridge-env.sh)
 #
 # Not NoNewPrivileges: sudoers already limits the shellm user to the
-# headlong-thinkersctl wrapper, and that is the documented way for a mind
+# librarian-thinkersctl wrapper, and that is the documented way for a mind
 # to restart itself safely (the wake note and `thinkers stop` both point
 # at it); it still works under the read-only root (verified 2026-09-15).
 #
@@ -52,7 +70,7 @@ action="${1:?usage: thinkers-sandbox.sh install|render|status APP_DIR [SHELLM_HO
 APP_DIR="${2:?APP_DIR required}"
 SHELLM_HOME="${3:-$(dirname "$APP_DIR")}"
 UNIT_DIR="${4:-/etc/systemd/system}"
-DROPIN_DIR="$UNIT_DIR/headlong-thinkers@.service.d"
+DROPIN_DIR="$UNIT_DIR/librarian-thinkers@.service.d"
 DROPIN="$DROPIN_DIR/sandbox.conf"
 
 env_value() {  # env_value NAME -> the environment wins, then APP_DIR/.env
@@ -65,7 +83,7 @@ env_value() {  # env_value NAME -> the environment wins, then APP_DIR/.env
 
 flag_on() {
     local v
-    v=$(env_value HEADLONG_SANDBOX)
+    v=$(env_value LIBRARIAN_SANDBOX)
     case "${v:-1}" in
         0|false|no|off) return 1 ;;
         *) return 0 ;;
@@ -78,10 +96,10 @@ flag_on() {
 # outside the checkout and is linked back (layer 0 of
 # design/runtime_isolation.md), the writable mount must land on the real
 # directory: the link at app/.identities is resolved, or
-# HEADLONG_IDENTITIES_DIR in .env names it outright.
+# LIBRARIAN_IDENTITIES_DIR in .env names it outright.
 identities_dir() {
     local v d
-    v=$(env_value HEADLONG_IDENTITIES_DIR)
+    v=$(env_value LIBRARIAN_IDENTITIES_DIR)
     if [[ -n "$v" ]]; then printf '%s' "$v"; return 0; fi
     d="$SHELLM_HOME/app/.identities"
     # No override: a bind mount (the provisioned layout) is a real directory
@@ -95,10 +113,10 @@ identities_dir() {
 
 render() {
     cat <<CONF
-# Installed by deploy/thinkers-sandbox.sh from HEADLONG_SANDBOX in
-# $APP_DIR/.env (default on). Do not edit: set HEADLONG_SANDBOX=0 there
+# Installed by deploy/thinkers-sandbox.sh from LIBRARIAN_SANDBOX in
+# $APP_DIR/.env (default on). Do not edit: set LIBRARIAN_SANDBOX=0 there
 # and re-run deploy/update.sh to remove it. Takes effect on the next
-# headlong-thinkersctl restart <identity>.
+# librarian-thinkersctl restart <identity>.
 [Service]
 ProtectSystem=strict
 ReadWritePaths=$SHELLM_HOME /tmp /var/tmp

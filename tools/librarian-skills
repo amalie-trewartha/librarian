@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2154,SC2034  # colors, VERBOSE, _skillsrc and the helpers come from the sourced core `skills`
+# Librarian names are canonical; Headlong spellings still work (bin/librarian-env).
+for _le in "$(dirname "${BASH_SOURCE[0]}")/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/bin/librarian-env"; do
+    # shellcheck source=/dev/null
+    if [[ -f "$_le" ]]; then . "$_le"; break; fi
+done; unset _le
+
 set -euo pipefail
 
-# headlong-skills — the skills package manager: search, install, remove,
+# librarian-skills — the skills package manager: search, install, remove,
 # check, init, promote, kernel, and remotes. The mind's own `skills`
 # (bin/skills) lists, shows, and renders skills into its prompt; this tool
 # sources it for the shared config and helpers and adds the management
@@ -13,7 +19,7 @@ _core=""
 for _c in "$_here/skills" "$_here/../bin/skills" "$(command -v skills 2>/dev/null || true)"; do
     if [[ -n "$_c" && -f "$_c" ]]; then _core="$_c"; break; fi
 done
-[[ -n "$_core" ]] || { echo "headlong-skills: cannot find the core skills script (bin/skills)" >&2; exit 1; }
+[[ -n "$_core" ]] || { echo "librarian-skills: cannot find the core skills script (bin/skills)" >&2; exit 1; }
 # shellcheck disable=SC2034  # read by the sourced core: skip its main
 SKILLS_LIB_ONLY=1
 # shellcheck disable=SC1090  # resolved at runtime: sibling in PREFIX or ../bin in a checkout
@@ -725,7 +731,7 @@ EOF
 
 usage() {
     cat <<'EOF'
-headlong-skills — the skills package manager (search, install, check, remotes)
+librarian-skills — the skills package manager (search, install, check, remotes)
 
 Usage:
   skills                                    List installed skills (eligible only)

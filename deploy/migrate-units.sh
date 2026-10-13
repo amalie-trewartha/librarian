@@ -1,8 +1,26 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (same mapping as bin/librarian-env).
+if [[ -z "${LIBRARIAN_MEMORY+x}" && -n "${HEADLONG_LIBRARIAN+x}" ]]; then export LIBRARIAN_MEMORY="$HEADLONG_LIBRARIAN"; fi
+if [[ -z "${LIBRARIAN_SRC+x}" && -n "${HEADLONG_LIBRARIAN_SRC+x}" ]]; then export LIBRARIAN_SRC="$HEADLONG_LIBRARIAN_SRC"; fi
+for _le_hv in $(compgen -A variable HEADLONG_ 2>/dev/null); do
+    case "$_le_hv" in HEADLONG_LIBRARIAN|HEADLONG_LIBRARIAN_SRC) continue ;; esac
+    _le_lv="LIBRARIAN_${_le_hv#HEADLONG_}"
+    if [[ -z "${!_le_lv+x}" ]]; then export "$_le_lv=${!_le_hv}"; fi
+done
+unset _le_hv _le_lv
+if [[ -z "${LIBRARIAN_HOME:-}" && -n "${HOME:-}" && ! -d "$HOME/.librarian" && -d "$HOME/.headlong" ]]; then
+    export LIBRARIAN_HOME="$HOME/.headlong"
+fi
+if [[ -z "${LIBRARIAN_THINKERS_TEMPLATES:-}" && -n "${HOME:-}" ]]; then
+    if [[ ! -d "$HOME/.librarian-thinkers" && -d "$HOME/.headlong-thinkers" ]]; then
+        export LIBRARIAN_THINKERS_TEMPLATES="$HOME/.headlong-thinkers"
+    fi
+fi
+
 set -euo pipefail
 
 # deploy/migrate-units.sh — one-time cutover from the shelly-* systemd units
-# to headlong-*. Run once per box, in a window someone is watching:
+# to librarian-*. Run once per box, in a window someone is watching:
 #
 #   sudo bash /opt/shellm/app/deploy/migrate-units.sh --dry-run   # rehearse
 #   sudo bash /opt/shellm/app/deploy/migrate-units.sh             # do it
@@ -39,7 +57,7 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/shellm/app}"
 SHELLM_HOME="${SHELLM_HOME:-$(dirname "$APP_DIR")}"
-BACKUP_DIR="${BACKUP_DIR:-/var/backups/headlong-unit-migration}"
+BACKUP_DIR="${BACKUP_DIR:-/var/backups/librarian-unit-migration}"
 # Overridable so the script can be rehearsed against a scratch layout.
 SYSD="${SYSD:-/etc/systemd/system}"
 SUDOERS_D="${SUDOERS_D:-/etc/sudoers.d}"
@@ -48,18 +66,31 @@ LOCAL_BIN="${LOCAL_BIN:-/usr/local/bin}"
 
 # legacy:new. Order matters for stop (below) but not here.
 UNIT_PAIRS=(
-    "shelly-web.service:headlong-web.service"
-    "shelly-thinkers@.service:headlong-thinkers@.service"
-    "shelly-thinkers-alert@.service:headlong-thinkers-alert@.service"
-    "shelly-slack-bridge.service:headlong-slack-bridge.service"
-    "shelly-slack-agent.service:headlong-slack-agent.service"
-    "shelly-telegram-bridge.service:headlong-telegram-bridge.service"
+    "headlong-web.service:librarian-web.service"
+    "headlong-thinkers@.service:librarian-thinkers@.service"
+    "headlong-thinkers-alert@.service:librarian-thinkers-alert@.service"
+    "headlong-thinkers-silence@.service:librarian-thinkers-silence@.service"
+    "headlong-thinkers-silence@.timer:librarian-thinkers-silence@.timer"
+    "headlong-slack-bridge.service:librarian-slack-bridge.service"
+    "headlong-slack-agent.service:librarian-slack-agent.service"
+    "headlong-telegram-bridge.service:librarian-telegram-bridge.service"
+    # One generation further back (a box never migrated off shelly-*).
+    "shelly-web.service:librarian-web.service"
+    "shelly-thinkers@.service:librarian-thinkers@.service"
+    "shelly-thinkers-alert@.service:librarian-thinkers-alert@.service"
+    "shelly-slack-bridge.service:librarian-slack-bridge.service"
+    "shelly-slack-agent.service:librarian-slack-agent.service"
+    "shelly-telegram-bridge.service:librarian-telegram-bridge.service"
 )
 
 # Stopped in this order: bridges first so nothing new arrives while the mind
 # drains, then the persona bootstrap, then the dispatchers, then the web
 # control plane last (it is what an operator watches for health).
 STOP_ORDER=(
+    headlong-slack-bridge.service
+    headlong-telegram-bridge.service
+    headlong-slack-agent.service
+    headlong-web.service
     shelly-slack-bridge.service
     shelly-telegram-bridge.service
     shelly-slack-agent.service
@@ -119,9 +150,9 @@ if [[ "$MODE" == rollback ]]; then
     # dispatcher in a cgroup whose unit file is about to vanish is a mess.
     while read -r ident; do
         [[ -n "$ident" ]] || continue
-        say "Stopping headlong-thinkers@$ident"
-        run systemctl stop "headlong-thinkers@$ident.service" || true
-    done < <(thinker_instances headlong-thinkers)
+        say "Stopping librarian-thinkers@$ident"
+        run systemctl stop "librarian-thinkers@$ident.service" || true
+    done < <(thinker_instances librarian-thinkers)
 
     for pair in "${UNIT_PAIRS[@]}"; do
         new="${pair#*:}"
@@ -129,8 +160,8 @@ if [[ "$MODE" == rollback ]]; then
         run systemctl disable --now "$new" || true
         run rm -f "$SYSD/$new"
     done
-    if [[ -d "$SYSD/headlong-web.service.d" ]]; then
-        run rm -rf "$SYSD/headlong-web.service.d"
+    if [[ -d "$SYSD/librarian-web.service.d" ]]; then
+        run rm -rf "$SYSD/librarian-web.service.d"
     fi
 
     for pair in "${UNIT_PAIRS[@]}"; do
@@ -148,11 +179,11 @@ if [[ "$MODE" == rollback ]]; then
     if [[ -f "$BACKUP_DIR/sudoers-shelly-thinkers" ]]; then
         run install -o root -g root -m 0440 "$BACKUP_DIR/sudoers-shelly-thinkers" $SUDOERS_D/shelly-thinkers
     fi
-    run rm -f $SUDOERS_D/headlong-thinkers $LOCAL_BIN/headlong-thinkersctl
+    run rm -f $SUDOERS_D/librarian-thinkers $LOCAL_BIN/librarian-thinkersctl
     if [[ -f "$BACKUP_DIR/shelly-signals.rules" ]]; then
         run install -o root -g root -m 0640 "$BACKUP_DIR/shelly-signals.rules" $AUDIT_D/shelly-signals.rules
     fi
-    run rm -f $AUDIT_D/headlong-signals.rules
+    run rm -f $AUDIT_D/librarian-signals.rules
 
     run systemctl daemon-reload
 
@@ -184,14 +215,14 @@ for pair in "${UNIT_PAIRS[@]}"; do
     [[ -f "$APP_DIR/deploy/$new" ]] \
         || { echo "error: missing $APP_DIR/deploy/$new — is the repo on the rename commit?" >&2; exit 1; }
 done
-[[ -f "$APP_DIR/deploy/headlong-thinkersctl" ]] \
-    || { echo "error: missing $APP_DIR/deploy/headlong-thinkersctl" >&2; exit 1; }
+[[ -f "$APP_DIR/deploy/librarian-thinkersctl" ]] \
+    || { echo "error: missing $APP_DIR/deploy/librarian-thinkersctl" >&2; exit 1; }
 
-# No compat aliases this time: the headlong-* console scripts must already
+# No compat aliases this time: the librarian-* console scripts must already
 # be in the venvs (deploy update.sh ran on the rename commit) or the new
 # units will have nothing to exec.
-for proj_bin in web/.venv/bin/headlong-web slack/.venv/bin/headlong-slack-bridge \
-                telegram/.venv/bin/headlong-telegram-bridge; do
+for proj_bin in web/.venv/bin/librarian-web slack/.venv/bin/librarian-slack-bridge \
+                telegram/.venv/bin/librarian-telegram-bridge; do
     proj="${proj_bin%%/*}"
     # Optional components: only require the binary if the component's legacy
     # unit is actually installed.
@@ -276,7 +307,7 @@ done
 ########################################################################
 # Swap the files
 ########################################################################
-say "Removing legacy units and installing headlong-* units"
+say "Removing legacy units and installing librarian-* units"
 for pair in "${UNIT_PAIRS[@]}"; do
     legacy="${pair%%:*}"
     [[ -f "$SYSD/$legacy" ]] || continue
@@ -300,23 +331,26 @@ done
 
 # The box-local drop-in (CORS origin, etc.) has to follow the unit name or
 # it stops applying — silently, since systemd just ignores an orphan dir.
-# SHELLY_* var names inside it are rewritten to HEADLONG_* (there is no
-# SHELLY_ fallback in headlong_web/env.py anymore); operator-set SHELLM_*
+# SHELLY_* var names inside it are rewritten to LIBRARIAN_* (there is no
+# SHELLY_ fallback in librarian_web/env.py anymore); operator-set SHELLM_*
 # names keep working through env.py's SHELLM_ fallback, which stays until
 # the parked /opt/shellm world is renamed.
-if [[ -d "$SYSD/shelly-web.service.d" ]]; then
-    say "Moving drop-in shelly-web.service.d -> headlong-web.service.d"
-    run mv "$SYSD/shelly-web.service.d" "$SYSD/headlong-web.service.d"
+for legacy_dropin in headlong shelly; do
+    [[ -d "$SYSD/$legacy_dropin-web.service.d" ]] || continue
+    say "Moving drop-in $legacy_dropin-web.service.d -> librarian-web.service.d"
+    run mv "$SYSD/$legacy_dropin-web.service.d" "$SYSD/librarian-web.service.d"
     if [[ $DRY_RUN -eq 1 ]]; then
-        printf '    [dry-run] rewrite SHELLY_ -> HEADLONG_ in headlong-web.service.d/*.conf\n'
+        printf '    [dry-run] rewrite HEADLONG_/SHELLY_ -> LIBRARIAN_ in librarian-web.service.d/*.conf\n'
     else
-        for conf in "$SYSD/headlong-web.service.d"/*.conf; do
+        for conf in "$SYSD/librarian-web.service.d"/*.conf; do
             [[ -f "$conf" ]] || continue
-            sed -i -e 's/\bSHELLY_/HEADLONG_/g' \
-                -e 's|/usr/local/bin/shelly-thinkersctl|/usr/local/bin/headlong-thinkersctl|g' "$conf"
+            sed -i -e 's/\bHEADLONG_LIBRARIAN_SRC\b/LIBRARIAN_SRC/g' -e 's/\bHEADLONG_LIBRARIAN\b/LIBRARIAN_MEMORY/g' \
+                -e 's/\bHEADLONG_/LIBRARIAN_/g' -e 's/\bSHELLY_/LIBRARIAN_/g' \
+                -e 's|/usr/local/bin/headlong-thinkersctl|/usr/local/bin/librarian-thinkersctl|g' \
+                -e 's|/usr/local/bin/shelly-thinkersctl|/usr/local/bin/librarian-thinkersctl|g' "$conf"
         done
     fi
-fi
+done
 
 for pair in "${UNIT_PAIRS[@]}"; do
     new="${pair#*:}"
@@ -330,21 +364,23 @@ for pair in "${UNIT_PAIRS[@]}"; do
     fi
 done
 
-say "Installing headlong-thinkersctl, sudoers, audit rules (single names — no compat)"
-run install -o root -g root -m 0755 "$APP_DIR/deploy/headlong-thinkersctl" "$LOCAL_BIN/headlong-thinkersctl"
-# Sweep BOTH prior generations of the wrapper.
+say "Installing librarian-thinkersctl (headlong-thinkersctl stays as an alias), sudoers, audit rules"
+run install -o root -g root -m 0755 "$APP_DIR/deploy/librarian-thinkersctl" "$LOCAL_BIN/librarian-thinkersctl"
+# The Headlong-era wrapper name stays callable (the dash's control plane and
+# operator habits); the sudoers rule permits both. Older generations go.
+run ln -sfn "$LOCAL_BIN/librarian-thinkersctl" "$LOCAL_BIN/headlong-thinkersctl"
 run rm -f "$LOCAL_BIN/shelly-thinkersctl" "$LOCAL_BIN/shellm-thinkersctl"
-if [[ -f "$APP_DIR/deploy/sudoers-headlong-thinkers" ]]; then
-    if visudo -cf "$APP_DIR/deploy/sudoers-headlong-thinkers" >/dev/null; then
-        run install -o root -g root -m 0440 "$APP_DIR/deploy/sudoers-headlong-thinkers" $SUDOERS_D/headlong-thinkers
-        run rm -f $SUDOERS_D/shelly-thinkers $SUDOERS_D/shellm-thinkers
+if [[ -f "$APP_DIR/deploy/sudoers-librarian-thinkers" ]]; then
+    if visudo -cf "$APP_DIR/deploy/sudoers-librarian-thinkers" >/dev/null; then
+        run install -o root -g root -m 0440 "$APP_DIR/deploy/sudoers-librarian-thinkers" $SUDOERS_D/librarian-thinkers
+        run rm -f $SUDOERS_D/headlong-thinkers $SUDOERS_D/shelly-thinkers $SUDOERS_D/shellm-thinkers
     else
-        echo "==> ERROR: sudoers-headlong-thinkers failed visudo — keeping the old rule" >&2
+        echo "==> ERROR: sudoers-librarian-thinkers failed visudo — keeping the old rule" >&2
     fi
 fi
-if [[ -f "$APP_DIR/deploy/audit-headlong-signals.rules" ]]; then
-    run install -o root -g root -m 0640 "$APP_DIR/deploy/audit-headlong-signals.rules" $AUDIT_D/headlong-signals.rules
-    run rm -f $AUDIT_D/shelly-signals.rules $AUDIT_D/shellm-signals.rules
+if [[ -f "$APP_DIR/deploy/audit-librarian-signals.rules" ]]; then
+    run install -o root -g root -m 0640 "$APP_DIR/deploy/audit-librarian-signals.rules" $AUDIT_D/librarian-signals.rules
+    run rm -f $AUDIT_D/headlong-signals.rules $AUDIT_D/shelly-signals.rules $AUDIT_D/shellm-signals.rules
     run augenrules --load || echo "==> WARN: augenrules --load failed — rules apply after next reboot" >&2
 fi
 
@@ -353,7 +389,7 @@ run systemctl daemon-reload
 ########################################################################
 # Start
 ########################################################################
-say "Starting headlong-* units"
+say "Starting librarian-* units"
 # Enable whatever was enabled before. Templates are never enabled; their
 # instances come up through the slack persona bootstrap, same as on boot.
 while IFS=$'\t' read -r unit enabled _active; do
@@ -370,10 +406,10 @@ while IFS=$'\t' read -r unit enabled _active; do
 done < <(if [[ $DRY_RUN -eq 1 ]]; then printf '%s' "$manifest"; else cat "$BACKUP_DIR/manifest"; fi)
 
 # Web first so the dash is up to watch the rest. Then the persona bootstrap,
-# whose ExecStart calls `headlong-thinkersctl restart <identity>` and brings
+# whose ExecStart calls `librarian-thinkersctl restart <identity>` and brings
 # the mind back — the same path every reboot takes. Then the bridges.
-for unit in headlong-web.service headlong-slack-agent.service \
-            headlong-slack-bridge.service headlong-telegram-bridge.service; do
+for unit in librarian-web.service librarian-slack-agent.service \
+            librarian-slack-bridge.service librarian-telegram-bridge.service; do
     # In a dry run nothing was installed, so test the repo source instead —
     # otherwise the rehearsal skips the entire start phase and shows
     # nothing about the step most worth rehearsing.
@@ -390,11 +426,11 @@ done
 # it does not manage (a non-persona identity) gets started explicitly.
 for ident in "${INSTANCES[@]:-}"; do
     [[ -n "$ident" ]] || continue
-    if [[ $DRY_RUN -eq 0 ]] && systemctl is-active --quiet "headlong-thinkers@$ident.service"; then
+    if [[ $DRY_RUN -eq 0 ]] && systemctl is-active --quiet "librarian-thinkers@$ident.service"; then
         continue
     fi
-    say "Starting headlong-thinkers@$ident (not brought up by the bootstrap)"
-    run systemctl start "headlong-thinkers@$ident.service" || true
+    say "Starting librarian-thinkers@$ident (not brought up by the bootstrap)"
+    run systemctl start "librarian-thinkers@$ident.service" || true
 done
 
 ########################################################################
@@ -418,14 +454,14 @@ for pair in "${UNIT_PAIRS[@]}"; do
 done
 for ident in "${INSTANCES[@]:-}"; do
     [[ -n "$ident" ]] || continue
-    st=$(systemctl is-active "headlong-thinkers@$ident.service" 2>/dev/null || true)
-    printf '    %-36s %s\n' "headlong-thinkers@$ident.service" "$st"
+    st=$(systemctl is-active "librarian-thinkers@$ident.service" 2>/dev/null || true)
+    printf '    %-36s %s\n' "librarian-thinkers@$ident.service" "$st"
     [[ "$st" == active ]] || fail=1
     # The self-stop guard matches the dispatcher's cgroup by unit name. If
     # the cgroup does not carry the new name the guard is not protecting
     # this mind, which is the exact failure the rename could introduce.
     dpid=$(cat "$APP_DIR/.identities/$ident/run/dispatcher.pid" 2>/dev/null || true)
-    if [[ -n "$dpid" ]] && grep -q "headlong-thinkers@$ident.service" "/proc/$dpid/cgroup" 2>/dev/null; then
+    if [[ -n "$dpid" ]] && grep -q "librarian-thinkers@$ident.service" "/proc/$dpid/cgroup" 2>/dev/null; then
         printf '    %-36s guard cgroup OK (pid %s)\n' "" "$dpid"
     else
         printf '    %-36s GUARD CGROUP NOT CONFIRMED (pid %s)\n' "" "${dpid:-none}"

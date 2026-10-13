@@ -9,7 +9,7 @@
 #   harness        tests/run-all.sh            bash tests for bin/ and tools/
 #   python         pytest                       web, slack, telegram (matrix)
 #   viewer         bun test + typecheck + build web/viewer (what the box builds)
-#   tui            cargo fmt/clippy/check       tui/headlong
+#   tui            cargo fmt/clippy/check       tui/librarian
 #   shellcheck     shellcheck -S warning        every shell script in the tree
 #   macos          bash 3.2 lint + harness      the product scripts must run on
 #                                               macOS's stock /bin/bash (3.2):
@@ -35,7 +35,7 @@
 #
 # Run the same things locally: tests/run-all.sh, uv run --project web pytest
 # web/tests (and slack, telegram), bun run test/typecheck/build in web/viewer,
-# cargo fmt --check / clippy / check in tui/headlong, tests/smoke_install.sh,
+# cargo fmt --check / clippy / check in tui/librarian, tests/smoke_install.sh,
 # gitleaks git . -c .gitleaks.toml, cloc bin/ thinkers/. For the macOS gate on
 # a Mac: PATH=/bin:/usr/bin:$PATH tests/run-all.sh (so `bash` is 3.2).
 
@@ -116,7 +116,7 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: tui/headlong
+        working-directory: tui/librarian
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -124,7 +124,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: tui/headlong
+          workspaces: tui/librarian
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo check
@@ -148,7 +148,7 @@ jobs:
           echo "$files" | xargs shellcheck -S warning
   macos:
     name: macOS (bash 3.2)
-    # Headlong has to run on a stock Mac, whose /bin/bash is 3.2 (Apple never
+    # Librarian has to run on a stock Mac, whose /bin/bash is 3.2 (Apple never
     # shipped a GPLv3 bash). Bash-4 expansions like ${x^^} are a fatal "bad
     # substitution" there, which once made every shellm run on macOS exit
     # rc=1 with no output (PR #38). Three checks, all with bash 3.2 as the

@@ -1,11 +1,11 @@
 # Peer hearing
 
-**In one sentence:** let one Headlong persona hear what another persona
+**In one sentence:** let one Librarian persona hear what another persona
 posts on Slack, with a bound that stops the two of them from talking
 forever.
 
 Status: built 2026-09-14 for Audel and Harris. When this document and the
-code disagree, the code wins. Code: `slack/src/headlong_slack/inbound.py`
+code disagree, the code wins. Code: `slack/src/librarian_slack/inbound.py`
 (`_on_event`), `state.py` (`PeerGuard`), `config.py`.
 
 ## The problem
@@ -60,7 +60,7 @@ with the sender named as `slack-<peer user id>-<channel>-<thread ts>`, so
 says what the sender is:
 
 ```
-(Slack: harris, a Headlong persona like you, not a person in #headlong-bot-chatter — reply with: chat reply slack-U0C2G1517EC-C0C1KSMTBMY-1789377778.721439) ...
+(Slack: harris, a Librarian persona like you, not a person in #librarian-bot-chatter — reply with: chat reply slack-U0C2G1517EC-C0C1KSMTBMY-1789377778.721439) ...
 ```
 
 The responder and the monolith need no change. The persona prompt and the
@@ -83,6 +83,6 @@ its side, so an unanswered message is the guard, not a snub.
 Both boxes run the same bridge. Set `SLACK_PEER_BOT_USERS` in each box's
 `.env` to the other persona's bot user id (Audel: `U0BN5FSURBN`, Harris:
 `U0C2G1517EC`), mirror it into the laptop env files and the SSM parameters
-so a rebuild keeps it, and restart `headlong-slack-bridge` on each box. The
+so a rebuild keeps it, and restart `librarian-slack-bridge` on each box. The
 mind does not restart. Turn it off again by unsetting the variable and
 restarting the bridge.

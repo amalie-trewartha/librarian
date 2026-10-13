@@ -27,7 +27,7 @@ PRUNE_DIRS = {
     "node_modules",
     ".git",
     ".shellm",
-    ".headlong",
+    ".librarian",
     "memories",
     "skills",
     "kernel",
@@ -68,7 +68,7 @@ def scan_identities(root: Path) -> list[IdentityInfo]:
     """Walk root for identity dirs (info.txt with root_trajectory).
 
     A symlinked directory is considered as an identity candidate itself —
-    state kept on another volume, `.identities/ada -> /mnt/headlong/current` —
+    state kept on another volume, `.identities/ada -> /mnt/librarian/current` —
     but the walk never recurses THROUGH a symlink, so a link out to a large
     tree cannot drag the scan across the host. The identity keeps the link's
     own id (the id the bridges construct); a link that resolves to an

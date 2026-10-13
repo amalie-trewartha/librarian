@@ -33,7 +33,7 @@ command -v python3 >/dev/null || { echo "FAIL python3 not found"; exit 1; }
 WORK=$(mktemp -d)
 cleanup() { [[ -n "${SRV:-}" ]] && kill "$SRV" 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT
-export HOME="$WORK/home" HEADLONG_HOME="$WORK/home/.headlong"; mkdir -p "$HEADLONG_HOME"
+export HOME="$WORK/home" LIBRARIAN_HOME="$WORK/home/.librarian"; mkdir -p "$LIBRARIAN_HOME"
 
 cat > "$WORK/srv.py" <<'PY'
 import http.server, json, sys, os

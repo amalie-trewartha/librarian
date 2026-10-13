@@ -1,7 +1,7 @@
 import unittest
 
 from helpers import StoreCase
-from headlong_librarian import identity, model, queue, triggers
+from librarian import identity, model, queue, triggers
 
 
 class WorkingEditTest(StoreCase):
@@ -88,7 +88,7 @@ class WorkingEditTest(StoreCase):
         self.assertTrue(triggers.heuristic_contradiction("I always ask before I proceed on a scope change.", "I proceed on scope changes and never ask first."))
 
     def test_llm_judge_overrides_heuristic(self):
-        from headlong_librarian import llm as llmmod
+        from librarian import llm as llmmod
 
         class Fake:
             model = "fake"
@@ -203,7 +203,7 @@ class SeedAndProbeTest(StoreCase):
         self.assertTrue(all(n.status == "active" for n in identity.list_identity(self.store, "core")))
 
     def test_core_candidate_rule(self):
-        from headlong_librarian import lifecycle
+        from librarian import lifecycle
 
         w = self.working("I write the scaffold first.")
         self.activate(w)
@@ -222,7 +222,7 @@ class SeedAndProbeTest(StoreCase):
 
     def test_probe_drift_with_fake_answers(self):
         self.core("I flag uncertainty.")
-        from headlong_librarian import llm as llmmod
+        from librarian import llm as llmmod
 
         class Fake:
             model = "fake-main"

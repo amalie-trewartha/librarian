@@ -25,7 +25,7 @@ import time
 from hashlib import sha256
 from pathlib import Path
 
-from headlong_web.env import getenv
+from librarian_web.env import getenv
 
 # Names are path segments; allow the leading underscore of _lib but nothing
 # resembling traversal.
@@ -43,9 +43,10 @@ _VERSION_TTL_S = 60
 def bundled_root() -> Path | None:
     """Where pristine thinkers live: env override, the repo this server runs
     from, or the installed templates."""
-    override = getenv("HEADLONG_WEB_THINKERS_SRC")
+    override = getenv("LIBRARIAN_WEB_THINKERS_SRC")
     candidates = [Path(override)] if override else []
-    candidates += [_REPO_ROOT / "thinkers", Path.home() / ".headlong-thinkers"]
+    templates = getenv("LIBRARIAN_THINKERS_TEMPLATES")
+    candidates += [_REPO_ROOT / "thinkers", Path(templates) if templates else Path.home() / ".librarian-thinkers", Path.home() / ".headlong-thinkers"]
     for cand in candidates:
         if cand.is_dir():
             return cand

@@ -7,10 +7,10 @@
 # Why: symlink_mounts() mounts the *parent directory* of every symlink target
 # it finds in the workdir, and the agent has write access to that workdir. So
 # `ln -s ~/.ssh/id_ed25519 x` used to be enough to get ~/.ssh mounted into the
-# next container, and `ln -s ~/.headlong/.env x` the state home holding the API
+# next container, and `ln -s ~/.librarian/.env x` the state home holding the API
 # key — the sandbox handing over host files rather than being broken out of.
 # Targets are now confined to the app checkout plus whatever the operator opts
-# into via HEADLONG_SANDBOX_RO_DIRS.
+# into via LIBRARIAN_SANDBOX_RO_DIRS.
 #
 # The functions are exercised directly; no docker daemon and no network.
 
@@ -49,8 +49,8 @@ SECRETS="$WORK/secrets"; mkdir -p "$SECRETS"; echo key > "$SECRETS/id_ed25519"
 # Somewhere they did.
 PROJ="$WORK/project"; mkdir -p "$PROJ"; echo code > "$PROJ/main.c"
 
-export HEADLONG_HOME="$WORK/state-empty"
-unset HEADLONG_SANDBOX_RO_DIRS
+export LIBRARIAN_HOME="$WORK/state-empty"
+unset LIBRARIAN_SANDBOX_RO_DIRS
 
 # --- no allowlist: the checkout is reachable, nothing else ------------------
 ln -sf "$SECRETS/id_ed25519" "$WD/stolen"
@@ -78,7 +78,7 @@ esac
 rm -f "$WD/whole_checkout"
 
 # --- opting a directory in makes it reachable, and only it ------------------
-export HEADLONG_SANDBOX_RO_DIRS="$PROJ"
+export LIBRARIAN_SANDBOX_RO_DIRS="$PROJ"
 ln -sf "$PROJ/main.c" "$WD/proj"
 out=$(symlink_mounts "$WD")
 case "$out" in *"$PROJ"*) ok "symlink into an allowlisted dir permitted" ;;
@@ -90,24 +90,24 @@ case "$out" in *"$SECRETS"*) bad "unlisted dir still refused with an allowlist s
 [ "$(sandbox_ro_dirs | grep -c "$PROJ")" -eq 1 ] \
     && ok "sandbox_ro_dirs reads the environment" || bad "sandbox_ro_dirs reads the environment"
 
-export HEADLONG_SANDBOX_RO_DIRS="$PROJ:$WORK/does-not-exist"
+export LIBRARIAN_SANDBOX_RO_DIRS="$PROJ:$WORK/does-not-exist"
 [ -z "$(sandbox_ro_dirs | grep does-not-exist)" ] \
     && ok "sandbox_ro_dirs drops missing dirs" || bad "sandbox_ro_dirs drops missing dirs"
 
 # A single entry has no trailing newline once split; the last one must survive.
-export HEADLONG_SANDBOX_RO_DIRS="$PROJ"
+export LIBRARIAN_SANDBOX_RO_DIRS="$PROJ"
 [ "$(sandbox_ro_dirs | wc -l | tr -d ' ')" -eq 1 ] \
     && ok "sandbox_ro_dirs yields a sole entry (no trailing newline)" \
     || bad "sandbox_ro_dirs yields a sole entry (no trailing newline)"
 
-unset HEADLONG_SANDBOX_RO_DIRS
-mkdir -p "$WORK/state"; export HEADLONG_HOME="$WORK/state"
-printf 'HEADLONG_SANDBOX_RO_DIRS=%s\n' "$PROJ" > "$WORK/state/.env"
+unset LIBRARIAN_SANDBOX_RO_DIRS
+mkdir -p "$WORK/state"; export LIBRARIAN_HOME="$WORK/state"
+printf 'LIBRARIAN_SANDBOX_RO_DIRS=%s\n' "$PROJ" > "$WORK/state/.env"
 [ "$(sandbox_ro_dirs | grep -c "$PROJ")" -eq 1 ] \
     && ok "sandbox_ro_dirs falls back to the state .env" || bad "sandbox_ro_dirs falls back to the state .env"
 
 # --- a workdir with no checkout above it allows nothing outside itself -------
-unset HEADLONG_SANDBOX_RO_DIRS; export HEADLONG_HOME="$WORK/state-empty"
+unset LIBRARIAN_SANDBOX_RO_DIRS; export LIBRARIAN_HOME="$WORK/state-empty"
 LONE="$WORK/lone"; mkdir -p "$LONE"; ln -sf "$SECRETS/id_ed25519" "$LONE/x"
 out=$(symlink_mounts "$LONE")
 case "$out" in *"$SECRETS"*) bad "no-checkout workdir denies outside targets" "$out" ;;

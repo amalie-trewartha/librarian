@@ -73,7 +73,7 @@ Three changes, shipped in this order. Each stands alone.
 Delete `bin/view`, `bin/put`, `bin/glob`, `bin/sub` and `bin/focus`. Split
 `bin/skills`: `prompt`, `list`, `list-json` and `show` stay in core (about
 200 lines); `install`, `search`, `check`, `promote`, `init`, `kernel`,
-`remove` and the remotes machinery move to `tools/headlong-skills`. Same rule as
+`remove` and the remotes machinery move to `tools/librarian-skills`. Same rule as
 providers: what the mind needs stays in core, everything else lives in
 tools/.
 
@@ -86,11 +86,11 @@ The guarantees `sub` and `put` encoded (fail on a missing match, write
 atomically) were not being delivered because the model did not call them.
 One sentence in the system prompt replaces them: check that an edit matched
 before writing, and write through a temp file when a half-written file
-would matter. No compatibility stubs, as with the headlong rename. One line
+would matter. No compatibility stubs, as with the librarian rename. One line
 in the release note for public installs.
 
 Result: core at 9,706 lines (from 10,996). The manager is
-`tools/headlong-skills`; it sources `bin/skills` for the shared helpers, and
+`tools/librarian-skills`; it sources `bin/skills` for the shared helpers, and
 `skills <manager subcommand>` forwards to it, so the mind's `skills install
 ...` keeps working outside Docker. Test: `tests/test_skills_split.sh`.
 

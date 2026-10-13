@@ -19,7 +19,7 @@ variable "root_volume_gb" {
 variable "shellm_repo" {
   description = "Default git repo to install; a box entry can point at a collaborator's fork"
   type        = string
-  default     = "https://github.com/laude-institute/headlong.git"
+  default     = "https://github.com/amalie-trewartha/librarian.git"
 }
 
 variable "shellm_branch" {
@@ -46,14 +46,14 @@ variable "env_parameter_prefix" {
     <name> reads /<prefix>/<name>/env at first boot if it exists (the
     instance role can read anything under the prefix). Seed one with a
     DEDICATED, SPEND-CAPPED key before apply:
-      aws ssm put-parameter --name /headlong-collab/<name>/env \
+      aws ssm put-parameter --name /librarian-collab/<name>/env \
           --type SecureString --overwrite --region <region> \
           --value "$(printf 'OPENROUTER_API_KEY=sk-or-...\nSHELLM_MODEL=...\n')"
     A missing parameter is a warning in the bootstrap log, not a failure:
     the collaborator can put their own key in /opt/shellm/app/.env.
   EOT
   type        = string
-  default     = "/headlong-collab"
+  default     = "/librarian-collab"
 
   validation {
     condition     = can(regex("^/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$", var.env_parameter_prefix))
@@ -64,7 +64,7 @@ variable "env_parameter_prefix" {
 variable "boxes" {
   description = <<-EOT
     One entry per collaborator box, keyed by a short name (a-z, 0-9, -).
-    The name becomes the hostname headlong-<name>, the Name tag, the SSM
+    The name becomes the hostname librarian-<name>, the Name tag, the SSM
     parameter path, and the default login user.
       ssh_public_keys  OpenSSH public keys allowed to log in (required)
       user             login + passwordless-sudo user (default: the name)

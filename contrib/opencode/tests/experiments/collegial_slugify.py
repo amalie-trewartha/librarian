@@ -43,7 +43,7 @@ def main():
     identity = out / "identity"
     identity.mkdir()
     (identity / "core_identity_prompt.md").touch()
-    run([ROOT / "bin/headlong-opencode", "install", "--identity", identity])
+    run([ROOT / "bin/librarian-opencode", "install", "--identity", identity])
     env["PATH"] = str(identity / "extensions/opencode/bin") + os.pathsep + env["PATH"]
 
     repo = out / "source"
@@ -70,7 +70,7 @@ def main():
                            + "Path('slugify.py').write_text(" + repr(implementation) + ")\n")
         backend.chmod(0o755)
         env["CODING_AGENT_OPENCODE_BIN"] = str(backend)
-        run([ROOT / "bin/headlong-opencode", "enable", "--identity", identity])
+        run([ROOT / "bin/librarian-opencode", "enable", "--identity", identity])
         verify = shlex.join([sys.executable, str(checker), ".", "--mode", mode])
         completed = run(["coding-agent", "--repo", target, "--task", task,
                          "--verify", verify, "--backend-bin", backend,

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # test_thinkers_sandbox.sh — deploy/thinkers-sandbox.sh: the drop-in follows
-# HEADLONG_SANDBOX (default on), installs and removes idempotently, and
+# LIBRARIAN_SANDBOX (default on), installs and removes idempotently, and
 # carries the mount rules the sandbox is made of.
 #
 # Usage: tests/test_thinkers_sandbox.sh
@@ -22,9 +22,9 @@ HOME_DIR="$TMP/home"
 APP="$HOME_DIR/app"
 UNITS="$TMP/units"
 mkdir -p "$APP" "$UNITS"
-DROPIN="$UNITS/headlong-thinkers@.service.d/sandbox.conf"
+DROPIN="$UNITS/librarian-thinkers@.service.d/sandbox.conf"
 
-run() { env -u HEADLONG_SANDBOX bash "$SCRIPT" "$@"; }
+run() { env -u LIBRARIAN_SANDBOX bash "$SCRIPT" "$@"; }
 
 # 1. render: the rules
 out=$(run render "$APP" "$HOME_DIR")
@@ -44,40 +44,40 @@ r=$(run install "$APP" "$HOME_DIR" "$UNITS")
 [[ "$(run status "$APP" "$HOME_DIR" "$UNITS")" == "on present" ]] && ok "status: on present" || bad "status: on present"
 
 # 3. flag off in .env removes it
-printf 'OPENROUTER_API_KEY=x\nHEADLONG_SANDBOX=0\n' > "$APP/.env"
+printf 'OPENROUTER_API_KEY=x\nLIBRARIAN_SANDBOX=0\n' > "$APP/.env"
 r=$(run install "$APP" "$HOME_DIR" "$UNITS")
-[[ "$r" == removed && ! -f "$DROPIN" ]] && ok "install: HEADLONG_SANDBOX=0 removes the drop-in" || bad "install: flag off removes" "$r"
-[[ ! -d "$UNITS/headlong-thinkers@.service.d" ]] && ok "install: empty drop-in dir removed" || bad "install: empty drop-in dir removed"
+[[ "$r" == removed && ! -f "$DROPIN" ]] && ok "install: LIBRARIAN_SANDBOX=0 removes the drop-in" || bad "install: flag off removes" "$r"
+[[ ! -d "$UNITS/librarian-thinkers@.service.d" ]] && ok "install: empty drop-in dir removed" || bad "install: empty drop-in dir removed"
 r=$(run install "$APP" "$HOME_DIR" "$UNITS")
 [[ "$r" == unchanged ]] && ok "install: off stays off, unchanged" || bad "install: off unchanged" "$r"
 [[ "$(run status "$APP" "$HOME_DIR" "$UNITS")" == "off absent" ]] && ok "status: off absent" || bad "status: off absent"
 
 # 4. quoted / spaced values and re-enable
-printf 'HEADLONG_SANDBOX="1"\n' > "$APP/.env"
+printf 'LIBRARIAN_SANDBOX="1"\n' > "$APP/.env"
 r=$(run install "$APP" "$HOME_DIR" "$UNITS")
 [[ "$r" == installed && -f "$DROPIN" ]] && ok "install: quoted 1 re-installs" || bad "install: quoted 1 re-installs" "$r"
-printf 'HEADLONG_SANDBOX=off\n' > "$APP/.env"
+printf 'LIBRARIAN_SANDBOX=off\n' > "$APP/.env"
 [[ "$(run install "$APP" "$HOME_DIR" "$UNITS")" == removed ]] && ok "install: 'off' is off" || bad "install: 'off' is off"
 
 # 5. environment wins over .env
-printf 'HEADLONG_SANDBOX=0\n' > "$APP/.env"
-r=$(HEADLONG_SANDBOX=1 bash "$SCRIPT" install "$APP" "$HOME_DIR" "$UNITS")
+printf 'LIBRARIAN_SANDBOX=0\n' > "$APP/.env"
+r=$(LIBRARIAN_SANDBOX=1 bash "$SCRIPT" install "$APP" "$HOME_DIR" "$UNITS")
 [[ "$r" == installed ]] && ok "install: environment overrides .env" || bad "install: environment overrides .env" "$r"
 
 # 6. a stale drop-in with different content is rewritten
 printf '[Service]\nProtectSystem=full\n' > "$DROPIN"
-printf 'HEADLONG_SANDBOX=1\n' > "$APP/.env"
+printf 'LIBRARIAN_SANDBOX=1\n' > "$APP/.env"
 r=$(run install "$APP" "$HOME_DIR" "$UNITS")
 [[ "$r" == installed ]] && grep -q 'ProtectSystem=strict' "$DROPIN" && ok "install: stale drop-in rewritten" || bad "install: stale drop-in rewritten" "$r"
 
 # 7. a moved identities root: the writable mount names the real directory
-printf 'HEADLONG_SANDBOX=1\nHEADLONG_IDENTITIES_DIR=/var/lib/headlong/identities\n' > "$APP/.env"
+printf 'LIBRARIAN_SANDBOX=1\nLIBRARIAN_IDENTITIES_DIR=/var/lib/headlong/identities\n' > "$APP/.env"
 out=$(run render "$APP" "$HOME_DIR")
-grep -q '^ReadWritePaths=/var/lib/headlong/identities/%i$' <<< "$out" && ok "render: HEADLONG_IDENTITIES_DIR moves the writable mount" || bad "render: HEADLONG_IDENTITIES_DIR" "$out"
+grep -q '^ReadWritePaths=/var/lib/headlong/identities/%i$' <<< "$out" && ok "render: LIBRARIAN_IDENTITIES_DIR moves the writable mount" || bad "render: LIBRARIAN_IDENTITIES_DIR" "$out"
 grep -q "^ReadOnlyPaths=$APP$" <<< "$out" && ok "render: app checkout still read-only with a moved root" || bad "render: app still read-only"
-out=$(HEADLONG_IDENTITIES_DIR=/srv/ids bash "$SCRIPT" render "$APP" "$HOME_DIR")
+out=$(LIBRARIAN_IDENTITIES_DIR=/srv/ids bash "$SCRIPT" render "$APP" "$HOME_DIR")
 grep -q '^ReadWritePaths=/srv/ids/%i$' <<< "$out" && ok "render: environment overrides .env for the root" || bad "render: env override for root"
-printf 'HEADLONG_SANDBOX=1\n' > "$APP/.env"
+printf 'LIBRARIAN_SANDBOX=1\n' > "$APP/.env"
 real="$TMP/var-lib-identities"; mkdir -p "$real"; ln -s "$real" "$APP/.identities"
 real_resolved=$(cd "$real" && pwd -P)   # macOS: /var is itself a link to /private/var
 out=$(run render "$APP" "$HOME_DIR")

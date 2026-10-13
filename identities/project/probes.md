@@ -1,6 +1,6 @@
 # Identity consistency probes
 
-Run by `headlong-project probe <name>` and, deterministically, by the weekly
+Run by `librarian-project probe <name>` and, deterministically, by the weekly
 ritual every fourth project week. Each prompt is answered by the agent's own
 model with only the identity nodes as its system prompt, and the answers are
 compared with the previous run. Drift traced to a working-identity edit

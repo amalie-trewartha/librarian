@@ -33,7 +33,7 @@ import {
 import type { Identity } from "~/lib/types";
 
 export function meta() {
-  return [{ title: "Headlong · identities" }];
+  return [{ title: "Librarian · identities" }];
 }
 
 function relativeTime(iso: string | null): string {
@@ -214,7 +214,7 @@ function KillAllButton() {
   const mutation = useMutation({
     mutationFn: killAll,
     onSuccess: (result) => {
-      const summary = result.stdout.trim() || "No Headlong processes found.";
+      const summary = result.stdout.trim() || "No Librarian processes found.";
       if (result.dry_run) {
         if (window.confirm(`${summary}\n\nProceed with kill?`)) {
           mutation.mutate(false);
@@ -234,7 +234,7 @@ function KillAllButton() {
       variant="destructive"
       size="sm"
       disabled={mutation.isPending}
-      title="Kill every Headlong process on this machine (dispatchers, agents, thinker steps)"
+      title="Kill every Librarian process on this machine (dispatchers, agents, thinker steps)"
       onClick={() => mutation.mutate(true)}
     >
       <Skull className="size-3" />

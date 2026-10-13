@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (bin/librarian-env).
+for _le in "$(dirname "${BASH_SOURCE[0]}")/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/bin/librarian-env"; do
+    # shellcheck source=/dev/null
+    if [[ -f "$_le" ]]; then . "$_le"; break; fi
+done; unset _le
+
 set -euo pipefail
 
 die() { echo "shellm-docker-broker: error: $*" >&2; exit 1; }
@@ -78,15 +84,15 @@ path_under() {
 
 # sandbox_ro_dirs - directories the operator has chosen to expose to the
 # sandbox read-only, newline-separated. Configured as a colon-separated list
-# in HEADLONG_SANDBOX_RO_DIRS, either in the environment or in the state
+# in LIBRARIAN_SANDBOX_RO_DIRS, either in the environment or in the state
 # .env. These are mounted :ro into every run AND accepted as symlink targets.
 # Everything else outside the app checkout stays refused, so the agent cannot
 # widen its own view by planting a symlink.
 sandbox_ro_dirs() {
-    local raw="${HEADLONG_SANDBOX_RO_DIRS:-}" home_env
+    local raw="${LIBRARIAN_SANDBOX_RO_DIRS:-}" home_env
     if [[ -z "$raw" ]]; then
-        home_env="${HEADLONG_HOME:-$HOME/.headlong}/.env"
-        [[ -r "$home_env" ]] && raw=$(sed -n 's/^HEADLONG_SANDBOX_RO_DIRS=//p' "$home_env" | tail -1)
+        home_env="${LIBRARIAN_HOME:-$HOME/.librarian}/.env"
+        [[ -r "$home_env" ]] && raw=$(sed -n 's/^LIBRARIAN_SANDBOX_RO_DIRS=//p' "$home_env" | tail -1)
     fi
     raw="${raw%\"}"; raw="${raw#\"}"
     [[ -z "$raw" ]] && return 0
@@ -101,7 +107,7 @@ sandbox_ro_dirs() {
 
 # symlink_allow_root WORKDIR - the only tree whose symlink targets may be
 # mounted: the app checkout (the directory holding .identities), which is
-# where every symlink Headlong itself creates points - thinkers, skills and
+# where every symlink Librarian itself creates points - thinkers, skills and
 # kernel entries. Falls back to the workdir, i.e. allow nothing outside it,
 # when no checkout can be identified.
 symlink_allow_root() {
@@ -174,8 +180,8 @@ symlink_mounts() {
     # is a path IT may have chosen - and this function mounts the target's
     # *parent directory*. Following an arbitrary target therefore hands the
     # sandbox whole host directories: `ln -s ~/.ssh/id_ed25519 x` would mount
-    # ~/.ssh, `ln -s ~/.headlong/.env x` the state home. Confine targets to the
-    # app checkout, which is where all of Headlong's own symlinks point.
+    # ~/.ssh, `ln -s ~/.librarian/.env x` the state home. Confine targets to the
+    # app checkout, which is where all of Librarian's own symlinks point.
     local allow_root allowed ro_dir
     allow_root=$(symlink_allow_root "$workdir")
     # Targets arrive canonicalized (readlink -f), so the root must be too, or
@@ -611,14 +617,14 @@ JQ
 # value>"` (compose 2.40.3, verified). The requester is not trusted with that,
 # so the caller gets a fixed message — and the log gets only a withheld notice
 # by default, because the same words would otherwise persist on disk. An
-# operator debugging a render sets HEADLONG_BROKER_LOG_COMPOSE_STDERR=1 to log
+# operator debugging a render sets LIBRARIAN_BROKER_LOG_COMPOSE_STDERR=1 to log
 # the raw text.
 compose_render_failed() {
     local err="$1" message="$2"
-    if [[ -n "${HEADLONG_BROKER_LOG_COMPOSE_STDERR:-}" ]]; then
+    if [[ -n "${LIBRARIAN_BROKER_LOG_COMPOSE_STDERR:-}" ]]; then
         log_msg "compose render failed: $(tr '\n' ' ' < "$err" | cut -c1-500)"
     else
-        log_msg "compose render failed ($(wc -c < "$err" | tr -d ' ') bytes of compose stderr withheld; set HEADLONG_BROKER_LOG_COMPOSE_STDERR=1 to log it)"
+        log_msg "compose render failed ($(wc -c < "$err" | tr -d ' ') bytes of compose stderr withheld; set LIBRARIAN_BROKER_LOG_COMPOSE_STDERR=1 to log it)"
     fi
     printf '%s\n' "$message" >&2
 }

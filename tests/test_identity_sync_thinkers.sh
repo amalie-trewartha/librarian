@@ -31,7 +31,7 @@ trap 'cd /; rm -rf "$WORK"' EXIT
 cd "$WORK" || exit 1
 
 # Isolate HOME. tools/identity turns on symlink mode from
-# $HOME/.headlong-thinkers/.use-symlinks, and its bundled source is the repo's
+# $HOME/.librarian-thinkers/.use-symlinks, and its bundled source is the repo's
 # own thinkers/ when run from a checkout — so on a --symlinks install this
 # test's identity got thinkers/monolith as a symlink INTO the repo, and the
 # "hand-edited prompt" write below landed in the real thinkers/monolith/
@@ -126,8 +126,8 @@ check "works without a default identity" test $? -eq 0
 # In --symlinks installs, code stays linked to the checkout but disabled is
 # identity state. Linking that marker too makes a dashboard/CLI opt-in last
 # only until the next sync, which silently re-links the bundled default.
-mkdir -p "$HOME/.headlong-thinkers"
-touch "$HOME/.headlong-thinkers/.use-symlinks"
+mkdir -p "$HOME/.librarian-thinkers"
+touch "$HOME/.librarian-thinkers/.use-symlinks"
 identity new delta >/dev/null 2>&1 || { bad "identity new delta (symlink mode)"; exit 1; }
 TD="$WORK/.identities/delta/thinkers"
 check "symlink mode links retrieval code" test -L "$TD/retrieval/step"

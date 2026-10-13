@@ -59,10 +59,10 @@ plog() { cat "$ID/run/logs/responder-prompts/"*"$1"* 2>/dev/null; }
 
 : > "$TRAJ"
 printf '{"step_id":"hdr","type":"trajectory","ts":"%s"}\n' "$(ago 99999)" >> "$TRAJ"
-msg a1 "$ANDY"   "$ME"   "(Slack: Andy Konwinski in #headlong-bot) can you paste the tweet into the channel?" 600
+msg a1 "$ANDY"   "$ME"   "(Slack: Andy Konwinski in #librarian-bot) can you paste the tweet into the channel?" 600
 msg r1 "$ME"     "$ANDY" "Sure, posting it now."                                                           590
-msg b0 "$BRADEN" "$ME"   "(Slack: Braden in #headlong-bot) unrelated: how was the eval run?"             300000   # 3.5 days ago, another thread would be different ts; same thread here
-msg b1 "$BRADEN" "$ME"   "(Slack: Braden in #headlong-bot) wait, which tweet?"                             +5
+msg b0 "$BRADEN" "$ME"   "(Slack: Braden in #librarian-bot) unrelated: how was the eval run?"             300000   # 3.5 days ago, another thread would be different ts; same thread here
+msg b1 "$BRADEN" "$ME"   "(Slack: Braden in #librarian-bot) wait, which tweet?"                             +5
 
 # --- 1. Braden's trigger sees Andy's thread messages -------------------------
 printf 'The launch tweet Andy asked me to post.\n' > "$STUB_REPLY_FILE"
@@ -74,7 +74,7 @@ if [[ "$ctx" == 3 && "$thr" == 2 ]]; then
 else
     bad "context_msgs 3, thread_msgs 2" "got context_msgs=$ctx thread_msgs=$thr"
 fi
-if plog b1 | grep -q 'Andy Konwinski in #headlong-bot) can you paste the tweet' && plog b1 | grep -q '"role":"assistant","content":"Sure, posting it now."'; then
+if plog b1 | grep -q 'Andy Konwinski in #librarian-bot) can you paste the tweet' && plog b1 | grep -q '"role":"assistant","content":"Sure, posting it now."'; then
     ok "the prompt carries Andy's message as a user turn and our reply as an assistant turn"
 else
     bad "the prompt carries Andy's message and our reply" "$(plog b1 | grep -o '"role":"[a-z]*","content":"[^"]\{0,50\}' | head -5 | tr '\n' ' ')"

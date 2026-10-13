@@ -1,7 +1,25 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (same mapping as bin/librarian-env).
+if [[ -z "${LIBRARIAN_MEMORY+x}" && -n "${HEADLONG_LIBRARIAN+x}" ]]; then export LIBRARIAN_MEMORY="$HEADLONG_LIBRARIAN"; fi
+if [[ -z "${LIBRARIAN_SRC+x}" && -n "${HEADLONG_LIBRARIAN_SRC+x}" ]]; then export LIBRARIAN_SRC="$HEADLONG_LIBRARIAN_SRC"; fi
+for _le_hv in $(compgen -A variable HEADLONG_ 2>/dev/null); do
+    case "$_le_hv" in HEADLONG_LIBRARIAN|HEADLONG_LIBRARIAN_SRC) continue ;; esac
+    _le_lv="LIBRARIAN_${_le_hv#HEADLONG_}"
+    if [[ -z "${!_le_lv+x}" ]]; then export "$_le_lv=${!_le_hv}"; fi
+done
+unset _le_hv _le_lv
+if [[ -z "${LIBRARIAN_HOME:-}" && -n "${HOME:-}" && ! -d "$HOME/.librarian" && -d "$HOME/.headlong" ]]; then
+    export LIBRARIAN_HOME="$HOME/.headlong"
+fi
+if [[ -z "${LIBRARIAN_THINKERS_TEMPLATES:-}" && -n "${HOME:-}" ]]; then
+    if [[ ! -d "${LIBRARIAN_THINKERS_TEMPLATES:-$HOME/.librarian-thinkers}" && -d "$HOME/.headlong-thinkers" ]]; then
+        export LIBRARIAN_THINKERS_TEMPLATES="$HOME/.headlong-thinkers"
+    fi
+fi
+
 set -euo pipefail
 
-# install.sh — install Headlong's tools onto PATH.
+# install.sh — install Librarian's tools onto PATH.
 #
 # Two ways in:
 #
@@ -9,14 +27,14 @@ set -euo pipefail
 #     ./install.sh [options]
 #
 #   One-liner (no checkout needed):
-#     curl -fsSL https://headlong.ai/install.sh | bash
+#     curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/install.sh | bash
 #
-# The one-liner clones the repo to ~/.headlong/app, symlink-installs the
-# tools, then hands off to `headlong-init` to bootstrap a first identity and
+# The one-liner clones the repo to ~/.librarian/app, symlink-installs the
+# tools, then hands off to `librarian-init` to bootstrap a first identity and
 # start the local dash. Pass args through the pipe with `| bash -s -- <args>`.
 #
 # Prefer to read before you run? Same thing, two steps:
-#     curl -fsSLO https://headlong.ai/install.sh
+#     curl -fsSLO https://raw.githubusercontent.com/amalie-trewartha/librarian/main/install.sh
 #     less install.sh && bash install.sh --init
 #
 # Everything side-effectful happens inside main(), invoked on the LAST line of
@@ -24,24 +42,27 @@ set -euo pipefail
 # `curl | bash`) parses but executes nothing. Keep it that way: top level is
 # only defaults, function definitions, and that final call.
 
-# State home: HEADLONG_HOME if set; else ~/.headlong. (An install from a
-# pre-headlong era lives in ~/.shelly or ~/.shellm — move it:
-# mv ~/.shelly ~/.headlong)
-# Whether the OPERATOR exported HEADLONG_REPO (before the default below
+# State home: LIBRARIAN_HOME (or HEADLONG_HOME, mapped above) if set; else
+# ~/.librarian, or ~/.headlong when only that exists (a Headlong-era install
+# keeps its state in place; the mapping above picks it up).
+# Whether the OPERATOR exported LIBRARIAN_REPO (before the default below
 # replaces "unset" with the public URL): decides if the container path may
 # retarget to this checkout's own origin/branch.
-HEADLONG_REPO_OPERATOR_SET="${HEADLONG_REPO+set}"
-HEADLONG_REPO="${HEADLONG_REPO:-https://github.com/laude-institute/headlong.git}"
-HEADLONG_BRANCH="${HEADLONG_BRANCH:-main}"
-HEADLONG_HOME="${HEADLONG_HOME:-$HOME/.headlong}"
+LIBRARIAN_REPO_OPERATOR_SET="${LIBRARIAN_REPO+set}"
+LIBRARIAN_REPO="${LIBRARIAN_REPO:-https://github.com/amalie-trewartha/librarian.git}"
+LIBRARIAN_BRANCH="${LIBRARIAN_BRANCH:-main}"
+LIBRARIAN_HOME="${LIBRARIAN_HOME:-$HOME/.librarian}"
 
 PREFIX="${PREFIX:-$HOME/.local/bin}"
 SYMLINKS="${SYMLINKS:-0}"
 RUN_INIT=0
 # Core agent tools (bin/) and the management/aux CLIs around them (tools/).
-BIN_TOOLS=(shellm shellm-docker skills mem llm context traj thinkers chat recap blind delegate)
-AUX_TOOLS=(shellm-docker-broker identity shellm-explore headlong-skills headlong-init headlong-killall headlong-project persona headlong-web headlong-slack-bridge headlong-telegram-bridge)
-TOOLS=("${BIN_TOOLS[@]}" "${AUX_TOOLS[@]}")
+BIN_TOOLS=(shellm shellm-docker skills mem llm context traj thinkers chat recap blind delegate librarian-env)
+AUX_TOOLS=(shellm-docker-broker identity shellm-explore librarian-skills librarian-init librarian-killall librarian-project persona librarian-web librarian-slack-bridge librarian-telegram-bridge librarian)
+# The Headlong-era names stay callable: repo symlinks under tools/ that install
+# like any other tool (a symlink in --symlinks mode, a copy otherwise).
+LEGACY_TOOLS=(headlong-init headlong-killall headlong-project headlong-skills headlong-web headlong-slack-bridge headlong-telegram-bridge)
+TOOLS=("${BIN_TOOLS[@]}" "${AUX_TOOLS[@]}" "${LEGACY_TOOLS[@]}")
 
 # ---------------------------------------------------------------------------
 # Dependency checks (shared by both modes)
@@ -90,10 +111,10 @@ _require_deps() {
 # ---------------------------------------------------------------------------
 
 # _docker_daemon_ok — is a working Docker daemon reachable?
-# HEADLONG_FAKE_DOCKER=ok|down|missing fakes the answer so the menu can be
-# tried by hand; headlong-init honors the same variable.
+# LIBRARIAN_FAKE_DOCKER=ok|down|missing fakes the answer so the menu can be
+# tried by hand; librarian-init honors the same variable.
 _docker_daemon_ok() {
-    case "${HEADLONG_FAKE_DOCKER:-}" in
+    case "${LIBRARIAN_FAKE_DOCKER:-}" in
         ok) return 0 ;;
         down|missing) return 1 ;;
     esac
@@ -105,7 +126,7 @@ _docker_daemon_ok() {
 # marker carries the first answer across that handoff so the checkout does not
 # ask the same question again.
 _location_offer_available() {
-    [[ "${HEADLONG_INSTALL_LOCATION_CHOSEN:-0}" != "1" ]] || return 1
+    [[ "${LIBRARIAN_INSTALL_LOCATION_CHOSEN:-0}" != "1" ]] || return 1
     [[ ! -f /.dockerenv && ! -f /run/.containerenv ]] || return 1
     (: </dev/tty) 2>/dev/null || return 1
     _docker_daemon_ok
@@ -114,7 +135,7 @@ _location_offer_available() {
 # URL helpers for the local-model endpoint: replace only a loopback
 # authority host, never substrings elsewhere in the URL (a host like
 # mylocalhost.dev, or a path segment, must survive untouched). The same
-# helpers live in bin/shellm and tools/headlong-init — this repo duplicates
+# helpers live in bin/shellm and tools/librarian-init — this repo duplicates
 # small helpers rather than sharing a lib; keep the copies identical.
 _url_host() {
     local rest="${1#*://}"
@@ -164,8 +185,8 @@ _url_is_loopback() {
 # exported.
 #
 # The interview answers are not secrets and stay inline: two of them
-# (HEADLONG_REPO, HEADLONG_BRANCH) are assigned by install.sh WITHOUT export,
-# so a bare name would forward nothing. The one exception is HEADLONG_LOCAL_URL
+# (LIBRARIAN_REPO, LIBRARIAN_BRANCH) are assigned by install.sh WITHOUT export,
+# so a bare name would forward nothing. The one exception is LIBRARIAN_LOCAL_URL
 # — an endpoint URL can carry user:pass@ credentials or a query token — so it
 # is treated like a secret and forwarded by name (it always arrives exported,
 # from the operator's own environment). This function is collected with a
@@ -174,28 +195,28 @@ _url_is_loopback() {
 _docker_forward_args() {
     local var
     for var in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY \
-               OPENCODE_API_KEY LLM_API_KEY HEADLONG_LOCAL_API_KEY; do
+               OPENCODE_API_KEY LLM_API_KEY LIBRARIAN_LOCAL_API_KEY; do
         if [[ -n "${!var:-}" ]]; then
             export "${var?}"
             printf '%s\0%s\0' "-e" "$var"
         fi
     done
-    if [[ -n "${HEADLONG_LOCAL_URL:-}" ]]; then
-        # The installer receiving the URL runs inside the full Headlong
+    if [[ -n "${LIBRARIAN_LOCAL_URL:-}" ]]; then
+        # The installer receiving the URL runs inside the full Librarian
         # container, where localhost names that container. Use Docker's
         # hostname for a model server running on the host.
-        if _url_is_loopback "$HEADLONG_LOCAL_URL"; then
-            HEADLONG_LOCAL_URL=$(_url_host_swap "$HEADLONG_LOCAL_URL" host.docker.internal)
+        if _url_is_loopback "$LIBRARIAN_LOCAL_URL"; then
+            LIBRARIAN_LOCAL_URL=$(_url_host_swap "$LIBRARIAN_LOCAL_URL" host.docker.internal)
         fi
-        export HEADLONG_LOCAL_URL
-        printf '%s\0%s\0' "-e" "HEADLONG_LOCAL_URL"
+        export LIBRARIAN_LOCAL_URL
+        printf '%s\0%s\0' "-e" "LIBRARIAN_LOCAL_URL"
     fi
     # (LLM_PROVIDER itself travels inside the state .env, which the
     # container's init re-persists; exporting it here would also pin it for
     # the whole container, which the operator did not ask for.)
-    for var in HEADLONG_IDENTITY_NAME HEADLONG_IDENTITY_VIBE HEADLONG_IDENTITY_FOCUS \
-               HEADLONG_IDENTITY_USER HEADLONG_OPERATOR_NAME HEADLONG_REPO HEADLONG_BRANCH \
-               HEADLONG_PROVIDER HEADLONG_LOCAL_MODEL; do
+    for var in LIBRARIAN_IDENTITY_NAME LIBRARIAN_IDENTITY_VIBE LIBRARIAN_IDENTITY_FOCUS \
+               LIBRARIAN_IDENTITY_USER LIBRARIAN_OPERATOR_NAME LIBRARIAN_REPO LIBRARIAN_BRANCH \
+               LIBRARIAN_PROVIDER LIBRARIAN_LOCAL_MODEL; do
         if [[ -n "${!var:-}" ]]; then
             printf '%s\0%s\0' "-e" "$var=${!var}"
         fi
@@ -229,16 +250,16 @@ EOF
                 cat >/dev/tty <<'EOF'
 
 EVERY shell command your agent writes will run DIRECTLY ON THIS MACHINE,
-as your user, with access to your files, with no sandbox. Headlong agents
+as your user, with access to your files, with no sandbox. Librarian agents
 run continuously and unattended. NOT RECOMMENDED.
 
 EOF
                 printf 'Type "yes" to DANGEROUSLY continue without a sandbox (anything else goes back): ' >/dev/tty
                 IFS= read -r reply </dev/tty || return 0
                 if [[ "$reply" == "yes" ]]; then
-                    # headlong-init's gate honors this as an explicit, sticky
+                    # librarian-init's gate honors this as an explicit, sticky
                     # choice and records it in the state .env.
-                    export HEADLONG_UNSANDBOXED=1
+                    export LIBRARIAN_UNSANDBOXED=1
                     return 0
                 fi
                 ;;
@@ -248,16 +269,16 @@ EOF
 
     # An agent container already exists: that IS the install. Go back in
     # instead of failing on the taken name.
-    if docker inspect --type container headlong >/dev/null 2>&1; then
+    if docker inspect --type container librarian >/dev/null 2>&1; then
         cat <<'EOF'
 
-A container named 'headlong' already exists, so your agent lives there.
+A container named 'librarian' already exists, so your agent lives there.
 Dropping you into it (type exit to leave; the agent keeps running).
 To update the agent, re-run the installer inside the container:
-  curl -fsSL https://headlong.ai/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/install.sh | bash
 EOF
-        docker start headlong >/dev/null 2>&1 || true
-        exec docker exec -it headlong bash -l </dev/tty
+        docker start librarian >/dev/null 2>&1 || true
+        exec docker exec -it librarian bash -l </dev/tty
     fi
 
     # Forward a key and interview answers already in the environment, so the
@@ -275,29 +296,29 @@ EOF
     rm -f "$fwd_tmp"
 
     echo
-    echo "==> Starting your agent in a Docker container named 'headlong'"
+    echo "==> Starting your agent in a Docker container named 'librarian'"
     echo "    Dash: http://localhost:8080 once it is up. Get back in later with:"
-    echo "    docker exec -it headlong bash -l"
+    echo "    docker exec -it librarian bash -l"
     echo
     local rc=0
-    docker run -it --name headlong --restart unless-stopped -p 8080:8080 \
+    docker run -it --name librarian --restart unless-stopped -p 8080:8080 \
         --add-host "host.docker.internal:host-gateway" \
         ${fwd[@]+"${fwd[@]}"} buildpack-deps:curl \
-        bash -c 'curl -fsSL https://headlong.ai/install.sh | bash; exec bash' </dev/tty || rc=$?
+        bash -c 'curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/install.sh | bash; exec bash' </dev/tty || rc=$?
     if [[ "$rc" -eq 0 ]]; then
         cat <<'EOF'
 
 You left the container shell; the agent keeps running in the background.
-  docker exec -it headlong bash -l   back into the agent's world
-  docker stop headlong               pause everything
-  docker start headlong              resume
-  docker rm -f headlong              delete the agent and its whole world
+  docker exec -it librarian bash -l   back into the agent's world
+  docker stop librarian               pause everything
+  docker start librarian              resume
+  docker rm -f librarian              delete the agent and its whole world
 EOF
         exit 0
     fi
     echo "install.sh: the Docker run failed (exit $rc)." >&2
     echo "If the name or port 8080 is taken, remove the half-made container with" >&2
-    echo "  docker rm -f headlong" >&2
+    echo "  docker rm -f librarian" >&2
     echo "and re-run the installer. Answer 2 to install on this machine instead." >&2
     exit "$rc"
 }
@@ -307,29 +328,29 @@ _bootstrap_and_reexec() {
 
     cat <<'EOF'
 
-Headlong installer. At any time, from any shell:
-  read-only status:  curl -fsSL https://headlong.ai/status.sh | bash
-  uninstall:         curl -fsSL https://headlong.ai/uninstall.sh | bash
+Librarian installer. At any time, from any shell:
+  read-only status:  curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/status.sh | bash
+  uninstall:         curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/uninstall.sh | bash
 
 EOF
-    local app_dir="$HEADLONG_HOME/app"
+    local app_dir="$LIBRARIAN_HOME/app"
     # Offer the whole-agent-in-Docker menu to a human at a tty with a working
     # daemon, outside a container, as long as no agent exists yet. A leftover
     # checkout alone (an install aborted before an identity was created) does
     # not count as a decision; only a completed install skips the menu.
     if [[ ! -e "$app_dir/.identities/default" ]] && _location_offer_available; then
         _offer_docker_install
-        export HEADLONG_INSTALL_LOCATION_CHOSEN=1
+        export LIBRARIAN_INSTALL_LOCATION_CHOSEN=1
     fi
     if [[ -d "$app_dir/.git" ]]; then
         echo "==> Updating existing checkout at $app_dir"
-        if ! git -C "$app_dir" pull --ff-only origin "$HEADLONG_BRANCH"; then
+        if ! git -C "$app_dir" pull --ff-only origin "$LIBRARIAN_BRANCH"; then
             echo "install.sh: warning: could not update $app_dir; installing from what's there" >&2
         fi
     else
-        echo "==> Cloning $HEADLONG_REPO ($HEADLONG_BRANCH) to $app_dir"
-        mkdir -p "$HEADLONG_HOME"
-        git clone --branch "$HEADLONG_BRANCH" "$HEADLONG_REPO" "$app_dir"
+        echo "==> Cloning $LIBRARIAN_REPO ($LIBRARIAN_BRANCH) to $app_dir"
+        mkdir -p "$LIBRARIAN_HOME"
+        git clone --branch "$LIBRARIAN_BRANCH" "$LIBRARIAN_REPO" "$app_dir"
     fi
     echo
     exec bash "$app_dir/install.sh" --symlinks --init "$@"
@@ -343,30 +364,30 @@ _usage() {
     cat <<'EOF'
 Usage: ./install.sh [options]
 
-Installs Headlong's tools from bin/ and tools/ to a directory on your PATH,
+Installs Librarian's tools from bin/ and tools/ to a directory on your PATH,
 plus the core skills (~/.skills/core-skills), the bundled thinker templates
-(~/.headlong-thinkers), and the Rust TUI if cargo is available.
+(~/.librarian-thinkers), and the Rust TUI if cargo is available.
 
 Options:
   --prefix DIR   Install directory (default: ~/.local/bin)
   --symlinks     Create symlinks instead of copies (edits take effect without reinstalling)
-  --init         After installing, run `headlong-init` to bootstrap a first
+  --init         After installing, run `librarian-init` to bootstrap a first
                  identity and start the local dash (the curl|bash one-liner
                  does this by default)
   --keep-conflicts
                  Only warn about commands earlier on PATH that shadow the
-                 installed ones. By default, older Headlong copies and any
+                 installed ones. By default, older Librarian copies and any
                  other llm found ahead of the install directory are moved
                  aside (renamed <name>.pre-headlong-<date>, no sudo); other
                  same-named programs are left alone with a warning.
-  --uninstall    Remove Headlong from this machine (runs uninstall.sh; see
+  --uninstall    Remove Librarian from this machine (runs uninstall.sh; see
                  uninstall.sh --help for its options)
   -h, --help     Show this help
 
 Environment variables:
   PREFIX         Same as --prefix
   SYMLINKS=1     Same as --symlinks
-  HEADLONG_HOME  Headlong state directory (default: ~/.headlong)
+  LIBRARIAN_HOME  Librarian state directory (default: ~/.librarian)
 
 Examples:
   ./install.sh                          # copy to ~/.local/bin
@@ -387,10 +408,10 @@ _install_tools() {
     for tool in "${TOOLS[@]}"; do
         dir=bin
         [[ -f "tools/$tool" ]] && dir=tools
-        # Something already at our path that is not Headlong (pipx puts the
+        # Something already at our path that is not Librarian (pipx puts the
         # Python llm CLI in ~/.local/bin too): keep it, renamed, rather than
         # overwrite it silently.
-        if [[ ( -e "$PREFIX/$tool" || -L "$PREFIX/$tool" ) ]] && ! _is_headlong_copy "$PREFIX/$tool"; then
+        if [[ ( -e "$PREFIX/$tool" || -L "$PREFIX/$tool" ) ]] && ! _is_librarian_copy "$PREFIX/$tool"; then
             mv "$PREFIX/$tool" "$PREFIX/$tool.pre-headlong-$stamp"
             echo "  Kept the existing $PREFIX/$tool as $PREFIX/$tool.pre-headlong-$stamp"
         fi
@@ -406,21 +427,21 @@ _install_tools() {
 }
 
 # A command earlier on PATH with the same name as one of ours wins over the
-# fresh install: an older Headlong copy under another prefix, or another
+# fresh install: an older Librarian copy under another prefix, or another
 # program called llm (the Python llm CLI) made `llm` run the wrong tool and
 # fail with "Cannot detect provider". Walk the PATH entries ahead of $PREFIX:
-#   - an older Headlong copy (it mentions headlong or shellm, or links into a
+#   - an older Librarian copy (it mentions librarian or shellm, or links into a
 #     checkout) and any llm are moved aside to <name>.pre-headlong-<date>,
 #     reversibly and without sudo;
 #   - anything else with one of our generic names (chat, context, mem, ...)
 #     is left alone, with a warning.
-# --keep-conflicts (HEADLONG_REPLACE_CONFLICTS=0) only warns.
-REPLACE_CONFLICTS="${HEADLONG_REPLACE_CONFLICTS:-1}"
-_is_headlong_copy() {
+# --keep-conflicts (LIBRARIAN_REPLACE_CONFLICTS=0) only warns.
+REPLACE_CONFLICTS="${LIBRARIAN_REPLACE_CONFLICTS:-1}"
+_is_librarian_copy() {
     local f="$1" target
     target=$(realpath "$f" 2>/dev/null) || target="$f"
     [[ -f "$(dirname "$target")/shellm" && -f "$(dirname "$target")/../install.sh" ]] && return 0
-    head -n 80 "$target" 2>/dev/null | grep -qiE 'headlong|shellm'
+    head -n 80 "$target" 2>/dev/null | grep -qiE 'librarian|headlong|shellm'
 }
 _resolve_shadowing() {
     local ours dir tool cand stamp moved=0 warned=0 before=1 entry
@@ -442,7 +463,7 @@ _resolve_shadowing() {
             cand="$dir/$tool"
             [[ -e "$cand" || -L "$cand" ]] || continue
             [[ "$(realpath "$cand" 2>/dev/null)" == "$(realpath "$ours" 2>/dev/null)" ]] && continue
-            if [[ "$tool" == llm ]] || _is_headlong_copy "$cand"; then
+            if [[ "$tool" == llm ]] || _is_librarian_copy "$cand"; then
                 if [[ "$REPLACE_CONFLICTS" == 1 && -w "$dir" ]]; then
                     mv "$cand" "$cand.pre-headlong-$stamp"
                     echo "  Moved aside $cand (it shadowed $ours) → $cand.pre-headlong-$stamp"
@@ -452,7 +473,7 @@ _resolve_shadowing() {
                     warned=$((warned + 1))
                 fi
             else
-                echo "Warning: $cand (not Headlong) shadows $ours; left alone. Put $PREFIX earlier on PATH to use Headlong's $tool." >&2
+                echo "Warning: $cand (not Librarian) shadows $ours; left alone. Put $PREFIX earlier on PATH to use Librarian's $tool." >&2
                 warned=$((warned + 1))
             fi
         done
@@ -507,7 +528,7 @@ _install_skills() {
 
 _install_thinkers() {
     [[ -d "thinkers" ]] || return 0
-    local thinkers_prefix="${HOME}/.headlong-thinkers"
+    local thinkers_prefix="${LIBRARIAN_THINKERS_TEMPLATES:-$HOME/.librarian-thinkers}"
     mkdir -p "$thinkers_prefix"
     local td name
     if [[ "$SYMLINKS" -eq 1 ]]; then
@@ -542,7 +563,7 @@ _install_thinkers() {
 }
 
 # PATH: make sure the tools are reachable — for this process (so --init can
-# chain into headlong-init) and, with consent, for future shells.
+# chain into librarian-init) and, with consent, for future shells.
 # A same-named system binary in a dir BEFORE $PREFIX silently shadows the tool
 # we just installed (macOS ships /usr/sbin/chat, /usr/bin/view). Verify each
 # installed tool actually resolves to OUR copy; warn if not. Install still
@@ -571,9 +592,9 @@ _ensure_path() {
         *":$PREFIX:"*) _warn_shadowed; return 0 ;;
     esac
     export PATH="$PREFIX:$PATH"
-    # Tell headlong-init (exec'd below) that the calling shell does NOT have
+    # Tell librarian-init (exec'd below) that the calling shell does NOT have
     # $PREFIX on its PATH yet, so it can hand the user a shell that does.
-    export HEADLONG_PATH_ADDED="$PREFIX"
+    export LIBRARIAN_PATH_ADDED="$PREFIX"
     local path_line="export PATH=\"$PREFIX:\$PATH\"" rc="" reply=""
     case "$(basename "${SHELL:-}")" in
         zsh)  rc="$HOME/.zshrc" ;;
@@ -588,7 +609,7 @@ _ensure_path() {
     if [[ -n "$rc" && "$in_container" -eq 1 ]]; then
         grep -qxF "$path_line" "$rc" 2>/dev/null || printf '\n%s\n' "$path_line" >> "$rc"
         echo "==> Added $PREFIX to PATH in $rc (container — no prompt)."
-        export HEADLONG_RC_FILE="$rc"
+        export LIBRARIAN_RC_FILE="$rc"
     elif [[ -n "$rc" ]] && (: </dev/tty) 2>/dev/null; then
         echo
         printf 'Add %s to your PATH in %s? [Y/n] ' "$PREFIX" "$rc" >/dev/tty
@@ -596,7 +617,7 @@ _ensure_path() {
         if [[ ! "$reply" =~ ^[Nn] ]]; then
             grep -qxF "$path_line" "$rc" 2>/dev/null || printf '\n%s\n' "$path_line" >> "$rc"
             echo "Added to $rc (takes effect in new shells)."
-            export HEADLONG_RC_FILE="$rc"
+            export LIBRARIAN_RC_FILE="$rc"
         fi
         echo
     else
@@ -636,15 +657,15 @@ main() {
     # the one-liner makes: container or this machine. Offer it when nothing
     # has been installed yet; an existing identity (or no tty / no Docker)
     # keeps the plain checkout-mode behavior.
-    if [[ "$RUN_INIT" -eq 1 && ! -e "$HEADLONG_HOME/app/.identities/default" \
+    if [[ "$RUN_INIT" -eq 1 && ! -e "$LIBRARIAN_HOME/app/.identities/default" \
             && ! -e "$script_dir/.identities/default" ]] \
             && _location_offer_available; then
         # The container path curls the PUBLIC installer, which would install
         # upstream main — not the code being installed right now. Default the
         # forwarded repo/branch to this checkout's own origin and branch so
-        # choice 1 runs the same code (an operator-exported HEADLONG_REPO
+        # choice 1 runs the same code (an operator-exported LIBRARIAN_REPO
         # still wins).
-        if [[ -z "$HEADLONG_REPO_OPERATOR_SET" ]] && git -C "$script_dir" rev-parse --git-dir >/dev/null 2>&1; then
+        if [[ -z "$LIBRARIAN_REPO_OPERATOR_SET" ]] && git -C "$script_dir" rev-parse --git-dir >/dev/null 2>&1; then
             local origin_url branch_name
             origin_url=$(git -C "$script_dir" remote get-url origin 2>/dev/null || true)
             branch_name=$(git -C "$script_dir" branch --show-current 2>/dev/null || true)
@@ -664,20 +685,20 @@ main() {
                 *)
                     if [[ -n "$origin_url" ]]; then
                         echo "note: this checkout's origin ($origin_url) cannot be cloned from inside a container;" >&2
-                        echo "      the container choice below would install upstream main instead (export HEADLONG_REPO to override)." >&2
+                        echo "      the container choice below would install upstream main instead (export LIBRARIAN_REPO to override)." >&2
                     fi
                     origin_url=""
                     ;;
             esac
             if [[ -n "$origin_url" && -n "$branch_name" ]]; then
-                HEADLONG_REPO="$origin_url"
-                HEADLONG_BRANCH="$branch_name"
-                export HEADLONG_REPO HEADLONG_BRANCH
+                LIBRARIAN_REPO="$origin_url"
+                LIBRARIAN_BRANCH="$branch_name"
+                export LIBRARIAN_REPO LIBRARIAN_BRANCH
             fi
         fi
         _offer_docker_install
     fi
-    unset HEADLONG_INSTALL_LOCATION_CHOSEN
+    unset LIBRARIAN_INSTALL_LOCATION_CHOSEN
 
     _require_deps jq curl python3
 
@@ -686,8 +707,8 @@ main() {
 
     # Record where the checkout lives so tools installed as copies (not
     # symlinks) can still find repo assets (web/, identities/, thinkers/).
-    mkdir -p "$HEADLONG_HOME"
-    printf '%s\n' "$(pwd)" > "$HEADLONG_HOME/app_dir"
+    mkdir -p "$LIBRARIAN_HOME"
+    printf '%s\n' "$(pwd)" > "$LIBRARIAN_HOME/app_dir"
 
     _install_tui
     _install_skills
@@ -697,7 +718,7 @@ main() {
 
     if [[ "$RUN_INIT" -eq 1 ]]; then
         echo
-        exec "$PREFIX/headlong-init"
+        exec "$PREFIX/librarian-init"
     fi
 }
 

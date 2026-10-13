@@ -1,72 +1,78 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (bin/librarian-env).
+for _le in "$(dirname "${BASH_SOURCE[0]}")/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/bin/librarian-env"; do
+    # shellcheck source=/dev/null
+    if [[ -f "$_le" ]]; then . "$_le"; break; fi
+done; unset _le
+
 set -euo pipefail
 
-# headlong-init — bootstrap a first identity and start its life.
+# librarian-init — bootstrap a first identity and start its life.
 #
 # Idempotent: safe to re-run any time. Creates only what's missing:
-#   ~/.headlong/.env                   API key + default model
+#   ~/.librarian/.env                   API key + default model
 #   <app>/.identities/<name>/          the identity (persona, memories, ...)
 # then starts the monolith thinker and the local web dash, and opens the dash
 # so you can watch the mind spin.
 #
 # Interactive prompts read from /dev/tty, so this works under `curl | bash`.
 # With no tty everything falls back to defaults / environment:
-#   HEADLONG_UNSANDBOXED=1   accept an agent whose shell commands run directly
+#   LIBRARIAN_UNSANDBOXED=1   accept an agent whose shell commands run directly
 #                          on this machine when Docker is not available
-#   HEADLONG_APP_DIR         path to the headlong checkout (auto-detected)
-#   HEADLONG_IDENTITY_NAME   identity name (default: ada)
-#   HEADLONG_IDENTITY_VIBE   personality, a few words
-#   HEADLONG_IDENTITY_FOCUS  what to think about when idle
-#   HEADLONG_OPERATOR_NAME   your name (the operator)
-#   HEADLONG_IDENTITY_USER   a note about you, the operator
-#   HEADLONG_NO_THINKERS=1   don't start the monolith thinker
-#   HEADLONG_NO_DASH=1       don't start the web dash
-#   HEADLONG_WEB_ARGS        extra args for headlong-web (e.g. "--host 0.0.0.0"
+#   LIBRARIAN_APP_DIR         path to the librarian checkout (auto-detected)
+#   LIBRARIAN_IDENTITY_NAME   identity name (default: ada)
+#   LIBRARIAN_IDENTITY_VIBE   personality, a few words
+#   LIBRARIAN_IDENTITY_FOCUS  what to think about when idle
+#   LIBRARIAN_OPERATOR_NAME   your name (the operator)
+#   LIBRARIAN_IDENTITY_USER   a note about you, the operator
+#   LIBRARIAN_NO_THINKERS=1   don't start the monolith thinker
+#   LIBRARIAN_NO_DASH=1       don't start the web dash
+#   LIBRARIAN_WEB_ARGS        extra args for librarian-web (e.g. "--host 0.0.0.0"
 #                          to reach the dash through a Docker port mapping)
-#   HEADLONG_PROVIDER        "cloud" (default: pick a provider from an API
+#   LIBRARIAN_PROVIDER        "cloud" (default: pick a provider from an API
 #                          key) or "local" (OpenAI-compatible endpoint: ask
 #                          for a URL + optional key, verify with /v1/models,
 #                          pick the model from that list)
-#   HEADLONG_LOCAL_URL       endpoint for the local provider (skips the URL
+#   LIBRARIAN_LOCAL_URL       endpoint for the local provider (skips the URL
 #                          prompt; e.g. http://localhost:11434/v1)
-#   HEADLONG_LOCAL_API_KEY   bearer token for the local endpoint, when it
+#   LIBRARIAN_LOCAL_API_KEY   bearer token for the local endpoint, when it
 #                          wants one (LM Studio and router proxies often do)
-#   HEADLONG_LOCAL_MODEL     model to pin (skips the model-picker prompt)
+#   LIBRARIAN_LOCAL_MODEL     model to pin (skips the model-picker prompt)
 #
 # --dry-run walks the Docker sandbox gate interactively, writes nothing,
-# starts nothing, and exits. Pair with HEADLONG_FAKE_DOCKER=ok|down|missing
-# and HEADLONG_NO_TTY=1 to rehearse each path.
+# starts nothing, and exits. Pair with LIBRARIAN_FAKE_DOCKER=ok|down|missing
+# and LIBRARIAN_NO_TTY=1 to rehearse each path.
 #
 # Writes status.json in the state home at the end: identity, model, mind/dash
 # status ("ok" | "failed" | "skipped"), dash URL, pid file paths.
 
-die() { printf 'headlong-init: error: %s\n' "$*" >&2; exit 1; }
+die() { printf 'librarian-init: error: %s\n' "$*" >&2; exit 1; }
 info() { printf '\n==> %s\n' "$*"; }   # phase header; the blank line sets phases apart
 
-# State home: HEADLONG_HOME if set; else ~/.headlong. A pre-headlong
-# install lives in ~/.shelly or ~/.shellm — move it: mv ~/.shelly ~/.headlong
-HEADLONG_HOME="${HEADLONG_HOME:-$HOME/.headlong}"
-HEADLONG_APP_DIR="${HEADLONG_APP_DIR:-}"
-HEADLONG_IDENTITY_NAME="${HEADLONG_IDENTITY_NAME:-}"
-HEADLONG_IDENTITY_VIBE="${HEADLONG_IDENTITY_VIBE:-}"
-HEADLONG_IDENTITY_FOCUS="${HEADLONG_IDENTITY_FOCUS:-}"
-HEADLONG_IDENTITY_USER="${HEADLONG_IDENTITY_USER:-}"
-HEADLONG_OPERATOR_NAME="${HEADLONG_OPERATOR_NAME:-}"
-HEADLONG_NO_THINKERS="${HEADLONG_NO_THINKERS:-}"
-HEADLONG_NO_DASH="${HEADLONG_NO_DASH:-}"
-HEADLONG_WEB_ARGS="${HEADLONG_WEB_ARGS:-}"
+# State home: LIBRARIAN_HOME if set; else ~/.librarian. A pre-librarian
+# install lives in ~/.shelly or ~/.shellm — move it: mv ~/.shelly ~/.librarian
+LIBRARIAN_HOME="${LIBRARIAN_HOME:-$HOME/.librarian}"
+LIBRARIAN_APP_DIR="${LIBRARIAN_APP_DIR:-}"
+LIBRARIAN_IDENTITY_NAME="${LIBRARIAN_IDENTITY_NAME:-}"
+LIBRARIAN_IDENTITY_VIBE="${LIBRARIAN_IDENTITY_VIBE:-}"
+LIBRARIAN_IDENTITY_FOCUS="${LIBRARIAN_IDENTITY_FOCUS:-}"
+LIBRARIAN_IDENTITY_USER="${LIBRARIAN_IDENTITY_USER:-}"
+LIBRARIAN_OPERATOR_NAME="${LIBRARIAN_OPERATOR_NAME:-}"
+LIBRARIAN_NO_THINKERS="${LIBRARIAN_NO_THINKERS:-}"
+LIBRARIAN_NO_DASH="${LIBRARIAN_NO_DASH:-}"
+LIBRARIAN_WEB_ARGS="${LIBRARIAN_WEB_ARGS:-}"
 DRY_RUN=0
-mkdir -p "$HEADLONG_HOME/logs" "$HEADLONG_HOME/run"
-INIT_LOG="$HEADLONG_HOME/logs/init.log"
+mkdir -p "$LIBRARIAN_HOME/logs" "$LIBRARIAN_HOME/run"
+INIT_LOG="$LIBRARIAN_HOME/logs/init.log"
 
 # ---------------------------------------------------------------------------
 # Locate the repo checkout (needed for web/, identities/, .identities root)
 # ---------------------------------------------------------------------------
 
 _resolve_app_dir() {
-    if [[ -n "${HEADLONG_APP_DIR:-}" ]]; then
-        [[ -f "$HEADLONG_APP_DIR/bin/shellm" ]] || die "HEADLONG_APP_DIR=$HEADLONG_APP_DIR is not a headlong checkout"
-        printf '%s' "$HEADLONG_APP_DIR"
+    if [[ -n "${LIBRARIAN_APP_DIR:-}" ]]; then
+        [[ -f "$LIBRARIAN_APP_DIR/bin/shellm" ]] || die "LIBRARIAN_APP_DIR=$LIBRARIAN_APP_DIR is not a librarian checkout"
+        printf '%s' "$LIBRARIAN_APP_DIR"
         return 0
     fi
     local script_dir
@@ -80,19 +86,19 @@ _resolve_app_dir() {
     fi
     # Installed as a copy: fall back to the checkout recorded by install.sh.
     local recorded
-    recorded=$(cat "$HEADLONG_HOME/app_dir" 2>/dev/null || true)
+    recorded=$(cat "$LIBRARIAN_HOME/app_dir" 2>/dev/null || true)
     if [[ -n "$recorded" && -f "$recorded/bin/shellm" ]]; then
         printf '%s' "$recorded"
         return 0
     fi
-    if [[ -f "$HEADLONG_HOME/app/bin/shellm" ]]; then
-        printf '%s' "$HEADLONG_HOME/app"
+    if [[ -f "$LIBRARIAN_HOME/app/bin/shellm" ]]; then
+        printf '%s' "$LIBRARIAN_HOME/app"
         return 0
     fi
     return 1
 }
 
-APP_DIR=$(_resolve_app_dir) || die "can't find the headlong checkout. Set HEADLONG_APP_DIR=/path/to/headlong"
+APP_DIR=$(_resolve_app_dir) || die "can't find the librarian checkout. Set LIBRARIAN_APP_DIR=/path/to/librarian"
 export PATH="$APP_DIR/bin:$APP_DIR/tools:$PATH"
 
 # ---------------------------------------------------------------------------
@@ -102,16 +108,16 @@ export PATH="$APP_DIR/bin:$APP_DIR/tools:$PATH"
 HAS_TTY=0
 if (: </dev/tty) 2>/dev/null; then HAS_TTY=1; fi
 # Tests and scripted runs force the no-tty paths even under a terminal.
-if [[ "${HEADLONG_NO_TTY:-0}" == "1" ]]; then HAS_TTY=0; fi
+if [[ "${LIBRARIAN_NO_TTY:-0}" == "1" ]]; then HAS_TTY=0; fi
 
 # In a container, bind the dash on all interfaces so a published port
 # (docker run -p 8080:8080) can reach it — localhost-only is unreachable
-# through a port mapping. Explicit HEADLONG_WEB_ARGS still wins.
+# through a port mapping. Explicit LIBRARIAN_WEB_ARGS still wins.
 IN_CONTAINER=0
 [[ -f /.dockerenv || -f /run/.containerenv ]] && IN_CONTAINER=1
-[[ "${HEADLONG_FAKE_CONTAINER:-0}" == "1" ]] && IN_CONTAINER=1
-if [[ "$IN_CONTAINER" -eq 1 && -z "${HEADLONG_WEB_ARGS:-}" ]]; then
-    HEADLONG_WEB_ARGS="--host 0.0.0.0"
+[[ "${LIBRARIAN_FAKE_CONTAINER:-0}" == "1" ]] && IN_CONTAINER=1
+if [[ "$IN_CONTAINER" -eq 1 && -z "${LIBRARIAN_WEB_ARGS:-}" ]]; then
+    LIBRARIAN_WEB_ARGS="--host 0.0.0.0"
 fi
 
 # ask <prompt> [default] — print the answer; default on no tty / empty reply
@@ -170,7 +176,7 @@ _load_env() {
     return 0
 }
 _load_env "$APP_DIR/.env" || true
-_load_env "$HEADLONG_HOME/.env" || true
+_load_env "$LIBRARIAN_HOME/.env" || true
 
 # _env_set <file> <key> <value> — set KEY in an env file (replacing any
 # existing line) and export it into this process. The value is written
@@ -223,10 +229,10 @@ _env_unset() {
 # ---------------------------------------------------------------------------
 
 _docker_state() {  # -> ok | down | missing
-    # HEADLONG_FAKE_DOCKER=ok|down|missing fakes the answer so each gate
-    # path can be tried by hand (pair with HEADLONG_NO_TTY=1 as needed).
-    case "${HEADLONG_FAKE_DOCKER:-}" in
-        ok|down|missing) printf '%s' "$HEADLONG_FAKE_DOCKER"; return 0 ;;
+    # LIBRARIAN_FAKE_DOCKER=ok|down|missing fakes the answer so each gate
+    # path can be tried by hand (pair with LIBRARIAN_NO_TTY=1 as needed).
+    case "${LIBRARIAN_FAKE_DOCKER:-}" in
+        ok|down|missing) printf '%s' "$LIBRARIAN_FAKE_DOCKER"; return 0 ;;
     esac
     command -v docker >/dev/null 2>&1 || { printf 'missing'; return 0; }
     if docker info >/dev/null 2>&1; then printf 'ok'; else printf 'down'; fi
@@ -234,8 +240,8 @@ _docker_state() {  # -> ok | down | missing
 
 _sandbox_on() {
     info "Docker found. ${NAME:-Your agent}'s shell commands will run sandboxed in Docker."
-    _env_set "$HEADLONG_HOME/.env" "SHELLM_REQUIRE_DOCKER" "1"
-    _env_set "$HEADLONG_HOME/.env" "HEADLONG_UNSANDBOXED" "0"
+    _env_set "$LIBRARIAN_HOME/.env" "SHELLM_REQUIRE_DOCKER" "1"
+    _env_set "$LIBRARIAN_HOME/.env" "LIBRARIAN_UNSANDBOXED" "0"
     # Warm the sandbox image in the background so the first thought is not
     # stuck behind a docker pull.
     local image="${SHELLM_DOCKER_IMAGE:-ubuntu:latest}"
@@ -248,9 +254,9 @@ _sandbox_on() {
 _sandbox_off() {
     # Remember the consent so re-runs do not ask again, and so shellm does
     # not refuse to run.
-    _env_set "$HEADLONG_HOME/.env" "HEADLONG_UNSANDBOXED" "1"
-    _env_set "$HEADLONG_HOME/.env" "SHELLM_REQUIRE_DOCKER" "0"
-    echo "    Continuing without a sandbox. To turn it on later, install Docker, set HEADLONG_UNSANDBOXED=0 in $HEADLONG_HOME/.env, and re-run headlong-init."
+    _env_set "$LIBRARIAN_HOME/.env" "LIBRARIAN_UNSANDBOXED" "1"
+    _env_set "$LIBRARIAN_HOME/.env" "SHELLM_REQUIRE_DOCKER" "0"
+    echo "    Continuing without a sandbox. To turn it on later, install Docker, set LIBRARIAN_UNSANDBOXED=0 in $LIBRARIAN_HOME/.env, and re-run librarian-init."
 }
 
 _sandbox_gate() {
@@ -259,10 +265,10 @@ _sandbox_gate() {
 
     # An explicit unsandboxed choice (the installer menu, the environment, or
     # a previous typed yes) sticks, even when Docker is available.
-    if [[ "${HEADLONG_UNSANDBOXED:-}" == "1" ]]; then
-        echo "Warning: no Docker sandbox (HEADLONG_UNSANDBOXED=1). The agent's shell commands run directly on this machine. Set HEADLONG_UNSANDBOXED=0 in $HEADLONG_HOME/.env and re-run headlong-init to turn the sandbox on." >&2
-        _env_set "$HEADLONG_HOME/.env" "HEADLONG_UNSANDBOXED" "1"
-        _env_set "$HEADLONG_HOME/.env" "SHELLM_REQUIRE_DOCKER" "0"
+    if [[ "${LIBRARIAN_UNSANDBOXED:-}" == "1" ]]; then
+        echo "Warning: no Docker sandbox (LIBRARIAN_UNSANDBOXED=1). The agent's shell commands run directly on this machine. Set LIBRARIAN_UNSANDBOXED=0 in $LIBRARIAN_HOME/.env and re-run librarian-init to turn the sandbox on." >&2
+        _env_set "$LIBRARIAN_HOME/.env" "LIBRARIAN_UNSANDBOXED" "1"
+        _env_set "$LIBRARIAN_HOME/.env" "SHELLM_REQUIRE_DOCKER" "0"
         return 0
     fi
 
@@ -274,7 +280,7 @@ _sandbox_gate() {
     fi
 
     if [[ "$HAS_TTY" -eq 0 ]]; then
-        die "no Docker daemon is reachable, so there is no sandbox for the agent's shell commands. Install and start Docker, or set HEADLONG_UNSANDBOXED=1 to accept the agent running directly on this machine."
+        die "no Docker daemon is reachable, so there is no sandbox for the agent's shell commands. Install and start Docker, or set LIBRARIAN_UNSANDBOXED=1 to accept the agent running directly on this machine."
     fi
 
     local reply
@@ -288,7 +294,7 @@ then press Enter to check again. `docker info` shows what is wrong.
 
 EOF
             printf 'Press Enter to re-check, or type "yes" to DANGEROUSLY run the agent unsandboxed on this machine: ' >/dev/tty
-            IFS= read -r reply </dev/tty || die "no answer. Start Docker and re-run headlong-init."
+            IFS= read -r reply </dev/tty || die "no answer. Start Docker and re-run librarian-init."
             if [[ "$reply" == "yes" ]]; then
                 _sandbox_off
                 return 0
@@ -305,7 +311,7 @@ EOF
 WARNING: Docker was not found on this machine, so there is no sandbox.
 
 EVERY shell command your agent writes will run DIRECTLY ON THIS MACHINE,
-as your user, with access to your files. Headlong agents run continuously
+as your user, with access to your files. Librarian agents run continuously
 and unattended.
 
 The safe path is to STOP NOW, install Docker (https://docs.docker.com/get-docker/),
@@ -389,18 +395,18 @@ _reconcile_key_vars() {
             # The right variable is already set; leave both alone and let the
             # priority order below pick the consistent one.
             [[ "${!want}" != "${!var}" ]] && printf \
-                'headlong-init: warning: %s holds a %s key; %s is also set, using that one.\n' \
+                'librarian-init: warning: %s holds a %s key; %s is also set, using that one.\n' \
                 "$var" "$want" "$want" >&2
             continue
         fi
-        printf 'headlong-init: warning: %s holds a key whose prefix belongs to %s; using it as %s.\n' \
+        printf 'librarian-init: warning: %s holds a key whose prefix belongs to %s; using it as %s.\n' \
             "$var" "$want" "$want" >&2
         # Persist on an ordinary setup so later processes see the corrected
         # variable. During a local-to-cloud switch, stage the correction in
         # this process only: the working local .env remains byte-for-byte
         # intact until the cloud handshake succeeds.
         if [[ "$persist" -eq 1 ]]; then
-            _env_set "$HEADLONG_HOME/.env" "$want" "${!var}"
+            _env_set "$LIBRARIAN_HOME/.env" "$want" "${!var}"
         else
             export "$want=${!var}"
             _STAGED_CLOUD_KEY_VAR="$want"
@@ -410,7 +416,7 @@ _reconcile_key_vars() {
         # would keep routing to the wrong provider; follow the key.
         if [[ "${SHELLM_MODEL:-}" == "$(_default_model_for "$var")" ]]; then
             if [[ "$persist" -eq 1 ]]; then
-                _env_set "$HEADLONG_HOME/.env" "SHELLM_MODEL" "$(_default_model_for "$want")"
+                _env_set "$LIBRARIAN_HOME/.env" "SHELLM_MODEL" "$(_default_model_for "$want")"
             else
                 SHELLM_MODEL="$(_default_model_for "$want")"
                 export SHELLM_MODEL
@@ -505,10 +511,10 @@ _prompt_key() {
         esac
     fi
     if [[ "$persist" -eq 1 ]]; then
-        _env_set "$HEADLONG_HOME/.env" "$var" "$key"
+        _env_set "$LIBRARIAN_HOME/.env" "$var" "$key"
         # Pin the model to this key's provider so a stale key for another
         # provider's default can't shadow the one we just validated.
-        _env_set "$HEADLONG_HOME/.env" "SHELLM_MODEL" "$(_default_model_for "$var")"
+        _env_set "$LIBRARIAN_HOME/.env" "SHELLM_MODEL" "$(_default_model_for "$var")"
     else
         # A prompted key would otherwise be lost when this init exits. Stage
         # it until validation, then _commit_local_wipe persists it as part of
@@ -576,7 +582,7 @@ _local_models_get() {
         header="${header//$'\n'/\\n}"
         header="${header//$'\r'/\\r}"
         header="${header//$'\v'/\\v}"
-        auth_file=$(mktemp "${TMPDIR:-/tmp}/headlong-init-auth.XXXXXX")
+        auth_file=$(mktemp "${TMPDIR:-/tmp}/librarian-init-auth.XXXXXX")
         chmod 600 "$auth_file" 2>/dev/null || true
         printf 'header = "%s"\n' "$header" > "$auth_file"
         curl_args+=(-K "$auth_file")
@@ -705,8 +711,8 @@ _url_is_loopback() {
 
 # _local_probe_url <url> — the URL this init process can reach. A host-side
 # installer probes the localhost twin of host.docker.internal. An installer
-# running inside the full Headlong container must keep host.docker.internal,
-# because localhost there means the Headlong container itself.
+# running inside the full Librarian container must keep host.docker.internal,
+# because localhost there means the Librarian container itself.
 _local_probe_url() {
     local url="$1"
     if [[ "$IN_CONTAINER" -eq 0 && "$(_url_host "$url")" == "host.docker.internal" ]]; then
@@ -776,9 +782,9 @@ _pick_from_list() {
 # SHELLM_API_URL, LLM_API_KEY (when given) and SHELLM_MODEL, persists them,
 # and proves the whole chain with a real completion through bin/llm.
 _setup_local_llm() {
-    local base chat key models chosen url_env="${HEADLONG_LOCAL_URL:-${SHELLM_API_URL:-${LLM_API_URL:-}}}"
-    local key_env="${HEADLONG_LOCAL_API_KEY:-}"
-    local model_env="${HEADLONG_LOCAL_MODEL:-}"
+    local base chat key models chosen url_env="${LIBRARIAN_LOCAL_URL:-${SHELLM_API_URL:-${LLM_API_URL:-}}}"
+    local key_env="${LIBRARIAN_LOCAL_API_KEY:-}"
+    local model_env="${LIBRARIAN_LOCAL_MODEL:-}"
     local revalidating=0
 
     # Keep a saved local model — or a saved LLM_API_KEY — only when the
@@ -786,14 +792,14 @@ _setup_local_llm() {
     # .env must not override the model list returned by a newly selected
     # server, and a key saved for one endpoint must never be sent as a
     # Bearer token to a different one.
-    if [[ -z "${HEADLONG_LOCAL_URL:-}" \
+    if [[ -z "${LIBRARIAN_LOCAL_URL:-}" \
             && "${LLM_PROVIDER:-}" == "openai-compatible" ]]; then
         [[ -n "$model_env" ]] || model_env="${SHELLM_MODEL:-}"
         [[ -n "$key_env" ]] || key_env="${LLM_API_KEY:-}"
     fi
 
     # A URL supplied directly to an init process already running in the full
-    # Headlong container needs the Docker host name before the first probe.
+    # Librarian container needs the Docker host name before the first probe.
     if [[ "$IN_CONTAINER" -eq 1 ]]; then
         url_env=$(_local_container_url "$url_env")
     fi
@@ -804,8 +810,8 @@ _setup_local_llm() {
     # the rest of init from restarting the mind and dashboard.
     if [[ -L "$APP_DIR/.identities/default" && -n "${SHELLM_API_URL:-}" \
             && "${LLM_PROVIDER:-}" == "openai-compatible" \
-            && -z "${HEADLONG_PROVIDER:-}" && -z "${HEADLONG_LOCAL_URL:-}" \
-            && -z "${HEADLONG_LOCAL_MODEL:-}" && -z "${HEADLONG_LOCAL_API_KEY:-}" ]]; then
+            && -z "${LIBRARIAN_PROVIDER:-}" && -z "${LIBRARIAN_LOCAL_URL:-}" \
+            && -z "${LIBRARIAN_LOCAL_MODEL:-}" && -z "${LIBRARIAN_LOCAL_API_KEY:-}" ]]; then
         revalidating=1
     fi
 
@@ -814,7 +820,7 @@ _setup_local_llm() {
         if LLM_API_URL="$(_local_probe_url "$SHELLM_API_URL")" _llm_ok; then
             echo "    OK — ${SHELLM_MODEL} answered."
         else
-            echo "headlong-init: warning: the existing local model server did not answer; keeping its configuration" >&2
+            echo "librarian-init: warning: the existing local model server did not answer; keeping its configuration" >&2
         fi
         return 0
     fi
@@ -822,31 +828,31 @@ _setup_local_llm() {
     if [[ "$HAS_TTY" -eq 1 ]]; then
         cat >/dev/tty <<'EOF'
 
-Local model server (Ollama, LM Studio, vLLM, llama.cpp, ...). Headlong
+Local model server (Ollama, LM Studio, vLLM, llama.cpp, ...). Librarian
 talks to it through its OpenAI-compatible chat API; no cloud API key is
 needed, and the agent's completions all stay on this machine or your
-network. The server must already be running — Headlong never installs
+network. The server must already be running — Librarian never installs
 one or pulls models.
 
 EOF
     fi
 
     # --- URL -----------------------------------------------------------------
-    # No-tty: HEADLONG_LOCAL_URL (or an inherited URL) is required — there is
+    # No-tty: LIBRARIAN_LOCAL_URL (or an inherited URL) is required — there is
     # no one to ask and no trustworthy default port (every server differs).
     # A server that is DOWN is a hard error (starting the mind against it
     # just fails later, unattended); a server that answers but exposes no
     # model list (some proxies) only warns.
     if [[ "$HAS_TTY" -eq 0 ]]; then
-        [[ -n "$url_env" ]] || die "local provider selected with no URL. Set HEADLONG_LOCAL_URL (e.g. http://localhost:11434)"
+        [[ -n "$url_env" ]] || die "local provider selected with no URL. Set LIBRARIAN_LOCAL_URL (e.g. http://localhost:11434)"
         base=$(_local_base_url "$(_local_probe_url "$url_env")")
         key="$key_env"
         if ! _local_models_get "$base" "$key"; then
             if [[ -n "$_local_models_err" && "$_local_models_err" == could\ not\ reach* ]]; then
-                die "local endpoint unreachable: $_local_models_err. Start the server and re-run headlong-init."
+                die "local endpoint unreachable: $_local_models_err. Start the server and re-run librarian-init."
             fi
-            echo "headlong-init: warning: could not list models: $_local_models_err" >&2
-            echo "headlong-init: continuing with the given URL — set HEADLONG_LOCAL_MODEL if the model name is not already pinned" >&2
+            echo "librarian-init: warning: could not list models: $_local_models_err" >&2
+            echo "librarian-init: continuing with the given URL — set LIBRARIAN_LOCAL_MODEL if the model name is not already pinned" >&2
         fi
     else
         # A tty: default to the env/inherited value; otherwise suggest a
@@ -863,7 +869,7 @@ EOF
             url_env=$(_prompt_local_url "$def_url")
             # A URL typed at an in-container prompt needs the Docker host
             # name, same as the env-supplied path above: localhost inside
-            # the full Headlong container is the container itself.
+            # the full Librarian container is the container itself.
             if [[ "$IN_CONTAINER" -eq 1 ]]; then
                 url_env=$(_local_container_url "$url_env")
             fi
@@ -880,7 +886,7 @@ EOF
                 break
             fi
             if ! ask_yn "Try a different URL/key?"; then
-                die "local endpoint unreachable. Start the server and re-run headlong-init."
+                die "local endpoint unreachable. Start the server and re-run librarian-init."
             fi
             def_url="$url_env"
             key=""
@@ -906,7 +912,7 @@ EOF
                 chosen=$(ask "The server did not expose a model list. Type the model name to use")
                 [[ -n "$chosen" ]] || die "no model given"
             else
-                die "no model: the server exposed no model list. Set HEADLONG_LOCAL_MODEL."
+                die "no model: the server exposed no model list. Set LIBRARIAN_LOCAL_MODEL."
             fi
         fi
     fi
@@ -919,14 +925,14 @@ EOF
     # the id sane for every other consumer too.
     case "$chosen" in
         *[!A-Za-z0-9._:/@-]*)
-            die "model id '$chosen' contains characters headlong will not store (allowed: letters, digits, . _ : / @ -)"
+            die "model id '$chosen' contains characters librarian will not store (allowed: letters, digits, . _ : / @ -)"
             ;;
     esac
 
     # The URL the main runtime will dial. A host install keeps its
     # localhost URL because thinkers and ordinary llm calls run on the host;
     # bin/shellm translates that URL only for code it runs in its Docker
-    # sandbox. A full Headlong container needs host.docker.internal here
+    # sandbox. A full Librarian container needs host.docker.internal here
     # because its main runtime is already inside Docker.
     chat=$(_local_chat_url "$url_env")
     if [[ "$IN_CONTAINER" -eq 1 ]] && _url_is_loopback "$chat"; then
@@ -950,16 +956,16 @@ EOF
     fi
     echo "    OK — $chosen answered."
 
-    _env_set "$HEADLONG_HOME/.env" "LLM_PROVIDER" "openai-compatible"
-    _env_set "$HEADLONG_HOME/.env" "SHELLM_API_URL" "$chat"
+    _env_set "$LIBRARIAN_HOME/.env" "LLM_PROVIDER" "openai-compatible"
+    _env_set "$LIBRARIAN_HOME/.env" "SHELLM_API_URL" "$chat"
     if [[ -n "$key" ]]; then
-        _env_set "$HEADLONG_HOME/.env" "LLM_API_KEY" "$key"
+        _env_set "$LIBRARIAN_HOME/.env" "LLM_API_KEY" "$key"
     else
         # An old key would ride along to the new endpoint; the openai-compat
         # provider must be keyless here, not mis-keyed.
-        _env_unset "$HEADLONG_HOME/.env" "LLM_API_KEY"
+        _env_unset "$LIBRARIAN_HOME/.env" "LLM_API_KEY"
     fi
-    _env_set "$HEADLONG_HOME/.env" "SHELLM_MODEL" "$chosen"
+    _env_set "$LIBRARIAN_HOME/.env" "SHELLM_MODEL" "$chosen"
 
     # The sandbox reaches a loopback server via Docker's host gateway, which
     # also exposes every other service bound to this machine's loopback to
@@ -979,12 +985,12 @@ EOF
 # ---------------------------------------------------------------------------
 
 # _ask_local_or_cloud — returns 0 for local, nonzero for cloud. Preceded by
-# HEADLONG_PROVIDER, then a tty offer (first run), then a
+# LIBRARIAN_PROVIDER, then a tty offer (first run), then a
 # configured-but-unverified local endpoint in the state .env (a re-run
 # re-checks it rather than re-asking), and defaults to cloud otherwise.
 _ask_local_or_cloud() {
-    [[ "${HEADLONG_PROVIDER:-}" == "local" ]] && return 0
-    [[ "${HEADLONG_PROVIDER:-}" == "cloud" ]] && return 1
+    [[ "${LIBRARIAN_PROVIDER:-}" == "local" ]] && return 0
+    [[ "${LIBRARIAN_PROVIDER:-}" == "cloud" ]] && return 1
     # Existing configuration wins before any tty prompt. This keeps both
     # cloud and local re-runs unattended after the first successful install.
     if [[ -n "${SHELLM_API_URL:-${LLM_API_URL:-}}" \
@@ -1005,19 +1011,19 @@ _ask_local_or_cloud() {
 _commit_local_wipe() {
     local keep_model="${SHELLM_MODEL:-}" local_var
     for local_var in LLM_PROVIDER SHELLM_API_URL LLM_API_URL LLM_API_KEY SHELLM_MODEL; do
-        _env_unset "$HEADLONG_HOME/.env" "$local_var"
+        _env_unset "$LIBRARIAN_HOME/.env" "$local_var"
     done
     if [[ -n "$_STAGED_CLOUD_KEY_VAR" ]]; then
-        _env_set "$HEADLONG_HOME/.env" "$_STAGED_CLOUD_KEY_VAR" "$_STAGED_CLOUD_KEY_VALUE"
+        _env_set "$LIBRARIAN_HOME/.env" "$_STAGED_CLOUD_KEY_VAR" "$_STAGED_CLOUD_KEY_VALUE"
     fi
-    [[ -z "$keep_model" ]] || _env_set "$HEADLONG_HOME/.env" "SHELLM_MODEL" "$keep_model"
+    [[ -z "$keep_model" ]] || _env_set "$LIBRARIAN_HOME/.env" "SHELLM_MODEL" "$keep_model"
 }
 
 _ensure_api_key() {
     # An explicit cloud choice replaces a saved local provider. Clear the
     # local URL, optional key, and model before selecting the cloud default.
     local switching_from_local=0
-    if [[ "${HEADLONG_PROVIDER:-}" == "cloud" \
+    if [[ "${LIBRARIAN_PROVIDER:-}" == "cloud" \
             && "${LLM_PROVIDER:-}" == "openai-compatible" ]]; then
         switching_from_local=1
     fi
@@ -1039,13 +1045,13 @@ _ensure_api_key() {
     fi
 
     if ! _have_key && [[ "$HAS_TTY" -eq 0 ]]; then
-        die "no API key found. Set ANTHROPIC_API_KEY (or OPENAI/GEMINI/OPENROUTER/OPENCODE_API_KEY), or put it in $HEADLONG_HOME/.env"
+        die "no API key found. Set ANTHROPIC_API_KEY (or OPENAI/GEMINI/OPENROUTER/OPENCODE_API_KEY), or put it in $LIBRARIAN_HOME/.env"
     fi
     if ! _have_key; then
         cat >/dev/tty <<'EOF'
 
-Headlong needs an LLM API key (Anthropic, OpenAI, Gemini, OpenRouter, or OpenCode).
-Paste just the key itself; headlong-init figures out the provider from it.
+Librarian needs an LLM API key (Anthropic, OpenAI, Gemini, OpenRouter, or OpenCode).
+Paste just the key itself; librarian-init figures out the provider from it.
 
   * Use a DEDICATED, SPEND-CAPPED key. The agent you're about to create
     runs continuously and executes shell commands.
@@ -1068,7 +1074,7 @@ EOF
             SHELLM_MODEL="$(_default_model_for "$(_first_key_var)")"
             export SHELLM_MODEL
         else
-            _env_set "$HEADLONG_HOME/.env" "SHELLM_MODEL" "$(_default_model_for "$(_first_key_var)")"
+            _env_set "$LIBRARIAN_HOME/.env" "SHELLM_MODEL" "$(_default_model_for "$(_first_key_var)")"
         fi
     fi
 
@@ -1103,7 +1109,7 @@ EOF
         _prompt_key "$((1 - switching_from_local))" || die "no key entered (quit)"
     done
     if [[ "$revalidating" -eq 1 && "$switching_from_local" -eq 0 ]]; then
-        echo "headlong-init: continuing anyway — this key worked before, so the API may just be having a moment" >&2
+        echo "librarian-init: continuing anyway — this key worked before, so the API may just be having a moment" >&2
         return 0
     fi
     die "could not validate an API key after 3 attempts"
@@ -1120,11 +1126,11 @@ export IDENTITY_DIR="$IDENTITY_ROOT"
 DEFAULT_VIBE="curious, warm, and plainspoken"
 DEFAULT_FOCUS="learning how their own mind works, and getting to know the machine and the person they live with"
 
-NAME="${HEADLONG_IDENTITY_NAME:-}"
-VIBE="${HEADLONG_IDENTITY_VIBE:-$DEFAULT_VIBE}"
-FOCUS="${HEADLONG_IDENTITY_FOCUS:-$DEFAULT_FOCUS}"
-USER_NOTE="${HEADLONG_IDENTITY_USER:-}"
-OPERATOR_NAME="${HEADLONG_OPERATOR_NAME:-}"
+NAME="${LIBRARIAN_IDENTITY_NAME:-}"
+VIBE="${LIBRARIAN_IDENTITY_VIBE:-$DEFAULT_VIBE}"
+FOCUS="${LIBRARIAN_IDENTITY_FOCUS:-$DEFAULT_FOCUS}"
+USER_NOTE="${LIBRARIAN_IDENTITY_USER:-}"
+OPERATOR_NAME="${LIBRARIAN_OPERATOR_NAME:-}"
 
 # Adopt an existing default identity when no name was given
 if [[ -z "$NAME" && -L "$IDENTITY_ROOT/default" ]]; then
@@ -1135,7 +1141,7 @@ _interview() {
     [[ "$HAS_TTY" -eq 1 ]] || return 0
     cat >/dev/tty <<'EOF'
 
-Time to launch your Headlong agent. It starts with a baseline personality;
+Time to launch your Librarian agent. It starts with a baseline personality;
 answer as much or as little as you like (Enter keeps the default).
 
 EOF
@@ -1205,7 +1211,7 @@ _write_persona() {
     template=$(cat "$APP_DIR/identities/starter-persona.md")
 
     info "Writing ${NAME}'s core identity"
-    persona=$(llm -t 3000 -s "You write core identity prompts for Headlong virtual people. Output ONLY the final markdown document — no code fences, no commentary. Write in first person. Refer to the person exclusively by the literal placeholder {{identity_name}} (it is substituted at runtime — never write their actual name)." \
+    persona=$(llm -t 3000 -s "You write core identity prompts for Librarian virtual people. Output ONLY the final markdown document — no code fences, no commentary. Write in first person. Refer to the person exclusively by the literal placeholder {{identity_name}} (it is substituted at runtime — never write their actual name)." \
         "Rewrite this baseline core identity into a specific one, keeping its structure and every capability reference (chat reply, learn, recall, goals, idle-as-rest) intact:
 
 $template
@@ -1227,7 +1233,7 @@ Weave the answers in naturally so the personality shows in the writing voice its
           && $(printf '%s\n' "$persona" | wc -l) -ge 8 ]]; then
         printf '%s\n' "$persona" > "$identity_dir/core_identity_prompt.md"
     else
-        echo "headlong-init: LLM persona generation failed; using the starter template" >&2
+        echo "librarian-init: LLM persona generation failed; using the starter template" >&2
         sed -e "s|{{vibe}}|$VIBE|g" -e "s|{{focus}}|$FOCUS|g" \
             "$APP_DIR/identities/starter-persona.md" > "$identity_dir/core_identity_prompt.md"
         if [[ -n "$(_operator_blurb)" ]]; then
@@ -1312,7 +1318,7 @@ _link_persona_command() {
 # ---------------------------------------------------------------------------
 
 _start_thinkers() {
-    [[ "${HEADLONG_NO_THINKERS:-0}" != "1" ]] || { info "Skipping thinkers (HEADLONG_NO_THINKERS=1)"; return 0; }
+    [[ "${LIBRARIAN_NO_THINKERS:-0}" != "1" ]] || { info "Skipping thinkers (LIBRARIAN_NO_THINKERS=1)"; return 0; }
     info "Starting ${NAME}'s mind (monolith + responder thinkers)"
     (
         cd "$APP_DIR"
@@ -1324,7 +1330,7 @@ _start_thinkers() {
         source "$IDENTITY_ROOT/$NAME/activate"
         set -eu
         set -o pipefail
-        [[ -n "${IDENTITY_NAME:-}" ]] || { echo "headlong-init: activate did not set IDENTITY_NAME" >&2; exit 1; }
+        [[ -n "${IDENTITY_NAME:-}" ]] || { echo "librarian-init: activate did not set IDENTITY_NAME" >&2; exit 1; }
         thinkers stop --self >/dev/null 2>&1 || true
         # monolith = the inner loop; responder = immediate chat replies.
         # Both, or the first `ada hello` goes unanswered.
@@ -1345,10 +1351,10 @@ _ensure_dash_deps() {
             curl -LsSf https://astral.sh/uv/install.sh | sh
             export PATH="$HOME/.local/bin:$PATH"
         fi
-        command -v uv >/dev/null 2>&1 || { echo "headlong-init: uv not available — skipping the dash (install uv, then re-run headlong-init)" >&2; return 1; }
+        command -v uv >/dev/null 2>&1 || { echo "librarian-init: uv not available — skipping the dash (install uv, then re-run librarian-init)" >&2; return 1; }
     fi
     # The frontend build needs a JS runtime — unless it's already built
-    if [[ ! -f "$APP_DIR/web/src/headlong_web/static/index.html" ]]; then
+    if [[ ! -f "$APP_DIR/web/src/librarian_web/static/index.html" ]]; then
         if ! command -v bun >/dev/null 2>&1 && ! command -v pnpm >/dev/null 2>&1 && ! command -v npm >/dev/null 2>&1; then
             if confirm_install "The dash frontend needs a JS runtime. Install bun now?"; then
                 # bun's installer needs unzip, which slim container images
@@ -1361,7 +1367,7 @@ _ensure_dash_deps() {
                 export PATH="$HOME/.bun/bin:$PATH"
             fi
             if ! command -v bun >/dev/null 2>&1 && ! command -v npm >/dev/null 2>&1; then
-                echo "headlong-init: no JS runtime — skipping the dash (install bun or node, then re-run headlong-init)" >&2
+                echo "librarian-init: no JS runtime — skipping the dash (install bun or node, then re-run librarian-init)" >&2
                 return 1
             fi
         fi
@@ -1376,21 +1382,21 @@ _ensure_dash_deps() {
 PREBUILD_PID=""
 PREBUILD_LOG=""
 _prebuild_dash() {
-    [[ "${HEADLONG_NO_DASH:-0}" != "1" ]] || return 0
+    [[ "${LIBRARIAN_NO_DASH:-0}" != "1" ]] || return 0
     _ensure_dash_deps || return 0          # _start_dash will report it
-    [[ -f "$APP_DIR/web/src/headlong_web/static/index.html" ]] && return 0
-    PREBUILD_LOG="$HEADLONG_HOME/logs/web-build.log"
+    [[ -f "$APP_DIR/web/src/librarian_web/static/index.html" ]] && return 0
+    PREBUILD_LOG="$LIBRARIAN_HOME/logs/web-build.log"
     : > "$PREBUILD_LOG"
     info "Preparing the dash in the background (first run builds the frontend; log: $PREBUILD_LOG)"
-    nohup headlong-web "$APP_DIR" --build-only >>"$PREBUILD_LOG" 2>&1 &
+    nohup librarian-web "$APP_DIR" --build-only >>"$PREBUILD_LOG" 2>&1 &
     PREBUILD_PID=$!
 }
 
 _start_dash() {
-    [[ "${HEADLONG_NO_DASH:-0}" != "1" ]] || { info "Skipping the dash (HEADLONG_NO_DASH=1)"; return 0; }
+    [[ "${LIBRARIAN_NO_DASH:-0}" != "1" ]] || { info "Skipping the dash (LIBRARIAN_NO_DASH=1)"; return 0; }
     _ensure_dash_deps || { DASH_STATUS="failed"; return 0; }
 
-    local log="$HEADLONG_HOME/logs/web.log" pidfile="$HEADLONG_HOME/run/web.pid" pid
+    local log="$LIBRARIAN_HOME/logs/web.log" pidfile="$LIBRARIAN_HOME/run/web.pid" pid
     pid=$(cat "$pidfile" 2>/dev/null || true)
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
         DASH_URL=$(grep -o 'http://[^ ]*' "$log" 2>/dev/null | tail -1 || true)
@@ -1407,36 +1413,36 @@ _start_dash() {
         if wait "$PREBUILD_PID"; then
             info "Starting the dash"
         else
-            echo "headlong-init: background frontend build failed — tail of $PREBUILD_LOG:" >&2
+            echo "librarian-init: background frontend build failed — tail of $PREBUILD_LOG:" >&2
             tail -15 "$PREBUILD_LOG" >&2
             info "Starting the dash (it will retry the frontend build — can take a few minutes)"
         fi
-    elif [[ -f "$APP_DIR/web/src/headlong_web/static/index.html" ]]; then
+    elif [[ -f "$APP_DIR/web/src/librarian_web/static/index.html" ]]; then
         info "Starting the dash"
     else
         info "Starting the dash (the first run builds the frontend — can take a few minutes)"
     fi
     : > "$log"
     # shellcheck disable=SC2086
-    nohup headlong-web "$APP_DIR" ${HEADLONG_WEB_ARGS:-} >>"$log" 2>&1 &
+    nohup librarian-web "$APP_DIR" ${LIBRARIAN_WEB_ARGS:-} >>"$log" 2>&1 &
     pid=$!
     printf '%s\n' "$pid" > "$pidfile"
 
     local _
     for _ in $(seq 1 300); do
-        if grep -qE '(shellm|shelly|headlong)-web serving' "$log" 2>/dev/null; then
-            DASH_URL=$(grep -E '(shellm|shelly|headlong)-web serving' "$log" | tail -1 | grep -o 'http://[^ ]*')
+        if grep -qE '(shellm|shelly|librarian)-web serving' "$log" 2>/dev/null; then
+            DASH_URL=$(grep -E '(shellm|shelly|librarian)-web serving' "$log" | tail -1 | grep -o 'http://[^ ]*')
             DASH_STATUS="ok"
             return 0
         fi
         if ! kill -0 "$pid" 2>/dev/null; then
-            echo "headlong-init: the dash failed to start — tail of $log:" >&2
+            echo "librarian-init: the dash failed to start — tail of $log:" >&2
             tail -20 "$log" >&2
             return 0
         fi
         sleep 1
     done
-    echo "headlong-init: the dash didn't come up within 5 minutes; check $log" >&2
+    echo "librarian-init: the dash didn't come up within 5 minutes; check $log" >&2
 }
 
 # The "serving" log line is printed just before the server binds, so a browser
@@ -1517,20 +1523,20 @@ jq -n \
     --arg cmd "$PERSONA_CMD" \
     --arg app_dir "$APP_DIR" \
     --arg model "${SHELLM_MODEL:-}" \
-    --arg mind "$(if [[ "${HEADLONG_NO_THINKERS:-0}" == "1" ]]; then echo skipped; elif [[ -n "$DISPATCHER_PID" ]]; then echo ok; else echo failed; fi)" \
+    --arg mind "$(if [[ "${LIBRARIAN_NO_THINKERS:-0}" == "1" ]]; then echo skipped; elif [[ -n "$DISPATCHER_PID" ]]; then echo ok; else echo failed; fi)" \
     --arg mind_pidfile "$DISPATCHER_PIDFILE" \
     --arg dash "$DASH_STATUS" \
     --arg dash_url "${DASH_URL/0.0.0.0/localhost}" \
     --argjson container "$([[ "$IN_CONTAINER" -eq 1 ]] && echo true || echo false)" \
-    --arg dash_pidfile "$HEADLONG_HOME/run/web.pid" \
-    --arg logs "$HEADLONG_HOME/logs" \
+    --arg dash_pidfile "$LIBRARIAN_HOME/run/web.pid" \
+    --arg logs "$LIBRARIAN_HOME/logs" \
     --arg updated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '{identity: $identity, persona_command: $cmd, app_dir: $app_dir,
       model: $model,
       mind: {status: $mind, pid_file: $mind_pidfile},
       dash: {status: $dash, url: (if $dash_url == "" then null else $dash_url end), pid_file: $dash_pidfile},
       container: $container, logs_dir: $logs, updated: $updated}' \
-    > "$HEADLONG_HOME/status.json" || true
+    > "$LIBRARIAN_HOME/status.json" || true
 
 # Inside a container the dash binds 0.0.0.0; the address that works is the
 # published port on the host.
@@ -1549,13 +1555,13 @@ $NAME is running.
 
 What was installed
 EOF
-_row "$HEADLONG_HOME"            "state home: .env (your API key), logs/, status.json"
-_row "$APP_DIR"                  "the Headlong checkout"
+_row "$LIBRARIAN_HOME"            "state home: .env (your API key), logs/, status.json"
+_row "$APP_DIR"                  "the Librarian checkout"
 _row "$IDENTITY_ROOT/$NAME"      "$NAME: persona, memories, trajectory"
 _row "$PERSONA_BIN"              "the tools, and the '$NAME' command"
 [[ -d "$HOME/.skills/core-skills" ]] && _row "$HOME/.skills/core-skills" "core skills"
-[[ -d "$HOME/.headlong-thinkers" ]]  && _row "$HOME/.headlong-thinkers"  "thinker templates"
-[[ -n "${HEADLONG_RC_FILE:-}" ]]     && _row "$HEADLONG_RC_FILE"         "one PATH line added"
+[[ -d "$HOME/.librarian-thinkers" ]]  && _row "$HOME/.librarian-thinkers"  "thinker templates"
+[[ -n "${LIBRARIAN_RC_FILE:-}" ]]     && _row "$LIBRARIAN_RC_FILE"         "one PATH line added"
 cat <<EOF
 
 Commands
@@ -1565,27 +1571,27 @@ Commands
   Something broken?    $PERSONA_CMD bugreport   (bundle to attach to a report)
   Everything else      $PERSONA_CMD --help
   Not on PATH yet?     $PERSONA_PATH
-  Read-only status     curl -fsSL https://headlong.ai/status.sh | bash
-  Uninstall            curl -fsSL https://headlong.ai/uninstall.sh | bash
+  Read-only status     curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/Librarian/main/status.sh | bash
+  Uninstall            curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/Librarian/main/uninstall.sh | bash
 EOF
 
 # The one-liner (`curl | bash`) runs in a child process, so the shell the user
 # typed it in cannot see the PATH entry install.sh just added — `$NAME` would
 # be "command not found" until they open a new terminal. install.sh exports
-# HEADLONG_PATH_ADDED when that is the case; hand the user a fresh interactive
+# LIBRARIAN_PATH_ADDED when that is the case; hand the user a fresh interactive
 # shell (PATH inherited) so the commands above work right now. No tty, or a
 # PATH that was already fine: nothing to do.
-if [[ -n "${HEADLONG_PATH_ADDED:-}" && "$HAS_TTY" -eq 1 ]]; then
+if [[ -n "${LIBRARIAN_PATH_ADDED:-}" && "$HAS_TTY" -eq 1 ]]; then
     _shell="${SHELL:-bash}"
     if [[ -x "$_shell" ]]; then
         echo
         echo "Opening a new shell so '$PERSONA_CMD' is on your PATH. In any other terminal, run:"
-        echo "  export PATH=\"$HEADLONG_PATH_ADDED:\$PATH\""
+        echo "  export PATH=\"$LIBRARIAN_PATH_ADDED:\$PATH\""
         echo
-        unset HEADLONG_PATH_ADDED
+        unset LIBRARIAN_PATH_ADDED
         exec "$_shell" -i </dev/tty
     fi
     echo
     echo "Run this first so '$PERSONA_CMD' is on your PATH:"
-    echo "  export PATH=\"$HEADLONG_PATH_ADDED:\$PATH\""
+    echo "  export PATH=\"$LIBRARIAN_PATH_ADDED:\$PATH\""
 fi

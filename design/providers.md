@@ -4,7 +4,7 @@ Status: DECIDED 2026-08-27 — the policy below governs provider additions.
 The `openai-compatible` provider and the adapter seam are both
 implemented in `bin/llm`.
 
-Headlong keeps getting asked to support more model providers (PR #46,
+Librarian keeps getting asked to support more model providers (PR #46,
 issues #65 and #71). Each one is easy on its own, but core grows with
 every provider we absorb, and there are a lot of providers. The policy
 in this document says which providers go into core, which stay outside

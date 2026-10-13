@@ -11,6 +11,12 @@
 # THINK_MODEL=...) always wins, and earlier files beat later ones. Values are
 # extracted by actually sourcing the file in a subshell so quoting behaves
 # exactly like the loaders in bin/llm and bin/shellm.
+# Librarian names are canonical; Headlong spellings still work (bin/librarian-env).
+for _le in "$(dirname "${BASH_SOURCE[0]}")/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/bin/librarian-env"; do
+    # shellcheck source=/dev/null
+    if [[ -f "$_le" ]]; then . "$_le"; break; fi
+done; unset _le
+
 _load_env_defaults() {
     local envfile="$1"
     [[ -f "$envfile" ]] || return 1
@@ -50,13 +56,13 @@ _require_env() {
     # late to influence the -m flag), so the keys must be filled in here.
     _load_env_defaults "$IDENTITY_DIR/.env" || true
     _load_env_defaults ".env" || true
-    # The framework state home, where headlong-init writes the API key and
+    # The framework state home, where librarian-init writes the API key and
     # SHELLM_MODEL. Resolved without SHELLM_HOME on purpose, unlike bin/llm and
     # bin/shellm: both launchers export SHELLM_HOME as <identity>/.shellm
     # (bin/thinkers, web control.py), so honouring it here would read the
     # identity directory and never the file holding the key. ~/.shellm stays
     # after it for a pre-rename install.
-    _load_env_defaults "${HEADLONG_HOME:-$HOME/.headlong}/.env" || true
+    _load_env_defaults "${LIBRARIAN_HOME:-$HOME/.librarian}/.env" || true
     _load_env_defaults "$HOME/.shellm/.env" || true
 
     mkdir -p "$MEM_DIR" "$SKILLS_DIR" "$SKILLS_KERNEL_DIR" "$TRAJ_DIR"
@@ -142,7 +148,7 @@ _runtime_line() {
     if [[ ! -w "$root/bin" ]]; then
         boundary=" The checkout at $root is read-only inside a wake: bin, thinkers, tools, deploy and .env cannot be edited in place, and no identity can be created beside yours; runtime changes go through your own clone and a pull request. Your identity directory${IDENTITY_DIR:+ ($IDENTITY_DIR)} is yours to write."
     fi
-    printf 'Runtime: headlong %s (%s)%s%s. A fact about your own runtime that you verified under this commit holds until this line changes.%s\n' \
+    printf 'Runtime: librarian %s (%s)%s%s. A fact about your own runtime that you verified under this commit holds until this line changes.%s\n' \
         "$sha" "$subject" "${head_t:+, checked out $head_t}" "${sync_t:+; your thinkers synced $sync_t}" "$boundary"
     return 0
 }
@@ -232,7 +238,7 @@ _outbound_section() {
 
 # Clock line plus one routing signal per scheduled goal (design/scheduled_goals.md).
 # A goal memory with `schedule: 09:00 17:00` (local times, `tz:` zone, default
-# HEADLONG_TZ, default UTC) has one window per time per day. Whether a window
+# LIBRARIAN_TZ, default UTC) has one window per time per day. Whether a window
 # is due, done or still ahead is worked out here, not by the model: on
 # 2026-09-18 Audel, with no clock in its prompt, posted "Friday 9am PT" on
 # Thursday evening, five times. A window is done when the sent ledger holds
@@ -242,7 +248,7 @@ _outbound_section() {
 # only: no date parsing, so GNU and BSD date both work.
 _fm() { awk -v k="$2: " 'NR==1 && /^---$/{f=1; next} f && /^---$/{exit} f && index($0, k)==1{print substr($0, length(k)+1)}' "$1"; }
 _schedule_signals() {
-    local mem_dir="${1:-$MEM_DIR}" tz="${HEADLONG_TZ:-UTC}" grace="${SCHEDULE_GRACE_MIN:-360}"
+    local mem_dir="${1:-$MEM_DIR}" tz="${LIBRARIAN_TZ:-UTC}" grace="${SCHEDULE_GRACE_MIN:-360}"
     local f sched gtz until id title day now now_m zone sent t t_m key at due next said
     printf -- '- Now: %s (%s).\n' "$(TZ="$tz" date +'%A %Y-%m-%d %H:%M %Z')" "$(date -u +'%Y-%m-%d %H:%MZ')"
     [[ -d "$mem_dir" ]] || return 0
@@ -791,11 +797,11 @@ _build_shellm_flags() {
     # mounts it; SHELLM_RO_VARS makes that mount read-only. Model-tier settings
     # follow so the mind's own `librarian` calls resolve the same models.
     local _lv
-    for _lv in HEADLONG_LIBRARIAN_SRC HEADLONG_LIBRARIAN LIBRARIAN_MODEL LIBRARIAN_LLM LIBRARIAN_PACK_TOKENS \
+    for _lv in LIBRARIAN_SRC LIBRARIAN_MEMORY LIBRARIAN_MODEL LIBRARIAN_LLM LIBRARIAN_PACK_TOKENS \
                LIBRARIAN_MODEL_RANK LIBRARIAN_MODEL_JUDGE LIBRARIAN_MODEL_DRAFT LIBRARIAN_MODEL_CORE_CHECK LIBRARIAN_MODEL_PROBE_ANSWER; do
         [[ -n "${!_lv:-}" ]] && printf '%s\n' "--var" "$_lv=${!_lv}"
     done
-    [[ -n "${HEADLONG_LIBRARIAN_SRC:-}" ]] && printf '%s\n' "--var" "SHELLM_RO_VARS=HEADLONG_LIBRARIAN_SRC"
+    [[ -n "${LIBRARIAN_SRC:-}" ]] && printf '%s\n' "--var" "SHELLM_RO_VARS=LIBRARIAN_SRC"
 
     # Standard binaries. Keep this in sync with the tools promised to the
     # running mind in README.md and the stock identity prompt: a host-only tool

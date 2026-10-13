@@ -16,7 +16,7 @@ run() {  # run <bash snippet> with the library sourced under set -e
 
 # Runtime line from the repo checkout.
 out=$(IDENTITY_DIR="$W/none" run '_runtime_line; echo RC=$?')
-grep -q '^Runtime: headlong [0-9a-f]\{7,\} (.*), checked out 20[0-9][0-9]-' <<<"$out" && ok "runtime line: commit, subject, checkout time" || bad "runtime line" "$out"
+grep -q '^Runtime: librarian [0-9a-f]\{7,\} (.*), checked out 20[0-9][0-9]-' <<<"$out" && ok "runtime line: commit, subject, checkout time" || bad "runtime line" "$out"
 grep -q 'thinkers synced' <<<"$out" && bad "no sync time without an identity thinkers dir" || ok "no sync time without an identity thinkers dir"
 mkdir -p "$W/id/thinkers/monolith"; printf 'x\n' > "$W/id/thinkers/monolith/step"
 out=$(IDENTITY_DIR="$W/id" run '_runtime_line')

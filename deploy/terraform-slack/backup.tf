@@ -26,7 +26,7 @@ variable "backup_copy_region" {
 # stack's policy snapshots only its own box.
 resource "aws_ec2_tag" "backup" {
   resource_id = aws_instance.shellm.root_block_device[0].volume_id
-  key         = "headlong-backup"
+  key         = "librarian-backup"
   value       = "shellm-${var.subdomain}"
 }
 
@@ -56,7 +56,7 @@ resource "aws_dlm_lifecycle_policy" "backup" {
   policy_details {
     resource_types = ["VOLUME"]
     target_tags = {
-      "headlong-backup" = "shellm-${var.subdomain}"
+      "librarian-backup" = "shellm-${var.subdomain}"
     }
 
     # 13:00 UTC is 06:00 Pacific. DLM starts within the hour after.
@@ -64,7 +64,7 @@ resource "aws_dlm_lifecycle_policy" "backup" {
       name      = "daily"
       copy_tags = true
       tags_to_add = {
-        "headlong-backup-schedule" = "daily"
+        "librarian-backup-schedule" = "daily"
       }
 
       create_rule {
@@ -94,7 +94,7 @@ resource "aws_dlm_lifecycle_policy" "backup" {
       name      = "weekly"
       copy_tags = true
       tags_to_add = {
-        "headlong-backup-schedule" = "weekly"
+        "librarian-backup-schedule" = "weekly"
       }
 
       create_rule {

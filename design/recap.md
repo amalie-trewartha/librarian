@@ -177,7 +177,7 @@ Standard shape: the CLI owns the logic, the web layer moves bytes.
   this can't feed back into dispatch).
 - **Self-context**: feed `recap --cached --json` back to the agent — a
   cheap autobiographical memory layer for "what have I been doing this
-  week?" (very Headlong: the recap is a compressed self-narrative).
+  week?" (very Librarian: the recap is a compressed self-narrative).
 - **Hierarchical reduce**: when episodes number in the hundreds, add a
   second map level (episode groups → chapters) before the theme reduce.
 - **Semantic window boundaries**: gap-aware cutting covers the natural

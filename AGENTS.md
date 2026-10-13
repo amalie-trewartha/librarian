@@ -1,30 +1,42 @@
-# Operating Headlong as a coding agent
+# Operating Librarian as a coding agent
 
 This file is for coding agents (Claude Code, Cursor, and similar). It
-covers installing Headlong without a tty, checking that it is healthy, and
+covers installing Librarian without a tty, checking that it is healthy, and
 the sharp edges that are not obvious from the code.
 
-Naming: **Headlong** is the agent framework — identities, thinkers, the
-mind log, bridges, the dash. **shellm** is one tool inside it: the
-CLI implementation of Recursive Language Models in bash (`bin/shellm`),
-plus its run machinery (`shellm-docker`, `shellm-explore`). Use "Headlong"
-for the system and "shellm" only for that tool. Framework commands are
-`headlong-*` (`headlong-init`, `headlong-web`, ...; the old `shellm-*` names
-remain as symlinks) and framework env vars are `HEADLONG_*` (legacy
-`SHELLM_*` spellings still honored). The state home defaults to
-`~/.headlong`, falling back to `~/.shellm` when only that exists (so
-pre-rename installs keep their state); explicit `HEADLONG_HOME` or
-`SHELLM_HOME` overrides both. Systemd units are `headlong-*`; a box provisioned before
-the rename is migrated once with `deploy/migrate-units.sh` (see
-deploy/DEPLOY.md). What deliberately keeps the `shellm` name: the
-`/opt/shellm` deploy path, the `shellm` and `shellm-telegram` UNIX users,
-`~shellm/.shellm`, the per-identity `.shellm/` subdirectory, the
-`~/.headlong-thinkers` template dir that install.sh seeds, and the
-`*.shellm.net` domains. If you take one of those on, or any other
-structural change to a live box, read `deploy/MIGRATIONS.md` first — it
-lists the couplings that fail *silently*.
+Naming: **Librarian** is the agent framework — identities, thinkers, the
+mind log, bridges, the dash — and `librarian` (bare) is its memory system,
+the store and context packer in `librarian/` (design/librarian.md).
+**shellm** is one tool inside it: the CLI implementation of Recursive
+Language Models in bash (`bin/shellm`), plus its run machinery
+(`shellm-docker`, `shellm-explore`). Use "Librarian" for the system,
+"the librarian" or "the memory system" for the store, and "shellm" only for
+that tool. Framework commands are `librarian-*` (`librarian-init`,
+`librarian-web`, ...) and framework env vars are `LIBRARIAN_*`.
 
-Headlong creates a persistent identity whose mind is a loop of LLM calls
+Librarian was Headlong until 2026-10-13 and keeps back-compat with that
+era (design/rename-to-librarian.md): the `headlong-*` command names are
+symlinks to the `librarian-*` tools; `HEADLONG_*` env vars are mapped to
+`LIBRARIAN_*` by `bin/librarian-env`, which every entry script sources
+(`HEADLONG_LIBRARIAN` → `LIBRARIAN_MEMORY`, `HEADLONG_LIBRARIAN_SRC` →
+`LIBRARIAN_SRC`); the state home defaults to `~/.librarian`, or
+`~/.headlong` when only that exists; the thinker templates likewise prefer
+an existing `~/.headlong-thinkers`; the Python packages keep `headlong-web`,
+`headlong-slack-bridge` and `headlong-telegram-bridge` as console-script
+aliases. Explicit `LIBRARIAN_HOME` or `HEADLONG_HOME` overrides the
+default. Systemd units are `librarian-*`; a box provisioned under Headlong
+(or earlier) is migrated once with `deploy/migrate-units.sh`, which keeps
+both `thinkersctl` wrapper names. Older `SHELLM_*` framework spellings are
+honored only where they were before. What deliberately keeps an older name:
+the `/opt/shellm` deploy path, the `shellm` and `shellm-telegram` UNIX
+users, `~shellm/.shellm`, the per-identity `.shellm/` subdirectory, the
+`*.shellm.net` domains, `/var/lib/headlong/identities` on provisioned
+boxes, the audit key `headlong-sig`, and the `.pre-headlong-<date>` backup
+suffix the installer uses for displaced copies. If you take one of those on,
+or any other structural change to a live box, read `deploy/MIGRATIONS.md`
+first — it lists the couplings that fail *silently*.
+
+Librarian creates a persistent identity whose mind is a loop of LLM calls
 run by a dispatcher. The identity has a name (default `ada`), and that
 name becomes a shell command. A local web dashboard shows the mind's
 trajectory.
@@ -36,14 +48,14 @@ environment variable or a default. A key must be in the environment:
 
 ```bash
 export OPENROUTER_API_KEY=sk-or-...   # or ANTHROPIC_/OPENAI_/GEMINI_API_KEY
-curl -fsSL https://headlong.ai/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/install.sh | bash
 ```
 
-Optional variables: `HEADLONG_IDENTITY_NAME`, `HEADLONG_IDENTITY_VIBE`,
-`HEADLONG_IDENTITY_FOCUS`, `HEADLONG_IDENTITY_USER` (the interview answers),
-`SHELLM_MODEL` (otherwise picked per provider; a tool var, so no HEADLONG_
-spelling), `HEADLONG_NO_DASH=1`,
-`HEADLONG_NO_THINKERS=1`. The installer never uses sudo. In a container as
+Optional variables: `LIBRARIAN_IDENTITY_NAME`, `LIBRARIAN_IDENTITY_VIBE`,
+`LIBRARIAN_IDENTITY_FOCUS`, `LIBRARIAN_IDENTITY_USER` (the interview answers),
+`SHELLM_MODEL` (otherwise picked per provider; a tool var, so no LIBRARIAN_
+spelling), `LIBRARIAN_NO_DASH=1`,
+`LIBRARIAN_NO_THINKERS=1`. The installer never uses sudo. In a container as
 root it apt-installs its own dependencies.
 
 Warning: the installer symlinks tools into `~/.local/bin`. If those names
@@ -52,11 +64,11 @@ already link into a development checkout, the one-liner repoints them to
 
 ## Check the outcome
 
-The installer writes `status.json` in the state home (`~/.headlong`, or
+The installer writes `status.json` in the state home (`~/.librarian`, or
 `~/.shellm` on pre-rename installs) at the end of every run:
 
 ```bash
-jq -r '.identity, .mind.status, .dash.status, .dash.url' ~/.headlong/status.json
+jq -r '.identity, .mind.status, .dash.status, .dash.url' ~/.librarian/status.json
 ```
 
 `mind.status` and `dash.status` are `ok`, `failed`, or `skipped`. The
@@ -64,7 +76,7 @@ file is a snapshot of that run; the live source of truth is the pid files
 it names (`.mind.pid_file`, `.dash.pid_file`). `<name> status` prints the
 same picture for humans.
 
-`dash.url` works from wherever Headlong is installed. When `container` is
+`dash.url` works from wherever Librarian is installed. When `container` is
 true, the URL is container-internal: from the host, use localhost with
 whatever host port was published (`docker run -p <host>:8080`). The
 container cannot know that number.
@@ -86,13 +98,13 @@ Replies take 15 to 45 seconds while the monolith thinker wakes.
 
 ## Where things live
 
-- `~/.headlong/` — state root (`HEADLONG_HOME`, legacy `SHELLM_HOME`;
+- `~/.librarian/` — state root (`LIBRARIAN_HOME`, legacy `SHELLM_HOME`;
   pre-rename installs use `~/.shellm`): `.env` (key + model),
   `status.json`, `logs/` (`init.log`, `web.log`), `run/web.pid`,
   `app_dir` (path to the checkout).
-- `~/.headlong/app/` — the checkout, when installed by the one-liner.
+- `~/.librarian/app/` — the checkout, when installed by the one-liner.
 - `~/.local/bin/` — the installed tools (symlinks for the one-liner).
-- `~/.skills/core-skills/` and `~/.headlong-thinkers/` — the bundled skills
+- `~/.skills/core-skills/` and `~/.librarian-thinkers/` — the bundled skills
   and thinker templates that new identities are seeded from.
 - `<app>/.identities/<name>/` — the identity: persona, memories,
   trajectory, `run/dispatcher.pid`, and its `activate` script.
@@ -107,23 +119,23 @@ Replies take 15 to 45 seconds while the monolith thinker wakes.
 
 ## Project mode
 
-`headlong-project init <name> --spec FILE` turns an identity into an
+`librarian-project init <name> --spec FILE` turns an identity into an
 unattended research agent (design/long_autonomy.md). Its files are in
 `<identity>/workdir/project/` (a git repo, committed every wake). The
 read-only originals are in `<identity>/project-pristine/`: edit charter
-or spec there and run `headlong-project update-pristine <name>`. Never
+or spec there and run `librarian-project update-pristine <name>`. Never
 edit them under `project/`, because the next wake restores them.
-`headlong-project status <name>` is the health check, and `ada status`
+`librarian-project status <name>` is the health check, and `ada status`
 leads with open questions. Init sets a 2M tokens/day budget
-(`PROJECT_DAILY_TOKENS`) and a 14-day end (`headlong-project deadline`
+(`PROJECT_DAILY_TOKENS`) and a 14-day end (`librarian-project deadline`
 moves it). Budgets can be in tokens (cache reads weighted at a tenth) or in
-estimated dollars (`--daily-usd`, `--total-usd`). Humans answer questions with `headlong-project answer`. Do not
+estimated dollars (`--daily-usd`, `--total-usd`). Humans answer questions with `librarian-project answer`. Do not
 write Answer lines yourself: provenance comes from git authorship.
 Memory in project mode is the Librarian (design/librarian.md): every wake
 gets a budgeted context pack from `<identity>/librarian/store.sqlite`, the
 runtime closes an episode with an outcome derived from artifacts, and the
-human check-in queue (`headlong-project queue <name>`) decides core-identity
-changes. `headlong-project init --preferences FILE` seeds the group's
+human check-in queue (`librarian-project queue <name>`) decides core-identity
+changes. `librarian-project init --preferences FILE` seeds the group's
 stated values. The 20,000-line cloc cap on `bin/` + `thinkers/` is checked
 in CI; `librarian/`, `tools/` and `tests/` are not counted.
 

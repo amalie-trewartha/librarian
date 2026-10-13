@@ -1,7 +1,25 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (same mapping as bin/librarian-env).
+if [[ -z "${LIBRARIAN_MEMORY+x}" && -n "${HEADLONG_LIBRARIAN+x}" ]]; then export LIBRARIAN_MEMORY="$HEADLONG_LIBRARIAN"; fi
+if [[ -z "${LIBRARIAN_SRC+x}" && -n "${HEADLONG_LIBRARIAN_SRC+x}" ]]; then export LIBRARIAN_SRC="$HEADLONG_LIBRARIAN_SRC"; fi
+for _le_hv in $(compgen -A variable HEADLONG_ 2>/dev/null); do
+    case "$_le_hv" in HEADLONG_LIBRARIAN|HEADLONG_LIBRARIAN_SRC) continue ;; esac
+    _le_lv="LIBRARIAN_${_le_hv#HEADLONG_}"
+    if [[ -z "${!_le_lv+x}" ]]; then export "$_le_lv=${!_le_hv}"; fi
+done
+unset _le_hv _le_lv
+if [[ -z "${LIBRARIAN_HOME:-}" && -n "${HOME:-}" && ! -d "$HOME/.librarian" && -d "$HOME/.headlong" ]]; then
+    export LIBRARIAN_HOME="$HOME/.headlong"
+fi
+if [[ -z "${LIBRARIAN_THINKERS_TEMPLATES:-}" && -n "${HOME:-}" ]]; then
+    if [[ ! -d "$HOME/.librarian-thinkers" && -d "$HOME/.headlong-thinkers" ]]; then
+        export LIBRARIAN_THINKERS_TEMPLATES="$HOME/.headlong-thinkers"
+    fi
+fi
+
 set -euo pipefail
 
-# deploy/setup.sh — provision a fresh Ubuntu VM to run headlong-web.
+# deploy/setup.sh — provision a fresh Ubuntu VM to run librarian-web.
 #
 # Creates a dedicated `shellm` user, clones the repo to /opt/shellm/app,
 # installs uv + bun for that user, prebuilds the viewer frontend, and
@@ -11,14 +29,14 @@ set -euo pipefail
 #   sudo bash deploy/setup.sh
 #
 # Override defaults via env:
-#   SHELLM_REPO=https://github.com/laude-institute/headlong.git
+#   SHELLM_REPO=https://github.com/amalie-trewartha/librarian.git
 #   SHELLM_BRANCH=main
 #   SHELLM_HOME=/opt/shellm
 #
 # After this script: put your (spend-capped!) API key in
 # /opt/shellm/app/.env and set up the Cloudflare tunnel — see DEPLOY.md.
 
-SHELLM_REPO="${SHELLM_REPO:-https://github.com/laude-institute/headlong.git}"
+SHELLM_REPO="${SHELLM_REPO:-https://github.com/amalie-trewartha/librarian.git}"
 SHELLM_BRANCH="${SHELLM_BRANCH:-main}"
 SHELLM_HOME="${SHELLM_HOME:-/opt/shellm}"
 SHELLM_USER="shellm"
@@ -65,8 +83,8 @@ sudo -u "$SHELLM_USER" bash -c "
     cd '$APP_DIR/web/viewer'
     bun install --frozen-lockfile
     bun run build
-    rm -rf '$APP_DIR/web/src/headlong_web/static'
-    cp -R build/client '$APP_DIR/web/src/headlong_web/static'
+    rm -rf '$APP_DIR/web/src/librarian_web/static'
+    cp -R build/client '$APP_DIR/web/src/librarian_web/static'
     cd '$APP_DIR/web' && uv sync
 "
 
@@ -89,7 +107,7 @@ fi
 # trip find/tar, 2026-09-15). The mount is in fstab so it survives reboots.
 # A box from before this layout has a populated real directory at the old
 # path; that is left alone (migration is a deliberate stop, move, mount).
-IDENTITIES_DIR="${HEADLONG_IDENTITIES_DIR:-/var/lib/headlong/identities}"
+IDENTITIES_DIR="${LIBRARIAN_IDENTITIES_DIR:-/var/lib/headlong/identities}"
 echo "==> Identities root: $IDENTITIES_DIR (mounted at $APP_DIR/.identities)"
 mkdir -p "$IDENTITIES_DIR"
 chown "$SHELLM_USER:$SHELLM_USER" "$IDENTITIES_DIR"
@@ -110,41 +128,41 @@ else
 fi
 
 echo "==> Installing systemd service"
-sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$SCRIPT_DIR/headlong-web.service" \
-    > /etc/systemd/system/headlong-web.service
+sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$SCRIPT_DIR/librarian-web.service" \
+    > /etc/systemd/system/librarian-web.service
 systemctl daemon-reload
-systemctl enable --now headlong-web
+systemctl enable --now librarian-web
 
 # Per-identity thinker units: the dash starts/stops dispatchers through
-# headlong-thinkers@<identity>.service (via the sudo wrapper) so they get
-# their own cgroup instead of living inside headlong-web's.
+# librarian-thinkers@<identity>.service (via the sudo wrapper) so they get
+# their own cgroup instead of living inside librarian-web's.
 echo "==> Installing per-identity thinkers unit + control wrapper"
-for unit_file in headlong-thinkers@.service headlong-thinkers-alert@.service \
-                 headlong-thinkers-silence@.service headlong-thinkers-silence@.timer; do
+for unit_file in librarian-thinkers@.service librarian-thinkers-alert@.service \
+                 librarian-thinkers-silence@.service librarian-thinkers-silence@.timer; do
     sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$SCRIPT_DIR/${unit_file}" \
         > "/etc/systemd/system/${unit_file}"
 done
-# Runtime sandbox drop-in for the thinkers template (HEADLONG_SANDBOX in
+# Runtime sandbox drop-in for the thinkers template (LIBRARIAN_SANDBOX in
 # .env, default on; see deploy/thinkers-sandbox.sh).
 bash "$SCRIPT_DIR/thinkers-sandbox.sh" install "$APP_DIR" "$SHELLM_HOME" >/dev/null
-install -o root -g root -m 0755 "$SCRIPT_DIR/headlong-thinkersctl" /usr/local/bin/headlong-thinkersctl
-if visudo -cf "$SCRIPT_DIR/sudoers-headlong-thinkers"; then
-    install -o root -g root -m 0440 "$SCRIPT_DIR/sudoers-headlong-thinkers" /etc/sudoers.d/headlong-thinkers
+install -o root -g root -m 0755 "$SCRIPT_DIR/librarian-thinkersctl" /usr/local/bin/librarian-thinkersctl
+if visudo -cf "$SCRIPT_DIR/sudoers-librarian-thinkers"; then
+    install -o root -g root -m 0440 "$SCRIPT_DIR/sudoers-librarian-thinkers" /etc/sudoers.d/librarian-thinkers
 else
-    echo "ERROR: deploy/sudoers-headlong-thinkers failed the visudo check — not installing" >&2
+    echo "ERROR: deploy/sudoers-librarian-thinkers failed the visudo check — not installing" >&2
     exit 1
 fi
 systemctl daemon-reload
 
 # Signal auditing: kernel-level attribution for process kills (see
-# deploy/audit-headlong-signals.rules — added after the 2026-08-12
+# deploy/audit-librarian-signals.rules — added after the 2026-08-12
 # unattributed dispatcher death). ausearch -k headlong-sig names the sender.
 echo "==> Installing auditd signal rules"
 if ! command -v augenrules >/dev/null 2>&1; then
     DEBIAN_FRONTEND=noninteractive apt-get install -y auditd >/dev/null
 fi
-install -o root -g root -m 0640 "$SCRIPT_DIR/audit-headlong-signals.rules" \
-    /etc/audit/rules.d/headlong-signals.rules
+install -o root -g root -m 0640 "$SCRIPT_DIR/audit-librarian-signals.rules" \
+    /etc/audit/rules.d/librarian-signals.rules
 augenrules --load || echo "WARN: augenrules --load failed — audit rules apply after next reboot" >&2
 
 # Optional component: the Slack bridge (persona bootstrap + Socket Mode
@@ -156,18 +174,18 @@ if [[ "${SHELLM_INSTALL_SLACK_BRIDGE:-0}" == "1" ]]; then
         export PATH=\"\$HOME/.local/bin:\$PATH\"
         cd '$APP_DIR/slack' && uv sync
     "
-    for unit in headlong-slack-agent headlong-slack-bridge; do
+    for unit in librarian-slack-agent librarian-slack-bridge; do
         sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$SCRIPT_DIR/$unit.service" \
             > "/etc/systemd/system/$unit.service"
     done
     systemctl daemon-reload
-    systemctl enable --now headlong-slack-agent headlong-slack-bridge
+    systemctl enable --now librarian-slack-agent librarian-slack-bridge
 fi
 
 echo
-echo "Done. headlong-web is running on 127.0.0.1:8080 (not publicly reachable)."
+echo "Done. librarian-web is running on 127.0.0.1:8080 (not publicly reachable)."
 echo
 echo "Next steps:"
 echo "  1. Add your spend-capped API key to $APP_DIR/.env"
-echo "     then: systemctl restart headlong-web"
+echo "     then: systemctl restart librarian-web"
 echo "  2. Set up the Cloudflare tunnel + Access policy — see deploy/DEPLOY.md"

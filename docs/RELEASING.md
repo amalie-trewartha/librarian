@@ -23,7 +23,7 @@ notes, then announce. The tag is cheap and can be deleted if needed.
 
 Use SemVer with a `v` prefix: `v0.1.0`. The manifests already say 0.1.0
 (`web/pyproject.toml`, `slack/pyproject.toml`, `telegram/pyproject.toml`,
-`tui/headlong/Cargo.toml`), so the first tag matches them. Below 1.0
+`tui/librarian/Cargo.toml`), so the first tag matches them. Below 1.0
 signals "early, expect change", which is honest for a launch. Later
 releases bump the middle number for features and the last for fixes.
 
@@ -63,7 +63,7 @@ Nick runs these (Claude drafts, Nick commits and pushes, as usual).
 
 1. Pick the commit and create an annotated tag on it:
 
-       git tag -a v0.1.0 <sha> -m "Headlong v0.1.0: first public release"
+       git tag -a v0.1.0 <sha> -m "Librarian v0.1.0: first public release"
        git push origin v0.1.0
 
    An annotated tag (`-a`) records who tagged and when, and GitHub treats
@@ -74,7 +74,7 @@ Nick runs these (Claude drafts, Nick commits and pushes, as usual).
    list every commit since the beginning of time (there is no earlier tag),
    which is noise. Keep notes short and aimed at a newcomer:
 
-   - one paragraph on what Headlong is (reuse the README pitch)
+   - one paragraph on what Librarian is (reuse the README pitch)
    - the install command, pinned to the tag (see below)
    - three to six highlights worth knowing on day one
    - known limitations and the supported platforms (macOS, Ubuntu)
@@ -85,7 +85,7 @@ Nick runs these (Claude drafts, Nick commits and pushes, as usual).
 3. Create the release as a draft, so it can be reviewed and published at
    the moment the announcement goes live:
 
-       gh release create v0.1.0 --draft --title "Headlong v0.1.0" \
+       gh release create v0.1.0 --draft --title "Librarian v0.1.0" \
          --notes-file /tmp/notes-v0.1.0.md
 
    No binary assets are needed: the project installs from source. The Rust
@@ -94,7 +94,7 @@ Nick runs these (Claude drafts, Nick commits and pushes, as usual).
 4. Verify from the outside, as a reader would:
 
        gh release view v0.1.0
-       git clone --branch v0.1.0 https://github.com/laude-institute/headlong.git /tmp/hl-v0.1.0
+       git clone --branch v0.1.0 https://github.com/amalie-trewartha/librarian.git /tmp/hl-v0.1.0
        cd /tmp/hl-v0.1.0 && bash tests/smoke_install.sh
 
    A clone by tag works because `git clone --branch` accepts tags, which is
@@ -108,11 +108,11 @@ Nick runs these (Claude drafts, Nick commits and pushes, as usual).
 
 ## Pinning the install command to the tag
 
-`install.sh` reads `HEADLONG_BRANCH` and passes it to `git clone --branch`,
+`install.sh` reads `LIBRARIAN_BRANCH` and passes it to `git clone --branch`,
 so a tag works without code changes:
 
-    curl -fsSL https://raw.githubusercontent.com/laude-institute/headlong/v0.1.0/install.sh \
-      | HEADLONG_BRANCH=v0.1.0 bash
+    curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/v0.1.0/install.sh \
+      | LIBRARIAN_BRANCH=v0.1.0 bash
 
 Both parts matter: the URL fetches the installer from the tag, and the
 variable makes it clone the tag. Keep the unpinned `main` command in the

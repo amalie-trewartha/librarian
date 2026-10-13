@@ -1,4 +1,4 @@
-from headlong_telegram.filepayload import CAPTION_MAX, file_payload, file_signature
+from librarian_telegram.filepayload import CAPTION_MAX, file_payload, file_signature
 
 
 def test_plain_text_is_not_a_file():

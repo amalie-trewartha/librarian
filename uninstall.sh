@@ -1,25 +1,43 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (same mapping as bin/librarian-env).
+if [[ -z "${LIBRARIAN_MEMORY+x}" && -n "${HEADLONG_LIBRARIAN+x}" ]]; then export LIBRARIAN_MEMORY="$HEADLONG_LIBRARIAN"; fi
+if [[ -z "${LIBRARIAN_SRC+x}" && -n "${HEADLONG_LIBRARIAN_SRC+x}" ]]; then export LIBRARIAN_SRC="$HEADLONG_LIBRARIAN_SRC"; fi
+for _le_hv in $(compgen -A variable HEADLONG_ 2>/dev/null); do
+    case "$_le_hv" in HEADLONG_LIBRARIAN|HEADLONG_LIBRARIAN_SRC) continue ;; esac
+    _le_lv="LIBRARIAN_${_le_hv#HEADLONG_}"
+    if [[ -z "${!_le_lv+x}" ]]; then export "$_le_lv=${!_le_hv}"; fi
+done
+unset _le_hv _le_lv
+if [[ -z "${LIBRARIAN_HOME:-}" && -n "${HOME:-}" && ! -d "$HOME/.librarian" && -d "$HOME/.headlong" ]]; then
+    export LIBRARIAN_HOME="$HOME/.headlong"
+fi
+if [[ -z "${LIBRARIAN_THINKERS_TEMPLATES:-}" && -n "${HOME:-}" ]]; then
+    if [[ ! -d "$HOME/.librarian-thinkers" && -d "$HOME/.headlong-thinkers" ]]; then
+        export LIBRARIAN_THINKERS_TEMPLATES="$HOME/.headlong-thinkers"
+    fi
+fi
+
 set -euo pipefail
 
-# uninstall.sh — remove Headlong from this machine, the reverse of install.sh.
+# uninstall.sh — remove Librarian from this machine, the reverse of install.sh.
 #
-#   curl -fsSL https://headlong.ai/uninstall.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/uninstall.sh | bash
 #   ./uninstall.sh [options]            (from a checkout)
 #   ./install.sh --uninstall            (same thing)
 #
 # What it does, in order, with a confirmation before anything destructive:
-#   1. Stops every running Headlong process (dispatchers, thinker steps,
+#   1. Stops every running Librarian process (dispatchers, thinker steps,
 #      shellm runs, the dash) — shown first, then confirmed.
 #   2. Moves your agent's identities (memories, trajectory) to a backup
 #      folder in your home directory, unless you say to delete them.
-#   3. Removes: the state home (~/.headlong: .env, logs, the checkout),
+#   3. Removes: the state home (~/.librarian: .env, logs, the checkout),
 #      the tool links/copies in ~/.local/bin, ~/.skills/core-skills,
-#      ~/.headlong-thinkers, and the PATH line install.sh added to your rc.
+#      ~/.librarian-thinkers, and the PATH line install.sh added to your rc.
 #
 # Everything side-effectful happens inside main(), invoked on the LAST line
 # of this file, so a partially downloaded script executes nothing.
 
-HEADLONG_HOME="${HEADLONG_HOME:-$HOME/.headlong}"
+LIBRARIAN_HOME="${LIBRARIAN_HOME:-$HOME/.librarian}"
 PREFIX="${PREFIX:-$HOME/.local/bin}"
 YES=0
 DRY_RUN=0
@@ -29,14 +47,15 @@ IDENTITIES="ask"      # ask | keep | delete
 # here too so this script works standalone, after the checkout is gone;
 # tests/test_uninstall.sh checks the two lists agree.
 TOOLS=(shellm shellm-docker skills mem llm context traj thinkers chat recap blind delegate
-       shellm-docker-broker identity shellm-explore headlong-skills headlong-init headlong-killall headlong-project persona headlong-web
-       headlong-slack-bridge headlong-telegram-bridge headlong-tui)
+       shellm-docker-broker identity shellm-explore librarian-skills librarian-init librarian-killall librarian-project persona librarian-web
+       librarian-slack-bridge librarian-telegram-bridge librarian-tui
+       librarian librarian-env headlong-init headlong-killall headlong-project headlong-skills headlong-web headlong-slack-bridge headlong-telegram-bridge)
 
 _usage() {
     cat <<'EOF'
 Usage: uninstall.sh [options]
 
-Stops every running Headlong process and removes what install.sh put on this
+Stops every running Librarian process and removes what install.sh put on this
 machine. Your agent's identities (memories, trajectory) are moved to a backup
 folder in your home directory unless you choose to delete them.
 
@@ -51,7 +70,7 @@ Options:
   -h, --help          Show this help
 
 Environment:
-  HEADLONG_HOME       State directory (default: ~/.headlong)
+  LIBRARIAN_HOME       State directory (default: ~/.librarian)
   PREFIX              Same as --prefix
 EOF
 }
@@ -84,9 +103,9 @@ ask_yn() {
 APP_DIR=""
 _find_app_dir() {
     local recorded
-    recorded=$(cat "$HEADLONG_HOME/app_dir" 2>/dev/null || true)
+    recorded=$(cat "$LIBRARIAN_HOME/app_dir" 2>/dev/null || true)
     if [[ -n "$recorded" && -f "$recorded/bin/shellm" ]]; then APP_DIR="$recorded"; return 0; fi
-    if [[ -f "$HEADLONG_HOME/app/bin/shellm" ]]; then APP_DIR="$HEADLONG_HOME/app"; return 0; fi
+    if [[ -f "$LIBRARIAN_HOME/app/bin/shellm" ]]; then APP_DIR="$LIBRARIAN_HOME/app"; return 0; fi
     # From a checkout: this script sits next to install.sh
     local here; here="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd)"
     if [[ -f "$here/bin/shellm" ]]; then APP_DIR="$here"; return 0; fi
@@ -97,7 +116,7 @@ _find_app_dir() {
 # state home (the one-liner). A clone the user made themselves, and the
 # .identities inside it, stay put — it's their working copy.
 _app_is_ours() {
-    [[ -n "$APP_DIR" && "$APP_DIR" == "$HEADLONG_HOME"/* ]]
+    [[ -n "$APP_DIR" && "$APP_DIR" == "$LIBRARIAN_HOME"/* ]]
 }
 _identity_root() {
     _app_is_ours && [[ -d "$APP_DIR/.identities" ]] && printf '%s' "$APP_DIR/.identities"
@@ -105,7 +124,7 @@ _identity_root() {
 }
 
 # Tool entries in PREFIX that are ours: names from the list, plus any symlink
-# that points at a persona/headlong tool (the `ada` -> persona links, and
+# that points at a persona/librarian tool (the `ada` -> persona links, and
 # symlink-mode installs pointing into the checkout).
 _our_prefix_entries() {
     local f name target t
@@ -134,15 +153,15 @@ _rc_files_with_path_line() {
     return 0
 }
 
-# Running processes. Prefer the checkout's own headlong-killall (exact argv
+# Running processes. Prefer the checkout's own librarian-killall (exact argv
 # patterns); fall back to a conservative pgrep over the same shapes so the
 # uninstaller still works when the checkout is already gone.
 _killall_bin() {
-    if [[ -n "$APP_DIR" && -x "$APP_DIR/tools/headlong-killall" ]]; then printf '%s' "$APP_DIR/tools/headlong-killall"; return 0; fi
-    command -v headlong-killall 2>/dev/null && return 0
+    if [[ -n "$APP_DIR" && -x "$APP_DIR/tools/librarian-killall" ]]; then printf '%s' "$APP_DIR/tools/librarian-killall"; return 0; fi
+    command -v librarian-killall 2>/dev/null && return 0
     return 1
 }
-# Process shapes, copied from headlong-killall (the source of truth) for the
+# Process shapes, copied from librarian-killall (the source of truth) for the
 # case where the checkout is already gone; tests/test_status.sh checks parity.
 PATTERNS=(
     'bash [^ ]*/(bin|tools)/(shellm|shellm-explore|llm|chat)( |$)'
@@ -151,7 +170,7 @@ PATTERNS=(
     'bash [^ ]*/bin/traj tail'
     'tail -n 0 -F [^ ]*trajectory\.jsonl'
 )
-DASH_PAT='(uv run --project [^ ]+ |/\.venv/bin/)(headlong|shellm|shelly)-web( |$)'
+DASH_PAT='(uv run --project [^ ]+ |/\.venv/bin/)(librarian|shellm|shelly)-web( |$)'
 _list_processes() {
     local k
     {
@@ -162,7 +181,7 @@ _list_processes() {
             for pat in "${PATTERNS[@]}"; do pgrep -fl "$pat" 2>/dev/null || true; done
         fi
         # The dash, by our own pattern too: an older checkout's killall
-        # predates the headlong-web name and would miss it.
+        # predates the librarian-web name and would miss it.
         pgrep -fl "$DASH_PAT" 2>/dev/null || true
     } | grep -E '^[0-9]+ ' | grep -v " $$ " | sort -un -k1,1
 }
@@ -213,17 +232,17 @@ main() {
     local nprocs=0; [[ -n "$procs" ]] && nprocs=$(printf '%s\n' "$procs" | grep -c '' || true)
 
     local found=0
-    [[ -d "$HEADLONG_HOME" || "${#entries[@]}" -gt 0 || -d "$HOME/.skills/core-skills" || -d "$HOME/.headlong-thinkers" || "${#rcs[@]}" -gt 0 || "$nprocs" -gt 0 ]] && found=1
+    [[ -d "$LIBRARIAN_HOME" || "${#entries[@]}" -gt 0 || -d "$HOME/.skills/core-skills" || -d "${LIBRARIAN_THINKERS_TEMPLATES:-$HOME/.librarian-thinkers}" || "${#rcs[@]}" -gt 0 || "$nprocs" -gt 0 ]] && found=1
     if [[ "$found" -eq 0 ]]; then
-        say "Nothing to do: no Headlong install found (looked in $HEADLONG_HOME, $PREFIX, ~/.skills/core-skills, ~/.headlong-thinkers)."
+        say "Nothing to do: no Librarian install found (looked in $LIBRARIAN_HOME, $PREFIX, ~/.skills/core-skills, ~/.librarian-thinkers)."
         exit 0
     fi
 
     # --- 1. processes: show, ask, stop --------------------------------------
     say
-    if [[ "$DRY_RUN" -eq 1 ]]; then say "Headlong uninstall (dry run)"; else say "Headlong uninstall"; fi
-    head_ "Running Headlong processes"
-    local killall_hint="headlong-killall --dry-run --web"
+    if [[ "$DRY_RUN" -eq 1 ]]; then say "Librarian uninstall (dry run)"; else say "Librarian uninstall"; fi
+    head_ "Running Librarian processes"
+    local killall_hint="librarian-killall --dry-run --web"
     local k; if k=$(_killall_bin); then killall_hint="$k --dry-run --web"; fi
     if [[ "$STOP" -eq 0 ]]; then
         say "  (not checked: --no-stop)"
@@ -264,14 +283,14 @@ main() {
     elif [[ -n "$APP_DIR" ]]; then
         say "  (your own checkout at $APP_DIR, and the .identities inside it, stay in place)"
     fi
-    [[ -d "$HEADLONG_HOME" ]]      && say "  $HEADLONG_HOME   (.env with your API key, logs, status)"
+    [[ -d "$LIBRARIAN_HOME" ]]      && say "  $LIBRARIAN_HOME   (.env with your API key, logs, status)"
     if [[ "${#entries[@]}" -gt 0 ]]; then
         local names; names=$(printf '%s ' "${entries[@]##*/}")
         say "  ${#entries[@]} tool link(s)/copies in $PREFIX"
         say "    ${names% }" | fold -s -w 76 | sed '2,$s/^/    /'
     fi
     [[ -d "$HOME/.skills/core-skills" ]] && say "  $HOME/.skills/core-skills"
-    [[ -d "$HOME/.headlong-thinkers" ]]  && say "  $HOME/.headlong-thinkers"
+    [[ -d "${LIBRARIAN_THINKERS_TEMPLATES:-$HOME/.librarian-thinkers}" ]]  && say "  $HOME/.librarian-thinkers"
     [[ "${#rcs[@]}" -gt 0 ]]       && say "  the PATH line for $PREFIX in: ${rcs[*]}"
     local backup=""
     if [[ -n "$idroot" ]]; then
@@ -283,11 +302,11 @@ main() {
         done
         case "$IDENTITIES" in
             delete) say "  -> will be DELETED (--delete-identities)" ;;
-            keep)   backup="$HOME/headlong-identities-backup-$(date +%Y%m%d-%H%M%S)"; say "  -> will be moved to $backup" ;;
+            keep)   backup="$HOME/librarian-identities-backup-$(date +%Y%m%d-%H%M%S)"; say "  -> will be moved to $backup" ;;
             ask)
                 say
                 if ask_yn "  Keep a backup of them in your home directory?" y; then
-                    backup="$HOME/headlong-identities-backup-$(date +%Y%m%d-%H%M%S)"
+                    backup="$HOME/librarian-identities-backup-$(date +%Y%m%d-%H%M%S)"
                     say "  -> will be moved to $backup"
                 else
                     say "  -> will be DELETED"
@@ -312,9 +331,9 @@ main() {
     local e
     for e in "${entries[@]+"${entries[@]}"}"; do rm -f "$e"; done
     [[ "${#entries[@]}" -gt 0 ]] && say "  $PREFIX: ${#entries[@]} entries"
-    if [[ -d "$HEADLONG_HOME" ]]; then rm -rf "${HEADLONG_HOME:?}"; say "  $HEADLONG_HOME"; fi
+    if [[ -d "$LIBRARIAN_HOME" ]]; then rm -rf "${LIBRARIAN_HOME:?}"; say "  $LIBRARIAN_HOME"; fi
     if [[ -d "$HOME/.skills/core-skills" ]]; then rm -rf "${HOME:?}/.skills/core-skills"; rmdir "$HOME/.skills" 2>/dev/null || true; say "  $HOME/.skills/core-skills"; fi
-    if [[ -d "$HOME/.headlong-thinkers" ]]; then rm -rf "${HOME:?}/.headlong-thinkers"; say "  $HOME/.headlong-thinkers"; fi
+    if [[ -d "${LIBRARIAN_THINKERS_TEMPLATES:-$HOME/.librarian-thinkers}" ]]; then rm -rf "${LIBRARIAN_THINKERS_TEMPLATES:-${HOME:?}/.librarian-thinkers}"; say "  $HOME/.librarian-thinkers"; fi
     local rc line="export PATH=\"$PREFIX:\$PATH\"" tmp
     for rc in "${rcs[@]+"${rcs[@]}"}"; do
         tmp=$(mktemp)
@@ -325,7 +344,7 @@ main() {
     rmdir "$PREFIX" 2>/dev/null || true
 
     say
-    say "Headlong is uninstalled."
+    say "Librarian is uninstalled."
     say
     if [[ -n "$backup" ]]; then
         say "  Identities backed up to:  $backup"
@@ -333,7 +352,7 @@ main() {
         say
     fi
     [[ "${#rcs[@]}" -gt 0 ]] && say "  PATH changed: open a new terminal."
-    say "  Reinstall any time:  curl -fsSL https://headlong.ai/install.sh | bash"
+    say "  Reinstall any time:  curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/install.sh | bash"
     say
 }
 

@@ -24,8 +24,8 @@
 # a 1.8 dev box can be broken for every CI run and every container user. Any
 # such error turns the pinned cases below red.
 #
-# Every run happens in a scratch cwd with HEADLONG_HOME pointed at an empty
-# directory, so the checkout's own .env and the developer's ~/.headlong/.env
+# Every run happens in a scratch cwd with LIBRARIAN_HOME pointed at an empty
+# directory, so the checkout's own .env and the developer's ~/.librarian/.env
 # cannot reach into the results.
 
 set -uo pipefail
@@ -46,7 +46,7 @@ command -v jq >/dev/null 2>&1 || { echo "FAIL jq not found — bin/llm needs it,
 # --- curl stub ---------------------------------------------------------------
 # bin/llm passes the payload as -d @FILE (never on argv), so the stub copies
 # that file aside and answers with one SSE chunk plus [DONE].
-mkdir -p "$WORK/bin" "$WORK/run" "$WORK/home/.headlong"
+mkdir -p "$WORK/bin" "$WORK/run" "$WORK/home/.librarian"
 cat > "$WORK/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 for a in "$@"; do
@@ -70,7 +70,7 @@ run_llm() {
     : > "$PAYLOAD_OUT"
     ( cd "$WORK/run" && printf 'hi' | env -u LLM_OR_ONLY -u LLM_OR_DATA_COLLECTION \
         -u LLM_OR_ZDR -u SHELLM_HOME -u LLM_PROVIDER \
-        HOME="$WORK/home" HEADLONG_HOME="$WORK/home/.headlong" \
+        HOME="$WORK/home" LIBRARIAN_HOME="$WORK/home/.librarian" \
         OPENROUTER_API_KEY="test-key" OPENAI_API_KEY="test-key" \
         "${envs[@]+"${envs[@]}"}" \
         "$REPO/bin/llm" -m "openai/gpt-4o-mini" "$@" ) \

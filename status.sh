@@ -1,16 +1,34 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (same mapping as bin/librarian-env).
+if [[ -z "${LIBRARIAN_MEMORY+x}" && -n "${HEADLONG_LIBRARIAN+x}" ]]; then export LIBRARIAN_MEMORY="$HEADLONG_LIBRARIAN"; fi
+if [[ -z "${LIBRARIAN_SRC+x}" && -n "${HEADLONG_LIBRARIAN_SRC+x}" ]]; then export LIBRARIAN_SRC="$HEADLONG_LIBRARIAN_SRC"; fi
+for _le_hv in $(compgen -A variable HEADLONG_ 2>/dev/null); do
+    case "$_le_hv" in HEADLONG_LIBRARIAN|HEADLONG_LIBRARIAN_SRC) continue ;; esac
+    _le_lv="LIBRARIAN_${_le_hv#HEADLONG_}"
+    if [[ -z "${!_le_lv+x}" ]]; then export "$_le_lv=${!_le_hv}"; fi
+done
+unset _le_hv _le_lv
+if [[ -z "${LIBRARIAN_HOME:-}" && -n "${HOME:-}" && ! -d "$HOME/.librarian" && -d "$HOME/.headlong" ]]; then
+    export LIBRARIAN_HOME="$HOME/.headlong"
+fi
+if [[ -z "${LIBRARIAN_THINKERS_TEMPLATES:-}" && -n "${HOME:-}" ]]; then
+    if [[ ! -d "$HOME/.librarian-thinkers" && -d "$HOME/.headlong-thinkers" ]]; then
+        export LIBRARIAN_THINKERS_TEMPLATES="$HOME/.headlong-thinkers"
+    fi
+fi
+
 set -uo pipefail
 
-# status.sh — what Headlong has on this machine, and what is running.
+# status.sh — what Librarian has on this machine, and what is running.
 #
-#   curl -fsSL https://headlong.ai/status.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/status.sh | bash
 #   ./status.sh                 (from a checkout)
 #
 # Read-only: prints and exits. No prompts, nothing changed, no network. Use
-# it to see what `ada stop`, `headlong-killall` or uninstall.sh would act on,
+# it to see what `ada stop`, `librarian-killall` or uninstall.sh would act on,
 # or paste its output into a bug report. Needs only bash and ps.
 
-HEADLONG_HOME="${HEADLONG_HOME:-$HOME/.headlong}"
+LIBRARIAN_HOME="${LIBRARIAN_HOME:-$HOME/.librarian}"
 PREFIX="${PREFIX:-$HOME/.local/bin}"
 ON_PATH=1          # set below; when 0, commands are printed with full paths
 BIN=""             # where to find a tool from THIS shell: "" (on PATH),
@@ -20,9 +38,10 @@ cmd_for() {        # cmd_for <identity> — how to address it from THIS shell
     else printf '%spersona %s' "$BIN" "$1"; fi
 }
 TOOLS=(shellm shellm-docker skills mem llm context traj thinkers chat recap
-       shellm-docker-broker identity shellm-explore headlong-skills headlong-init headlong-killall persona headlong-web
-       headlong-slack-bridge headlong-telegram-bridge headlong-tui)
-# Process shapes, same as headlong-killall (the source of truth) and
+       shellm-docker-broker identity shellm-explore librarian-skills librarian-init librarian-killall persona librarian-web
+       librarian-slack-bridge librarian-telegram-bridge librarian-tui
+       librarian librarian-env headlong-init headlong-killall headlong-project headlong-skills headlong-web headlong-slack-bridge headlong-telegram-bridge)
+# Process shapes, same as librarian-killall (the source of truth) and
 # uninstall.sh; tests/test_uninstall.sh checks the three agree.
 PATTERNS=(
     'bash [^ ]*/(bin|tools)/(shellm|shellm-explore|llm|chat)( |$)'
@@ -31,7 +50,7 @@ PATTERNS=(
     'bash [^ ]*/bin/traj tail'
     'tail -n 0 -F [^ ]*trajectory\.jsonl'
 )
-DASH_PAT='(uv run --project [^ ]+ |/\.venv/bin/)(headlong|shellm|shelly)-web( |$)'
+DASH_PAT='(uv run --project [^ ]+ |/\.venv/bin/)(librarian|shellm|shelly)-web( |$)'
 
 say()   { printf '%s\n' "$*"; }
 head_() { printf '\n==> %s\n' "$*"; }
@@ -45,19 +64,19 @@ esac
 
 # --- install ------------------------------------------------------------------
 APP_DIR=""
-recorded=$(cat "$HEADLONG_HOME/app_dir" 2>/dev/null || true)
+recorded=$(cat "$LIBRARIAN_HOME/app_dir" 2>/dev/null || true)
 if [[ -n "$recorded" && -f "$recorded/bin/shellm" ]]; then APP_DIR="$recorded"
-elif [[ -f "$HEADLONG_HOME/app/bin/shellm" ]]; then APP_DIR="$HEADLONG_HOME/app"
+elif [[ -f "$LIBRARIAN_HOME/app/bin/shellm" ]]; then APP_DIR="$LIBRARIAN_HOME/app"
 else
     here="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd)"
     [[ -f "$here/bin/shellm" ]] && APP_DIR="$here"
 fi
 
 say
-say "Headlong status — $(date '+%Y-%m-%d %H:%M:%S') on $(hostname 2>/dev/null || uname -n)"
+say "Librarian status — $(date '+%Y-%m-%d %H:%M:%S') on $(hostname 2>/dev/null || uname -n)"
 head_ "Install"
-if [[ -z "$APP_DIR" && ! -d "$HEADLONG_HOME" ]]; then
-    say "  not installed (no $HEADLONG_HOME, no checkout found)"
+if [[ -z "$APP_DIR" && ! -d "$LIBRARIAN_HOME" ]]; then
+    say "  not installed (no $LIBRARIAN_HOME, no checkout found)"
 else
     if [[ -n "$APP_DIR" ]]; then
         commit=$(git -C "$APP_DIR" rev-parse --short HEAD 2>/dev/null || echo "?")
@@ -67,18 +86,18 @@ else
     else
         say "  checkout:   not found"
     fi
-    if [[ -d "$HEADLONG_HOME" ]]; then
+    if [[ -d "$LIBRARIAN_HOME" ]]; then
         keys=""
         for k in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY; do
-            grep -q "^$k=" "$HEADLONG_HOME/.env" 2>/dev/null && keys="$keys $k"
+            grep -q "^$k=" "$LIBRARIAN_HOME/.env" 2>/dev/null && keys="$keys $k"
         done
-        # .env values are single-quoted (headlong-init _env_set); strip a
+        # .env values are single-quoted (librarian-init _env_set); strip a
         # matching pair of surrounding quotes for display.
-        model=$(sed -n 's/^SHELLM_MODEL=//p' "$HEADLONG_HOME/.env" 2>/dev/null | tail -1)
+        model=$(sed -n 's/^SHELLM_MODEL=//p' "$LIBRARIAN_HOME/.env" 2>/dev/null | tail -1)
         model="${model#\'}"; model="${model%\'}"
-        say "  state home: $HEADLONG_HOME   (.env has:${keys:- no API key}${model:+; model $model})"
+        say "  state home: $LIBRARIAN_HOME   (.env has:${keys:- no API key}${model:+; model $model})"
     else
-        say "  state home: $HEADLONG_HOME   (missing)"
+        say "  state home: $LIBRARIAN_HOME   (missing)"
     fi
     n=0; persona_links=""
     for t in "${TOOLS[@]}"; do [[ -e "$PREFIX/$t" || -L "$PREFIX/$t" ]] && n=$((n+1)); done
@@ -93,12 +112,12 @@ else
         elif [[ -n "$APP_DIR" && -x "$APP_DIR/tools/persona" ]]; then BIN="$APP_DIR/tools/"; fi
     fi
     [[ -d "$HOME/.skills/core-skills" ]]  && say "  skills:     $HOME/.skills/core-skills"
-    [[ -d "$HOME/.headlong-thinkers" ]]   && say "  thinkers:   $HOME/.headlong-thinkers"
+    [[ -d "${LIBRARIAN_THINKERS_TEMPLATES:-$HOME/.librarian-thinkers}" ]]   && say "  thinkers:   $HOME/.librarian-thinkers"
 fi
 
 # --- LLM: last call, from the marker bin/llm keeps --------------------------------
 LLM_ALERT=""
-hf="$HEADLONG_HOME/run/llm_health.json"
+hf="$LIBRARIAN_HOME/run/llm_health.json"
 if [[ -f "$hf" ]] && [[ "$(jq -r '.ok' "$hf" 2>/dev/null)" == "false" ]]; then
     IFS=$'\t' read -r lk lc lm lt lp < <(jq -r '[(.kind // "other"), (.http_code // "" | tostring), (.message // ""), (.ts // ""), (.provider // "")] | @tsv' "$hf" 2>/dev/null)
     case "$lk" in
@@ -111,8 +130,8 @@ if [[ -f "$hf" ]] && [[ "$(jq -r '.ok' "$hf" 2>/dev/null)" == "false" ]]; then
     say "  !! $LLM_ALERT (${lp:-provider}${lc:+, HTTP $lc}, last tried $lt)"
     [[ -n "$lm" ]] && say "     provider said: ${lm:0:160}"
     case "$lk" in
-        credit) say "     Fix: top up the key (or put a new one in $HEADLONG_HOME/.env), then start the agent again." ;;
-        auth)   say "     Fix: put a working key in $HEADLONG_HOME/.env, then start the agent again." ;;
+        credit) say "     Fix: top up the key (or put a new one in $LIBRARIAN_HOME/.env), then start the agent again." ;;
+        auth)   say "     Fix: put a working key in $LIBRARIAN_HOME/.env, then start the agent again." ;;
     esac
 elif [[ -f "$hf" ]]; then
     head_ "LLM"
@@ -142,16 +161,16 @@ fi
 
 # --- dash ---------------------------------------------------------------------
 head_ "Dash"
-wpid=$(cat "$HEADLONG_HOME/run/web.pid" 2>/dev/null || true)
+wpid=$(cat "$LIBRARIAN_HOME/run/web.pid" 2>/dev/null || true)
 if alive "$wpid"; then
-    url=$(grep -o 'http://[^ ]*' "$HEADLONG_HOME/logs/web.log" 2>/dev/null | tail -1)
+    url=$(grep -o 'http://[^ ]*' "$LIBRARIAN_HOME/logs/web.log" 2>/dev/null | tail -1)
     say "  running (pid $wpid)${url:+ at $url}"
 else
     say "  stopped"
 fi
 
 # --- processes ----------------------------------------------------------------
-head_ "Headlong processes on this machine"
+head_ "Librarian processes on this machine"
 procs=$(
     for pat in "${PATTERNS[@]}" "$DASH_PAT"; do pgrep -fl "$pat" 2>/dev/null || true; done \
         | grep -E '^[0-9]+ ' | grep -v "^$$ " | sort -un -k1,1
@@ -192,7 +211,7 @@ if [[ -n "$main_id" ]]; then
         cmdrow "other identities:" "${BIN}persona <name> stop|start|bugreport   for: ${others[*]}"
     fi
 fi
-[[ -x "${BIN:-./}headlong-killall" || -n "$(command -v headlong-killall 2>/dev/null)" || -x "${BIN}headlong-killall" ]] \
-    && cmdrow "stop everything:" "${BIN}headlong-killall --web"
-cmdrow "uninstall:" "curl -fsSL https://headlong.ai/uninstall.sh | bash"
+[[ -x "${BIN:-./}librarian-killall" || -n "$(command -v librarian-killall 2>/dev/null)" || -x "${BIN}librarian-killall" ]] \
+    && cmdrow "stop everything:" "${BIN}librarian-killall --web"
+cmdrow "uninstall:" "curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/uninstall.sh | bash"
 say

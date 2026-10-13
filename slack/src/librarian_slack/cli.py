@@ -1,6 +1,6 @@
 """Run the Slack Socket Mode bridge for a shellm identity.
 
-Usage: headlong-slack-bridge [ROOT]
+Usage: librarian-slack-bridge [ROOT]
 
 ROOT is the directory the web server serves (contains .identities/);
 defaults to the current directory. Configuration comes from the
@@ -22,7 +22,7 @@ from .state import ActiveThreads
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="headlong-slack-bridge", description=__doc__)
+    parser = argparse.ArgumentParser(prog="librarian-slack-bridge", description=__doc__)
     parser.add_argument("root", nargs="?", default=".", help="Serve root (contains .identities/)")
     parser.add_argument("--verbose", action="store_true", help="Debug logging")
     args = parser.parse_args()
@@ -42,7 +42,7 @@ def main() -> None:
     bot_user_id = auth["user_id"]
     peers = ",".join(sorted(cfg.peer_bot_users)) or "none"
     print(
-        f"headlong-slack-bridge: identity={cfg.identity} bot={auth['user']} "
+        f"librarian-slack-bridge: identity={cfg.identity} bot={auth['user']} "
         f"({bot_user_id}) web={cfg.web_url} peers={peers} "
         f"(max {cfg.peer_max_turns} in a row, {cfg.peer_hourly_cap}/h)",
         file=sys.stderr,

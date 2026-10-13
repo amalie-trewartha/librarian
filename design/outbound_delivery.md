@@ -7,7 +7,7 @@ and deploy: `chat sent` over a `deliveries.jsonl` index (`bin/chat`), the
 `thinkers/_lib/common.sh`, wired in `thinkers/monolith/step`, rule in
 `prompt.md`), the 24h repeat refusal with `--force` in `chat send` and
 proactive `chat reply`, and Telegram notices
-(`telegram/src/headlong_telegram/outbound.py`). Tests:
+(`telegram/src/librarian_telegram/outbound.py`). Tests:
 `tests/test_chat_sent.sh`, `tests/test_monolith_wake_sections.sh`,
 `telegram/tests/test_outbound.py`. The phone chat has no bridge process, so
 its sends show as `unconfirmed` rather than `pending` (see part 7). Deploy
@@ -58,7 +58,7 @@ on top. This design applies that shape to outbound messages.
 
 ### 1. Address grammar, in one place
 
-`slack/src/headlong_slack/naming.py` owns the grammar. It accepts:
+`slack/src/librarian_slack/naming.py` owns the grammar. It accepts:
 
 | form | meaning | delivery |
 |------|---------|----------|
@@ -68,7 +68,7 @@ on top. This design applies that shape to outbound messages.
 | `slack-U…`, `slack-W…` | a bare user id | open the DM with `conversations.open`, post there |
 
 The two short forms are what the mind writes when it means "post in
-headlong-bot" or "DM Nick"; the bridge now does what was meant. The first
+librarian-bot" or "DM Nick"; the bridge now does what was meant. The first
 letter of a Slack id says what it is (U and W are users, C public channels,
 G private channels, D DM channels), which is what makes the two-part forms
 unambiguous.

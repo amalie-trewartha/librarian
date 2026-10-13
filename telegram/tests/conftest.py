@@ -1,6 +1,6 @@
 import pytest
 
-from headlong_telegram import outbound
+from librarian_telegram import outbound
 
 
 @pytest.fixture(autouse=True)

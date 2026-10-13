@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Full Terminal Bench 2.0 evaluation with headlong agent.
+# Full Terminal Bench 2.0 evaluation with librarian agent.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -9,8 +9,8 @@ JOBS_DIR="${JOBS_DIR:-$(pwd)/.harbor-jobs}"
 mkdir -p "$JOBS_DIR"
 
 uvx harbor run \
-  --agent-import-path harbor_headlong_agent:HeadlongAgent \
-  --environment-import-path harbor_headlong_environment:HeadlongDockerEnvironment \
+  --agent-import-path harbor_librarian_agent:LibrarianAgent \
+  --environment-import-path harbor_librarian_environment:LibrarianDockerEnvironment \
   --dataset terminal-bench@2.0 \
   --model anthropic/claude-opus-4-7 \
   --ak effort=max \

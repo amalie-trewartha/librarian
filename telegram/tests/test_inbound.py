@@ -3,11 +3,11 @@
 import httpx
 import pytest
 
-from headlong_telegram import inbound as inbound_mod
-from headlong_telegram.api import Bot
-from headlong_telegram.allowlist import Allowlist
-from headlong_telegram.config import Config
-from headlong_telegram.inbound import Inbound
+from librarian_telegram import inbound as inbound_mod
+from librarian_telegram.api import Bot
+from librarian_telegram.allowlist import Allowlist
+from librarian_telegram.config import Config
+from librarian_telegram.inbound import Inbound
 
 ADMIN = 100
 

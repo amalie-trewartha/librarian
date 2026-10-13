@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (bin/librarian-env).
+for _le in "$(dirname "${BASH_SOURCE[0]}")/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/bin/librarian-env"; do
+    # shellcheck source=/dev/null
+    if [[ -f "$_le" ]]; then . "$_le"; break; fi
+done; unset _le
+
 set -euo pipefail
 
 # skills — the skills the mind can read: list, show, and render them into
 # its prompt. Skills follow the Agent Skills open standard (a SKILL.md with
 # YAML frontmatter). Installing, searching, checking, remotes and the kernel
-# live in tools/headlong-skills, which shares this file; `skills <that
+# live in tools/librarian-skills, which shares this file; `skills <that
 # subcommand>` forwards to it when it is on PATH. Pure bash, jq.
 
 # ---------------------------------------------------------------------------
@@ -413,7 +419,7 @@ action_list() {
     if [[ "$format" != "prompt" ]]; then
         if [[ "$found" -eq 0 ]]; then
             echo "No skills installed." >&2
-            printf "  Run ${_bold}headlong-skills init${_reset} to create one, or ${_bold}skills <query>${_reset} to search.\n" >&2
+            printf "  Run ${_bold}librarian-skills init${_reset} to create one, or ${_bold}skills <query>${_reset} to search.\n" >&2
         fi
 
         # --- Skipped (missing requirements) ---
@@ -523,7 +529,7 @@ Usage:
   skills prompt                             Print the skills section of the system prompt
 
 Installing, searching, checking, init, promote, kernel and remotes are in
-headlong-skills (tools/). `skills <one of those>` forwards to it when it is
+librarian-skills (tools/). `skills <one of those>` forwards to it when it is
 on PATH.
 
 Options:
@@ -559,13 +565,13 @@ EOF
     exit 0
 }
 
-# Hand the whole command line to headlong-skills (tools/), which sources this
+# Hand the whole command line to librarian-skills (tools/), which sources this
 # file for its helpers, so every subcommand keeps working from one name.
 _forward() {
     local mgr
-    mgr=$(command -v headlong-skills 2>/dev/null) \
-        || mgr="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../tools/headlong-skills"
-    [[ -x "$mgr" ]] || die "'$1' is handled by headlong-skills (tools/), which is not on PATH"
+    mgr=$(command -v librarian-skills 2>/dev/null) \
+        || mgr="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../tools/librarian-skills"
+    [[ -x "$mgr" ]] || die "'$1' is handled by librarian-skills (tools/), which is not on PATH"
     exec "$mgr" "${_ARGV[@]}"
 }
 
@@ -609,5 +615,5 @@ main() {
     esac
 }
 
-# headlong-skills sources this file for its helpers and runs its own main.
+# librarian-skills sources this file for its helpers and runs its own main.
 [[ "${SKILLS_LIB_ONLY:-0}" == 1 ]] || main "$@"

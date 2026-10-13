@@ -24,9 +24,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from statistics import median
 
-from headlong_web import discovery, thinkers
-from headlong_web.liveness import pid_alive
-from headlong_web.llm_health import _parse_ts, _tail_steps
+from librarian_web import discovery, thinkers
+from librarian_web.liveness import pid_alive
+from librarian_web.llm_health import _parse_ts, _tail_steps
 
 # Busy + no mind-log growth for this long -> stalled. Floor value; raised
 # to STALL_CADENCE_FACTOR x the recent median step gap when known.

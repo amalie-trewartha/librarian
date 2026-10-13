@@ -73,7 +73,7 @@ and no `prompt-section-failed` error step follows the deploy.
 Two stable sections added right after the identity/skills prefix, so they sit
 in the cached part of every call:
 
-- `Runtime: headlong <sha> (<subject>), checked out <time>; your thinkers
+- `Runtime: librarian <sha> (<subject>), checked out <time>; your thinkers
   synced <time>.` from the app checkout (`_runtime_line`). Empty when the app
   root is not a git checkout. Gives a runtime fact a version to be keyed to.
 - `Workspace: <workdir>` with one line per top-level directory (recursive file

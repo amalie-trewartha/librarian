@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (bin/librarian-env).
+for _le in "$(dirname "${BASH_SOURCE[0]}")/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/bin/librarian-env"; do
+    # shellcheck source=/dev/null
+    if [[ -f "$_le" ]]; then . "$_le"; break; fi
+done; unset _le
+
 set -euo pipefail
 
 # llm — Minimal multi-provider LLM CLI tool
@@ -11,7 +17,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 
 # Load .env files, layered: cwd's .env, then the state home's .env
-# (~/.headlong) fills whatever
+# (~/.librarian) fills whatever
 # is still missing. Each fills in only vars that are NOT already set: the
 # real environment always wins over files — same semantics as bin/shellm
 # and thinkers/_lib/common.sh. Values are extracted by sourcing the file in
@@ -30,9 +36,9 @@ _llm_load_env() {
     return 0
 }
 _llm_load_env ".env" || true
-# State home: HEADLONG_HOME (framework) or SHELLM_HOME (tool-level; the
-# thinkers dispatcher exports it per-identity) if set; else ~/.headlong.
-_llm_home="${HEADLONG_HOME:-${SHELLM_HOME:-$HOME/.headlong}}"
+# State home: LIBRARIAN_HOME (framework) or SHELLM_HOME (tool-level; the
+# thinkers dispatcher exports it per-identity) if set; else ~/.librarian.
+_llm_home="${LIBRARIAN_HOME:-${SHELLM_HOME:-$HOME/.librarian}}"
 _llm_load_env "$_llm_home/.env" || true
 
 LLM_MODEL="${LLM_MODEL:-}"
@@ -759,7 +765,7 @@ supports_gemini_thinking() {
 # previous request's last message changes and a breakpoint there alone never
 # matches again (live blind runs cached only their system prompt). The
 # second-to-last message (the previous reply) does not change afterwards, so
-# each request reads everything up to it from the cache. Headlong sent no cache_control before, so every step re-sent its
+# each request reads everything up to it from the cache. Librarian sent no cache_control before, so every step re-sent its
 # whole 20K-40K token context at full price. Explicit breakpoints, because
 # Bedrock does not support the top-level automatic form.
 # LLM_PROMPT_CACHE=0 turns it off.

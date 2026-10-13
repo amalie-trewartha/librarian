@@ -57,8 +57,8 @@ export ANTHROPIC_API_KEY="test-key"
 export OPENAI_API_KEY="test-key"
 export GEMINI_API_KEY="test-key"
 export OPENROUTER_API_KEY="test-key"
-export HEADLONG_HOME="$WORK/home"   # bin/llm writes run/llm_health.json here
-mkdir -p "$HEADLONG_HOME"
+export LIBRARIAN_HOME="$WORK/home"   # bin/llm writes run/llm_health.json here
+mkdir -p "$LIBRARIAN_HOME"
 export CURL_ARGS="$WORK/curl_args"
 export LLM_RETRIES=0
 # The shell running the suite may have sourced a .env that sets the very

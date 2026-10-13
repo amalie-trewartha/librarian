@@ -8,10 +8,10 @@
 # process lives; tests/test_var_secrets.sh already pins the same rule for the
 # shellm path, and thinkers/_lib/common.sh already forwards keys by bare name
 # for the same reason. Keys therefore go by NAME, which requires them to be exported.
-# HEADLONG_LOCAL_URL is treated the same way: an endpoint URL can carry
+# LIBRARIAN_LOCAL_URL is treated the same way: an endpoint URL can carry
 # user:pass@ credentials or a query token, so its value must not reach argv.
 # The remaining non-secret answers stay inline because two of them
-# (HEADLONG_REPO, HEADLONG_BRANCH) are assigned by install.sh without export
+# (LIBRARIAN_REPO, LIBRARIAN_BRANCH) are assigned by install.sh without export
 # and a bare name would silently forward nothing.
 
 set -uo pipefail
@@ -35,14 +35,14 @@ LOCAL_SECRET=local-ARGVCANARY
 args=$(
     export OPENROUTER_API_KEY="$SECRET"
     export OPENCODE_API_KEY="$OPENCODE_SECRET"
-    export HEADLONG_LOCAL_API_KEY="$LOCAL_SECRET"
-    export HEADLONG_IDENTITY_NAME=ada
-    export HEADLONG_LOCAL_URL=http://127.0.0.1:8090/v1
+    export LIBRARIAN_LOCAL_API_KEY="$LOCAL_SECRET"
+    export LIBRARIAN_IDENTITY_NAME=ada
+    export LIBRARIAN_LOCAL_URL=http://127.0.0.1:8090/v1
     # Set, deliberately NOT exported, which is how install.sh leaves them.
     # shellcheck disable=SC2034  # read by _docker_forward_args through ${!var}
-    HEADLONG_REPO=https://example.invalid/fork.git
+    LIBRARIAN_REPO=https://example.invalid/fork.git
     # shellcheck disable=SC2034  # read by _docker_forward_args through ${!var}
-    HEADLONG_BRANCH=experiment
+    LIBRARIAN_BRANCH=experiment
     # shellcheck disable=SC1090  # generated copy of the installer under test
     source "$WORK/install.lib"
     # Flatten the NUL delimiters here: command substitution drops NUL bytes,
@@ -66,7 +66,7 @@ case "$flat" in
 esac
 case "$flat" in
     *"$LOCAL_SECRET"*) bad "the local server key stays off the docker command line" "found $LOCAL_SECRET in: $flat" ;;
-    *"-e HEADLONG_LOCAL_API_KEY "*) ok "the local server key is forwarded by name" ;;
+    *"-e LIBRARIAN_LOCAL_API_KEY "*) ok "the local server key is forwarded by name" ;;
     *) bad "the local server key is forwarded by name" "got: $flat" ;;
 esac
 # The endpoint URL can carry user:pass@ credentials or a query token, so it
@@ -74,33 +74,33 @@ esac
 # the docker client's argv.
 case "$flat" in
     *"http://host.docker.internal:8090/v1"*) bad "the local model URL stays off the docker command line" "found the URL value in: $flat" ;;
-    *"-e HEADLONG_LOCAL_URL "*) ok "the local model URL is forwarded by name" ;;
+    *"-e LIBRARIAN_LOCAL_URL "*) ok "the local model URL is forwarded by name" ;;
     *) bad "the local model URL is forwarded by name" "got: $flat" ;;
 esac
 # Forwarding by name only works if the (possibly rewritten) URL is exported.
 url_exported=$(
-    export HEADLONG_LOCAL_URL=http://127.0.0.1:8090/v1
+    export LIBRARIAN_LOCAL_URL=http://127.0.0.1:8090/v1
     # shellcheck disable=SC1090  # generated copy of the installer under test
     source "$WORK/install.lib"
     _docker_forward_args > "$WORK/fwd_url"
     # shellcheck disable=SC2034  # records drained, not inspected
     while IFS= read -r -d '' line; do :; done < "$WORK/fwd_url"
-    export -p | grep -c '^declare -x HEADLONG_LOCAL_URL=.*host.docker.internal' || true
+    export -p | grep -c '^declare -x LIBRARIAN_LOCAL_URL=.*host.docker.internal' || true
 )
 [[ "$url_exported" -ge 1 ]] && ok "the rewritten URL is exported for the bare name" \
     || bad "the rewritten URL is exported for the bare name" "not exported/rewritten after the call"
 case "$flat" in
-    *"-e HEADLONG_IDENTITY_NAME=ada "*) ok "interview answers are still forwarded inline" ;;
+    *"-e LIBRARIAN_IDENTITY_NAME=ada "*) ok "interview answers are still forwarded inline" ;;
     *) bad "interview answers are still forwarded inline" "got: $flat" ;;
 esac
 # The two the script assigns itself: a bare name would forward nothing, because
 # docker reads a name-only -e from its own environment.
 case "$flat" in
-    *"-e HEADLONG_REPO=https://example.invalid/fork.git "*) ok "an unexported repo override still reaches the container" ;;
+    *"-e LIBRARIAN_REPO=https://example.invalid/fork.git "*) ok "an unexported repo override still reaches the container" ;;
     *) bad "an unexported repo override still reaches the container" "got: $flat" ;;
 esac
 case "$flat" in
-    *"-e HEADLONG_BRANCH=experiment "*) ok "an unexported branch override still reaches the container" ;;
+    *"-e LIBRARIAN_BRANCH=experiment "*) ok "an unexported branch override still reaches the container" ;;
     *) bad "an unexported branch override still reaches the container" "got: $flat" ;;
 esac
 
@@ -125,9 +125,9 @@ exported=$(
 # fills in are forwarded, and no key name appears at all.
 none=$(
     unset OPENROUTER_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENCODE_API_KEY
-    unset LLM_API_KEY HEADLONG_LOCAL_API_KEY HEADLONG_LOCAL_URL
-    unset HEADLONG_IDENTITY_NAME HEADLONG_IDENTITY_VIBE HEADLONG_IDENTITY_FOCUS
-    unset HEADLONG_IDENTITY_USER HEADLONG_OPERATOR_NAME
+    unset LLM_API_KEY LIBRARIAN_LOCAL_API_KEY LIBRARIAN_LOCAL_URL
+    unset LIBRARIAN_IDENTITY_NAME LIBRARIAN_IDENTITY_VIBE LIBRARIAN_IDENTITY_FOCUS
+    unset LIBRARIAN_IDENTITY_USER LIBRARIAN_OPERATOR_NAME
     # shellcheck disable=SC1090  # generated copy of the installer under test
     source "$WORK/install.lib"
     _docker_forward_args | tr '\0' ' '

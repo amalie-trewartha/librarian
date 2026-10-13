@@ -1,4 +1,4 @@
-from headlong_slack.filepayload import COMMENT_MAX, file_payload, file_signature
+from librarian_slack.filepayload import COMMENT_MAX, file_payload, file_signature
 
 
 def test_plain_text_is_not_a_file():

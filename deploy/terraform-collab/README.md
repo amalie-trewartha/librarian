@@ -1,7 +1,7 @@
 # terraform-collab
 
 Boxes for outside collaborators who have no Laude AWS access. Each box is
-an isolated Headlong install with one login user who has passwordless
+an isolated Librarian install with one login user who has passwordless
 sudo, reached over plain key-only SSH. Nothing of Laude's is on a box
 beyond the compute: no Slack tokens, no Cloudflare, no shared identity,
 no path to Audel's box. Nick keeps a side door through SSM.
@@ -11,7 +11,7 @@ It is a sibling of [`../terraform`](../terraform/README.md) (demo) and
 smaller: AWS only, one `boxes` map, one instance and Elastic IP per
 entry. Provisioning on the box is the same `deploy/setup.sh` those stacks
 use, so the collaborator gets the dash on `127.0.0.1:8080`, the
-`headlong-web` and `headlong-thinkers@` units, and `deploy/update.sh`.
+`librarian-web` and `librarian-thinkers@` units, and `deploy/update.sh`.
 
 ## What the first boot does
 
@@ -19,7 +19,7 @@ use, so the collaborator gets the dash on `127.0.0.1:8080`, the
 
 1. Creates the login user with the keys from `terraform.tfvars`, locks its
    password, and gives it `NOPASSWD` sudo.
-2. Hardens sshd through `/etc/ssh/sshd_config.d/00-headlong-collab.conf`:
+2. Hardens sshd through `/etc/ssh/sshd_config.d/00-librarian-collab.conf`:
    public key auth only, password and keyboard-interactive off, root login
    off, `AllowUsers <user>` so the stock `ubuntu` account cannot log in,
    `MaxAuthTries 4`, no X11 forwarding.
@@ -29,13 +29,13 @@ use, so the collaborator gets the dash on `127.0.0.1:8080`, the
    port forward, how to add a key, how to update).
 5. Clones the repo and runs `deploy/setup.sh`. This is the slow part,
    about five to eight minutes.
-6. If the SSM parameter `/headlong-collab/<name>/env` exists, installs it
+6. If the SSM parameter `/librarian-collab/<name>/env` exists, installs it
    as `/opt/shellm/app/.env` and restarts the web unit. A missing
    parameter is a warning, not a failure.
 
 Other posture: the security group opens port 22 only, IMDSv2 is required,
 and the instance role is SSM plus read access to parameters under
-`/headlong-collab/`.
+`/librarian-collab/`.
 
 ## Create a box
 
@@ -48,7 +48,7 @@ cp terraform.tfvars.example terraform.tfvars   # gitignored
 $EDITOR terraform.tfvars                        # add a boxes entry with their key
 
 # Optional: a spend-capped key for the box. Skip it and they bring their own.
-aws ssm put-parameter --name /headlong-collab/<name>/env --type SecureString \
+aws ssm put-parameter --name /librarian-collab/<name>/env --type SecureString \
     --overwrite --region ap-southeast-2 \
     --value "$(printf 'OPENROUTER_API_KEY=sk-or-...\nSHELLM_MODEL=...\n')"
 
@@ -73,14 +73,14 @@ it also catches a later hand edit.
 
 Send the collaborator the `ssh-config` stanza and this note, filled in:
 
-> Your box is `headlong-<name>`. Log in with `ssh <user>@<ip>` using the
+> Your box is `librarian-<name>`. Log in with `ssh <user>@<ip>` using the
 > key you gave me; you have passwordless sudo and the box is yours to
-> break. Headlong is installed at `/opt/shellm/app` and the login message
+> break. Librarian is installed at `/opt/shellm/app` and the login message
 > lists the day-to-day commands. The dash is not on the internet: run
 > `ssh -N -L 8080:127.0.0.1:8080 <user>@<ip>` and open
 > `http://localhost:8080`. Put your own API key in `/opt/shellm/app/.env`
-> (or I seeded one) and restart with `sudo systemctl restart headlong-web`.
-> Please keep it to Headlong work; the box gets security updates on its
+> (or I seeded one) and restart with `sudo systemctl restart librarian-web`.
+> Please keep it to Librarian work; the box gets security updates on its
 > own but you reboot it when the login message asks.
 
 ## Day 2

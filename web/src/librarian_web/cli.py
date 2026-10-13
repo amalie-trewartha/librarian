@@ -1,7 +1,7 @@
-"""Launch the Headlong dash (web viewer)
+"""Launch the Librarian dash (web viewer)
 
-Prod:  headlong-web [ROOT]         # build frontend if missing, serve on one port
-Dev:   headlong-web --dev [ROOT]   # vite dev server + uvicorn --reload
+Prod:  librarian-web [ROOT]         # build frontend if missing, serve on one port
+Dev:   librarian-web --dev [ROOT]   # vite dev server + uvicorn --reload
 """
 
 import argparse
@@ -12,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from headlong_web.env import getenv
+from librarian_web.env import getenv
 
 PACKAGE_DIR = Path(__file__).parent
 STATIC_DIR = PACKAGE_DIR / "static"
@@ -66,7 +66,7 @@ def _find_available_port(host: str, ports: range) -> int:
             if port != ports.start:
                 owner = _port_owner(ports.start)
                 print(
-                    f"headlong-web: WARNING: port {ports.start} is taken"
+                    f"librarian-web: WARNING: port {ports.start} is taken"
                     + (f" by {owner}" if owner else "")
                     + f" — serving on {port} instead. Check your browser's URL.",
                     file=sys.stderr,
@@ -78,7 +78,7 @@ def _find_available_port(host: str, ports: range) -> int:
 def _js_runtime() -> list[str]:
     """Pick the JS package manager for the frontend.
 
-    Order: $HEADLONG_WEB_JS override (legacy $SHELLM_WEB_JS), then
+    Order: $LIBRARIAN_WEB_JS override (legacy $SHELLM_WEB_JS), then
     bun > pnpm > npm by availability.
     pnpm falls back to `corepack pnpm` (bundled with node) when not installed
     directly.
@@ -91,11 +91,11 @@ def _js_runtime() -> list[str]:
             return ["corepack", "pnpm"]
         return None
 
-    override = getenv("HEADLONG_WEB_JS")
+    override = getenv("LIBRARIAN_WEB_JS")
     if override:
         runtime = resolve(override)
         if runtime is None:
-            raise SystemExit(f"HEADLONG_WEB_JS={override} but it isn't on PATH")
+            raise SystemExit(f"LIBRARIAN_WEB_JS={override} but it isn't on PATH")
         return runtime
     for name in ("bun", "pnpm", "npm"):
         if name == "pnpm" and not shutil.which("pnpm"):
@@ -105,7 +105,7 @@ def _js_runtime() -> list[str]:
             return runtime
     raise SystemExit(
         "No JS package manager found; install bun, pnpm, or npm "
-        "(or set HEADLONG_WEB_JS)"
+        "(or set LIBRARIAN_WEB_JS)"
     )
 
 
@@ -125,19 +125,19 @@ def _build_frontend() -> None:
 def _run_production(root: Path, host: str, port: int, rebuild: bool, read_only: bool) -> None:
     import uvicorn
 
-    from headlong_web.server import create_app
+    from librarian_web.server import create_app
 
     if rebuild or not (STATIC_DIR / "index.html").is_file():
         _build_frontend()
     app = create_app(root, STATIC_DIR, read_only=read_only)
     if not read_only:
-        from headlong_web.push import PushWatcher
+        from librarian_web.push import PushWatcher
 
         PushWatcher(root).start()
-    # NOTE: tools/headlong-init and tools/persona grep the dash log for
+    # NOTE: tools/librarian-init and tools/persona grep the dash log for
     # this "-web serving" line — keep their patterns in sync if it changes.
     # to detect a healthy dash — keep this string until that grep migrates.
-    print(f"headlong-web serving {root} at http://{host}:{port}", file=sys.stderr)
+    print(f"librarian-web serving {root} at http://{host}:{port}", file=sys.stderr)
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 
@@ -149,15 +149,15 @@ def _run_dev(root: Path, host: str, port: int, read_only: bool) -> None:
     env["VITE_API_URL"] = f"http://{host}:{port}"
     frontend = subprocess.Popen([*runtime, "run", "dev"], cwd=VIEWER_DIR, env=env)
     print(
-        f"headlong-web dev: backend http://{host}:{port}, frontend http://localhost:5173",
+        f"librarian-web dev: backend http://{host}:{port}, frontend http://localhost:5173",
         file=sys.stderr,
     )
     try:
-        os.environ["HEADLONG_WEB_ROOT"] = str(root)
+        os.environ["LIBRARIAN_WEB_ROOT"] = str(root)
         if read_only:
-            os.environ["HEADLONG_WEB_READONLY"] = "1"
+            os.environ["LIBRARIAN_WEB_READONLY"] = "1"
         uvicorn.run(
-            "headlong_web:create_app_from_env",
+            "librarian_web:create_app_from_env",
             host=host,
             port=port,
             factory=True,
@@ -174,7 +174,7 @@ def _run_dev(root: Path, host: str, port: int, read_only: bool) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="headlong-web", description=__doc__)
+    parser = argparse.ArgumentParser(prog="librarian-web", description=__doc__)
     parser.add_argument("root", nargs="?", default=".", help="Directory to scan for identities")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=None, help="Port (default: first free in 8080-8089)")
@@ -184,7 +184,7 @@ def main() -> None:
         "--build-only",
         action="store_true",
         help="Build the frontend (if missing, or with --rebuild) and exit without serving. "
-        "headlong-init runs this in the background so the first start is quick.",
+        "librarian-init runs this in the background so the first start is quick.",
     )
     parser.add_argument(
         "--read-only",
@@ -208,14 +208,14 @@ def main() -> None:
         if not _port_free(args.host, args.port):
             owner = _port_owner(args.port)
             raise SystemExit(
-                f"headlong-web: port {args.port} is already in use"
+                f"librarian-web: port {args.port} is already in use"
                 + (f" by {owner}" if owner else "")
-                + " — is another headlong-web still running?"
+                + " — is another librarian-web still running?"
             )
         port = args.port
     else:
         port = _find_available_port(args.host, DEFAULT_PORT_RANGE)
-    read_only = args.read_only or getenv("HEADLONG_WEB_READONLY", "") not in ("", "0")
+    read_only = args.read_only or getenv("LIBRARIAN_WEB_READONLY", "") not in ("", "0")
 
     if args.dev:
         _run_dev(root, args.host, port, read_only)

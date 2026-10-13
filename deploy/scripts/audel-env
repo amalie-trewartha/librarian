@@ -67,7 +67,7 @@ $1"
 
 restart_dispatcher() {
     info "restarting the dispatcher for $IDENT (drains in-flight steps, seconds to a few minutes)..."
-    run_script_on_box "sudo headlong-thinkersctl restart $(printf %q "$IDENT")" || die "dispatcher restart failed"
+    run_script_on_box "sudo librarian-thinkersctl restart $(printf %q "$IDENT")" || die "dispatcher restart failed"
     info "restarted."
 }
 

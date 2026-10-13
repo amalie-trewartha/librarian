@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# tests/test_thinker_set_coupling.sh — headlong-init and persona must start the
+# tests/test_thinker_set_coupling.sh — librarian-init and persona must start the
 # same thinkers.
 #
 # Usage: tests/test_thinker_set_coupling.sh
 #
-# Why: this is a coupling that fails SILENTLY. headlong-init brings a mind up
+# Why: this is a coupling that fails SILENTLY. librarian-init brings a mind up
 # with `thinkers start monolith responder`; `<name> start` in tools/persona
 # brings it back after `<name> stop`. When the two lists drift, nothing errors
 # — the dispatcher starts, status.json says "ok", the dash says "ok", and the
@@ -34,12 +34,12 @@ start_set() {
         | tr ' ' '\n' | sed '/^$/d' | sort -u
 }
 
-init_set=$(start_set "$REPO/tools/headlong-init")
+init_set=$(start_set "$REPO/tools/librarian-init")
 persona_set=$(start_set "$REPO/tools/persona")
 bootstrap_set=$(start_set "$REPO/deploy/bootstrap-slack-identity.sh")
 
 if [[ -z "$init_set" ]]; then
-    bad "found a 'thinkers start' line in tools/headlong-init"
+    bad "found a 'thinkers start' line in tools/librarian-init"
 elif [[ -z "$persona_set" ]]; then
     bad "found a 'thinkers start' line in tools/persona"
 else
@@ -48,7 +48,7 @@ else
         ok "they start the same thinkers: $(echo "$init_set" | tr '\n' ' ')"
     else
         bad "they start the same thinkers" \
-            "headlong-init=[$(echo "$init_set" | tr '\n' ' ')] persona=[$(echo "$persona_set" | tr '\n' ' ')]"
+            "librarian-init=[$(echo "$init_set" | tr '\n' ' ')] persona=[$(echo "$persona_set" | tr '\n' ' ')]"
     fi
     # The responder is the human-facing one; name it explicitly so that
     # dropping it from BOTH starters still fails here.
@@ -65,9 +65,9 @@ fi
 # enumerates the roster dynamically like deploy/thinkers-service.sh).
 if [[ -n "$bootstrap_set" && "$bootstrap_set" != "$init_set" ]]; then
     bad "bootstrap-slack-identity fallback starts the same thinkers" \
-        "bootstrap=[$(echo "$bootstrap_set" | tr '\n' ' ')] headlong-init=[$(echo "$init_set" | tr '\n' ' ')]"
+        "bootstrap=[$(echo "$bootstrap_set" | tr '\n' ' ')] librarian-init=[$(echo "$init_set" | tr '\n' ' ')]"
 else
-    ok "bootstrap-slack-identity fallback matches headlong-init (or starts none)"
+    ok "bootstrap-slack-identity fallback matches librarian-init (or starts none)"
 fi
 
 # Every named thinker must actually ship, or the starter silently no-ops.

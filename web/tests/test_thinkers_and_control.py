@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from headlong_web import control, thinkers
-from headlong_web.server import create_app
+from librarian_web import control, thinkers
+from librarian_web.server import create_app
 
 ROOT_TRAJ = "eeeeeeee-5555-4555-8555-555555555555"
 
@@ -263,7 +263,7 @@ def test_step_trigger_fires(client: TestClient, stub_bin: Path):
 
 @pytest.fixture
 def unit_ctl(tmp_path: Path, monkeypatch):
-    """Fake headlong-thinkersctl: logs calls; is-active mirrors a state file."""
+    """Fake librarian-thinkersctl: logs calls; is-active mirrors a state file."""
     from types import SimpleNamespace
 
     script = tmp_path / "thinkersctl"
@@ -435,7 +435,7 @@ def test_create_identity(client: TestClient, stub_bin: Path, control_identity: P
 
 
 def test_killall(client: TestClient, stub_bin: Path):
-    _write_stub(stub_bin, "headlong-killall")
+    _write_stub(stub_bin, "librarian-killall")
     resp = client.post("/api/killall", json={"dry_run": True})
     assert resp.status_code == 200
     assert "ARGS=--dry-run" in _calls(stub_bin)

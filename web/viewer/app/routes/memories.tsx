@@ -52,7 +52,7 @@ function memoryBody(content: string) {
 }
 
 export function meta() {
-  return [{ title: "Headlong · memories" }];
+  return [{ title: "Librarian · memories" }];
 }
 
 export default function MemoriesPage() {

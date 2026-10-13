@@ -1,4 +1,4 @@
-from headlong_telegram.outbound import RecentPosts
+from librarian_telegram.outbound import RecentPosts
 
 
 def test_recent_posts_dedupe_window():
@@ -15,8 +15,8 @@ def test_run_delivers_only_chat_sourced_messages(tmp_path, monkeypatch):
     must not reach Telegram."""
     import threading
 
-    from headlong_telegram import outbound
-    from headlong_telegram.config import Config
+    from librarian_telegram import outbound
+    from librarian_telegram.config import Config
 
     steps = [
         # legit reply, stamped by bin/chat
@@ -54,9 +54,9 @@ def test_run_delivers_only_chat_sourced_messages(tmp_path, monkeypatch):
 import base64
 import threading
 
-from headlong_telegram.api import ApiError
-from headlong_telegram import outbound
-from headlong_telegram.config import Config
+from librarian_telegram.api import ApiError
+from librarian_telegram import outbound
+from librarian_telegram.config import Config
 
 
 def _cfg(tmp_path):
@@ -247,8 +247,8 @@ def test_jpeg_uses_send_photo(tmp_path, monkeypatch):
 def test_file_send_failure_falls_back_to_notice(tmp_path, monkeypatch):
     import threading
 
-    from headlong_telegram import outbound
-    from headlong_telegram.api import ApiError
+    from librarian_telegram import outbound
+    from librarian_telegram.api import ApiError
 
     steps = [
         {"type": "message", "from": "audel", "to": "telegram-1-1",
@@ -278,7 +278,7 @@ def test_file_send_failure_falls_back_to_notice(tmp_path, monkeypatch):
 def test_undecodable_file_falls_back_to_notice(tmp_path, monkeypatch):
     import threading
 
-    from headlong_telegram import outbound
+    from librarian_telegram import outbound
 
     steps = [
         {"type": "message", "from": "audel", "to": "telegram-1-1",
@@ -311,7 +311,7 @@ def test_undecodable_file_falls_back_to_notice(tmp_path, monkeypatch):
 def test_identical_file_steps_are_suppressed(tmp_path, monkeypatch):
     import threading
 
-    from headlong_telegram import outbound
+    from librarian_telegram import outbound
 
     body = b"same-bytes"
     b64 = base64.b64encode(body).decode("ascii")
@@ -353,7 +353,7 @@ def test_identical_file_steps_are_suppressed(tmp_path, monkeypatch):
 def test_invalid_file_content_does_not_stop_later_replies(tmp_path, monkeypatch):
     import threading
 
-    from headlong_telegram import outbound
+    from librarian_telegram import outbound
 
     steps = [
         {"type": "message", "from": "audel", "to": "telegram-1-1",

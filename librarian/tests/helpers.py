@@ -14,7 +14,7 @@ SRC = HERE.parent / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from headlong_librarian import db, gate, lifecycle, model  # noqa: E402
+from librarian import db, gate, lifecycle, model  # noqa: E402
 
 T0 = "2026-10-01T00:00:00Z"
 CLEAR = ("PROJECT_NOW", "PROJECT_REAL_NOW", "PROJECT_TIME_SCALE", "PROJECT_STARTED_AT", "LIBRARIAN_MODEL", "SHELLM_FAST_MODEL", "SHELLM_MODEL", "THINK_MODEL", "LLM_MODEL", "LIBRARIAN_STORE", "LIBRARIAN_FTS", "TRAJ_DIR", "TRAJ_ID", "PROJECT_DIR")

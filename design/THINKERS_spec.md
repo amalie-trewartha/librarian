@@ -59,7 +59,7 @@ The dispatcher is a background process launched by `thinkers start`. It:
 
 1. Reads all `subscriptions.jsonl` files from `$THINKERS_DIR/*/subscriptions.jsonl`
 2. Resolves each `traj_id` to a file path (defaults to `$TRAJ_DIR/$TRAJ_ID`)
-3. Creates a FIFO at `/tmp/headlong-dispatch.XXXXXX/dispatch.fifo`, outside the identity dir so nothing the mind walks can open it, and records the path in `$IDENTITY_DIR/run/fifo_path`
+3. Creates a FIFO at `/tmp/librarian-dispatch.XXXXXX/dispatch.fifo`, outside the identity dir so nothing the mind walks can open it, and records the path in `$IDENTITY_DIR/run/fifo_path`
 4. For each unique trajectory file, starts `tail -n 0 -F <file>` piped through a tagger that prefixes each line with the trajectory ID, all writing to the FIFO
 5. Starts a ticker that writes a `TICK` heartbeat line into the FIFO every second
 6. Main loop reads from FIFO:
@@ -212,7 +212,7 @@ Walks memory, surfaces associative connections, and injects recalled memories in
 
 ## Installation
 
-Thinkers are installed to `~/.headlong-thinkers/` by `install.sh`. When a new identity is created, `identity new` copies bundled thinkers into `$IDENTITY_DIR/thinkers/` and updates `subscriptions.jsonl` to use the identity's root `TRAJ_ID`.
+Thinkers are installed to `~/.librarian-thinkers/` by `install.sh`. When a new identity is created, `identity new` copies bundled thinkers into `$IDENTITY_DIR/thinkers/` and updates `subscriptions.jsonl` to use the identity's root `TRAJ_ID`.
 
 ## Subscriptions Are Static
 

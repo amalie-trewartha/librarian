@@ -5,8 +5,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from headlong_web import memories
-from headlong_web.server import create_app
+from librarian_web import memories
+from librarian_web.server import create_app
 
 
 def _identity_root(tmp_path: Path) -> tuple[Path, Path]:

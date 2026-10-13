@@ -50,9 +50,9 @@ STUB
 chmod +x "$WORK/bin/llm"
 
 # env -u: the tool resolves SHELLM_TRAJ_DIR before TRAJ_DIR, and SHELLM_HOME /
-# HEADLONG_HOME / SHELLM_MODEL all steer it — any of them inherited from the
+# LIBRARIAN_HOME / SHELLM_MODEL all steer it — any of them inherited from the
 # calling shell would fail this test for the wrong reason.
-env -u SHELLM_TRAJ_DIR -u SHELLM_HOME -u HEADLONG_HOME -u SHELLM_MODEL \
+env -u SHELLM_TRAJ_DIR -u SHELLM_HOME -u LIBRARIAN_HOME -u SHELLM_MODEL \
     PATH="$WORK/bin:$PATH" TRAJ_DIR="$WORK/traj" \
     LLM_ARGV_FILE="$WORK/argv.txt" LLM_STDIN_FILE="$WORK/stdin.txt" \
     bash "$REPO/tools/shellm-explore" abc12345 --report \

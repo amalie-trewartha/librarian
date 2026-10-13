@@ -2,7 +2,7 @@ import os
 import subprocess
 import unittest
 
-from headlong_librarian import llm
+from librarian import llm
 
 
 class ResolveTest(unittest.TestCase):
@@ -82,7 +82,7 @@ class CallTest(unittest.TestCase):
             return P()
 
         subprocess.run = fake_run
-        os.environ["HEADLONG_LLM_BIN"] = "/fake/llm"
+        os.environ["LIBRARIAN_LLM_BIN"] = "/fake/llm"
         m = llm.LLM("haiku", "rank")
         out = m.complete("the prompt", system="sys", max_tokens=123)
         self.assertEqual(out, "answer")
@@ -100,7 +100,7 @@ class CallTest(unittest.TestCase):
             return P()
 
         subprocess.run = fail_run
-        os.environ["HEADLONG_LLM_BIN"] = "/fake/llm"
+        os.environ["LIBRARIAN_LLM_BIN"] = "/fake/llm"
         self.assertIsNone(llm.LLM("x", "judge").complete("p"))
 
         def raise_run(cmd, **kw):
@@ -111,7 +111,7 @@ class CallTest(unittest.TestCase):
 
     def test_call_budget(self):
         os.environ["LIBRARIAN_LLM_MAX_CALLS"] = "2"
-        os.environ["HEADLONG_LLM_BIN"] = "/fake/llm"
+        os.environ["LIBRARIAN_LLM_BIN"] = "/fake/llm"
 
         def ok_run(cmd, **kw):
             class P:

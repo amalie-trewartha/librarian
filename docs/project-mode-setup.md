@@ -1,6 +1,6 @@
 # Setting up project mode on a new machine
 
-Project mode runs one Headlong agent on one research project for days or
+Project mode runs one Librarian agent on one research project for days or
 weeks, unattended (see [design/long_autonomy.md](../design/long_autonomy.md)
 for how it works). This guide takes a fresh Linux machine to a running
 project. Every step below was run on a clean install. It assumes Claude on
@@ -14,7 +14,7 @@ check with them before using work accounts.
 
 ## 1. The machine
 
-- **Linux:** Ubuntu 22.04 or 24.04 was tested; macOS works for Headlong in
+- **Linux:** Ubuntu 22.04 or 24.04 was tested; macOS works for Librarian in
   general.
 - **Always on:** the host must stay awake for the whole run. The project
   clock follows wall time, so if the host sleeps, the clock jumps ahead
@@ -37,12 +37,12 @@ check with them before using work accounts.
 ## 2. Get the code and install the tools
 
 ```bash
-git clone https://github.com/amalie-trewartha/headlong.git ~/headlong
-cd ~/headlong
+git clone https://github.com/amalie-trewartha/librarian.git ~/librarian
+cd ~/librarian
 git checkout project-mode-long-autonomy     # until it is merged to main
 ./install.sh --symlinks
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
-command -v headlong-project llm blind delegate persona identity
+command -v librarian-project llm blind delegate persona identity
 ```
 
 `--symlinks` links the tools to the checkout, so a `git pull` updates them.
@@ -65,12 +65,12 @@ interview does not set up Bedrock.
    Opus 5.5 and Claude Haiku 4.5, and optionally a non-Claude reviewer
    such as Llama 4 Maverick.
 3. **Store a bearer key in a file**, not in an environment variable, so you
-   can rotate it later without a restart. `headlong-bedrock-env` (step 4)
+   can rotate it later without a restart. `librarian-bedrock-env` (step 4)
    does this for you, or by hand:
 
    ```bash
-   mkdir -p ~/.headlong
-   ( umask 077; nano ~/.headlong/bedrock-token )   # paste the key alone, save
+   mkdir -p ~/.librarian
+   ( umask 077; nano ~/.librarian/bedrock-token )   # paste the key alone, save
    ```
 
 4. **Pick model ids that match your region.**
@@ -79,7 +79,7 @@ interview does not set up Bedrock.
    - `anthropic.claude-opus-5-5` uses the newer `bedrock-mantle` endpoint,
      which exists in us-east-1, us-east-2 and us-west-2 but not us-west-1.
 
-**Anthropic API instead:** put `ANTHROPIC_API_KEY=...` in `~/.headlong/.env`,
+**Anthropic API instead:** put `ANTHROPIC_API_KEY=...` in `~/.librarian/.env`,
 and use `claude-opus-5-5` and `claude-haiku-4-5` as the models in step 4.
 
 ## 4. Configure
@@ -88,36 +88,36 @@ If your credentials are in an `aws.env` file (`AWS_REGION` plus
 `AWS_BEARER_TOKEN_BEDROCK`, or IAM keys), one command writes everything:
 
 ```bash
-~/headlong/docs/headlong-bedrock-env ~/aws.env --check
+~/librarian/docs/librarian-bedrock-env ~/aws.env --check
 # optional: --coldeyes bedrock-converse/us.meta.llama4-maverick-17b-instruct-v1:0
 ```
 
 It writes three files and checks the models:
-- the key to `~/.headlong/bedrock-token`, mode 600;
-- `~/.headlong/.env`, which points at the token file and picks
+- the key to `~/.librarian/bedrock-token`, mode 600;
+- `~/.librarian/.env`, which points at the token file and picks
   cross-region model ids for your region (`us.` or `eu.`);
-- `~/.headlong/app_dir`.
+- `~/.librarian/app_dir`.
 
 With `--check`, it makes one tiny call per model. It never prints a secret
 and will not overwrite an existing `.env` without `--force`. Then you can
 delete `aws.env`, and skip to "Check that the models answer" below.
 
-Or write `~/.headlong/.env` by hand (adjust the region and models):
+Or write `~/.librarian/.env` by hand (adjust the region and models):
 
 ```bash
-cat > ~/.headlong/.env <<EOF
+cat > ~/.librarian/.env <<EOF
 SHELLM_MODEL=us.anthropic.claude-opus-5-5
 SHELLM_FAST_MODEL=us.anthropic.claude-haiku-4-5-20251001-v1:0
 AWS_REGION=us-west-1
-AWS_BEARER_TOKEN_BEDROCK_FILE=$HOME/.headlong/bedrock-token
+AWS_BEARER_TOKEN_BEDROCK_FILE=$HOME/.librarian/bedrock-token
 SHELLM_REQUIRE_DOCKER=1
-HEADLONG_TZ=UTC
+LIBRARIAN_TZ=UTC
 LLM_PRICE_SCALE=1.1
 # Optional: weekly cold-eyes reviews on another model family
 # BLIND_MODEL_COLDEYES=bedrock-converse/us.meta.llama4-maverick-17b-instruct-v1:0
 EOF
-chmod 600 ~/.headlong/.env
-echo "$HOME/headlong" > ~/.headlong/app_dir
+chmod 600 ~/.librarian/.env
+echo "$HOME/librarian" > ~/.librarian/app_dir
 ```
 
 What the settings do:
@@ -142,15 +142,15 @@ provide an exemplar of the kind of end product you expect, for example an
 open-access paper converted to markdown.
 
 ```bash
-cd ~/headlong
+cd ~/librarian
 identity new cns
-headlong-project init cns --spec ~/brief.md --reference ~/exemplar.md \
+librarian-project init cns --spec ~/brief.md --reference ~/exemplar.md \
     --preferences ~/team-values.md --days 14 --daily-usd 15 --total-usd 200
 ```
 
 The `init` options:
 - **`--days N`:** when the run ends. Alternatively `--end YYYY-MM-DD`. Move
-  it later with `headlong-project deadline`.
+  it later with `librarian-project deadline`.
 - **`--daily-usd` / `--total-usd`:** estimated-dollar caps.
   - Set the run cap a little under your true limit, since the one wake
     that crosses it still finishes.
@@ -163,7 +163,7 @@ The `init` options:
   your own words. They become active preference nodes in the agent's
   memory store (the Librarian, [design/librarian.md](../design/librarian.md))
   and appear in every wake's memory pack when relevant. Repeatable. Add
-  more later with `headlong-project preferences cns add "..."`.
+  more later with `librarian-project preferences cns add "..."`.
 - **`--fresh-memory`:** start the memory store over. By default it is kept
   across projects, so skills and retrospectives from an earlier run carry
   into the next one.
@@ -178,7 +178,7 @@ the caps and pacing are what keep it inside a budget.
 
 ```bash
 persona cns start                 # start the mind
-headlong-project status cns       # health, deadline, spend, questions
+librarian-project status cns       # health, deadline, spend, questions
 persona cns stop                  # pause; start again to resume
 ```
 
@@ -188,8 +188,8 @@ edit the agent was refused, a disputed pair of memories, a new `area:` tag.
 To answer a question:
 
 ```bash
-headlong-project questions cns                       # open and closed questions
-headlong-project answer cns Q2 "Use the EU grid as the headline basis."
+librarian-project questions cns                       # open and closed questions
+librarian-project answer cns Q2 "Use the EU grid as the headline basis."
 ```
 
 Every question carries a default and a date. If nobody answers by then,
@@ -200,32 +200,32 @@ Decide a queue item (applied as you, committed to `project/` as author
 `human`):
 
 ```bash
-headlong-project queue cns                  # list
-headlong-project queue cns approve Q7       # or reject Q7 "a short reason"
+librarian-project queue cns                  # list
+librarian-project queue cns approve Q7       # or reject Q7 "a short reason"
 ```
 
 Other controls:
-- **Probe the identity:** `headlong-project probe cns` asks the agent's own
+- **Probe the identity:** `librarian-project probe cns` asks the agent's own
   model the probe prompts with only its identity nodes loaded and compares
   the answers with the previous run; drift traced to a working-identity edit
   reverts it and queues a note. The weekly ritual does this every fourth week.
-- **Look at the memory store:** `headlong-project librarian cns stats`,
+- **Look at the memory store:** `librarian-project librarian cns stats`,
   `... search --tags pkg:x --text "..."`, `... queue list`. The dashboard's
   Memories page shows the same nodes.
-- **Rotate the key:** overwrite `~/.headlong/bedrock-token`. The next call
+- **Rotate the key:** overwrite `~/.librarian/bedrock-token`. The next call
   uses the new key, with no restart.
-- **Move the deadline:** `headlong-project deadline cns --days 21`. This
+- **Move the deadline:** `librarian-project deadline cns --days 21`. This
   reopens a finished run.
 - **Change the charter or brief mid-run:** edit the files in
   `.identities/cns/project-pristine/`, then run
-  `headlong-project update-pristine cns`. Edits made under `project/` are
+  `librarian-project update-pristine cns`. Edits made under `project/` are
   undone on the next wake.
 - **Change budget settings:** edit `.identities/cns/.env`, then
   `persona cns stop; persona cns start`. Settings are read at start.
 
 ## 7. Read the results
 
-Everything is in `~/headlong/.identities/cns/workdir/project/`, a git repo
+Everything is in `~/librarian/.identities/cns/workdir/project/`, a git repo
 with one commit per wake. Read in this order:
 
 1. `reports/final.md`: the final report (after the end date).
@@ -238,16 +238,16 @@ with one commit per wake. Read in this order:
    retrospective, skill and episode and how each closed. `addenda.md` and
    `skills/` are mirrors of the same store.
 
-`git -C ~/headlong/.identities/cns/workdir/project log --oneline` is a
+`git -C ~/librarian/.identities/cns/workdir/project log --oneline` is a
 readable history of the run.
 
 ## Troubleshooting
 
 - **`Cannot detect provider for model '…'`, or another wrong-tool error:**
-  another program with the same name is running instead of Headlong's.
-  Typically that's the Python `llm` CLI, or an older Headlong install.
+  another program with the same name is running instead of Librarian's.
+  Typically that's the Python `llm` CLI, or an older Librarian install.
   `type -a llm` lists them in PATH order. Re-running `./install.sh
-  --symlinks` fixes it: it moves older Headlong copies and any other `llm`
+  --symlinks` fixes it: it moves older Librarian copies and any other `llm`
   found ahead of `~/.local/bin` out of the way (renamed
   `<name>.pre-headlong-<date>`, so it can be undone). It warns about any
   other same-named program without touching it. Run `hash -r` afterwards.
@@ -265,18 +265,18 @@ readable history of the run.
   ```bash
   persona cns stop
   docker rm -f $(docker ps -aq --filter name=shellm)
-  rm -rf ~/headlong/.identities/cns/.shellm/envs/cns
+  rm -rf ~/librarian/.identities/cns/.shellm/envs/cns
   persona cns start
   ```
 
 - **No memory pack in the wakes (`status` says `librarian: no store`, or
   the prompt shows the plain project excerpt):** the identity predates the
-  Librarian, `librarian` is not on PATH, or `HEADLONG_LIBRARIAN=0`. Run
-  `headlong-project init ... ` again to create the store (existing project
+  Librarian, `librarian` is not on PATH, or `LIBRARIAN_MEMORY=0`. Run
+  `librarian-project init ... ` again to create the store (existing project
   files are moved aside only with `--force`), or check
   `.identities/cns/run/librarian.log` and the `error` steps with
   `section:"librarian"` in the mind log for a failing librarian.
 - **Spend flat and status shows a budget pause:** a cap was reached. Wakes
   skip the model until usage falls back under the cap.
-- **Panic button:** `headlong-killall` stops every Headlong process on
+- **Panic button:** `librarian-killall` stops every Librarian process on
   the machine.

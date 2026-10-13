@@ -1,7 +1,7 @@
 """Symlinked identities: the scan and resolver must serve them (issue #66).
 
 An identity reached through a symlink — state on another volume,
-`.identities/ada -> /mnt/headlong/current` — was invisible to
+`.identities/ada -> /mnt/librarian/current` — was invisible to
 scan_identities, so the bridges (which accept the link and construct the id
 from it) got a 404 on every message. The scan now considers a symlinked
 directory as an identity candidate under the link's own id, without ever
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from headlong_web import discovery
+from librarian_web import discovery
 
 
 def _identity(dir_: Path, name: str) -> Path:

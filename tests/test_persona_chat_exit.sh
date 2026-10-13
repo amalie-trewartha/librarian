@@ -10,7 +10,7 @@
 # pid itself rather than read the variable (fatal under set -u).
 #
 # Everything runs under a throwaway HOME / app dir, so the real
-# ~/.headlong and the repo's own .identities are never touched.
+# ~/.librarian and the repo's own .identities are never touched.
 
 set -uo pipefail
 
@@ -45,22 +45,22 @@ watcher_gone() { ! pgrep -f "bin/$NAME\$" >/dev/null 2>&1; }
 
 # --- a fake install ----------------------------------------------------------
 export HOME="$WORK/home"
-export HEADLONG_HOME="$WORK/home/.headlong"
-export HEADLONG_APP_DIR="$WORK/app"
-mkdir -p "$HOME" "$HEADLONG_HOME" "$HEADLONG_APP_DIR" "$WORK/bin"
-ln -s "$REPO/bin" "$HEADLONG_APP_DIR/bin"
-ln -s "$REPO/tools" "$HEADLONG_APP_DIR/tools"
-ln -s "$REPO/thinkers" "$HEADLONG_APP_DIR/thinkers"
-ln -s "$REPO/identities" "$HEADLONG_APP_DIR/identities"
+export LIBRARIAN_HOME="$WORK/home/.librarian"
+export LIBRARIAN_APP_DIR="$WORK/app"
+mkdir -p "$HOME" "$LIBRARIAN_HOME" "$LIBRARIAN_APP_DIR" "$WORK/bin"
+ln -s "$REPO/bin" "$LIBRARIAN_APP_DIR/bin"
+ln -s "$REPO/tools" "$LIBRARIAN_APP_DIR/tools"
+ln -s "$REPO/thinkers" "$LIBRARIAN_APP_DIR/thinkers"
+ln -s "$REPO/identities" "$LIBRARIAN_APP_DIR/identities"
 
-# The name is linked to persona the way headlong-init does it, so the chat
-# runs as a bare `<name>`, the same as a real install. No headlong-tui on
+# The name is linked to persona the way librarian-init does it, so the chat
+# runs as a bare `<name>`, the same as a real install. No librarian-tui on
 # this PATH, so persona takes the simple chat loop.
 ln -s "$REPO/tools/persona" "$WORK/bin/$NAME"
 export PATH="$WORK/bin:$REPO/bin:$REPO/tools:/usr/bin:/bin"
 
-(cd "$HEADLONG_APP_DIR" && identity new "$NAME" >/dev/null 2>&1) || { bad "identity new $NAME"; exit 1; }
-ID="$HEADLONG_APP_DIR/.identities/$NAME"
+(cd "$LIBRARIAN_APP_DIR" && identity new "$NAME" >/dev/null 2>&1) || { bad "identity new $NAME"; exit 1; }
+ID="$LIBRARIAN_APP_DIR/.identities/$NAME"
 
 # --- one line, then EOF ------------------------------------------------------
 printf 'hello there\n' | "$NAME" >"$WORK/stdout" 2>"$WORK/stderr"

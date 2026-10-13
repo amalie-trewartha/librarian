@@ -1,4 +1,4 @@
-from headlong_web.chat_links import resolve_source_url
+from librarian_web.chat_links import resolve_source_url
 
 
 def test_source_url_is_recorded_and_inherited():

@@ -1,9 +1,27 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (same mapping as bin/librarian-env).
+if [[ -z "${LIBRARIAN_MEMORY+x}" && -n "${HEADLONG_LIBRARIAN+x}" ]]; then export LIBRARIAN_MEMORY="$HEADLONG_LIBRARIAN"; fi
+if [[ -z "${LIBRARIAN_SRC+x}" && -n "${HEADLONG_LIBRARIAN_SRC+x}" ]]; then export LIBRARIAN_SRC="$HEADLONG_LIBRARIAN_SRC"; fi
+for _le_hv in $(compgen -A variable HEADLONG_ 2>/dev/null); do
+    case "$_le_hv" in HEADLONG_LIBRARIAN|HEADLONG_LIBRARIAN_SRC) continue ;; esac
+    _le_lv="LIBRARIAN_${_le_hv#HEADLONG_}"
+    if [[ -z "${!_le_lv+x}" ]]; then export "$_le_lv=${!_le_hv}"; fi
+done
+unset _le_hv _le_lv
+if [[ -z "${LIBRARIAN_HOME:-}" && -n "${HOME:-}" && ! -d "$HOME/.librarian" && -d "$HOME/.headlong" ]]; then
+    export LIBRARIAN_HOME="$HOME/.headlong"
+fi
+if [[ -z "${LIBRARIAN_THINKERS_TEMPLATES:-}" && -n "${HOME:-}" ]]; then
+    if [[ ! -d "$HOME/.librarian-thinkers" && -d "$HOME/.headlong-thinkers" ]]; then
+        export LIBRARIAN_THINKERS_TEMPLATES="$HOME/.headlong-thinkers"
+    fi
+fi
+
 set -uo pipefail
 
 # deploy/thinkers-silence-alert.sh — "the mind has gone quiet" and "the disk
-# is filling" Slack notices for headlong-thinkers@<identity>.service. Run
-# every few minutes by headlong-thinkers-silence@<identity>.timer.
+# is filling" Slack notices for librarian-thinkers@<identity>.service. Run
+# every few minutes by librarian-thinkers-silence@<identity>.timer.
 #
 # The death and failure alerts fire when the dispatcher UNIT dies. This one
 # covers the other ways a mind stops:
@@ -20,14 +38,14 @@ set -uo pipefail
 # Rules learned from that:
 #   1. Post first. State on disk is written after, best effort.
 #   2. Never abort. No `set -e`; every write is `|| true`.
-#   3. Re-post while the condition lasts (HEADLONG_SILENCE_REPOST_SECS, one
+#   3. Re-post while the condition lasts (LIBRARIAN_SILENCE_REPOST_SECS, one
 #      hour), so one lost post cannot mute a whole outage.
 #   4. Markers fall back to a tmpfs dir when the identity's run/ dir cannot
-#      take a byte (HEADLONG_ALERT_STATE_FALLBACK, default /dev/shm).
+#      take a byte (LIBRARIAN_ALERT_STATE_FALLBACK, default /dev/shm).
 #
 # Silence signal: age of the root trajectory file. Every wake, idle, thought
 # and message appends to it, so at rest it is touched at least every
-# MONOLITH_BACKOFF_CAP seconds (300 by default). HEADLONG_SILENCE_SECS
+# MONOLITH_BACKOFF_CAP seconds (300 by default). LIBRARIAN_SILENCE_SECS
 # (default 1800) is six times that.
 #
 #   age >= threshold, no marker (or marker older than the repost interval)
@@ -36,7 +54,7 @@ set -uo pipefail
 #   dispatcher not running      → say nothing (the death alert owns that)
 #
 # Disk signal: the fullest of the app dir, the identity dir and /tmp
-# (HEADLONG_DISK_ALERT_PCT, default 90). Checked before the dispatcher gate
+# (LIBRARIAN_DISK_ALERT_PCT, default 90). Checked before the dispatcher gate
 # because a full disk matters whether or not the mind is up. Recovery posts
 # when usage drops five points under the threshold.
 #
@@ -52,17 +70,17 @@ set -uo pipefail
 # keeps happening. Checked before the dispatcher gate, like the disk.
 #
 # Missing Slack config degrades to a line in
-# /var/tmp/headlong-thinkers-alert.log, never a unit failure.
+# /var/tmp/librarian-thinkers-alert.log, never a unit failure.
 #
 # Usage: thinkers-silence-alert.sh APP_DIR IDENTITY
 
 APP_DIR="${1:?usage: thinkers-silence-alert.sh APP_DIR IDENTITY}"
 IDENT="${2:?identity name required}"
 
-FALLBACK_LOG="${HEADLONG_ALERT_FALLBACK_LOG:-/var/tmp/headlong-thinkers-alert.log}"
+FALLBACK_LOG="${LIBRARIAN_ALERT_FALLBACK_LOG:-/var/tmp/librarian-thinkers-alert.log}"
 ID_DIR="$APP_DIR/.identities/$IDENT"
 RUN_DIR="$ID_DIR/run"
-unit="headlong-thinkers@${IDENT}.service"
+unit="librarian-thinkers@${IDENT}.service"
 
 if [[ -r "$APP_DIR/.env" ]]; then
     set -a
@@ -77,14 +95,14 @@ if [[ -r "$ID_DIR/.env" ]]; then
     set +a
 fi
 
-THRESHOLD="${HEADLONG_SILENCE_SECS:-1800}"
-REPOST="${HEADLONG_SILENCE_REPOST_SECS:-3600}"
-DISK_PCT="${HEADLONG_DISK_ALERT_PCT:-90}"
-ALERT_CHANNEL="${HEADLONG_ALERT_CHANNEL:-${SLACK_ALERT_CHANNEL:-${SHELLM_ALERT_CHANNEL:-}}}"
-# Posting token: HEADLONG_ALERT_TOKEN (seeded by deploy/split-bridge-env.sh;
+THRESHOLD="${LIBRARIAN_SILENCE_SECS:-1800}"
+REPOST="${LIBRARIAN_SILENCE_REPOST_SECS:-3600}"
+DISK_PCT="${LIBRARIAN_DISK_ALERT_PCT:-90}"
+ALERT_CHANNEL="${LIBRARIAN_ALERT_CHANNEL:-${SLACK_ALERT_CHANNEL:-${SHELLM_ALERT_CHANNEL:-}}}"
+# Posting token: LIBRARIAN_ALERT_TOKEN (seeded by deploy/split-bridge-env.sh;
 # ideally a dedicated alert-only app). The bridge's own token is in
 # .env.bridge, which this script cannot read inside the thinkers sandbox.
-ALERT_TOKEN="${HEADLONG_ALERT_TOKEN:-${SLACK_BOT_TOKEN:-}}"
+ALERT_TOKEN="${LIBRARIAN_ALERT_TOKEN:-${SLACK_BOT_TOKEN:-}}"
 
 now=$(date +%s)
 
@@ -96,7 +114,7 @@ log_fallback() {
 post_slack() {
     local text="$1"
     if [[ -z "$ALERT_TOKEN" || -z "$ALERT_CHANNEL" ]]; then
-        log_fallback "$unit: $text; Slack not configured (need HEADLONG_ALERT_TOKEN + HEADLONG_ALERT_CHANNEL in $APP_DIR/.env)"
+        log_fallback "$unit: $text; Slack not configured (need LIBRARIAN_ALERT_TOKEN + LIBRARIAN_ALERT_CHANNEL in $APP_DIR/.env)"
         return 0
     fi
     local payload resp
@@ -116,7 +134,7 @@ post_slack() {
 # Markers normally live in the identity's run/ dir. When that dir cannot
 # take a byte (full disk), they go to a tmpfs dir instead, and both places
 # are consulted when looking for one.
-STATE_FALLBACK="${HEADLONG_ALERT_STATE_FALLBACK:-/dev/shm}/headlong-alert-$IDENT"
+STATE_FALLBACK="${LIBRARIAN_ALERT_STATE_FALLBACK:-/dev/shm}/librarian-alert-$IDENT"
 STATE_DIR="$RUN_DIR"
 if ! { printf 'x' > "$RUN_DIR/.alert_probe" && [[ -s "$RUN_DIR/.alert_probe" ]]; } 2>/dev/null; then
     mkdir -p "$STATE_FALLBACK" 2>/dev/null || true

@@ -19,7 +19,7 @@ it. (Working name: "collegial coding agents.")
 
 Two existing programs, run as a pair:
 
-- **Headlong** — an "identity" that runs on its own, forever. It keeps a diary of
+- **Librarian** — an "identity" that runs on its own, forever. It keeps a diary of
   everything it thinks and does (its *trajectory*), sets its own goals, remembers,
   and wakes itself up even when nobody is talking to it. Its strength: it never
   stops and comes up with its own directions. Its weakness, watched happening
@@ -30,15 +30,15 @@ Two existing programs, run as a pair:
   strength: it stays on task and actually finishes. Its weakness: it has no goals
   of its own and won't do anything you don't hand it.
 
-The plan is to stop choosing between them and run them as a loop: Headlong comes
+The plan is to stop choosing between them and run them as a loop: Librarian comes
 up with something to do, the coding agent actually does it and checks whether it
 works, and only things that work are kept. The "something to do" can include
-improving Headlong itself.
+improving Librarian itself.
 
 ## How it's done today, and why that's not enough
 
 Today these are two separate things. People drive coding agents by hand — a
-person picks the task, the agent does it. And Headlong runs on its own but
+person picks the task, the agent does it. And Librarian runs on its own but
 produces little that lasts. So today you can have *self-directed but useless*, or
 *useful but not self-directed* — not both. If you want a program that decides for
 itself what to build and then reliably builds it, nothing off the shelf does
@@ -50,16 +50,16 @@ The new part is small and specific: **couple the two in a loop where the reliabl
 one checks and finishes the self-directed one's ideas — and can also repair the
 self-directed one itself.**
 
-The plain reason it should work: each covers the other's exact weakness. Headlong
+The plain reason it should work: each covers the other's exact weakness. Librarian
 supplies goals and persistence; the coding agent supplies discipline and a
-reality check. Alone, Headlong explores but never lands; alone, the coding agent
+reality check. Alone, Librarian explores but never lands; alone, the coding agent
 lands but never explores. Together: exploration that actually lands.
 
 **The same idea, stated precisely — read the pair as an optimizer.** An optimizer
 is anything that searches for a better answer.
 
-- **Headlong alone is a high-temperature random walk.** "Temperature" here is how
-  wildly it jumps around; Headlong runs hot. It explores widely and never stops,
+- **Librarian alone is a high-temperature random walk.** "Temperature" here is how
+  wildly it jumps around; Librarian runs hot. It explores widely and never stops,
   but it does not reliably *climb* toward better — no signal telling it which way
   is up, high variance, spins in place.
 - **A coding agent alone is gradient descent from a fixed start.** It follows the
@@ -98,11 +98,11 @@ faster the pair climbs. Start with pass/fail; enrich the signal as we go.)
 
 ## The asymmetry is temperature, not rank
 
-It is tempting to call Headlong the "mind" and the coding agent the "hands." That
+It is tempting to call Librarian the "mind" and the coding agent the "hands." That
 is wrong, and we are not using it. It makes the coding agent a subordinate (it is
 not — Codex is very much a mind), and it puts the difference on *authority* when
 the difference that matters is *temperature and horizon*: how wildly each one
-searches, and over what span. Headlong runs hot — explore, long horizon,
+searches, and over what span. Librarian runs hot — explore, long horizon,
 self-directed, high variance. The coding agent runs cold — exploit, short horizon,
 task-directed, low variance.
 
@@ -116,11 +116,11 @@ failures — they settle on the same safe answer (collapse), or they both wander
 
 Three concrete things:
 
-1. **Real code ships.** Headlong stops producing diary entries that go nowhere and
+1. **Real code ships.** Librarian stops producing diary entries that go nowhere and
    starts producing tested changes that land in the repo. (It already found a real
    bug on its own: the mind-log web page crashes on an iPhone because it draws a
    thousand items at once. With this, it fixes that — and the fix stays fixed.)
-2. **Headlong gets better over time,** because it can reliably improve its own code
+2. **Librarian gets better over time,** because it can reliably improve its own code
    and tidy its own memory instead of losing the thread every time it tries.
 3. **We learn how to let a program safely improve itself** — its code and its
    memory. That is the real question underneath all of this, and nobody has a
@@ -136,9 +136,9 @@ If none of those happen, the experiment failed — which is also worth knowing.
   code could lose the identity. → Two rules below keep every change reversible:
   never erase history, and never keep a change that fails a check.
 - **The two just start agreeing** (this is "collapse" from above). If the coding
-  agent never pushes back and Headlong never changes its mind, you have a rubber
+  agent never pushes back and Librarian never changes its mind, you have a rubber
   stamp, not a partner. → Measure how often the coding agent actually changes
-  Headlong's decision; near-zero means it's broken.
+  Librarian's decision; near-zero means it's broken.
 - **It ships something broken.** → Nothing is kept unless it passes a check
   (tests, or at minimum "it runs").
 
@@ -153,16 +153,16 @@ Not open questions — you don't start without a number.
 
 ## How we'll know it worked (the exams)
 
-- **Mid-term (a few days in):** at least one idea Headlong came up with on its own
+- **Mid-term (a few days in):** at least one idea Librarian came up with on its own
   gets built by the coding agent, passes a check, and lands — *and* the coding
-  agent has changed Headlong's mind on at least one decision (the push-back is
+  agent has changed Librarian's mind on at least one decision (the push-back is
   real, not decorative).
 - **Final (end of the first run):** count the real, tested changes that landed
-  from Headlong's own ideas; run the ablation — Headlong alone vs. the pair on the
+  from Librarian's own ideas; run the ablation — Librarian alone vs. the pair on the
   same task — and show the pair produced more lasting work; and confirm nothing was
   lost: no erased memory, no broken code left behind.
 - **The single number to watch is the "changed-its-mind" rate** (the flip rate):
-  how often the coding agent's objection actually flips Headlong's decision. It is
+  how often the coding agent's objection actually flips Librarian's decision. It is
   the difference between a partnership and a rubber stamp, and it is easy to
   measure. Treat it as the pair's headline metric, not just a guardrail.
 
@@ -173,19 +173,19 @@ Four rules do the work.
 **1. Who decides what.** Split each decision by who is the right one to make it —
 this follows the temperature/horizon split above:
 
-- *What to work on* (the goal, the direction) → **Headlong decides.** It is the
+- *What to work on* (the goal, the direction) → **Librarian decides.** It is the
   one that runs forever and lives with the goal; the coding agent forgets
   everything after each task. Authority should track who bears the consequences
   and persists. Let the thing with no memory pick the goals and you have thrown
   away the point.
 - *How to do it* (the approach) → **the coding agent leads.** It is the one that
-  knows what actually works in a repo; this is where Headlong overriding it goes
+  knows what actually works in a repo; this is where Librarian overriding it goes
   wrong.
 - *Whether it's good enough to keep* → **a check decides, not either program** —
   tests pass, or at least it runs. "Stay on the rails" lives here, in the check,
   not in a chain of command.
 
-Plus one condition: **Headlong has to actually change its mind sometimes.** If it
+Plus one condition: **Librarian has to actually change its mind sometimes.** If it
 overrules the coding agent every time, the partnership is fake — which is exactly
 what the flip rate measures. And note this is why the volatile partner can safely
 hold the goals: its instability is contained by the check, not by taking away its
@@ -194,23 +194,23 @@ reality.
 
 **2. Fixing itself — two cases, guarded differently.** This is the part that makes
 the pair more than a task-runner, and the part to be careful with. Whoever can
-edit Headlong's own code and memory holds a *deeper* power than whoever picks the
+edit Librarian's own code and memory holds a *deeper* power than whoever picks the
 goals — you can rewrite the goal-picker itself — so these edits are governed
 tightly.
 
-- *Headlong asks to be changed (the growth loop).* Headlong decides "I should fix
+- *Librarian asks to be changed (the growth loop).* Librarian decides "I should fix
   my own X," hands it to the coding agent once, and the coding agent finishes it.
-  This is the normal way Headlong improves, and it fixes its worst habit directly:
+  This is the normal way Librarian improves, and it fixes its worst habit directly:
   it no longer has to hold a task in its head across fifty wake-ups — it kicks it
-  off once and the reliable partner sees it through. Headlong stays the author;
+  off once and the reliable partner sees it through. Librarian stays the author;
   the coding agent is the follow-through it lacks.
-- *The coding agent steps in uninvited (the rescue).* When Headlong is too broken
+- *The coding agent steps in uninvited (the rescue).* When Librarian is too broken
   to even ask — stuck doing nothing for an hour, looping — a watcher can reach in
   and fix it. This is more powerful and more dangerous (nobody asked, and it
   inverts who's in charge), so it is held to the strictest checks and used only
   for clear breakage.
 
-**3. Never destroy the past.** Headlong's memory is a diary you only ever add to —
+**3. Never destroy the past.** Librarian's memory is a diary you only ever add to —
 you never erase or rewrite an entry. Want a short summary of a hundred boring
 entries? Write the summary as a *new* entry that points back at them; the
 originals stay. This is the standard way reliable systems keep history (an
@@ -218,8 +218,8 @@ append-only log with derived summaries, the way databases keep a write-ahead log
 and lineage), and it makes every "memory change" safe: you can always see what
 really happened. This settles the hardest question from earlier drafts — "is the
 memory sacred?" — with a yes: **add, never rewrite.** It is also the line between
-a *collaborator that helps Headlong become itself* and a *controller that can
-author what Headlong is*.
+a *collaborator that helps Librarian become itself* and a *controller that can
+author what Librarian is*.
 
 **4. How hard the check is depends on how reversible the change is.** A change
 that is easy to undo (a sandboxed edit you can roll back) → let it through and
@@ -234,10 +234,10 @@ The two we have behave differently — opposite profiles — and the difference
 decides which job each is good for:
 
 - **Codex** — you invoke it, it does one task, it returns. A bounded executor.
-  Good for "Headlong asks to be changed": fire it, get the finished result.
+  Good for "Librarian asks to be changed": fire it, get the finished result.
 - **Hermes** — already runs on this machine on its own, all the time. A persistent
   overseer. Good for "step in uninvited": it is the watcher that can notice
-  Headlong is stuck and reach in.
+  Librarian is stuck and reach in.
 
 The backend you plug in is not just an implementation detail — because these have
 opposite profiles, it changes what kind of pairing you get. So use both, each for
@@ -250,20 +250,20 @@ This rides on what already exists:
 - Identities already keep separate diaries, memories, and chat destinations.
 - The diary already records everything; a coding-agent turn is just another entry,
   tagged so you can find it later.
-- Headlong already knows how to hand off bounded work (a "sub-run"); the
+- Librarian already knows how to hand off bounded work (a "sub-run"); the
   coding-agent call is one of those with a backend flag, not a new system.
-- Headlong talking to a coding agent already happens on this machine. This is the
-  next step: Headlong *using* one, on purpose.
+- Librarian talking to a coding agent already happens on this machine. This is the
+  next step: Librarian *using* one, on purpose.
 
 The one new piece is a small, boring command that runs a coding agent and writes
-its transcript into Headlong's diary as a recorded fact — never silently as
-Headlong's own thought:
+its transcript into Librarian's diary as a recorded fact — never silently as
+Librarian's own thought:
 
 ```
 coding-agent <codex|hermes|...> --workdir <dir> --task <file> --out <dir>
 ```
 
-**Non-goals:** don't replace Headlong's thinking with the coding agent; don't
+**Non-goals:** don't replace Librarian's thinking with the coding agent; don't
 touch the live message-handling code; don't make this a contest with a winner.
 
 ## The plan
@@ -272,17 +272,17 @@ Small first. Prove it once before doing it four times.
 
 **Phase 1 — one pair, one real improvement (about a week).** Build the command
 above with one coding agent (Codex, because we've already used it) and one
-Headlong identity. Wire the loop: Headlong proposes, the coding agent builds and
+Librarian identity. Wire the loop: Librarian proposes, the coding agent builds and
 checks, only passing changes land, every step recorded. *Pass the exam:*
-Headlong's own idea (say, the iPhone mind-log fix it already found) gets built,
-passes a check, and lands — and Headlong also declined a bad change while the
+Librarian's own idea (say, the iPhone mind-log fix it already found) gets built,
+passes a check, and lands — and Librarian also declined a bad change while the
 check blocked a broken one.
 
 **Phase 2 — the uninvited fix.** Add Hermes as the watcher that can step in when
-Headlong is stuck, held to the strictest checks and the never-erase rule.
+Librarian is stuck, held to the strictest checks and the never-erase rule.
 
 **Later — a fleet of pairs.** Once one pair works, the same setup generalizes:
-run `Headlong × <each other coding agent>` and see what each is good at — which
+run `Librarian × <each other coding agent>` and see what each is good at — which
 one leaps, which one tidies. Each backend sits at a different temperature, so each
 gives a different flavor of collaboration, and running several against the same
 problem teaches us what each uniquely contributes. That is where the earlier "four

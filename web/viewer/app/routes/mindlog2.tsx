@@ -11,7 +11,7 @@ import { useMindlog } from "~/lib/use-mindlog";
 import { cn } from "~/lib/utils";
 
 export function meta() {
-  return [{ title: "Headlong · mind log v2" }];
+  return [{ title: "Librarian · mind log v2" }];
 }
 
 /** Presentation stream: newest first, so a calm page with no scroll chasing. */
@@ -208,7 +208,7 @@ export default function Mindlog2Page() {
       )}
     >
       <header className="flex items-center gap-4">
-        <span className="text-2xl font-bold tracking-tight text-white">headlong</span>
+        <span className="text-2xl font-bold tracking-tight text-white">librarian</span>
         <div className="ml-auto flex items-center gap-3">
           <span className="font-mono text-lg text-zinc-300">{displayName}</span>
           <StatusPill identityId={identityId} />

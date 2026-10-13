@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from helpers import StoreCase
-from headlong_librarian import db, exchange, model
+from librarian import db, exchange, model
 
 
 class ExportImportTest(StoreCase):
@@ -115,7 +115,7 @@ class ExportImportTest(StoreCase):
 
 class StatsEvalTest(StoreCase):
     def test_stats_shape_and_precision(self):
-        from headlong_librarian import pack
+        from librarian import pack
 
         a = self.skill("eigen trick", ["pkg:colcon"], project="p-1")
         b = self.skill("unused trick about colcon paths", ["pkg:colcon"], project="p-1")

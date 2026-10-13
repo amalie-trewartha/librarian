@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (bin/librarian-env).
+for _le in "$(dirname "${BASH_SOURCE[0]}")/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/bin/librarian-env"; do
+    # shellcheck source=/dev/null
+    if [[ -f "$_le" ]]; then . "$_le"; break; fi
+done; unset _le
+
 set -euo pipefail
 
 # shellm-explore — Explore and visualize shellm run trees
@@ -24,8 +30,8 @@ fi
 # Argument parsing
 # ---------------------------------------------------------------------------
 
-# State home: HEADLONG_HOME/SHELLM_HOME if set; else ~/.headlong.
-_explore_home="${HEADLONG_HOME:-${SHELLM_HOME:-$HOME/.headlong}}"
+# State home: LIBRARIAN_HOME/SHELLM_HOME if set; else ~/.librarian.
+_explore_home="${LIBRARIAN_HOME:-${SHELLM_HOME:-$HOME/.librarian}}"
 TRAJ_DIR="${SHELLM_TRAJ_DIR:-${TRAJ_DIR:-$_explore_home/trajectories}}"
 RUN_ID=""
 REPORT=0

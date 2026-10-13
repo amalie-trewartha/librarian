@@ -23,7 +23,7 @@ class Config:
     thread_followups: bool
     # How many messages above a first @mention to prepend. 0 disables.
     thread_join_backfill: int = 20
-    # Peer hearing: bot user ids of other Headlong personas whose Slack
+    # Peer hearing: bot user ids of other Librarian personas whose Slack
     # posts may reach this mind. Empty (the default) keeps the old rule
     # that every bot post is dropped. See design/peer_hearing.md.
     peer_bot_users: frozenset[str] = frozenset()
@@ -55,15 +55,15 @@ def _default_identity(serve_root: Path) -> str:
             # that creates a second identity instead of fixing the link.
             if not (serve_root / base / name).is_dir():
                 raise SystemExit(
-                    f"headlong-slack-bridge: the default identity link {link} "
+                    f"librarian-slack-bridge: the default identity link {link} "
                     f"points at '{name}', which is not an identity under "
                     f"{serve_root / base}. Repoint it with: identity default <name>"
                 )
             return name
     raise SystemExit(
-        "headlong-slack-bridge: no identity given and no default set "
+        "librarian-slack-bridge: no identity given and no default set "
         f"under {serve_root} (looked for .identities/default and "
-        "identities/default). Set HEADLONG_SLACK_IDENTITY, or point the "
+        "identities/default). Set LIBRARIAN_SLACK_IDENTITY, or point the "
         "default at one with: identity default <name>"
     )
 
@@ -74,7 +74,7 @@ def _find_identity_dir(serve_root: Path, name: str) -> Path:
         if (candidate / "info.txt").is_file():
             return candidate
     raise SystemExit(
-        f"headlong-slack-bridge: identity '{name}' not found under {serve_root} "
+        f"librarian-slack-bridge: identity '{name}' not found under {serve_root} "
         "(looked in .identities/ and identities/). Create it with: identity new "
         + name
     )
@@ -87,18 +87,20 @@ def load(serve_root: Path) -> Config:
     app_token = os.environ.get("SLACK_APP_TOKEN") or os.environ.get("SLACK_CLI_XAPP", "")
     if not bot_token or not app_token:
         raise SystemExit(
-            "headlong-slack-bridge: SLACK_BOT_TOKEN and SLACK_APP_TOKEN are required"
+            "librarian-slack-bridge: SLACK_BOT_TOKEN and SLACK_APP_TOKEN are required"
         )
-    # HEADLONG_* is canonical; SHELLM_* accepted as a legacy fallback until the
+    # LIBRARIAN_* is canonical; SHELLM_* accepted as a legacy fallback until the
     # deployed boxes migrate their env files.
     identity = (
-        os.environ.get("HEADLONG_SLACK_IDENTITY")
+        os.environ.get("LIBRARIAN_SLACK_IDENTITY")
+        or os.environ.get("HEADLONG_SLACK_IDENTITY")
         or os.environ.get("SHELLM_SLACK_IDENTITY")
         or _default_identity(serve_root)
     )
     identity_dir = _find_identity_dir(serve_root, identity)
     state_dir = Path(
-        os.environ.get("HEADLONG_SLACK_STATE_DIR")
+        os.environ.get("LIBRARIAN_SLACK_STATE_DIR")
+        or os.environ.get("HEADLONG_SLACK_STATE_DIR")
         or os.environ.get("SHELLM_SLACK_STATE_DIR")
         or identity_dir / "run" / "slack-bridge"
     )
@@ -110,7 +112,8 @@ def load(serve_root: Path) -> Config:
         bot_token=bot_token,
         app_token=app_token,
         web_url=(
-            os.environ.get("HEADLONG_WEB_URL")
+            os.environ.get("LIBRARIAN_WEB_URL")
+            or os.environ.get("HEADLONG_WEB_URL")
             or os.environ.get("SHELLM_WEB_URL")
             or "http://127.0.0.1:8080"
         ).rstrip("/"),

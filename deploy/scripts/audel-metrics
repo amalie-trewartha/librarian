@@ -71,7 +71,7 @@ if [[ "$cached" -eq 0 ]]; then
 #     as many calls as the stamps that day (a complete ledger is a superset;
 #     model on each line), else from the reasoning-step stamps (model taken
 #     from the run's shellm-run row via run_id). Same rule as
-#     web/src/headlong_web/usage.py.
+#     web/src/librarian_web/usage.py.
 #   - related memories (design/related_memories.md): per day, wakes whose
 #     prompt carried a "Related memories" section, names shown, distinct
 #     names, repeats from the previous wake, names the run then opened

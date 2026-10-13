@@ -47,7 +47,7 @@ exec /bin/sleep "$@"
                                     "ROOT_TRAJ_", "_LLM_"))}
         env.update(PATH=f'{root / "bin"}:{repo / "bin"}:{os.environ["PATH"]}',
                    MEM_DIR=str(root / "mem"), TMPDIR=str(root / "tmp"),
-                   HEADLONG_HOME=str(root / "home"), LLM_PROVIDER="adapter",
+                   LIBRARIAN_HOME=str(root / "home"), LLM_PROVIDER="adapter",
                    LLM_ADAPTER=str(adapter), LLM_MODEL="test-model",
                    LLM_MAX_TIME=inner, LLM_RETRIES="0",
                    MEM_SEARCH_TIMEOUT_S=outer, MEM_SEARCH_HEARTBEAT_S=hb,

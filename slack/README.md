@@ -1,6 +1,6 @@
-# headlong-slack-bridge
+# librarian-slack-bridge
 
-A Slack Socket Mode bridge that connects one Headlong identity to a Slack
+A Slack Socket Mode bridge that connects one Librarian identity to a Slack
 workspace. Org members DM the bot or @mention it in channels; messages land
 in the identity's mind log as `message` steps, and the identity's replies
 are posted back to the right conversation.
@@ -8,7 +8,7 @@ are posted back to the right conversation.
 ## How it works
 
 ```
-Slack <=(Socket Mode websocket)=> headlong-slack-bridge
+Slack <=(Socket Mode websocket)=> librarian-slack-bridge
     inbound:  event -> from_name "slack-<user>-<channel>[-<thread_ts>]"
               -> POST <web>/api/identities/<id>/chat
               first @mention in an existing thread prepends a capped
@@ -32,35 +32,35 @@ format.
 ```bash
 export SLACK_BOT_TOKEN=xoxb-...     # see "Slack app lifecycle" below
 export SLACK_APP_TOKEN=xapp-...
-export HEADLONG_SLACK_IDENTITY=ada    # optional; defaults to the `default`
+export LIBRARIAN_SLACK_IDENTITY=ada    # optional; defaults to the `default`
                                       # identity link (legacy SHELLM_SLACK_IDENTITY
                                       # still honored)
-tools/headlong-slack-bridge [ROOT]      # ROOT = serve root, default repo root
+tools/librarian-slack-bridge [ROOT]      # ROOT = serve root, default repo root
 ```
 
-The launcher loads `<checkout>/.env` and then `$HEADLONG_HOME/.env` (default
-`~/.headlong/.env`), the same two files `persona` and `llm` read, so the
+The launcher loads `<checkout>/.env` and then `$LIBRARIAN_HOME/.env` (default
+`~/.librarian/.env`), the same two files `persona` and `llm` read, so the
 tokens can live in an env file instead of the calling shell. Anything already
 exported wins, which is what keeps systemd's `EnvironmentFile` and `slack run`
 in charge where they are used.
 
 The identity must exist (`identity new <name>`) with a running dispatcher
-(`thinkers start monolith responder`), and headlong-web must be serving the same root
-(default `http://127.0.0.1:8080`, override with `HEADLONG_WEB_URL`; legacy `SHELLM_WEB_URL` still honored).
+(`thinkers start monolith responder`), and librarian-web must be serving the same root
+(default `http://127.0.0.1:8080`, override with `LIBRARIAN_WEB_URL`; legacy `SHELLM_WEB_URL` still honored).
 
 Socket Mode is outbound-only: no public endpoint, works behind NAT, and
 keeps the zero-ingress deploy design. On a deployed box both the bridge and
-the web server run as systemd units (`deploy/headlong-slack-bridge.service`,
-`deploy/headlong-web.service`); `deploy/terraform-slack/` is the stack Laude
+the web server run as systemd units (`deploy/librarian-slack-bridge.service`,
+`deploy/librarian-web.service`); `deploy/terraform-slack/` is the stack Laude
 runs its own Slack-connected agent on.
 
-Other settings: `HEADLONG_SLACK_STATE_DIR`, legacy `SHELLM_SLACK_STATE_DIR`
+Other settings: `LIBRARIAN_SLACK_STATE_DIR`, legacy `SHELLM_SLACK_STATE_DIR`
 (cursor + thread state, default
 `<identity>/run/slack-bridge/`), `SLACK_THREAD_FOLLOWUPS=1` (answer
 un-mentioned replies in threads the bot is already part of),
 `SLACK_THREAD_JOIN_BACKFILL` (how many closest prior messages above a first @mention
 to prepend; default 20, 0 disables, max 50), and peer hearing:
-`SLACK_PEER_BOT_USERS` (comma-separated bot user ids of other Headlong
+`SLACK_PEER_BOT_USERS` (comma-separated bot user ids of other Librarian
 personas whose posts may reach this mind; empty keeps every bot post
 dropped), `SLACK_PEER_MAX_TURNS` (peer messages forwarded in one thread in a
 row with no person speaking; default 4) and `SLACK_PEER_HOURLY_CAP` (peer

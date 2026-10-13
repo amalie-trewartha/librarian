@@ -2,8 +2,8 @@
 # tests/test_thinker_env_fallback.sh — a thinker finds the API key where the
 # installer actually wrote it.
 #
-# tools/headlong-init writes the provider key and SHELLM_MODEL to
-# $HEADLONG_HOME/.env and nowhere else. The thinker step scripts resolve those
+# tools/librarian-init writes the provider key and SHELLM_MODEL to
+# $LIBRARIAN_HOME/.env and nowhere else. The thinker step scripts resolve those
 # BEFORE calling llm/shellm (which load .env too late to influence the -m
 # flag), so _require_env has to read that file. It cannot lean on llm to do it
 # instead: both launchers export SHELLM_HOME as <identity>/.shellm
@@ -26,7 +26,7 @@ bad() { fail=$((fail+1)); printf 'FAIL %s%s\n' "$1" "${2:+ — $2}"; }
 
 # probe <name> <expected-key-value> <setup-fn> -- runs _require_env in a fresh
 # HOME laid out by <setup-fn>. The subshell clears the env vars under test so
-# an ambient key or HEADLONG_HOME on the developer's machine cannot make a case
+# an ambient key or LIBRARIAN_HOME on the developer's machine cannot make a case
 # pass or fail for the wrong reason (and cannot print a real key on failure).
 probe() {
     local name="$1" want="$2" setup="$3"
@@ -35,7 +35,7 @@ probe() {
         H=$(mktemp -d)
         trap 'rm -rf "$H"' EXIT
         export HOME="$H"
-        unset OPENROUTER_API_KEY HEADLONG_HOME SHELLM_HOME
+        unset OPENROUTER_API_KEY LIBRARIAN_HOME SHELLM_HOME
         mkdir -p "$H/id/memories" "$H/id/skills" "$H/id/kernel" "$H/id/trajectories" "$H/wd"
         printf 'name=probe\n' > "$H/id/info.txt"
         "$setup" "$H"
@@ -54,29 +54,29 @@ probe() {
 }
 
 # Each writes the key into one of the places the loader consults.
-setup_headlong() { mkdir -p "$1/.headlong"; printf 'OPENROUTER_API_KEY=from-headlong\n' > "$1/.headlong/.env"; }
+setup_librarian() { mkdir -p "$1/.librarian"; printf 'OPENROUTER_API_KEY=from-librarian\n' > "$1/.librarian/.env"; }
 setup_legacy()   { mkdir -p "$1/.shellm";   printf 'OPENROUTER_API_KEY=from-legacy\n'   > "$1/.shellm/.env"; }
-setup_both()     { setup_headlong "$1"; setup_legacy "$1"; }
+setup_both()     { setup_librarian "$1"; setup_legacy "$1"; }
 # Also write the state-home and legacy files, so "identity wins over both"
 # proves precedence rather than merely that the identity file is read.
 setup_identity() { setup_both "$1"; printf 'OPENROUTER_API_KEY=from-identity\n' > "$1/id/.env"; }
 setup_none()     { :; }
 
-probe "state home .env is read"                 from-headlong setup_headlong
+probe "state home .env is read"                 from-librarian setup_librarian
 probe "legacy ~/.shellm/.env still read"        from-legacy   setup_legacy
-probe "state home wins over the legacy path"    from-headlong setup_both
+probe "state home wins over the legacy path"    from-librarian setup_both
 probe "identity .env still wins over both"      from-identity setup_identity
 probe "no env file leaves the key unset"        '<unset>'     setup_none
 
-# HEADLONG_HOME points the lookup somewhere else entirely.
+# LIBRARIAN_HOME points the lookup somewhere else entirely.
 out=$(
     H=$(mktemp -d); trap 'rm -rf "$H"' EXIT; export HOME="$H"
     unset OPENROUTER_API_KEY SHELLM_HOME
-    mkdir -p "$H/id" "$H/elsewhere" "$H/.headlong" "$H/wd"
+    mkdir -p "$H/id" "$H/elsewhere" "$H/.librarian" "$H/wd"
     printf 'name=probe\n' > "$H/id/info.txt"
-    printf 'OPENROUTER_API_KEY=from-default\n' > "$H/.headlong/.env"
+    printf 'OPENROUTER_API_KEY=from-default\n' > "$H/.librarian/.env"
     printf 'OPENROUTER_API_KEY=from-override\n' > "$H/elsewhere/.env"
-    export HEADLONG_HOME="$H/elsewhere"
+    export LIBRARIAN_HOME="$H/elsewhere"
     export IDENTITY_DIR="$H/id" TRAJ_DIR="$H/id" TRAJ_ID=t1 MEM_DIR="$H/id"
     cd "$H/wd" || exit 1
     # shellcheck disable=SC1090  # the library under test
@@ -84,16 +84,16 @@ out=$(
     _require_env >/dev/null 2>&1
     printf '%s' "${OPENROUTER_API_KEY:-<unset>}"
 )
-[[ "$out" == from-override ]] && ok "HEADLONG_HOME overrides the default state home" \
-    || bad "HEADLONG_HOME overrides the default state home" "got $out"
+[[ "$out" == from-override ]] && ok "LIBRARIAN_HOME overrides the default state home" \
+    || bad "LIBRARIAN_HOME overrides the default state home" "got $out"
 
 # The dispatcher's own environment must always beat a file.
 out=$(
     H=$(mktemp -d); trap 'rm -rf "$H"' EXIT; export HOME="$H"
-    unset HEADLONG_HOME SHELLM_HOME
-    mkdir -p "$H/id" "$H/.headlong" "$H/wd"
+    unset LIBRARIAN_HOME SHELLM_HOME
+    mkdir -p "$H/id" "$H/.librarian" "$H/wd"
     printf 'name=probe\n' > "$H/id/info.txt"
-    printf 'OPENROUTER_API_KEY=from-file\n' > "$H/.headlong/.env"
+    printf 'OPENROUTER_API_KEY=from-file\n' > "$H/.librarian/.env"
     export OPENROUTER_API_KEY=from-environment
     export IDENTITY_DIR="$H/id" TRAJ_DIR="$H/id" TRAJ_ID=t1 MEM_DIR="$H/id"
     cd "$H/wd" || exit 1
@@ -109,10 +109,10 @@ out=$(
 # still runs without it inside Docker.
 out=$(
     H=$(mktemp -d); trap 'rm -rf "$H"' EXIT; export HOME="$H"
-    unset OPENROUTER_API_KEY HEADLONG_HOME SHELLM_HOME
-    mkdir -p "$H/id/memories" "$H/id/skills" "$H/id/kernel" "$H/id/trajectories" "$H/.headlong" "$H/wd"
+    unset OPENROUTER_API_KEY LIBRARIAN_HOME SHELLM_HOME
+    mkdir -p "$H/id/memories" "$H/id/skills" "$H/id/kernel" "$H/id/trajectories" "$H/.librarian" "$H/wd"
     printf 'name=probe\n' > "$H/id/info.txt"
-    printf 'OPENROUTER_API_KEY=from-headlong\n' > "$H/.headlong/.env"
+    printf 'OPENROUTER_API_KEY=from-librarian\n' > "$H/.librarian/.env"
     export IDENTITY_DIR="$H/id" TRAJ_DIR="$H/id/trajectories" TRAJ_ID=t1 MEM_DIR="$H/id/memories"
     cd "$H/wd" || exit 1
     # shellcheck disable=SC1090  # the library under test
@@ -131,7 +131,7 @@ esac
 out=$(
     H=$(mktemp -d); trap 'rm -rf "$H"' EXIT; export HOME="$H"
     unset ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY \
-          OPENCODE_API_KEY LLM_API_KEY HEADLONG_HOME SHELLM_HOME
+          OPENCODE_API_KEY LLM_API_KEY LIBRARIAN_HOME SHELLM_HOME
     mkdir -p "$H/id/memories" "$H/id/skills" "$H/id/kernel" "$H/id/trajectories" "$H/wd" "$H/bin"
     printf 'name=probe\n' > "$H/id/info.txt"
     cat > "$H/bin/llm" <<'EOF'
@@ -171,7 +171,7 @@ fi
 # flag assembly runs in process substitution.
 out=$(
     H=$(mktemp -d); trap 'rm -rf "$H"' EXIT; export HOME="$H"
-    unset HEADLONG_HOME SHELLM_HOME
+    unset LIBRARIAN_HOME SHELLM_HOME
     mkdir -p "$H/id/memories" "$H/id/skills/probe" "$H/id/kernel" "$H/id/trajectories" "$H/wd"
     printf 'name=probe\n' > "$H/id/info.txt"
     cat > "$H/id/skills/probe/SKILL.md" <<'EOF'
@@ -221,7 +221,7 @@ out=$(
     H=$(mktemp -d)
     trap 'rm -rf "$H"' EXIT
     export HOME="$H"
-    unset HEADLONG_HOME SHELLM_HOME ZZ_UNSET_SKILL_VAR
+    unset LIBRARIAN_HOME SHELLM_HOME ZZ_UNSET_SKILL_VAR
     mkdir -p "$H/id/skills/probe" "$H/id/kernel"
     cat > "$H/id/skills/probe/SKILL.md" <<'EOF'
 ---

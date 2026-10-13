@@ -274,7 +274,7 @@ repeated-line guard would be the next net if the timeouts persist.
 
 2026-09-14 18:34Z: a wake answered a Telegram question about identity
 creation by creating one on the box, and inside the run it started two
-`headlong-web` servers with `nohup ... &`. The run finished normally and
+`librarian-web` servers with `nohup ... &`. The run finished normally and
 wrote its final step at 18:45:37Z. The monolith step then sat in `read()`
 for six hours. The dispatcher was alive and ticking, every unit reported
 active, and Audel's trajectory did not grow until an operator killed the
@@ -312,14 +312,14 @@ fine.
    in the dispatcher log naming what else was alive in its group. A step
    with no final, or a final from a run it did not launch, is left alone.
 3. **Silence alert** (`deploy/thinkers-silence-alert.sh`,
-   `headlong-thinkers-silence@<identity>.timer`, every 5 min). If the
+   `librarian-thinkers-silence@<identity>.timer`, every 5 min). If the
    dispatcher pid is alive, no deliberate stop is marked, and the root
-   trajectory has not been touched for `HEADLONG_SILENCE_SECS` (default
+   trajectory has not been touched for `LIBRARIAN_SILENCE_SECS` (default
    1800s, six times the 300s backoff cap), post one "gone quiet" message
    to the alert channel and write `run/silent_since`; post "is back" and
    drop the marker when steps resume. A dead dispatcher is the death
    alert's job and posts nothing here. The timer is armed by
-   `headlong-thinkersctl start|restart` and by `deploy/update.sh` for
+   `librarian-thinkersctl start|restart` and by `deploy/update.sh` for
    every identity with a thinkers unit.
 
 Tests: `tests/test_monolith_run_capture.sh` (a stub run leaves a

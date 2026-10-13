@@ -44,7 +44,7 @@ function pollForNewBuild(oldCommit: string, timeoutMs = 5 * 60 * 1000) {
   const started = Date.now();
   const tick = async () => {
     if (Date.now() - started > timeoutMs) {
-      toast.error("Update timed out — check `journalctl -u headlong-web` on the box");
+      toast.error("Update timed out — check `journalctl -u librarian-web` on the box");
       return;
     }
     try {
@@ -162,13 +162,13 @@ function LlmHealthChip() {
                         <a className="underline" href={LAST_CALL_HINT[last.provider]} target="_blank" rel="noreferrer">
                           {LAST_CALL_HINT[last.provider]}
                         </a>
-                        , or put a new key in ~/.headlong/.env, then restart the mind.
+                        , or put a new key in ~/.librarian/.env, then restart the mind.
                       </>
                     )}
                   </div>
                 )}
                 {last.kind === "auth" && (
-                  <div className="mt-1 text-[11px]">Put a working key in ~/.headlong/.env, then restart the mind.</div>
+                  <div className="mt-1 text-[11px]">Put a working key in ~/.librarian/.env, then restart the mind.</div>
                 )}
                 {last.ts && <div className="mt-1 text-[10px] text-muted-foreground">last tried {last.ts}</div>}
               </div>
@@ -307,7 +307,7 @@ export function Navbar() {
     <header className="sticky top-0 z-50 border-b border-border bg-background">
       <div className="flex h-12 items-center justify-between px-4">
         <Link to="/" className="font-mono text-sm font-semibold tracking-tight">
-          headlong
+          librarian
         </Link>
         <div className="flex items-center gap-3">
           <LlmHealthChip />

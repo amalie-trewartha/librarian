@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (bin/librarian-env).
+for _le in "$(dirname "${BASH_SOURCE[0]}")/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/bin/librarian-env"; do
+    # shellcheck source=/dev/null
+    if [[ -f "$_le" ]]; then . "$_le"; break; fi
+done; unset _le
+
 set -euo pipefail
 
-# identity — Standalone identity management CLI for headlong
+# identity — Standalone identity management CLI for librarian
 # Manages identities (create, list, default, delete, inspect).
 # Each identity has its own memories, skills, kernel, and trajectory.
 
@@ -154,16 +160,16 @@ _ensure_thinkers() {
     local script_dir
     script_dir="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
 
-    # Source: repo thinkers/ or installed ~/.headlong-thinkers/
+    # Source: repo thinkers/ or installed ~/.librarian-thinkers/
     local bundled_dir="$script_dir/../thinkers"
     if [[ ! -d "$bundled_dir" ]]; then
-        bundled_dir="$HOME/.headlong-thinkers"
+        bundled_dir="${LIBRARIAN_THINKERS_TEMPLATES:-$HOME/.librarian-thinkers}"
     fi
     [[ -d "$bundled_dir" ]] || return 0
 
     # Check if install was done with --symlinks
     local use_symlinks=0
-    [[ -f "$HOME/.headlong-thinkers/.use-symlinks" ]] && use_symlinks=1
+    [[ -f "${LIBRARIAN_THINKERS_TEMPLATES:-$HOME/.librarian-thinkers}/.use-symlinks" ]] && use_symlinks=1
 
     mkdir -p "$thinkers_dir"
 
@@ -198,7 +204,7 @@ _ensure_thinkers() {
         if [[ -d "$_rdest" && ! -d "$bundled_dir/$_retired" \
               && -f "$_rdest/step" && -f "$_rdest/subscriptions.jsonl" \
               && ! -e "$_rdest/disabled" ]]; then
-            printf 'retired by Headlong upgrade %s — this thinker was consolidated into monolith/responder; delete this file to re-enable\n' \
+            printf 'retired by Librarian upgrade %s — this thinker was consolidated into monolith/responder; delete this file to re-enable\n' \
                 "$(date +%Y-%m-%d)" > "$_rdest/disabled"
             echo "Retired bundled thinker '$_retired' (disabled marker written; dir kept)" >&2
         fi
@@ -1572,9 +1578,9 @@ Environment:
   IDENTITY_DIR   Override identities directory (default: .identities)
 
 Activation:
-  identity shell headlong               # start a subshell with env vars set
+  identity shell librarian               # start a subshell with env vars set
   exit                                   # leave the subshell
-  source .identities/headlong/activate   # activate in current shell (no subshell)
+  source .identities/librarian/activate   # activate in current shell (no subshell)
   deactivate_identity                    # undo (when using source activate)
 EOF
     exit 0

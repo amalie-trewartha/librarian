@@ -1,6 +1,6 @@
 # Optional OpenCode coding delegation
 
-This package is an opt-in experiment. A default Headlong install has no
+This package is an opt-in experiment. A default Librarian install has no
 OpenCode dependency, wrapper, or delegation instructions. Installation copies
 this package into one existing identity, disabled; enablement registers its
 skill for that identity only. No global command, dependency installer, generic
@@ -8,9 +8,9 @@ extension manager, or default prompt change is involved.
 
 ## Local setup and lifecycle
 
-Use a dedicated local test identity created by Headlong. This initial package
+Use a dedicated local test identity created by Librarian. This initial package
 supports local execution only, with Python 3.8+, Bash 3.2+, Git, jq, Perl, and
-Headlong's `traj` on PATH. Install OpenCode separately using its
+Librarian's `traj` on PATH. Install OpenCode separately using its
 [CLI documentation](https://opencode.ai/docs/cli/). Configure the dedicated
 identity to use `SHELLM_THINKER_ENV=local` and export that setting in the shell
 where you run these commands. The package never changes containment settings.
@@ -20,8 +20,8 @@ container environment.
 ```bash
 export SHELLM_THINKER_ENV=local
 identity_dir=/absolute/path/to/existing-test-identity
-contrib/opencode/bin/headlong-opencode install --identity "$identity_dir"
-manager="$identity_dir/extensions/opencode/bin/headlong-opencode"
+contrib/opencode/bin/librarian-opencode install --identity "$identity_dir"
+manager="$identity_dir/extensions/opencode/bin/librarian-opencode"
 "$manager" status --identity "$identity_dir"
 "$manager" doctor --identity "$identity_dir"
 "$manager" enable --identity "$identity_dir"
@@ -76,7 +76,7 @@ without OpenCode. Neither operation deletes provider credentials, trajectories,
 Git branches, worktrees, transcripts, or patches.
 
 `--out` must be a new/empty directory outside the installed package. By default
-artifacts are retained in a `headlong-coding-agent.*` temporary directory; choose
+artifacts are retained in a `librarian-coding-agent.*` temporary directory; choose
 an explicit durable output directory for evidence you need to keep. Trajectories
 use TRAJ_DIR/TRAJ_ID, or a standalone parent under the output directory. Output
 and trajectory paths inside the package (including symlink aliases) are rejected.
@@ -101,7 +101,7 @@ boundary against an agent able to rewrite its own files or invoke OpenCode itsel
 
 ## Offline validation
 
-From the Headlong checkout, run `contrib/opencode/tests/run.sh`. Tests install
+From the Librarian checkout, run `contrib/opencode/tests/run.sh`. Tests install
 isolated package copies and use scripted executors without credentials or paid
 calls. Core tests invoke this runner explicitly, including on macOS. See the
 [packaging validation record](docs/validation.md) for results and known base-test

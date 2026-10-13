@@ -15,7 +15,7 @@ command -v jq >/dev/null 2>&1 || { echo "FAIL jq not found"; exit 1; }
 
 WORK=$(mktemp -d)
 trap 'cd /; rm -rf "$WORK"' EXIT
-mkdir -p "$WORK/bin" "$WORK/run" "$WORK/home/.headlong"
+mkdir -p "$WORK/bin" "$WORK/run" "$WORK/home/.librarian"
 cat > "$WORK/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 for a in "$@"; do
@@ -31,7 +31,7 @@ printf '{"type":"object","additionalProperties":false,"properties":{"action":{"t
 
 run_llm() {   # [llm args...]
     : > "$PAYLOAD_OUT"
-    ( cd "$WORK/run" && printf 'hi' | env -u LLM_PROVIDER -u SHELLM_HOME HOME="$WORK/home" HEADLONG_HOME="$WORK/home/.headlong" \
+    ( cd "$WORK/run" && printf 'hi' | env -u LLM_PROVIDER -u SHELLM_HOME HOME="$WORK/home" LIBRARIAN_HOME="$WORK/home/.librarian" \
         OPENROUTER_API_KEY="test-key" OPENAI_API_KEY="test-key" ANTHROPIC_API_KEY="test-key" \
         "$REPO/bin/llm" "$@" ) > "$WORK/out" 2> "$WORK/err"
 }

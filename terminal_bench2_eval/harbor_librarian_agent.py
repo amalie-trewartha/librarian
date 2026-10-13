@@ -1,10 +1,10 @@
 """
-Harbor harness for headlong agent.
+Harbor harness for librarian agent.
 
-Headlong is an interactive conversational agent built on top of shellm. It adds
+Librarian is an interactive conversational agent built on top of shellm. It adds
 persona management, memory, and skills on top of shellm's bash execution loop.
 
-This harness invokes `headlong send` and lets headlong's own prompt composition
+This harness invokes `librarian send` and lets librarian's own prompt composition
 handle persona, skills, memory, and conversation history. The harness only
 handles: installing tools in the task container, uploading skills, and
 forwarding the task instruction.
@@ -25,12 +25,12 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
 
-class HeadlongAgent(BaseAgent):
+class LibrarianAgent(BaseAgent):
     """
-    Headlong harness for Harbor.
+    Librarian harness for Harbor.
 
     Uploads the full shellm toolchain into the task container, then invokes
-    `headlong send` with the task instruction. Headlong composes its own system
+    `librarian send` with the task instruction. Librarian composes its own system
     prompt (persona + skills + memory + conversation history).
     """
 
@@ -57,7 +57,7 @@ class HeadlongAgent(BaseAgent):
 
     @staticmethod
     def name() -> str:
-        return "headlong"
+        return "librarian"
 
     def version(self) -> str:
         return "0.2.0"
@@ -66,7 +66,7 @@ class HeadlongAgent(BaseAgent):
     def _find_bin_dir() -> Path:
         from shutil import which
 
-        for name in ("headlong", "shellm"):
+        for name in ("librarian", "shellm"):
             path = which(name)
             if path:
                 p = Path(path).resolve()
@@ -74,12 +74,12 @@ class HeadlongAgent(BaseAgent):
                     return p.parent
         for candidate in ("/usr/local/bin", "/usr/bin"):
             p = Path(candidate)
-            if (p / "headlong").is_file() or (p / "shellm").is_file():
+            if (p / "librarian").is_file() or (p / "shellm").is_file():
                 return p
-        raise FileNotFoundError("Cannot find headlong/shellm bin directory.")
+        raise FileNotFoundError("Cannot find librarian/shellm bin directory.")
 
     async def setup(self, environment: BaseEnvironment) -> None:
-        """Install dependencies and the full shellm/headlong toolchain."""
+        """Install dependencies and the full shellm/librarian toolchain."""
         install_cmd = r"""
 set -e
 export DEBIAN_FRONTEND=noninteractive
@@ -127,9 +127,9 @@ docker version --format '{{.Client.Version}}' >/dev/null
             timeout_sec=600,
         )
 
-        # Upload all shellm/headlong tools
+        # Upload all shellm/librarian tools
         tools = [
-            "shellm", "llm", "headlong", "mem", "skills",
+            "shellm", "llm", "librarian", "mem", "skills",
             "shellm-docker", "shellm-docker-broker", "shellm-explore",
             "context", "glob", "put", "sub", "traj", "view",
         ]
@@ -149,7 +149,7 @@ docker version --format '{{.Client.Version}}' >/dev/null
         await environment.exec(
             command=(
                 "chmod +x /usr/local/bin/shellm /usr/local/bin/llm "
-                "/usr/local/bin/headlong /usr/local/bin/mem /usr/local/bin/skills "
+                "/usr/local/bin/librarian /usr/local/bin/mem /usr/local/bin/skills "
                 "/usr/local/bin/shellm-docker /usr/local/bin/shellm-docker-broker "
                 "/usr/local/bin/shellm-explore /usr/local/bin/context "
                 "/usr/local/bin/glob /usr/local/bin/put /usr/local/bin/sub "
@@ -159,7 +159,7 @@ docker version --format '{{.Client.Version}}' >/dev/null
             user="root",
         )
 
-        # Upload skills so headlong's skill system works at runtime
+        # Upload skills so librarian's skill system works at runtime
         skills_dir = self.host_repo_dir / ".skills"
         if skills_dir.is_dir():
             for skill_dir in skills_dir.iterdir():
@@ -178,8 +178,8 @@ docker version --format '{{.Client.Version}}' >/dev/null
         await environment.exec(
             command=(
                 "set -e; "
-                "headlong --help >/dev/null 2>&1 || "
-                "  { echo 'headlong not runnable'; exit 1; }; "
+                "librarian --help >/dev/null 2>&1 || "
+                "  { echo 'librarian not runnable'; exit 1; }; "
                 "shellm --help >/dev/null 2>&1 || "
                 "  { echo 'shellm not runnable'; exit 1; }; "
                 "echo OK"
@@ -216,24 +216,24 @@ docker version --format '{{.Client.Version}}' >/dev/null
             # in Docker and use local execution (no nested container).
         }
 
-        # Write the task instruction to a file — headlong send reads from
+        # Write the task instruction to a file — librarian send reads from
         # stdin to avoid ARG_MAX limits on the command line.
         prompt_file = self.logs_dir / "prompt.txt"
         prompt_file.write_text(instruction)
         await environment.upload_file(
             source_path=prompt_file,
-            target_path="/tmp/.headlong_prompt",
+            target_path="/tmp/.librarian_prompt",
         )
 
-        # Use headlong send — let headlong compose its own prompt with
+        # Use librarian send — let librarian compose its own prompt with
         # persona, skills, memory, and conversation history.
         cmd = (
             "set -o pipefail; "
             "mkdir -p /logs/agent; "
             "cd /app 2>/dev/null || cd / ; "
-            "headlong send < /tmp/.headlong_prompt "
-            "2>&1 | tee /logs/agent/headlong.log; "
-            "rm -f /tmp/.headlong_prompt"
+            "librarian send < /tmp/.librarian_prompt "
+            "2>&1 | tee /logs/agent/librarian.log; "
+            "rm -f /tmp/.librarian_prompt"
         )
 
         result = await environment.exec(
@@ -244,10 +244,10 @@ docker version --format '{{.Client.Version}}' >/dev/null
         )
 
         try:
-            (self.logs_dir / "headlong.stdout.txt").write_text(result.stdout or "")
-            (self.logs_dir / "headlong.stderr.txt").write_text(result.stderr or "")
-            (self.logs_dir / "headlong.return_code.txt").write_text(
+            (self.logs_dir / "librarian.stdout.txt").write_text(result.stdout or "")
+            (self.logs_dir / "librarian.stderr.txt").write_text(result.stderr or "")
+            (self.logs_dir / "librarian.return_code.txt").write_text(
                 str(result.return_code)
             )
         except Exception as e:
-            self.logger.warning(f"failed to persist headlong logs: {e}")
+            self.logger.warning(f"failed to persist librarian logs: {e}")

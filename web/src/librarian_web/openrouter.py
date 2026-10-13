@@ -18,7 +18,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from headlong_web import envfile
+from librarian_web import envfile
 
 _USER_URL = "https://openrouter.ai/api/v1/models/user"
 _PUBLIC_URL = "https://openrouter.ai/api/v1/models"

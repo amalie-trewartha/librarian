@@ -44,7 +44,7 @@ export PATH="$WORK/toolbin:$PATH"
 export LLM_COUNT="$WORK/count"
 export LLM_SCRIPT="$WORK/script"
 export HOME="$WORK/home"
-export HEADLONG_HOME="$WORK/home/.headlong"
+export LIBRARIAN_HOME="$WORK/home/.librarian"
 export ANTHROPIC_API_KEY="test-key"
 export SHELLM_MODEL="test-model"
 export SHELLM_ENV=local
@@ -80,7 +80,7 @@ fi
 
 # The feedback the model sees names the real cause (output size), not an
 # interactive prompt or a dead sub-run.
-runaway_traj=("$HEADLONG_HOME/trajectories"/*runaway-case/trajectory.jsonl)
+runaway_traj=("$LIBRARIAN_HOME/trajectories"/*runaway-case/trajectory.jsonl)
 if grep -q 'output grew past' "${runaway_traj[@]}" 2>/dev/null; then
     ok "kill feedback names the output-size cause"
 else
@@ -124,7 +124,7 @@ if grep -q 'shellm-watchdog\] wall timeout' "$WORK/err"; then
 else
     bad "endless heartbeat is killed at SHELLM_MAX_EXEC_TIME" "$(tail -3 "$WORK/err")"
 fi
-wall_traj=("$HEADLONG_HOME/trajectories"/*heartbeat-case/trajectory.jsonl)
+wall_traj=("$LIBRARIAN_HOME/trajectories"/*heartbeat-case/trajectory.jsonl)
 if grep -q 'the limit for one block' "${wall_traj[@]}" 2>/dev/null; then
     ok "kill feedback names the wall-clock cause"
 else

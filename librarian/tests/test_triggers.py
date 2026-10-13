@@ -1,7 +1,7 @@
 import unittest
 
 from helpers import StoreCase
-from headlong_librarian import triggers
+from librarian import triggers
 
 
 class SignatureTest(unittest.TestCase):
@@ -72,7 +72,7 @@ class ProgressTest(StoreCase):
         self.assertEqual(res["suggestion"]["memory_ids"], [r])
 
     def test_contradiction_found_marks_disputed(self):
-        from headlong_librarian import model, pack
+        from librarian import model, pack
 
         a = self.skill("eigen via Eigen3_DIR", ["pkg:colcon"], project="p-1", body="Set `Eigen3_DIR=/opt/eigen`; verified 2026-09-01.")
         b = self.skill("eigen via system package", ["pkg:colcon"], project="p-1", body="Run `apt install libeigen3-dev` 3.4; verified 2026-09-02.")

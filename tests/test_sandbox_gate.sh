@@ -4,8 +4,8 @@
 # Usage: tests/test_sandbox_gate.sh
 #
 # Why: the agent writes and runs real shell commands; Docker is the sandbox
-# for them. headlong-init refuses to start an unsandboxed agent without
-# consent (a typed "yes" at a tty, or HEADLONG_UNSANDBOXED=1 without one),
+# for them. librarian-init refuses to start an unsandboxed agent without
+# consent (a typed "yes" at a tty, or LIBRARIAN_UNSANDBOXED=1 without one),
 # and when Docker is present it writes SHELLM_REQUIRE_DOCKER=1 so shellm
 # hard-fails instead of silently falling back to the host if the daemon
 # later dies. Docker is a stub here; no real daemon is touched.
@@ -40,72 +40,72 @@ esac
 STUBEOF
 chmod +x "$STUB/docker"
 
-# A minimal fake checkout: headlong-init only checks that bin/shellm exists
-# under HEADLONG_APP_DIR. Keeping it fake also keeps any real ~/.env or repo
+# A minimal fake checkout: librarian-init only checks that bin/shellm exists
+# under LIBRARIAN_APP_DIR. Keeping it fake also keeps any real ~/.env or repo
 # .env keys out of these runs.
 APP="$WORK/app"; mkdir -p "$APP/bin" "$APP/tools"
 : > "$APP/bin/shellm"
 
-# run_init <home> [VAR=VAL ...] — run headlong-init with no tty, no API keys,
+# run_init <home> [VAR=VAL ...] — run librarian-init with no tty, no API keys,
 # and the docker stub first on PATH. Output (stdout+stderr) to $WORK/out.
 run_init() {
     local home="$1"; shift
     mkdir -p "$home"
     env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u GEMINI_API_KEY -u OPENROUTER_API_KEY \
-        -u HEADLONG_UNSANDBOXED -u HEADLONG_FAKE_DOCKER -u SHELLM_DOCKER_IMAGE -u SHELLM_MODEL \
-        HOME="$home" HEADLONG_HOME="$home/.headlong" HEADLONG_APP_DIR="$APP" \
-        HEADLONG_NO_TTY=1 PATH="$STUB:$PATH" "$@" \
-        bash "$REPO/tools/headlong-init" </dev/null > "$WORK/out" 2>&1
+        -u LIBRARIAN_UNSANDBOXED -u LIBRARIAN_FAKE_DOCKER -u SHELLM_DOCKER_IMAGE -u SHELLM_MODEL \
+        HOME="$home" LIBRARIAN_HOME="$home/.librarian" LIBRARIAN_APP_DIR="$APP" \
+        LIBRARIAN_NO_TTY=1 PATH="$STUB:$PATH" "$@" \
+        bash "$REPO/tools/librarian-init" </dev/null > "$WORK/out" 2>&1
 }
 
-# --- headlong-init: no docker, no tty, no consent -> stop at the gate --------
+# --- librarian-init: no docker, no tty, no consent -> stop at the gate --------
 run_init "$WORK/h1" DOCKER_STUB_INFO_RC=1; rc=$?
 check() { local label="$1"; shift; if "$@" >/dev/null 2>&1; then ok "$label"; else bad "$label"; fi; }
 check_not() { local label="$1"; shift; if "$@" >/dev/null 2>&1; then bad "$label"; else ok "$label"; fi; }
 check "no docker, no consent: exits non-zero"            test "$rc" -ne 0
-check "no docker, no consent: names HEADLONG_UNSANDBOXED" grep -q "HEADLONG_UNSANDBOXED" "$WORK/out"
+check "no docker, no consent: names LIBRARIAN_UNSANDBOXED" grep -q "LIBRARIAN_UNSANDBOXED" "$WORK/out"
 check_not "no docker, no consent: never reaches the key step" grep -qi "API key" "$WORK/out"
 
-# --- headlong-init: no docker, consent via env -> gate passes ----------------
-run_init "$WORK/h2" DOCKER_STUB_INFO_RC=1 HEADLONG_UNSANDBOXED=1; rc=$?
+# --- librarian-init: no docker, consent via env -> gate passes ----------------
+run_init "$WORK/h2" DOCKER_STUB_INFO_RC=1 LIBRARIAN_UNSANDBOXED=1; rc=$?
 check "consented: passes the gate (fails later, at the key step)" grep -q "no API key" "$WORK/out"
 check "consented: prints the unsandboxed warning"        grep -qi "directly on this machine" "$WORK/out"
-check "consented: SHELLM_REQUIRE_DOCKER=0 in state .env" grep -qx "SHELLM_REQUIRE_DOCKER='0'" "$WORK/h2/.headlong/.env"
+check "consented: SHELLM_REQUIRE_DOCKER=0 in state .env" grep -qx "SHELLM_REQUIRE_DOCKER='0'" "$WORK/h2/.librarian/.env"
 
-# --- headlong-init: docker up -> sandbox promised and enforced ---------------
+# --- librarian-init: docker up -> sandbox promised and enforced ---------------
 run_init "$WORK/h3" DOCKER_STUB_INFO_RC=0; rc=$?
 check "docker up: announces the sandbox"                 grep -q "sandboxed in Docker" "$WORK/out"
-check "docker up: SHELLM_REQUIRE_DOCKER=1 in state .env" grep -qx "SHELLM_REQUIRE_DOCKER='1'" "$WORK/h3/.headlong/.env"
+check "docker up: SHELLM_REQUIRE_DOCKER=1 in state .env" grep -qx "SHELLM_REQUIRE_DOCKER='1'" "$WORK/h3/.librarian/.env"
 check "docker up: gate passes (fails later, at the key step)" grep -q "no API key" "$WORK/out"
 
 # --- explicit unsandboxed choice beats a live daemon (installer menu 3) ------
-run_init "$WORK/h7" DOCKER_STUB_INFO_RC=0 HEADLONG_UNSANDBOXED=1; rc=$?
-check "menu 3: unsandboxed sticks even with docker up"   grep -qx "SHELLM_REQUIRE_DOCKER='0'" "$WORK/h7/.headlong/.env"
-check "menu 3: choice persisted for re-runs"             grep -qx "HEADLONG_UNSANDBOXED='1'" "$WORK/h7/.headlong/.env"
+run_init "$WORK/h7" DOCKER_STUB_INFO_RC=0 LIBRARIAN_UNSANDBOXED=1; rc=$?
+check "menu 3: unsandboxed sticks even with docker up"   grep -qx "SHELLM_REQUIRE_DOCKER='0'" "$WORK/h7/.librarian/.env"
+check "menu 3: choice persisted for re-runs"             grep -qx "LIBRARIAN_UNSANDBOXED='1'" "$WORK/h7/.librarian/.env"
 check_not "menu 3: sandbox not announced"                grep -q "sandboxed in Docker" "$WORK/out"
 
-# --- the HEADLONG_FAKE_DOCKER knob overrides real detection ------------------
+# --- the LIBRARIAN_FAKE_DOCKER knob overrides real detection ------------------
 # The stub daemon answers "up" here, so only the knob can produce these paths.
-run_init "$WORK/h4" DOCKER_STUB_INFO_RC=0 HEADLONG_FAKE_DOCKER=missing; rc=$?
+run_init "$WORK/h4" DOCKER_STUB_INFO_RC=0 LIBRARIAN_FAKE_DOCKER=missing; rc=$?
 check "fake missing: gate stops despite a live daemon"   test "$rc" -ne 0
-check "fake missing: names HEADLONG_UNSANDBOXED"         grep -q "HEADLONG_UNSANDBOXED" "$WORK/out"
-run_init "$WORK/h5" DOCKER_STUB_INFO_RC=1 HEADLONG_FAKE_DOCKER=ok; rc=$?
-check "fake ok: sandbox promised despite a down daemon"  grep -qx "SHELLM_REQUIRE_DOCKER='1'" "$WORK/h5/.headlong/.env"
+check "fake missing: names LIBRARIAN_UNSANDBOXED"         grep -q "LIBRARIAN_UNSANDBOXED" "$WORK/out"
+run_init "$WORK/h5" DOCKER_STUB_INFO_RC=1 LIBRARIAN_FAKE_DOCKER=ok; rc=$?
+check "fake ok: sandbox promised despite a down daemon"  grep -qx "SHELLM_REQUIRE_DOCKER='1'" "$WORK/h5/.librarian/.env"
 
 # --- --dry-run: walks the gate, writes nothing, exits 0 ----------------------
 mkdir -p "$WORK/h6"
 env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u GEMINI_API_KEY -u OPENROUTER_API_KEY \
-    -u HEADLONG_UNSANDBOXED -u SHELLM_DOCKER_IMAGE -u SHELLM_MODEL \
-    HOME="$WORK/h6" HEADLONG_HOME="$WORK/h6/.headlong" HEADLONG_APP_DIR="$APP" \
-    HEADLONG_NO_TTY=1 HEADLONG_FAKE_DOCKER=ok PATH="$STUB:$PATH" \
-    bash "$REPO/tools/headlong-init" --dry-run > "$WORK/out" 2>&1; rc=$?
+    -u LIBRARIAN_UNSANDBOXED -u SHELLM_DOCKER_IMAGE -u SHELLM_MODEL \
+    HOME="$WORK/h6" LIBRARIAN_HOME="$WORK/h6/.librarian" LIBRARIAN_APP_DIR="$APP" \
+    LIBRARIAN_NO_TTY=1 LIBRARIAN_FAKE_DOCKER=ok PATH="$STUB:$PATH" \
+    bash "$REPO/tools/librarian-init" --dry-run > "$WORK/out" 2>&1; rc=$?
 check "dry-run: exits 0"                                 test "$rc" -eq 0
 check "dry-run: announces the sandbox"                   grep -q "sandboxed in Docker" "$WORK/out"
 check "dry-run: says what it would set"                  grep -q "would set SHELLM_REQUIRE_DOCKER=1" "$WORK/out"
 check "dry-run: says it stopped"                         grep -qi "dry run" "$WORK/out"
-check_not "dry-run: writes no state .env"                test -f "$WORK/h6/.headlong/.env"
-env HOME="$WORK/h6" HEADLONG_HOME="$WORK/h6/.headlong" HEADLONG_APP_DIR="$APP" \
-    bash "$REPO/tools/headlong-init" --bogus > "$WORK/out" 2>&1; rc=$?
+check_not "dry-run: writes no state .env"                test -f "$WORK/h6/.librarian/.env"
+env HOME="$WORK/h6" LIBRARIAN_HOME="$WORK/h6/.librarian" LIBRARIAN_APP_DIR="$APP" \
+    bash "$REPO/tools/librarian-init" --bogus > "$WORK/out" 2>&1; rc=$?
 check "unknown option is an error"                       test "$rc" -ne 0
 
 # --- shellm: SHELLM_REQUIRE_DOCKER enforcement -------------------------------

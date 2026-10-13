@@ -8,7 +8,7 @@ Bash 3.2.57 was built locally and placed first on PATH so the installed wrapper
 and its subprocesses also used it. All seven package shell files pass ShellCheck
 at warning severity and Bash 3.2 syntax checks; `git diff --check` is clean.
 
-[Native macOS CI](https://github.com/laude-institute/headlong/actions/runs/36252719406/job/108433643487)
+[Native macOS CI](https://github.com/amalie-trewartha/librarian/actions/runs/36252719406/job/108433643487)
 at `0c10540` exposed two failures in the credential-in-path
 regression: its expected path used `/var/...` while the wrapper correctly
 recorded `/private/var/...`. The expectation now retains the resolved parent

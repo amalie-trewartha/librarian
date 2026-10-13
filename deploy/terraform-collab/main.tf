@@ -1,6 +1,6 @@
 # deploy/terraform-collab — SSH-reachable boxes for outside collaborators.
 #
-# Each box runs its own isolated Headlong install (deploy/setup.sh, the same
+# Each box runs its own isolated Librarian install (deploy/setup.sh, the same
 # provisioning as Audel's box) and is reached over plain key-only SSH by one
 # collaborator who gets passwordless sudo. Nothing of Laude's is on the box
 # beyond the compute: no Slack tokens, no Cloudflare, no shared identity.
@@ -84,8 +84,8 @@ data "aws_subnets" "default" {
 # Port 22 only. Key-only auth is enforced on the box (user_data); narrowing
 # ssh_ingress_cidrs is the extra step if a collaborator has a fixed address.
 resource "aws_security_group" "collab" {
-  name_prefix = "headlong-collab-"
-  description = "headlong collaborator boxes: SSH in, everything out"
+  name_prefix = "librarian-collab-"
+  description = "librarian collaborator boxes: SSH in, everything out"
   vpc_id      = data.aws_vpc.default.id
 
   dynamic "ingress" {
@@ -119,7 +119,7 @@ resource "aws_security_group" "collab" {
   }
 
   tags = {
-    Name = "headlong-collab"
+    Name = "librarian-collab"
   }
 }
 
@@ -128,7 +128,7 @@ resource "aws_security_group" "collab" {
 # sibling's parameter, which is fine while all boxes belong to one
 # collaborator group and each parameter holds only its own spend-capped key.
 resource "aws_iam_role" "collab" {
-  name_prefix = "headlong-collab-"
+  name_prefix = "librarian-collab-"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -145,7 +145,7 @@ resource "aws_iam_role_policy_attachment" "ssm" {
 }
 
 resource "aws_iam_role_policy" "env_parameters" {
-  name_prefix = "headlong-collab-env-"
+  name_prefix = "librarian-collab-env-"
   role        = aws_iam_role.collab.id
   policy = jsonencode({
     Version = "2012-10-17"
@@ -158,7 +158,7 @@ resource "aws_iam_role_policy" "env_parameters" {
 }
 
 resource "aws_iam_instance_profile" "collab" {
-  name_prefix = "headlong-collab-"
+  name_prefix = "librarian-collab-"
   role        = aws_iam_role.collab.name
 }
 
@@ -205,7 +205,7 @@ resource "aws_instance" "collab" {
   }
 
   tags = {
-    Name         = "headlong-collab-${each.key}"
+    Name         = "librarian-collab-${each.key}"
     Stack        = "terraform-collab"
     Collaborator = each.value.user
   }
@@ -217,7 +217,7 @@ resource "aws_eip" "collab" {
   domain = "vpc"
 
   tags = {
-    Name  = "headlong-collab-${each.key}"
+    Name  = "librarian-collab-${each.key}"
     Stack = "terraform-collab"
   }
 }

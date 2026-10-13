@@ -1,4 +1,22 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (same mapping as bin/librarian-env).
+if [[ -z "${LIBRARIAN_MEMORY+x}" && -n "${HEADLONG_LIBRARIAN+x}" ]]; then export LIBRARIAN_MEMORY="$HEADLONG_LIBRARIAN"; fi
+if [[ -z "${LIBRARIAN_SRC+x}" && -n "${HEADLONG_LIBRARIAN_SRC+x}" ]]; then export LIBRARIAN_SRC="$HEADLONG_LIBRARIAN_SRC"; fi
+for _le_hv in $(compgen -A variable HEADLONG_ 2>/dev/null); do
+    case "$_le_hv" in HEADLONG_LIBRARIAN|HEADLONG_LIBRARIAN_SRC) continue ;; esac
+    _le_lv="LIBRARIAN_${_le_hv#HEADLONG_}"
+    if [[ -z "${!_le_lv+x}" ]]; then export "$_le_lv=${!_le_hv}"; fi
+done
+unset _le_hv _le_lv
+if [[ -z "${LIBRARIAN_HOME:-}" && -n "${HOME:-}" && ! -d "$HOME/.librarian" && -d "$HOME/.headlong" ]]; then
+    export LIBRARIAN_HOME="$HOME/.headlong"
+fi
+if [[ -z "${LIBRARIAN_THINKERS_TEMPLATES:-}" && -n "${HOME:-}" ]]; then
+    if [[ ! -d "$HOME/.librarian-thinkers" && -d "$HOME/.headlong-thinkers" ]]; then
+        export LIBRARIAN_THINKERS_TEMPLATES="$HOME/.headlong-thinkers"
+    fi
+fi
+
 set -euo pipefail
 
 # deploy/update.sh — pull the deploy branch, force a frontend rebuild,
@@ -9,7 +27,7 @@ set -euo pipefail
 # From an SSM session:  sudo bash /opt/shellm/app/deploy/update.sh
 
 APP_DIR="${APP_DIR:-/opt/shellm/app}"
-UNIT_DST="${UNIT_DST:-/etc/systemd/system/headlong-web.service}"
+UNIT_DST="${UNIT_DST:-/etc/systemd/system/librarian-web.service}"
 
 # bash has already read this script when the pull below replaces it, so a
 # deploy that changes update.sh itself, or adds unit files this script
@@ -19,32 +37,32 @@ before=$(sha256sum "$0" 2>/dev/null | cut -d' ' -f1 || true)
 echo "==> Pulling latest"
 sudo -u shellm git -C "$APP_DIR" pull --ff-only
 after=$(sha256sum "$0" 2>/dev/null | cut -d' ' -f1 || true)
-if [[ -z "${HEADLONG_UPDATE_REEXEC:-}" && -n "$before" && "$before" != "$after" ]]; then
+if [[ -z "${LIBRARIAN_UPDATE_REEXEC:-}" && -n "$before" && "$before" != "$after" ]]; then
     echo "==> update.sh changed in this pull — re-running the new copy"
-    export HEADLONG_UPDATE_REEXEC=1
+    export LIBRARIAN_UPDATE_REEXEC=1
     exec bash "$0" "$@"
 fi
 
-# The headlong rename moved every unit from shelly-* to headlong-*. That
+# The librarian rename moved every unit from shelly-* to librarian-*. That
 # cutover restarts the identity dispatchers, so it must never happen as a
 # side effect of a routine deploy — least of all from the dash's self-update
 # button. Stop here and make an operator run the migration in a supervised
 # window. Both prior generations trip this (a never-migrated box would still
 # be on shellm-*).
-legacy_units=$(ls /etc/systemd/system/{shellm,shelly}-{web,thinkers@,thinkers-alert@,slack-bridge,slack-agent,telegram-bridge}.service 2>/dev/null || true)
+legacy_units=$(ls /etc/systemd/system/{shellm,shelly,headlong}-{web,thinkers@,thinkers-alert@,slack-bridge,slack-agent,telegram-bridge}.service 2>/dev/null || true)
 if [[ -n "$legacy_units" ]]; then
-    echo "==> ERROR: legacy pre-headlong units are still installed:" >&2
+    echo "==> ERROR: legacy pre-librarian units are still installed:" >&2
     printf '      %s\n' $legacy_units >&2
-    echo "    This build expects headlong-* units. Run the one-time migration first:" >&2
+    echo "    This build expects librarian-* units. Run the one-time migration first:" >&2
     echo "      sudo bash $APP_DIR/deploy/migrate-units.sh" >&2
     echo "    It restarts the dispatchers, so run it when you can watch it." >&2
     exit 1
 fi
 
 # Re-sync the systemd unit from the repo so unit changes deploy like code.
-# Box-local customization belongs in headlong-web.service.d/override.conf
+# Box-local customization belongs in librarian-web.service.d/override.conf
 # (drop-ins survive this); hand-edits to the main unit will be overwritten.
-UNIT_SRC="$APP_DIR/deploy/headlong-web.service"
+UNIT_SRC="$APP_DIR/deploy/librarian-web.service"
 SHELLM_HOME="${SHELLM_HOME:-$(dirname "$APP_DIR")}"
 if [[ -f "$UNIT_SRC" ]]; then
     rendered=$(sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$UNIT_SRC")
@@ -60,8 +78,8 @@ fi
 # are what let the dash (user shellm) start dispatchers in their own
 # cgroup; the sudoers file is only installed if it passes visudo's check,
 # because a malformed sudoers file breaks sudo box-wide.
-for unit_file in headlong-thinkers@.service headlong-thinkers-alert@.service \
-                 headlong-thinkers-silence@.service headlong-thinkers-silence@.timer; do
+for unit_file in librarian-thinkers@.service librarian-thinkers-alert@.service \
+                 librarian-thinkers-silence@.service librarian-thinkers-silence@.timer; do
     unit_src="$APP_DIR/deploy/${unit_file}"
     [[ -f "$unit_src" ]] || continue
     rendered=$(sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$unit_src")
@@ -80,53 +98,53 @@ if grep -qs " $APP_DIR/.identities none bind" /etc/fstab && ! mountpoint -q "$AP
 fi
 
 # Runtime sandbox for every wake: a drop-in on the thinkers template,
-# driven by HEADLONG_SANDBOX in the root .env (default on). See
+# driven by LIBRARIAN_SANDBOX in the root .env (default on). See
 # deploy/thinkers-sandbox.sh. A change reaches a running mind at its next
-# headlong-thinkersctl restart <identity>; this script never restarts a
+# librarian-thinkersctl restart <identity>; this script never restarts a
 # dispatcher on its own.
 sandbox_state=$(sudo bash "$APP_DIR/deploy/thinkers-sandbox.sh" install "$APP_DIR" "$SHELLM_HOME")
 if [[ "$sandbox_state" != "unchanged" ]]; then
-    echo "==> Thinkers sandbox drop-in $sandbox_state — daemon-reload; restart each identity (headlong-thinkersctl restart <identity>) to apply"
+    echo "==> Thinkers sandbox drop-in $sandbox_state — daemon-reload; restart each identity (librarian-thinkersctl restart <identity>) to apply"
     sudo systemctl daemon-reload
 fi
 # Silence timer: one per identity that has a thinkers unit on this box.
 # Idempotent; a timer for a stopped identity exits quietly on every tick.
-for inst in $(systemctl list-units --all 'headlong-thinkers@*.service' --no-legend --plain 2>/dev/null | awk '{print $1}'); do
-    ident="${inst#headlong-thinkers@}"; ident="${ident%.service}"
+for inst in $(systemctl list-units --all 'librarian-thinkers@*.service' --no-legend --plain 2>/dev/null | awk '{print $1}'); do
+    ident="${inst#librarian-thinkers@}"; ident="${ident%.service}"
     [[ -n "$ident" ]] || continue
-    sudo systemctl enable --now "headlong-thinkers-silence@${ident}.timer" >/dev/null 2>&1 || true
+    sudo systemctl enable --now "librarian-thinkers-silence@${ident}.timer" >/dev/null 2>&1 || true
 done
-# Single name only — the headlong rename ships no wrapper compat. Legacy
+# Single name only — the librarian rename ships no wrapper compat. Legacy
 # copies are swept so nothing on the box can still invoke a wrapper that
 # targets units which no longer exist.
-if [[ -f "$APP_DIR/deploy/headlong-thinkersctl" ]] \
-    && ! cmp -s "$APP_DIR/deploy/headlong-thinkersctl" /usr/local/bin/headlong-thinkersctl 2>/dev/null; then
-    echo "==> Installing headlong-thinkersctl wrapper"
-    sudo install -o root -g root -m 0755 "$APP_DIR/deploy/headlong-thinkersctl" /usr/local/bin/headlong-thinkersctl
+if [[ -f "$APP_DIR/deploy/librarian-thinkersctl" ]] \
+    && ! cmp -s "$APP_DIR/deploy/librarian-thinkersctl" /usr/local/bin/librarian-thinkersctl 2>/dev/null; then
+    echo "==> Installing librarian-thinkersctl wrapper"
+    sudo install -o root -g root -m 0755 "$APP_DIR/deploy/librarian-thinkersctl" /usr/local/bin/librarian-thinkersctl
 fi
 sudo rm -f /usr/local/bin/shelly-thinkersctl /usr/local/bin/shellm-thinkersctl
-if [[ -f "$APP_DIR/deploy/sudoers-headlong-thinkers" ]] \
-    && ! sudo cmp -s "$APP_DIR/deploy/sudoers-headlong-thinkers" /etc/sudoers.d/headlong-thinkers 2>/dev/null; then
-    if sudo visudo -cf "$APP_DIR/deploy/sudoers-headlong-thinkers"; then
-        echo "==> Installing sudoers rule for headlong-thinkersctl"
-        sudo install -o root -g root -m 0440 "$APP_DIR/deploy/sudoers-headlong-thinkers" /etc/sudoers.d/headlong-thinkers
+if [[ -f "$APP_DIR/deploy/sudoers-librarian-thinkers" ]] \
+    && ! sudo cmp -s "$APP_DIR/deploy/sudoers-librarian-thinkers" /etc/sudoers.d/librarian-thinkers 2>/dev/null; then
+    if sudo visudo -cf "$APP_DIR/deploy/sudoers-librarian-thinkers"; then
+        echo "==> Installing sudoers rule for librarian-thinkersctl"
+        sudo install -o root -g root -m 0440 "$APP_DIR/deploy/sudoers-librarian-thinkers" /etc/sudoers.d/librarian-thinkers
         sudo rm -f /etc/sudoers.d/shelly-thinkers /etc/sudoers.d/shellm-thinkers
     else
-        echo "==> ERROR: deploy/sudoers-headlong-thinkers failed the visudo check — skipped" >&2
+        echo "==> ERROR: deploy/sudoers-librarian-thinkers failed the visudo check — skipped" >&2
     fi
 fi
 
 # Signal-audit rules (kernel-level kill attribution, see
-# deploy/audit-headlong-signals.rules). Existing boxes get auditd via this
+# deploy/audit-librarian-signals.rules). Existing boxes get auditd via this
 # path — setup.sh only runs on fresh provisions.
-if [[ -f "$APP_DIR/deploy/audit-headlong-signals.rules" ]] \
-    && ! sudo cmp -s "$APP_DIR/deploy/audit-headlong-signals.rules" /etc/audit/rules.d/headlong-signals.rules 2>/dev/null; then
+if [[ -f "$APP_DIR/deploy/audit-librarian-signals.rules" ]] \
+    && ! sudo cmp -s "$APP_DIR/deploy/audit-librarian-signals.rules" /etc/audit/rules.d/librarian-signals.rules 2>/dev/null; then
     if ! command -v augenrules >/dev/null 2>&1; then
         echo "==> Installing auditd"
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y auditd >/dev/null
     fi
-    echo "==> Audit rules changed — re-installing headlong-signals.rules"
-    sudo install -o root -g root -m 0640 "$APP_DIR/deploy/audit-headlong-signals.rules" /etc/audit/rules.d/headlong-signals.rules
+    echo "==> Audit rules changed — re-installing librarian-signals.rules"
+    sudo install -o root -g root -m 0640 "$APP_DIR/deploy/audit-librarian-signals.rules" /etc/audit/rules.d/librarian-signals.rules
     sudo rm -f /etc/audit/rules.d/shelly-signals.rules /etc/audit/rules.d/shellm-signals.rules
     sudo augenrules --load || echo "==> WARN: augenrules --load failed — rules apply after next reboot" >&2
 fi
@@ -141,9 +159,9 @@ fi
 if [[ -f "$APP_DIR/deploy/split-bridge-env.sh" ]]; then
     sudo bash "$APP_DIR/deploy/split-bridge-env.sh" "$APP_DIR"
 fi
-if [[ -f /etc/systemd/system/headlong-slack-bridge.service ]]; then
+if [[ -f /etc/systemd/system/librarian-slack-bridge.service ]]; then
     echo "==> Updating Slack bridge"
-    for unit in headlong-slack-agent headlong-slack-bridge; do
+    for unit in librarian-slack-agent librarian-slack-bridge; do
         unit_src="$APP_DIR/deploy/$unit.service"
         if [[ -f "$unit_src" ]]; then
             rendered=$(sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$unit_src")
@@ -155,7 +173,7 @@ if [[ -f /etc/systemd/system/headlong-slack-bridge.service ]]; then
         fi
     done
     sudo -u shellm bash -c "export PATH=\"\$HOME/.local/bin:\$PATH\"; cd '$APP_DIR/slack' && uv sync"
-    sudo systemctl restart headlong-slack-bridge
+    sudo systemctl restart librarian-slack-bridge
 fi
 
 # Optional component: Telegram bridge. Enabled post-hoc on a live box by
@@ -175,22 +193,22 @@ if [[ -f /etc/shellm/telegram.env ]]; then
     sudo usermod -aG shellm shellm-telegram
     sudo chmod g+rx "$SHELLM_HOME"
     sudo -u shellm bash -c "export PATH=\"\$HOME/.local/bin:\$PATH\"; cd '$APP_DIR/telegram' && uv sync"
-    unit_src="$APP_DIR/deploy/headlong-telegram-bridge.service"
+    unit_src="$APP_DIR/deploy/librarian-telegram-bridge.service"
     rendered=$(sed "s|@SHELLM_HOME@|$SHELLM_HOME|g" "$unit_src")
-    if ! printf '%s\n' "$rendered" | cmp -s - /etc/systemd/system/headlong-telegram-bridge.service 2>/dev/null; then
-        echo "==> Unit file changed — re-installing headlong-telegram-bridge"
-        printf '%s\n' "$rendered" | sudo tee /etc/systemd/system/headlong-telegram-bridge.service >/dev/null
+    if ! printf '%s\n' "$rendered" | cmp -s - /etc/systemd/system/librarian-telegram-bridge.service 2>/dev/null; then
+        echo "==> Unit file changed — re-installing librarian-telegram-bridge"
+        printf '%s\n' "$rendered" | sudo tee /etc/systemd/system/librarian-telegram-bridge.service >/dev/null
         sudo systemctl daemon-reload
     fi
-    sudo systemctl enable --now headlong-telegram-bridge >/dev/null 2>&1 || true
-    sudo systemctl restart headlong-telegram-bridge
+    sudo systemctl enable --now librarian-telegram-bridge >/dev/null 2>&1 || true
+    sudo systemctl restart librarian-telegram-bridge
 fi
 
 echo "==> Forcing frontend rebuild on restart"
-sudo -u shellm rm -rf "$APP_DIR/web/src/headlong_web/static"
+sudo -u shellm rm -rf "$APP_DIR/web/src/librarian_web/static"
 
-echo "==> Restarting headlong-web (rebuild takes ~1-2 min)"
-sudo systemctl restart headlong-web
+echo "==> Restarting librarian-web (rebuild takes ~1-2 min)"
+sudo systemctl restart librarian-web
 
 for _ in $(seq 1 36); do
     if curl -fsS localhost:8080/api/health >/dev/null 2>&1; then
@@ -201,5 +219,5 @@ for _ in $(seq 1 36); do
     sleep 5
 done
 
-echo "==> ERROR: service not healthy after 3 minutes; check: journalctl -u headlong-web -n 50" >&2
+echo "==> ERROR: service not healthy after 3 minutes; check: journalctl -u librarian-web -n 50" >&2
 exit 1

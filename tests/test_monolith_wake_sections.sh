@@ -68,7 +68,7 @@ grep -q 'to slack-nick: FAILED, never arrived (unknown slack address form) "lost
 grep -q '^- Now: [A-Z][a-z]*day [0-9-]* [0-9:]* UTC (' <<<"$p" && ok "the clock line is in the routing signals" || bad "clock line" "$(grep -A2 '^Routing signals' <<<"$p")"
 grep -q "^- DUE NOW: \"Daily digest for the team\".*--key 5ced0001/$(date -u +%Y-%m-%d)-0000 " <<<"$p" && ok "a scheduled goal's open window is DUE with its key" || bad "due line" "$(grep -i 'digest' <<<"$p" | head -3)"
 grep -q '^Related memories' <<<"$p" && ok "the related-memories section is in the wake prompt" || bad "related section present" "$(grep -c . <<<"$p") lines"
-grep -q '^Runtime: headlong [0-9a-f]\{7,\} (' <<<"$p" && ok "the runtime line names the checked-out commit" || bad "runtime line present"
+grep -q '^Runtime: librarian [0-9a-f]\{7,\} (' <<<"$p" && ok "the runtime line names the checked-out commit" || bad "runtime line present"
 grep -q '^Workspace: ' <<<"$p" && ok "the workspace section is in the wake prompt" || bad "workspace section present"
 grep -q '^- notes/ 2 files' <<<"$p" && ok "the workspace section counts files per directory" || bad "workspace dir count" "$(grep '^- ' <<<"$p" | head -3)"
 grep -q 'No WORKSPACE.md yet' <<<"$p" && ok "the workspace section invites a WORKSPACE.md when none exists" || bad "workspace invite"

@@ -180,7 +180,7 @@ Docker detection works like this:
 - If already inside a Docker container (e.g. CI) → runs locally unless `SHELLM_ALLOW_NESTED_DOCKER=1`
 - If Docker isn't installed → runs locally
 
-Docker access from inside the sandbox is off by default. `--docker-access broker` is the recommended mode when the agent needs helper containers: generated code gets `shellm-docker` plus a constrained `docker` facade (`docker info` and brokered `docker compose build/down/up/exec/cp/stop/config/version`). The broker rejects privileged containers, arbitrary bind mounts, host namespace sharing, device access, and Docker socket mounts. One known limit of the compose gate: a compose file can name another YAML file on the host through `extends.file` or a top-level `include`, and `docker compose config` reads that file while rendering. The paths it pulls in are still checked, but the read itself happens, so its fields land in the rendered model the sandbox gets back. Compose's error text (which can quote file contents) stays out of the sandbox and, by default, out of the broker log — set `HEADLONG_BROKER_LOG_COMPOSE_STDERR=1` to log it when debugging a render failure.
+Docker access from inside the sandbox is off by default. `--docker-access broker` is the recommended mode when the agent needs helper containers: generated code gets `shellm-docker` plus a constrained `docker` facade (`docker info` and brokered `docker compose build/down/up/exec/cp/stop/config/version`). The broker rejects privileged containers, arbitrary bind mounts, host namespace sharing, device access, and Docker socket mounts. One known limit of the compose gate: a compose file can name another YAML file on the host through `extends.file` or a top-level `include`, and `docker compose config` reads that file while rendering. The paths it pulls in are still checked, but the read itself happens, so its fields land in the rendered model the sandbox gets back. Compose's error text (which can quote file contents) stays out of the sandbox and, by default, out of the broker log — set `LIBRARIAN_BROKER_LOG_COMPOSE_STDERR=1` to log it when debugging a render failure.
 
 `--docker-access socket` mounts `/var/run/docker.sock` into the sandbox, and `--docker-access dind` starts an inner Docker daemon in a privileged outer container. Neither is a strong sandbox: both let the agent control a Docker daemon.
 
@@ -188,7 +188,7 @@ Docker access from inside the sandbox is off by default. `--docker-access broker
 
 An **env** is a named execution environment — either a Docker container or "local" (the host machine). Multiple runs can share an env, so installed packages and system modifications persist across conversations.
 
-Each run records its metadata and conversation history in a trajectory under the trajectories directory (`SHELLM_TRAJ_DIR`, default `~/.headlong/trajectories/`; the legacy `TRAJ_DIR` is still honored). Each trajectory is a directory named `<hex8>-<slug>/` holding an append-only `trajectory.jsonl`. The first line is the `{"type":"trajectory"}` header and the next is a `shellm-run` step capturing the command, workdir, model, and env.
+Each run records its metadata and conversation history in a trajectory under the trajectories directory (`SHELLM_TRAJ_DIR`, default `~/.librarian/trajectories/`; the legacy `TRAJ_DIR` is still honored). Each trajectory is a directory named `<hex8>-<slug>/` holding an append-only `trajectory.jsonl`. The first line is the `{"type":"trajectory"}` header and the next is a `shellm-run` step capturing the command, workdir, model, and env.
 
 Each run also has a **workdir** — a directory where generated code executes:
 
@@ -199,7 +199,7 @@ Each run also has a **workdir** — a directory where generated code executes:
 - Files created by the agent persist across iterations
 - Sub-runs are tracked as forked branches in the trajectory, not as nested directories
 
-Env metadata is stored in `~/.headlong/envs/<name>/` (`SHELLM_ENVS_DIR`).
+Env metadata is stored in `~/.librarian/envs/<name>/` (`SHELLM_ENVS_DIR`).
 
 ```bash
 # List recent runs
@@ -342,13 +342,13 @@ Types: `memory`, `todo`, `objective`, `value`, `belief`, `fact`, `preference`, `
 skills                      # List installed skills
 skills show web-research    # Show a skill's full instructions
 skills prompt               # The skills section of the mind's system prompt
-headlong-skills search "web research" # Search installed and remote (GitHub) skills
-headlong-skills install owner/repo    # Install from GitHub
-headlong-skills init my-new-skill     # Create a new skill
-headlong-skills remove old-skill      # Remove a skill
+librarian-skills search "web research" # Search installed and remote (GitHub) skills
+librarian-skills install owner/repo    # Install from GitHub
+librarian-skills init my-new-skill     # Create a new skill
+librarian-skills remove old-skill      # Remove a skill
 ```
 
-The core `skills` (in `bin/`) only lists, shows, and renders skills; the package manager `headlong-skills` (in `tools/`) does the rest and shares its code. `skills install ...` and the other manager subcommands forward to it when it is on PATH. Skills can declare requirements (env vars, binaries, OS) in their YAML frontmatter under `metadata.shelllm.requires`. By default, `skills list` only shows skills whose requirements are met. Use `headlong-skills check <name>` to diagnose a specific skill's requirements. Skills live in `SKILLS_DIR` (default: `./.skills/`); the bundled core skills are installed to `~/.skills/core-skills` and added as a remote.
+The core `skills` (in `bin/`) only lists, shows, and renders skills; the package manager `librarian-skills` (in `tools/`) does the rest and shares its code. `skills install ...` and the other manager subcommands forward to it when it is on PATH. Skills can declare requirements (env vars, binaries, OS) in their YAML frontmatter under `metadata.shelllm.requires`. By default, `skills list` only shows skills whose requirements are met. Use `librarian-skills check <name>` to diagnose a specific skill's requirements. Skills live in `SKILLS_DIR` (default: `./.skills/`); the bundled core skills are installed to `~/.skills/core-skills` and added as a remote.
 
 ## Options
 
@@ -380,13 +380,13 @@ All configuration is available as both CLI flags and environment variables. Flag
 | `-q, --quiet` | — | off | Suppress progress output, keep only final answer |
 | `-s, --system-prompt TEXT` | `SHELLM_SYSTEM_PROMPT` | built-in | Replace the system prompt (`--system-prompt-file FILE` reads it from a file; `--print-system-prompt` shows the default) |
 | `--traj ID` / `--resume` | — | new run | Write steps into an existing trajectory (`--resume` = the most recent one) instead of forking a new child |
-| `--traj-dir DIR` | `SHELLM_TRAJ_DIR` | `~/.headlong/trajectories` | Where trajectories are written |
+| `--traj-dir DIR` | `SHELLM_TRAJ_DIR` | `~/.librarian/trajectories` | Where trajectories are written |
 | `--var NAME=VALUE` | — | — | Pass a variable into the sandbox environment (repeatable) |
 | `--var NAME` | — | — | Forward `NAME` from shellm's own environment (repeatable). Use this for API keys and other secrets: the value never appears on a command line (`ps`) or in the recorded run command |
 | `--bin PATH` | — | — | Stage an extra executable into the sandbox (repeatable) |
 | `--new-env` | — | off | Force a fresh env instead of reusing one (cannot combine with `--env`) |
 | — | `SHELLM_FAST_MODEL` | — | Cheap model for utility calls (run summaries) |
-| — | `SHELLM_ENVS_DIR`, `SHELLM_WORKDIRS_DIR`, `SHELLM_BROKER_DIR`, `SHELLM_CONF_DIR` | under `~/.headlong` | State directories |
+| — | `SHELLM_ENVS_DIR`, `SHELLM_WORKDIRS_DIR`, `SHELLM_BROKER_DIR`, `SHELLM_CONF_DIR` | under `~/.librarian` | State directories |
 
 You can also put settings in a `.env` file in the working directory:
 

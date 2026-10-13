@@ -1,6 +1,6 @@
 """Run the Telegram bridge for a shellm identity.
 
-Usage: headlong-telegram-bridge [ROOT]
+Usage: librarian-telegram-bridge [ROOT]
 
 ROOT is the directory the web server serves (contains .identities/);
 defaults to the current directory. Configuration comes from the
@@ -51,7 +51,7 @@ def configure_logging(verbose: bool) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="headlong-telegram-bridge", description=__doc__)
+    parser = argparse.ArgumentParser(prog="librarian-telegram-bridge", description=__doc__)
     parser.add_argument("root", nargs="?", default=".", help="Serve root (contains .identities/)")
     parser.add_argument("--verbose", action="store_true", help="Debug logging")
     args = parser.parse_args()
@@ -66,7 +66,7 @@ def main() -> None:
     bot = Bot(cfg.bot_token)
     me = bot.get_me()
     print(
-        f"headlong-telegram-bridge: identity={cfg.identity} bot=@{me.get('username')} "
+        f"librarian-telegram-bridge: identity={cfg.identity} bot=@{me.get('username')} "
         f"admin={cfg.admin_id} web={cfg.web_url}",
         file=sys.stderr,
     )

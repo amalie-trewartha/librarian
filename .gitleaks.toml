@@ -6,7 +6,7 @@
 # deciding the secret is fake or already revoked; a rotated key is still a
 # leak in history, so rotate first, then allowlist.
 
-title = "headlong"
+title = "librarian"
 
 [extend]
 useDefault = true

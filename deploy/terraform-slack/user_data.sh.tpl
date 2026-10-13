@@ -46,19 +46,19 @@ fi
 %{ endif ~}
 
 # --- pin CORS to the public hostname --------------------------------------
-mkdir -p /etc/systemd/system/headlong-web.service.d
-cat > /etc/systemd/system/headlong-web.service.d/override.conf <<OVERRIDE
+mkdir -p /etc/systemd/system/librarian-web.service.d
+cat > /etc/systemd/system/librarian-web.service.d/override.conf <<OVERRIDE
 [Service]
-Environment="HEADLONG_WEB_ALLOWED_ORIGINS=${allowed_origins}"
+Environment="LIBRARIAN_WEB_ALLOWED_ORIGINS=${allowed_origins}"
 OVERRIDE
 
 systemctl daemon-reload
-systemctl restart headlong-web
+systemctl restart librarian-web
 
 # --- slack: re-run the persona bootstrap and bridge now that .env exists ---
 # setup.sh started both units before the SSM .env landed; the bridge loops
 # on Restart=always until tokens exist, so these restarts settle it fast.
-systemctl restart headlong-slack-agent || true
-systemctl restart headlong-slack-bridge || true
+systemctl restart librarian-slack-agent || true
+systemctl restart librarian-slack-bridge || true
 
 echo "==> shellm bootstrap done $(date -u)"

@@ -330,7 +330,7 @@ fi
 
 # compose's words can carry host file contents, and the broker log is a file
 # on disk, so by default the log gets a withheld notice, not the text. The
-# operator opts into the raw stderr with HEADLONG_BROKER_LOG_COMPOSE_STDERR.
+# operator opts into the raw stderr with LIBRARIAN_BROKER_LOG_COMPOSE_STDERR.
 : > "$SHELLM_BROKER_LOG"
 : > "$CALLS"
 printf '{}' > "$CFG_RAW"
@@ -355,9 +355,9 @@ fi
 
 : > "$SHELLM_BROKER_LOG"
 : > "$CALLS"
-export HEADLONG_BROKER_LOG_COMPOSE_STDERR=1
+export LIBRARIAN_BROKER_LOG_COMPOSE_STDERR=1
 response=$(handle_compose "$compose_request")
-unset HEADLONG_BROKER_LOG_COMPOSE_STDERR CFG_RC CFG_ERR
+unset LIBRARIAN_BROKER_LOG_COMPOSE_STDERR CFG_RC CFG_ERR
 if grep -q "$CANARY" "$SHELLM_BROKER_LOG"; then
     ok "the opt-in puts the raw stderr in the broker log"
 else

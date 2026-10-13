@@ -8,7 +8,7 @@
 # deploy/scripts/update afterwards to install/restart the bridge.
 #
 # The file also pins the identity the bridge serves
-# (HEADLONG_TELEGRAM_IDENTITY, default: the stack's persona, audel for
+# (LIBRARIAN_TELEGRAM_IDENTITY, default: the stack's persona, audel for
 # terraform-slack, harris for terraform-harris). Without the pin the bridge
 # follows whatever `.identities/default` points at, and on 2026-09-08 a
 # nested test run of Audel's repointed that link to a scratch identity, so
@@ -58,7 +58,7 @@ run_script_on_box "
     set -euo pipefail
     umask 077
     mkdir -p /etc/shellm
-    printf 'TELEGRAM_BOT_TOKEN=%s\nTELEGRAM_ADMIN_ID=%s\nHEADLONG_TELEGRAM_IDENTITY=%s\n' '$token' '$admin_id' '$identity' \
+    printf 'TELEGRAM_BOT_TOKEN=%s\nTELEGRAM_ADMIN_ID=%s\nLIBRARIAN_TELEGRAM_IDENTITY=%s\n' '$token' '$admin_id' '$identity' \
         > /etc/shellm/telegram.env
     chown root:root /etc/shellm/telegram.env
     chmod 600 /etc/shellm/telegram.env
@@ -68,4 +68,4 @@ run_script_on_box "
 " || die "writing the env file failed — box unchanged or partially written; check output above"
 
 info "Done. Next: deploy/scripts/update (installs + starts the bridge),"
-info "or if the bridge is already installed: deploy/scripts/run 'sudo systemctl restart headlong-telegram-bridge'"
+info "or if the bridge is already installed: deploy/scripts/run 'sudo systemctl restart librarian-telegram-bridge'"

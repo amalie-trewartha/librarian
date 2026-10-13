@@ -11,7 +11,7 @@ import json
 import os
 from pathlib import Path
 
-from headlong_web.liveness import pid_alive
+from librarian_web.liveness import pid_alive
 
 
 def is_disabled(thinker_dir: Path) -> bool:

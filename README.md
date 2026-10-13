@@ -1,25 +1,30 @@
 ```
-██  ██ █████  ████  █████  ██     ████  ██  ██  ████               ██
-██  ██ ██    ██  ██ ██  ██ ██    ██  ██ ███ ██ ██           ██   ██
-██▀▀██ ████  ██████ ██  ██ ██    ██  ██ ██▀███ ██ ███     ██   ██
-██  ██ ██    ██  ██ ██  ██ ██    ██  ██ ██ ▀██ ██  ██   ██   ██
-██  ██ █████ ██  ██ █████  █████  ████  ██  ██  █████      ██
+██     ██ ████  █████   ████  █████  ██  ████  ██   ██
+██     ██ ██  ██ ██  ██ ██  ██ ██  ██ ██ ██  ██ ███  ██
+██     ██ ████  █████  ██████ █████  ██ ██████ ██ █ ██
+██     ██ ██  ██ ██  ██ ██  ██ ██  ██ ██ ██  ██ ██  ███
+██████ ██ ████  ██  ██ ██  ██ ██  ██ ██ ██  ██ ██   ██
 ```
 
-[![CI](https://github.com/laude-institute/headlong/actions/workflows/ci.yml/badge.svg)](https://github.com/laude-institute/headlong/actions/workflows/ci.yml)
+[![CI](https://github.com/amalie-trewartha/librarian/actions/workflows/ci.yml/badge.svg)](https://github.com/amalie-trewartha/librarian/actions/workflows/ci.yml)
 
-**Headlong** is an open source agent microharness, a complete agent harness
-with a core of about 12K lines of Bash.
+**Librarian** is an open source harness for agents that run unattended for
+weeks: a persistent identity, a mind that wakes on a schedule, and a memory
+system (the librarian) that keeps what each project teaches and hands every
+wake a budgeted, ranked, auditable context. The core is about 12K lines of
+Bash around a standard-library Python memory store. It began as a fork of
+[Headlong](https://github.com/laude-institute/headlong), and the Headlong
+names still work (see [design/rename-to-librarian.md](design/rename-to-librarian.md)).
 
 [Launch post](https://www.laude.org/updates/headlong-a-microharness-for-persistent-agents) |
 [Announcement](https://x.com/andykonwinski/status/2091990178638496195)
 
 > [!IMPORTANT]
-> Headlong is alpha research software. Expect frequent changes. Run it in a
-> sandbox because Headlong agents run shell commands. Use a dedicated,
+> Librarian is alpha research software. Expect frequent changes. Run it in a
+> sandbox because Librarian agents run shell commands. Use a dedicated,
 > spend-capped API key, and do not give your agent sensitive secrets.
 
-Headlong's defining feature is **persistent
+Librarian's defining feature is **persistent
 agency**. Your agent keeps thinking between external interactions in a
 self-guided loop inspired by human inner monologue. A message from a human
 doesn't start a session. It lands in the agent's thought stream as one more
@@ -27,25 +32,25 @@ observation, and the agent decides if and when to respond. You give your agent
 a name and a personality, and it sets its own interests and priorities, starts
 its own projects, and pings you when it has something to say.
 
-A Headlong agent is also built to be shared. A whole team can talk to one
+A Librarian agent is also built to be shared. A whole team can talk to one
 agent over Slack, Telegram, and a chat app, and every conversation lands
 in the agent's single stream of thoughts. The agent follows what different
 people are working on, connects them, and pings whoever seems most
 relevant. Sharing one agent is fun, because it behaves more like a person
 than a service.
 
-At the heart of Headlong is `shellm`, a Bash implementation of a
+At the heart of Librarian is `shellm`, a Bash implementation of a
 [recursive language model (RLM)](https://alexzhang13.github.io/blog/2025/rlm/).
 The agent thinks by writing shell commands, running them, and reading the
 output. No tool system besides Bash is needed.
 
 ## Get started
 
-One line installs everything, interviews you to bring a Headlong agent to
+One line installs everything, interviews you to bring a Librarian agent to
 life, and opens a dashboard where you can watch its mind run:
 
 ```bash
-curl -fsSL https://headlong.ai/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/install.sh | bash
 ```
 
 You'll need bash 3.2+, git, curl, jq, Python 3, and an LLM API key (Anthropic,
@@ -57,7 +62,7 @@ OpenAI-compatible server (llama.cpp, Ollama, vLLM, LM Studio; see
 needs [uv](https://docs.astral.sh/uv/) and bun or node, and the installer
 offers to fetch those.
 
-Headlong is alpha research software. Use a dedicated, spend-capped key, because
+Librarian is alpha research software. Use a dedicated, spend-capped key, because
 your agent runs real shell commands and thinks around the clock. With Docker
 running, the installer offers to keep the whole agent in a container, or to
 install on your machine with the agent's commands sandboxed in a container
@@ -81,9 +86,9 @@ ada dash             # open the dashboard
 ada bugreport        # bundle logs + trajectory (keys scrubbed) for a bug report
 ```
 
-`headlong-killall` stops every Headlong process on the machine if you need a
-panic button. `curl -fsSL https://headlong.ai/status.sh | bash` shows what is
-installed and running; `curl -fsSL https://headlong.ai/uninstall.sh | bash`
+`librarian-killall` stops every Librarian process on the machine if you need a
+panic button. `curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/status.sh | bash` shows what is
+installed and running; `curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/uninstall.sh | bash`
 removes it all (details in
 [docs/install.md](docs/install.md#stopping-and-uninstalling)).
 
@@ -91,9 +96,9 @@ The container flow the installer offers is this, and you can also run it
 yourself:
 
 ```bash
-docker run -it --name headlong --restart unless-stopped -p 8080:8080 \
+docker run -it --name librarian --restart unless-stopped -p 8080:8080 \
   --add-host host.docker.internal:host-gateway buildpack-deps:curl \
-  bash -c 'curl -fsSL https://headlong.ai/install.sh | bash; exec bash'
+  bash -c 'curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/install.sh | bash; exec bash'
 ```
 
 Details, non-interactive/CI installs, and installing from a checkout are
@@ -102,7 +107,7 @@ in [docs/install.md](docs/install.md).
 ## Key ideas
 
 - **Persistent agency.** Most harnesses are reactive, or wake on a
-  schedule to run a fixed checklist. A Headlong agent is never asleep and
+  schedule to run a fixed checklist. A Librarian agent is never asleep and
   there is no checklist. It keeps generating thoughts about whatever it
   decides is interesting, even when there is no external input. Messages
   from Slack, Telegram, or the chat app are injected into the thought
@@ -134,7 +139,7 @@ in [docs/install.md](docs/install.md).
 - **Docker by default.** Generated code sandboxes itself into a container
   whenever Docker is available, and container reuse keeps restarts cheap.
   Local mode works too.
-- **Self-improvement by fork, test, merge.** An agent forks the Headlong
+- **Self-improvement by fork, test, merge.** An agent forks the Librarian
   codebase (and optionally its own trajectory), changes something, and
   runs. Merge the change back if it worked, or discard the agent and its
   changes if it didn't. No rollback machinery is needed. The agent we run
@@ -156,7 +161,7 @@ To make a minimal agent, you need:
 - a way to turn that trajectory into the context for the next call into
   the LLM (`context`).
 
-Headlong also gives an agent a few convenience tools, such as a way to
+Librarian also gives an agent a few convenience tools, such as a way to
 distill and codify its experience (`mem`) and a way to save and reuse
 procedures for specialized tasks (`skills`). The core is the tools the
 running mind executes, the executables in `bin/` plus the thought
@@ -188,18 +193,18 @@ Everything you run *around* the mind lives in `tools/`:
 | **shellm-docker-broker** | Host-side policy server for brokered Docker, never present in the mind's environment |
 | **identity** | Creates and manages identities (persona, memories, activate script) |
 | **persona** | Talks to and manages an identity by name, from anywhere |
-| **headlong-init** | One-time bootstrap: interview, first identity, first thoughts |
+| **librarian-init** | One-time bootstrap: interview, first identity, first thoughts |
 | **shellm-explore** | Visualizes run trees and writes LLM-powered reports on what happened and why |
-| **headlong-web** | The dashboard, where you watch a mind think in the browser |
-| **headlong-slack-bridge** / **headlong-telegram-bridge** | Slack and Telegram connectors into the same inner experience |
-| **headlong-project** | Puts an identity into project mode for weeks of unattended research ([design](design/long_autonomy.md)) |
+| **librarian-web** | The dashboard, where you watch a mind think in the browser |
+| **librarian-slack-bridge** / **librarian-telegram-bridge** | Slack and Telegram connectors into the same inner experience |
+| **librarian-project** | Puts an identity into project mode for weeks of unattended research ([design](design/long_autonomy.md)) |
 | **librarian** | The memory store and context packer for project-mode minds: typed, tagged memories with provenance, a budgeted pack every wake, outcome-based confirmation ([design](design/librarian.md)) |
-| **headlong-killall** | Panic button that stops every Headlong-related process |
+| **librarian-killall** | Panic button that stops every Librarian-related process |
 | **pr-committee** | Multi-model pull request review, used on this repo |
 
 ## Project mode: long unattended research
 
-`headlong-project init <name> --spec brief.md` points an identity at one
+`librarian-project init <name> --spec brief.md` points an identity at one
 research project for weeks with no human in the loop. The project gets a
 read-only charter and spec, a journal, a project memory and a questions
 file in which every question carries a dated default. The runtime then
@@ -216,11 +221,11 @@ what the wake measurably produced, not by the agent's opinion. See
 
 ## Local models
 
-Headlong can use any server that supports the OpenAI chat completions API,
+Librarian can use any server that supports the OpenAI chat completions API,
 including llama.cpp, Ollama, vLLM, and LM Studio. A local server does not
 need an API key unless you configured the server to require one.
 
-For llama.cpp, start the server with an alias that Headlong can use as the
+For llama.cpp, start the server with an alias that Librarian can use as the
 model name:
 
 ```bash
@@ -253,8 +258,8 @@ LLM_API_URL=http://127.0.0.1:11434/v1/chat/completions \
 llm -m qwen3:8b "hello"
 ```
 
-To configure an existing Headlong agent without running the installer again,
-add the provider, server address, and model to `~/.headlong/.env`:
+To configure an existing Librarian agent without running the installer again,
+add the provider, server address, and model to `~/.librarian/.env`:
 
 ```bash
 LLM_PROVIDER='openai-compatible'
@@ -278,21 +283,21 @@ To let the installer write the same settings, run it and choose the local
 model server when asked:
 
 ```bash
-curl -fsSL https://headlong.ai/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/install.sh | bash
 ```
 
 A local server can also be selected without a terminal:
 
 ```bash
-export HEADLONG_PROVIDER=local
-export HEADLONG_LOCAL_URL=http://127.0.0.1:11434/v1
-export HEADLONG_LOCAL_MODEL=qwen3:8b
-curl -fsSL https://headlong.ai/install.sh | bash
+export LIBRARIAN_PROVIDER=local
+export LIBRARIAN_LOCAL_URL=http://127.0.0.1:11434/v1
+export LIBRARIAN_LOCAL_MODEL=qwen3:8b
+curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/install.sh | bash
 ```
 
 For a host installation, keep a local server address such as `127.0.0.1`
-or `localhost`. Headlong changes the address only when `shellm` runs code
-inside its Docker sandbox. A full Headlong container uses
+or `localhost`. Librarian changes the address only when `shellm` runs code
+inside its Docker sandbox. A full Librarian container uses
 `host.docker.internal` to reach a server on the Docker host.
 
 On Linux, the model server must listen on an address that Docker can reach.
@@ -331,9 +336,12 @@ The recursive language model idea in `shellm` comes in part from the
 [Recursive LLM](https://github.com/andyk/recursive_llm) experiment (April
 2023) and from Alex Zhang's [Recursive LM
 (RLM)](https://alexzhang13.github.io/blog/2025/rlm/) project (October
-2025). The continuous thinking behind Headlong's persistent agency — and
-its name — come from the [Headlong](https://github.com/andyk/headlong)
-research project.
+2025). Librarian began as a fork of
+[Headlong](https://github.com/laude-institute/headlong) (October 2026); the
+continuous thinking behind its persistent agency, and Headlong's own name,
+come from the [Headlong](https://github.com/andyk/headlong) research
+project. The memory system is designed in "Librarian Memory & Context
+System for a Long-Running Autonomous Agent.md" in this repository.
 
 ## License
 

@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from headlong_web import control
-from headlong_web.server import create_app
+from librarian_web import control
+from librarian_web.server import create_app
 
 ROOT_TRAJ = "cdcdcdcd-8888-4888-8888-888888888888"
 

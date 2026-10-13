@@ -1,7 +1,7 @@
 {
-  "name": "Headlong",
-  "short_name": "Headlong",
-  "description": "Direct chat with Headlong identities",
+  "name": "Librarian",
+  "short_name": "Librarian",
+  "description": "Direct chat with Librarian identities",
   "start_url": "/talk",
   "scope": "/",
   "display": "standalone",

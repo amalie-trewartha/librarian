@@ -1,4 +1,4 @@
-"""FastAPI app factory for the Headlong dash (web viewer)."""
+"""FastAPI app factory for the Librarian dash (web viewer)."""
 
 import json
 import logging
@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from headlong_web import (
+from librarian_web import (
     activity,
     chat,
     control,
@@ -45,13 +45,13 @@ from headlong_web import (
 
 # Direct import: the bare module name would be shadowed inside create_app
 # by the GET /api/health route function.
-from headlong_web.health import response_stats
+from librarian_web.health import response_stats
 
 logger = logging.getLogger(__name__)
 
 VERSION = "0.1.0"
 
-# The repo the running server code lives in (…/web/src/headlong_web/server.py)
+# The repo the running server code lives in (…/web/src/librarian_web/server.py)
 _CODE_REPO = Path(__file__).resolve().parents[3]
 
 # The built frontend; deleting it makes the next startup rebuild (see cli.py).
@@ -170,12 +170,12 @@ def create_app(
     root: Path, static_dir: Path | None = None, *, read_only: bool = False
 ) -> FastAPI:
     root = root.resolve()
-    app = FastAPI(title="Headlong dash", version=VERSION)
+    app = FastAPI(title="Librarian dash", version=VERSION)
     # Default "*" suits local use; deployments should pin this to their
-    # public origin(s) via HEADLONG_WEB_ALLOWED_ORIGINS (comma-separated).
+    # public origin(s) via LIBRARIAN_WEB_ALLOWED_ORIGINS (comma-separated).
     allowed_origins = [
         origin.strip()
-        for origin in env.getenv("HEADLONG_WEB_ALLOWED_ORIGINS", "*").split(",")
+        for origin in env.getenv("LIBRARIAN_WEB_ALLOWED_ORIGINS", "*").split(",")
         if origin.strip()
     ]
     app.add_middleware(
@@ -218,7 +218,7 @@ def create_app(
     # the demo deployment (systemd restarts it); off by default elsewhere —
     # without a supervisor the process would just exit.
     self_update_enabled = (
-        env.getenv("HEADLONG_WEB_SELF_UPDATE") == "1" and not read_only
+        env.getenv("LIBRARIAN_WEB_SELF_UPDATE") == "1" and not read_only
     )
     update_lock = threading.Lock()
 
@@ -239,7 +239,7 @@ def create_app(
         if not self_update_enabled:
             raise HTTPException(
                 status_code=403,
-                detail="Self-update is disabled (set HEADLONG_WEB_SELF_UPDATE=1)",
+                detail="Self-update is disabled (set LIBRARIAN_WEB_SELF_UPDATE=1)",
             )
         if not update_lock.acquire(blocking=False):
             raise HTTPException(status_code=409, detail="Update already in progress")
@@ -946,7 +946,7 @@ def create_app(
                 status_code=422,
                 detail="Invalid identity name (use lowercase alphanumeric + hyphens)",
             )
-        max_bytes = int(env.getenv("HEADLONG_WEB_MAX_IMPORT_MB", "512")) * 1024 * 1024
+        max_bytes = int(env.getenv("LIBRARIAN_WEB_MAX_IMPORT_MB", "512")) * 1024 * 1024
         fd, tmp_name = tempfile.mkstemp(suffix=".shellm.tgz")
         tmp = Path(tmp_name)
         total = 0
@@ -960,7 +960,7 @@ def create_app(
                     if total > max_bytes:
                         raise HTTPException(
                             status_code=413,
-                            detail=f"Archive exceeds HEADLONG_WEB_MAX_IMPORT_MB ({max_bytes // (1024 * 1024)} MB)",
+                            detail=f"Archive exceeds LIBRARIAN_WEB_MAX_IMPORT_MB ({max_bytes // (1024 * 1024)} MB)",
                         )
                     out.write(chunk)
             if not first_chunk.startswith(b"\x1f\x8b"):

@@ -119,7 +119,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "headlong-tui"
+name = "librarian-tui"
 version = "0.1.0"
 dependencies = [
  "crossterm",

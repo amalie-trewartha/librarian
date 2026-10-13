@@ -46,15 +46,15 @@ def _default_identity(serve_root: Path) -> str:
             # that creates a second identity instead of fixing the link.
             if not (serve_root / base / name).is_dir():
                 raise SystemExit(
-                    f"headlong-telegram-bridge: the default identity link {link} "
+                    f"librarian-telegram-bridge: the default identity link {link} "
                     f"points at '{name}', which is not an identity under "
                     f"{serve_root / base}. Repoint it with: identity default <name>"
                 )
             return name
     raise SystemExit(
-        "headlong-telegram-bridge: no identity given and no default set "
+        "librarian-telegram-bridge: no identity given and no default set "
         f"under {serve_root} (looked for .identities/default and "
-        "identities/default). Set HEADLONG_TELEGRAM_IDENTITY, or point the "
+        "identities/default). Set LIBRARIAN_TELEGRAM_IDENTITY, or point the "
         "default at one with: identity default <name>"
     )
 
@@ -65,7 +65,7 @@ def _find_identity_dir(serve_root: Path, name: str) -> Path:
         if (candidate / "info.txt").is_file():
             return candidate
     raise SystemExit(
-        f"headlong-telegram-bridge: identity '{name}' not found under {serve_root} "
+        f"librarian-telegram-bridge: identity '{name}' not found under {serve_root} "
         "(looked in .identities/ and identities/). Create it with: identity new "
         + name
     )
@@ -74,23 +74,25 @@ def _find_identity_dir(serve_root: Path, name: str) -> Path:
 def load(serve_root: Path) -> Config:
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     if not bot_token:
-        raise SystemExit("headlong-telegram-bridge: TELEGRAM_BOT_TOKEN is required")
+        raise SystemExit("librarian-telegram-bridge: TELEGRAM_BOT_TOKEN is required")
     admin_raw = os.environ.get("TELEGRAM_ADMIN_ID", "")
     if not admin_raw.isdigit():
         raise SystemExit(
-            "headlong-telegram-bridge: TELEGRAM_ADMIN_ID is required (your numeric "
+            "librarian-telegram-bridge: TELEGRAM_ADMIN_ID is required (your numeric "
             "Telegram user id — message the bot once and check the bridge log)"
         )
-    # HEADLONG_* is canonical; SHELLM_* accepted as a legacy fallback until the
+    # LIBRARIAN_* is canonical; SHELLM_* accepted as a legacy fallback until the
     # deployed boxes migrate their env files.
     identity = (
-        os.environ.get("HEADLONG_TELEGRAM_IDENTITY")
+        os.environ.get("LIBRARIAN_TELEGRAM_IDENTITY")
+        or os.environ.get("HEADLONG_TELEGRAM_IDENTITY")
         or os.environ.get("SHELLM_TELEGRAM_IDENTITY")
         or _default_identity(serve_root)
     )
     identity_dir = _find_identity_dir(serve_root, identity)
     state_dir = Path(
-        os.environ.get("HEADLONG_TELEGRAM_STATE_DIR")
+        os.environ.get("LIBRARIAN_TELEGRAM_STATE_DIR")
+        or os.environ.get("HEADLONG_TELEGRAM_STATE_DIR")
         or os.environ.get("SHELLM_TELEGRAM_STATE_DIR")
         or identity_dir / "run" / "telegram-bridge"
     )
@@ -102,7 +104,8 @@ def load(serve_root: Path) -> Config:
         bot_token=bot_token,
         admin_id=int(admin_raw),
         web_url=(
-            os.environ.get("HEADLONG_WEB_URL")
+            os.environ.get("LIBRARIAN_WEB_URL")
+            or os.environ.get("HEADLONG_WEB_URL")
             or os.environ.get("SHELLM_WEB_URL")
             or "http://127.0.0.1:8080"
         ).rstrip("/"),

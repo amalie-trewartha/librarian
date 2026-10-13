@@ -14,7 +14,7 @@ Why it matters: what depends on it
 Blocking: yes | no (yes means a named piece of work is parked on it)
 Default: what you will assume and do if nobody answers, and the risk of it
 Default-by: YYYY-MM-DD | never
-Answer: (a human writes here, or runs: headlong-project answer <name> <Qn> "...". Never you.)
+Answer: (a human writes here, or runs: librarian-project answer <name> <Qn> "...". Never you.)
 Resolution: (you write this when you close it: "YYYY-MM-DD human answer applied: ..." or "YYYY-MM-DD default applied: ..." or "YYYY-MM-DD moot: ...")
 
 ---

@@ -129,8 +129,8 @@ EOF
 chmod +x "$WORK/bin/curl"
 export PATH="$WORK/bin:$PATH"
 export OPENROUTER_API_KEY="test-key"
-export HEADLONG_HOME="$WORK/home"   # bin/llm writes run/llm_health.json here
-mkdir -p "$HEADLONG_HOME"
+export LIBRARIAN_HOME="$WORK/home"   # bin/llm writes run/llm_health.json here
+mkdir -p "$LIBRARIAN_HOME"
 export CURL_COUNT="$WORK/count" CURL_MODE_FILE="$WORK/modes"
 export LLM_RETRY_BACKOFF=0
 
@@ -201,7 +201,7 @@ check "400 not retried"               test "$(calls)" = "1"
 check "400 message surfaced"          grep -q "bad request" "$WORK/stderr"
 
 # --- health marker: failures and successes leave run/llm_health.json -----------
-HF="$HEADLONG_HOME/run/llm_health.json"
+HF="$LIBRARIAN_HOME/run/llm_health.json"
 check "marker written on failure"     test -s "$HF"
 check "marker: ok=false, http 400"    bash -c 'jq -e ".ok == false and .http_code == 400 and .provider == \"openrouter\"" "$1" >/dev/null' _ "$HF"
 check "marker: 400 classified other"  bash -c 'jq -e ".kind == \"other\"" "$1" >/dev/null' _ "$HF"
@@ -314,7 +314,7 @@ check "empty is whitespace error"     test "$(calls)" = "2"
 # caller-provided LLM_USAGE_FILE; failures append nothing
 # ---------------------------------------------------------------------------
 
-LEDGER="$HEADLONG_HOME/usage/llm.jsonl"
+LEDGER="$LIBRARIAN_HOME/usage/llm.jsonl"
 rm -f "$LEDGER"
 reset "sse-ok-usage"
 out=$(LLM_RETRIES=0 run_llm)

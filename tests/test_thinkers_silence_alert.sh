@@ -31,7 +31,7 @@ mkdir -p "$ID/trajectories/abcd1234-root" "$ID/run/logs" "$TMP/stub"
 printf 'name=quiet\ncreated=test\nroot_trajectory=abcd1234-ffff-0000-0000-000000000000\n' > "$ID/info.txt"
 TRAJ="$ID/trajectories/abcd1234-root/trajectory.jsonl"
 printf '{"type":"idle"}\n' > "$TRAJ"
-printf 'SLACK_BOT_TOKEN=xoxb-test\nHEADLONG_ALERT_CHANNEL=C0TEST\n' > "$APP/.env"
+printf 'SLACK_BOT_TOKEN=xoxb-test\nLIBRARIAN_ALERT_CHANNEL=C0TEST\n' > "$APP/.env"
 printf 'tick\n' > "$ID/run/logs/dispatcher.log"
 
 # curl stub: record the JSON payload, answer ok
@@ -44,7 +44,7 @@ STUB
 chmod +x "$TMP/stub/curl"
 export CURL_LOG="$TMP/curl.log"
 
-run() { PATH="$TMP/stub:$PATH" HEADLONG_SILENCE_SECS=600 HEADLONG_ALERT_FALLBACK_LOG="$TMP/fallback.log" bash "$SCRIPT" "$APP" quiet; }
+run() { PATH="$TMP/stub:$PATH" LIBRARIAN_SILENCE_SECS=600 LIBRARIAN_ALERT_FALLBACK_LOG="$TMP/fallback.log" bash "$SCRIPT" "$APP" quiet; }
 posts() { if [[ -f "$CURL_LOG" ]]; then wc -l < "$CURL_LOG" | tr -d ' '; else echo 0; fi; }
 age_traj() { touch -d "@$(( $(date +%s) - $1 ))" "$TRAJ" 2>/dev/null || touch -t "$(date -r $(( $(date +%s) - $1 )) +%Y%m%d%H%M.%S)" "$TRAJ"; }
 
@@ -93,11 +93,11 @@ run; rc=$?
 [[ "$rc" -eq 0 && -f "$TMP/fallback.log" ]] && ok "missing config degrades to the fallback log" || bad "missing config degrades to the fallback log" "rc=$rc"
 
 # 8. still stale past the repost interval → posts again, as "still quiet"
-printf 'SLACK_BOT_TOKEN=xoxb-test\nHEADLONG_ALERT_CHANNEL=C0TEST\n' > "$APP/.env"
+printf 'SLACK_BOT_TOKEN=xoxb-test\nLIBRARIAN_ALERT_CHANNEL=C0TEST\n' > "$APP/.env"
 rm -f "$ID/run/silent_since" "$TMP/fallback.log"; : > "$CURL_LOG"
 age_traj 1200
 run
-HEADLONG_SILENCE_REPOST_SECS=0 run
+LIBRARIAN_SILENCE_REPOST_SECS=0 run
 if [[ "$(posts)" -eq 2 ]] && tail -n 1 "$CURL_LOG" | grep -q 'is still quiet'; then ok "re-posts after the repost interval"
 else bad "re-posts after the repost interval" "posts=$(posts) $(tail -n 1 "$CURL_LOG" 2>/dev/null | head -c 200)"; fi
 run
@@ -112,16 +112,16 @@ if [[ "$(id -u)" -eq 0 ]]; then
     ok "skip: root can write a read-only dir"
 else
     chmod 555 "$ID/run"
-    HEADLONG_ALERT_STATE_FALLBACK="$TMP/shm" run
+    LIBRARIAN_ALERT_STATE_FALLBACK="$TMP/shm" run
     chmod 755 "$ID/run"
     if [[ "$(posts)" -eq 1 ]] && grep -q 'has gone quiet' "$CURL_LOG"; then ok "unwritable marker does not block the post"
     else bad "unwritable marker does not block the post" "posts=$(posts)"; fi
-    [[ -f "$TMP/shm/headlong-alert-quiet/silent_since" ]] && ok "marker falls back to tmpfs" || bad "marker falls back to tmpfs"
+    [[ -f "$TMP/shm/librarian-alert-quiet/silent_since" ]] && ok "marker falls back to tmpfs" || bad "marker falls back to tmpfs"
     age_traj 10
-    HEADLONG_ALERT_STATE_FALLBACK="$TMP/shm" run
+    LIBRARIAN_ALERT_STATE_FALLBACK="$TMP/shm" run
     if [[ "$(posts)" -eq 2 ]] && tail -n 1 "$CURL_LOG" | grep -q 'is back'; then ok "recovery finds the fallback marker"
     else bad "recovery finds the fallback marker" "posts=$(posts)"; fi
-    [[ -f "$TMP/shm/headlong-alert-quiet/silent_since" ]] && bad "fallback marker removed" || ok "fallback marker removed"
+    [[ -f "$TMP/shm/librarian-alert-quiet/silent_since" ]] && bad "fallback marker removed" || ok "fallback marker removed"
 fi
 
 # 10. disk check: a df stub reports the usage; alert at 90, recovery under 85
@@ -134,7 +134,7 @@ printf '/dev/stub 39000000 %s %s %s%% /\n' $(( 390000 * pct )) $(( 390000 * (100
 STUB
 chmod +x "$TMP/dfstub/df"
 export DF_PCT="$TMP/df_pct"
-run_df() { PATH="$TMP/dfstub:$TMP/stub:$PATH" HEADLONG_SILENCE_SECS=600 HEADLONG_ALERT_FALLBACK_LOG="$TMP/fallback.log" bash "$SCRIPT" "$APP" quiet; }
+run_df() { PATH="$TMP/dfstub:$TMP/stub:$PATH" LIBRARIAN_SILENCE_SECS=600 LIBRARIAN_ALERT_FALLBACK_LOG="$TMP/fallback.log" bash "$SCRIPT" "$APP" quiet; }
 age_traj 10; : > "$CURL_LOG"
 printf '95' > "$DF_PCT"; run_df
 if [[ "$(posts)" -eq 1 ]] && grep -q '95% full' "$CURL_LOG"; then ok "disk over the threshold posts the alert"
@@ -168,7 +168,7 @@ run_df
 dm=$(stat -c %a "$TDIR" 2>/dev/null || stat -f %Lp "$TDIR")
 [[ "$dm" == 750 && "$(posts)" -eq 1 ]] && ok "locked again inside the interval: repaired, no second post" || bad "locked again inside the interval: repaired, no second post" "dir=$dm posts=$(posts)"
 chmod 700 "$TDIR"
-HEADLONG_SILENCE_REPOST_SECS=0 run_df
+LIBRARIAN_SILENCE_REPOST_SECS=0 run_df
 [[ "$(posts)" -eq 2 ]] && ok "locked again past the interval: posts again" || bad "locked again past the interval: posts again" "posts=$(posts)"
 run_df
 [[ "$(posts)" -eq 2 && ! -f "$ID/run/perm_alert" ]] && ok "healthy permissions: silent, marker dropped" || bad "healthy permissions: silent, marker dropped" "posts=$(posts)"

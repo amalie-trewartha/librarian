@@ -28,7 +28,7 @@ if os.environ.get('HOLD'):
 ''')
     backend.chmod(0o755)
     env.update(CODING_AGENT_OPENCODE_BIN=str(backend), PROMPT_CAPTURE=str(root / 'prompt'))
-    manager = PACKAGE / 'bin/headlong-opencode'
+    manager = PACKAGE / 'bin/librarian-opencode'
     identity = root / 'identity'
     other = root / 'other'
     for item in [identity, other]:

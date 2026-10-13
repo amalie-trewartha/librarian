@@ -33,7 +33,7 @@ DELIVERY_ERROR_TEXT = (
 )
 
 ADMIN_HELP = (
-    "headlong telegram bridge admin commands:\n"
+    "librarian telegram bridge admin commands:\n"
     "/approve <id> — let this user talk to the identity\n"
     "/deny <id> — silence a pending request for good\n"
     "/revoke <id> — remove an approved user\n"

@@ -1,4 +1,4 @@
-"""Peer hearing: another Headlong persona's bot posts reach the mind, bounded.
+"""Peer hearing: another Librarian persona's bot posts reach the mind, bounded.
 
 Two personas in one thread each answer every message the other posts, so
 the gate that lets a peer through comes with a loop guard: a run limit per
@@ -15,10 +15,10 @@ import time
 
 import pytest
 
-from headlong_slack import config as config_mod
-from headlong_slack.config import Config
-from headlong_slack.inbound import Inbound
-from headlong_slack.state import ActiveThreads, PeerGuard
+from librarian_slack import config as config_mod
+from librarian_slack.config import Config
+from librarian_slack.inbound import Inbound
+from librarian_slack.state import ActiveThreads, PeerGuard
 
 BOT = "U_BOT"
 PEER = "U_PEER"
@@ -74,7 +74,7 @@ def test_guard_allows_max_turns_then_blocks_until_a_person_speaks():
 def test_guard_hourly_cap_across_threads(monkeypatch):
     g = PeerGuard(max_turns=100, hourly_cap=3)
     now = [1_000_000.0]
-    monkeypatch.setattr("headlong_slack.state.time.time", lambda: now[0])
+    monkeypatch.setattr("librarian_slack.state.time.time", lambda: now[0])
     assert g.allow(CHAN, "1")[0] and g.allow(CHAN, "2")[0] and g.allow(CHAN, "3")[0]
     blocked, reason = g.allow(CHAN, "4")
     assert blocked is False and "hourly cap of 3" in reason
@@ -102,7 +102,7 @@ class _Client:
         return {"permalink": f"https://slack.test/{channel}/p{message_ts}"}
 
     def conversations_info(self, channel):
-        return {"channel": {"name": "headlong-bot-chatter", "is_im": False}}
+        return {"channel": {"name": "librarian-bot-chatter", "is_im": False}}
 
     def chat_postMessage(self, **kwargs):
         raise AssertionError(f"unexpected chat_postMessage {kwargs}")
@@ -138,7 +138,7 @@ class _Posted:
 @pytest.fixture
 def posted(monkeypatch):
     p = _Posted()
-    monkeypatch.setattr("headlong_slack.inbound.httpx.post", p)
+    monkeypatch.setattr("librarian_slack.inbound.httpx.post", p)
     return p
 
 
@@ -232,7 +232,7 @@ def test_peer_mention_is_forwarded_and_named_as_a_persona(bridge):
     body = b.send(_event(user=PEER, text="hello audel", bot=True), True)
     assert body["from_name"] == f"slack-{PEER}-{CHAN}-{PARENT}"
     assert body["content"].startswith(
-        "(Slack: harris, a Headlong persona like you, not a person in #headlong-bot-chatter"
+        "(Slack: harris, a Librarian persona like you, not a person in #librarian-bot-chatter"
     )
     assert body["content"].endswith("hello audel")
     assert body["source_url"].startswith("https://slack.test/")

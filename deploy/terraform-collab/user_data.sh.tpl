@@ -2,18 +2,18 @@
 # First-boot bootstrap for a collaborator box (rendered by Terraform; runs as
 # root via cloud-init). Order matters: the login user exists before sshd is
 # told to allow only that user, and the cheap hardening lands before the
-# long Headlong install, so an SSM shell during setup already sees the
+# long Librarian install, so an SSM shell during setup already sees the
 # final SSH posture. Bash dollar-brace expansions are written with a doubled dollar here because
 # Terraform renders this file first.
 set -euo pipefail
 exec > /var/log/headlong-bootstrap.log 2>&1
 
-echo "==> headlong collab bootstrap starting $(date -u) (box ${box_name}, user ${user})"
+echo "==> librarian collab bootstrap starting $(date -u) (box ${box_name}, user ${user})"
 export DEBIAN_FRONTEND=noninteractive
 
 # --- hostname ------------------------------------------------------------
-hostnamectl set-hostname 'headlong-${box_name}' || true
-grep -q 'headlong-${box_name}' /etc/hosts || echo '127.0.1.1 headlong-${box_name}' >> /etc/hosts
+hostnamectl set-hostname 'librarian-${box_name}' || true
+grep -q 'librarian-${box_name}' /etc/hosts || echo '127.0.1.1 librarian-${box_name}' >> /etc/hosts
 
 # --- login user: keys + passwordless sudo, no password ---------------------
 if ! id '${user}' >/dev/null 2>&1; then
@@ -26,15 +26,15 @@ ${authorized_keys}
 KEYS
 chown '${user}:${user}' '/home/${user}/.ssh/authorized_keys'
 chmod 0600 '/home/${user}/.ssh/authorized_keys'
-echo '${user} ALL=(ALL) NOPASSWD:ALL' > '/etc/sudoers.d/90-headlong-collab-${user}'
-chmod 0440 '/etc/sudoers.d/90-headlong-collab-${user}'
-visudo -cf '/etc/sudoers.d/90-headlong-collab-${user}'
+echo '${user} ALL=(ALL) NOPASSWD:ALL' > '/etc/sudoers.d/90-librarian-collab-${user}'
+chmod 0440 '/etc/sudoers.d/90-librarian-collab-${user}'
+visudo -cf '/etc/sudoers.d/90-librarian-collab-${user}'
 
 # --- sshd: key only, one allowed login, root closed -------------------------
 # sshd reads sshd_config.d/*.conf in name order ahead of the main file and
 # keeps the FIRST value it sees for each option, so this 00- file wins over
 # the image's 60-cloudimg-settings.conf and anything appended later.
-cat > /etc/ssh/sshd_config.d/00-headlong-collab.conf <<'CONF'
+cat > /etc/ssh/sshd_config.d/00-librarian-collab.conf <<'CONF'
 # Written by terraform-collab user_data. deploy/scripts/collab check audits it.
 PubkeyAuthentication yes
 PasswordAuthentication no
@@ -67,19 +67,19 @@ CONF
 systemctl enable --now unattended-upgrades
 
 # --- MOTD: what the collaborator needs to know at login --------------------
-cat > /etc/update-motd.d/60-headlong <<'MOTD'
+cat > /etc/update-motd.d/60-librarian <<'MOTD'
 #!/bin/sh
 cat <<'TXT'
 
-Headlong collaborator box (deploy/terraform-collab). You have passwordless sudo.
+Librarian collaborator box (deploy/terraform-collab). You have passwordless sudo.
   repo:     /opt/shellm/app  (owner: shellm; run git as: sudo -u shellm git -C /opt/shellm/app ...)
   dash:     from your laptop  ssh -N -L 8080:127.0.0.1:8080 ${user}@<this host>
             then open http://localhost:8080
-  API key:  sudo -u shellm nano /opt/shellm/app/.env   then  sudo systemctl restart headlong-web
+  API key:  sudo -u shellm nano /opt/shellm/app/.env   then  sudo systemctl restart librarian-web
   update:   sudo bash /opt/shellm/app/deploy/update.sh
-  status:   systemctl status headlong-web 'headlong-thinkers@*'
+  status:   systemctl status librarian-web 'librarian-thinkers@*'
   docs:     /opt/shellm/app/deploy/DEPLOY.md  /opt/shellm/app/AGENTS.md
-  logs:     /var/log/headlong-bootstrap.log (first boot), journalctl -u headlong-web
+  logs:     /var/log/headlong-bootstrap.log (first boot), journalctl -u librarian-web
 TXT
 if [ -f /var/run/reboot-required ]; then
     echo "*** A reboot is pending (kernel or security update): sudo reboot"
@@ -89,9 +89,9 @@ if ! grep -q 'bootstrap done' /var/log/headlong-bootstrap.log 2>/dev/null; then
 fi
 echo
 MOTD
-chmod 0755 /etc/update-motd.d/60-headlong
+chmod 0755 /etc/update-motd.d/60-librarian
 
-# --- headlong: clone for setup.sh, which does the real provisioning ---------
+# --- librarian: clone for setup.sh, which does the real provisioning ---------
 rm -rf /tmp/shellm-src
 git clone --depth 1 --branch '${branch}' '${repo}' /tmp/shellm-src
 SHELLM_REPO='${repo}' SHELLM_BRANCH='${branch}' bash /tmp/shellm-src/deploy/setup.sh
@@ -110,11 +110,11 @@ if [ -n "$ENV_CONTENT" ]; then
     chown shellm:shellm /opt/shellm/app/.env
     chmod 600 /opt/shellm/app/.env
     unset ENV_CONTENT
-    systemctl restart headlong-web
+    systemctl restart librarian-web
     echo "==> .env installed from SSM parameter ${env_parameter}"
 else
     echo "==> WARNING: no value at SSM parameter ${env_parameter}; the collaborator adds a key to /opt/shellm/app/.env"
 fi
 %{ endif ~}
 
-echo "==> headlong collab bootstrap done $(date -u)"
+echo "==> librarian collab bootstrap done $(date -u)"

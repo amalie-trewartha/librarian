@@ -7,7 +7,7 @@ follow-up for the tail window and block eviction (see Prefix caching):
 monolith passes it. Part 5 (faithful replay) is done: the old render
 engaged the request in 0 of 18 trials and reproduced the live commands,
 the run scope render engaged in 12 of 12 at 17K input tokens per call
-(`headlong-experiments/pending-request-placement/results.md`).
+(`librarian-experiments/pending-request-placement/results.md`).
 Relates to: [monolith_thinker.md](monolith_thinker.md),
 [monolith_run_health.md](monolith_run_health.md),
 [conversation_memory.md](conversation_memory.md),
@@ -25,7 +25,7 @@ changed nothing. Each change was verified by reading the prompt step in the
 trajectory, which showed the new wording in place.
 
 The replay experiment in
-`headlong-experiments/pending-request-placement/` was built to test whether
+`librarian-experiments/pending-request-placement/` was built to test whether
 moving the request higher in the prompt would help. Its control condition,
 the recorded prompt sent to the same model, engaged with the request in 15 of
 15 trials, while the live mind engaged in 0 of 5 wakes in the same hour. The
@@ -108,7 +108,7 @@ Evidence, all from 2026-09-03.
   million cached input).
 
 The write-up with the replay numbers is
-`headlong-experiments/pending-request-placement/results.md`.
+`librarian-experiments/pending-request-placement/results.md`.
 
 ## What we propose
 
@@ -286,7 +286,7 @@ and produced the same first commands as the live runs, including the
 Python script that searches the prompt files on disk. Prompt whole plus
 history engaged in 18 of 18 at 61K input tokens per call. Prompt whole in
 run scope engaged in 12 of 12 at 17K. Results in
-`headlong-experiments/pending-request-placement/results.md`.
+`librarian-experiments/pending-request-placement/results.md`.
 
 ## Rollout
 

@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (bin/librarian-env).
+for _le in "$(dirname "${BASH_SOURCE[0]}")/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/bin/librarian-env"; do
+    # shellcheck source=/dev/null
+    if [[ -f "$_le" ]]; then . "$_le"; break; fi
+done; unset _le
+
 set -uo pipefail
 
 # coding-agent - run a bounded coding task on an isolated candidate branch.
@@ -19,7 +25,7 @@ Options:
   --model MODEL        Backend model (default: CODING_AGENT_MODEL or backend config)
   --out DIR            New/empty artifacts directory, outside source or Git-ignored
   --timeout SECONDS    Deadline per executor/check, positive integer (default: 300)
-  --traj-dir DIR       Headlong trajectories directory (default: TRAJ_DIR)
+  --traj-dir DIR       Librarian trajectories directory (default: TRAJ_DIR)
   --parent-traj ID     Parent trajectory (default: TRAJ_ID)
   -h, --help           Show this help
 
@@ -285,7 +291,7 @@ source_before=$(checkout_fingerprint "$repo") || die "could not snapshot source 
 
 out_created=false
 if [[ -z "$out" ]]; then
-    out=$(mktemp -d "${TMPDIR:-/tmp}/headlong-coding-agent.XXXXXX") \
+    out=$(mktemp -d "${TMPDIR:-/tmp}/librarian-coding-agent.XXXXXX") \
         || die "could not create output directory"
     out_created=true
 fi
@@ -327,7 +333,7 @@ child_file=$(TRAJ_DIR="$traj_dir" TRAJ_ID="$child_traj" "$traj_bin" path 2>/dev/
 child_ref="${child_file#$traj_dir/}"
 
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
-branch="headlong-candidate/${base_commit:0:12}-${stamp}-$$"
+branch="librarian-candidate/${base_commit:0:12}-${stamp}-$$"
 worktree="$out/worktree"
 executor_stdout="$out/executor.stdout"
 executor_stderr="$out/executor.stderr"
@@ -380,7 +386,7 @@ if [[ "$worktree_rc" -eq 0 ]]; then
         executor_rc=0
         (
             cd "$worktree" || exit 125
-            unset HEADLONG_HOME SHELLM_HOME SHELLM_CONF_DIR IDENTITY_DIR MEM_DIR SKILLS_DIR \
+            unset LIBRARIAN_HOME SHELLM_HOME SHELLM_CONF_DIR IDENTITY_DIR MEM_DIR SKILLS_DIR \
                 SKILLS_KERNEL_DIR TRAJ_DIR TRAJ_ID ROOT_TRAJ_ID CHATRC
             OPENCODE_CONFIG_CONTENT="$opencode_guard" \
                 run_bounded "$out/executor.prompt" "$resolved_backend" --pure run --format json \
@@ -391,8 +397,8 @@ if [[ "$worktree_rc" -eq 0 ]]; then
     if [[ -n "$(git -C "$worktree" -c core.fileMode=true status --porcelain 2>/dev/null)" ]]; then
         git -C "$worktree" -c core.fileMode=true add -A >/dev/null 2>&1 || commit_rc=$?
         if [[ "$commit_rc" -eq 0 ]]; then
-            git -C "$worktree" -c user.name='Headlong Coding Agent' \
-                -c user.email='coding-agent@headlong.local' \
+            git -C "$worktree" -c user.name='Librarian Coding Agent' \
+                -c user.email='coding-agent@librarian.local' \
                 commit -m 'Candidate from delegated coding task' \
                 >"$out/commit.stdout" 2>"$out/commit.stderr" || commit_rc=$?
         fi

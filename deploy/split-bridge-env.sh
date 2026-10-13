@@ -1,4 +1,22 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (same mapping as bin/librarian-env).
+if [[ -z "${LIBRARIAN_MEMORY+x}" && -n "${HEADLONG_LIBRARIAN+x}" ]]; then export LIBRARIAN_MEMORY="$HEADLONG_LIBRARIAN"; fi
+if [[ -z "${LIBRARIAN_SRC+x}" && -n "${HEADLONG_LIBRARIAN_SRC+x}" ]]; then export LIBRARIAN_SRC="$HEADLONG_LIBRARIAN_SRC"; fi
+for _le_hv in $(compgen -A variable HEADLONG_ 2>/dev/null); do
+    case "$_le_hv" in HEADLONG_LIBRARIAN|HEADLONG_LIBRARIAN_SRC) continue ;; esac
+    _le_lv="LIBRARIAN_${_le_hv#HEADLONG_}"
+    if [[ -z "${!_le_lv+x}" ]]; then export "$_le_lv=${!_le_hv}"; fi
+done
+unset _le_hv _le_lv
+if [[ -z "${LIBRARIAN_HOME:-}" && -n "${HOME:-}" && ! -d "$HOME/.librarian" && -d "$HOME/.headlong" ]]; then
+    export LIBRARIAN_HOME="$HOME/.headlong"
+fi
+if [[ -z "${LIBRARIAN_THINKERS_TEMPLATES:-}" && -n "${HOME:-}" ]]; then
+    if [[ ! -d "$HOME/.librarian-thinkers" && -d "$HOME/.headlong-thinkers" ]]; then
+        export LIBRARIAN_THINKERS_TEMPLATES="$HOME/.headlong-thinkers"
+    fi
+fi
+
 set -euo pipefail
 
 # deploy/split-bridge-env.sh — move the Slack bridge's tokens out of the
@@ -15,9 +33,9 @@ set -euo pipefail
 #
 #   APP_DIR/.env          everything the mind and the dash need: LLM keys,
 #                         model names, channel ids, thinker knobs,
-#                         HEADLONG_ALERT_TOKEN (see below)
+#                         LIBRARIAN_ALERT_TOKEN (see below)
 #   APP_DIR/.env.bridge   SLACK_BOT_TOKEN and SLACK_APP_TOKEN, mode 600,
-#                         loaded by headlong-slack-bridge.service only and
+#                         loaded by librarian-slack-bridge.service only and
 #                         listed as InaccessiblePaths in the thinkers
 #                         sandbox (deploy/thinkers-sandbox.sh)
 #
@@ -26,7 +44,7 @@ set -euo pipefail
 #
 # The alert scripts (thinkers-death/failure/silence-alert.sh) run inside
 # the thinkers unit, so they cannot read .env.bridge either. They post
-# with HEADLONG_ALERT_TOKEN from .env. On first split that is seeded as a
+# with LIBRARIAN_ALERT_TOKEN from .env. On first split that is seeded as a
 # COPY of the bot token so alerts keep working, with a comment saying so:
 # the split is only complete once you replace it with a token from a
 # dedicated alert-only Slack app (chat:write to the alert channel). Until
@@ -68,7 +86,7 @@ tmpb=$(mktemp "$APP_DIR/.env.bridge.XXXXXX")
 if [[ -f "$BRIDGE" ]]; then
     grep -Ev "^[[:space:]]*(${moving_pattern})=" "$BRIDGE" > "$tmpb" || true
 else
-    printf '# Slack bridge tokens. Loaded by headlong-slack-bridge.service only;\n# unreadable from inside a wake (thinkers sandbox). Written by\n# deploy/split-bridge-env.sh from the root .env.\n' > "$tmpb"
+    printf '# Slack bridge tokens. Loaded by librarian-slack-bridge.service only;\n# unreadable from inside a wake (thinkers sandbox). Written by\n# deploy/split-bridge-env.sh from the root .env.\n' > "$tmpb"
 fi
 printf '%s\n' "$moving" >> "$tmpb"
 chmod 600 "$tmpb"
@@ -78,12 +96,12 @@ mv "$tmpb" "$BRIDGE"
 # .env: drop the moved lines, seed the alert token if absent.
 tmpe=$(mktemp "$APP_DIR/.env.XXXXXX")
 grep -Ev "^[[:space:]]*(${pattern})=" "$ENV" > "$tmpe" || true
-if ! grep -qE '^[[:space:]]*HEADLONG_ALERT_TOKEN=' "$tmpe"; then
+if ! grep -qE '^[[:space:]]*LIBRARIAN_ALERT_TOKEN=' "$tmpe"; then
     bot=$(printf '%s\n' "$moving" | sed -n 's/^[[:space:]]*SLACK_BOT_TOKEN=//p' | tail -n 1)
     if [[ -n "$bot" ]]; then
         printf '\n# Slack tokens moved to .env.bridge by deploy/split-bridge-env.sh (%s).\n' "$stamp" >> "$tmpe"
-        printf '# HEADLONG_ALERT_TOKEN is what the box alert scripts post with. Seeded as a\n# copy of the bot token; replace it with a dedicated alert-only app token to\n# finish the split (see deploy/split-bridge-env.sh).\n' >> "$tmpe"
-        printf 'HEADLONG_ALERT_TOKEN=%s\n' "$bot" >> "$tmpe"
+        printf '# LIBRARIAN_ALERT_TOKEN is what the box alert scripts post with. Seeded as a\n# copy of the bot token; replace it with a dedicated alert-only app token to\n# finish the split (see deploy/split-bridge-env.sh).\n' >> "$tmpe"
+        printf 'LIBRARIAN_ALERT_TOKEN=%s\n' "$bot" >> "$tmpe"
     fi
 else
     printf '\n# Slack tokens moved to .env.bridge by deploy/split-bridge-env.sh (%s).\n' "$stamp" >> "$tmpe"

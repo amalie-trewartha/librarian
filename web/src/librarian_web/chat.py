@@ -8,8 +8,8 @@ meant ~3.5GB of transient dicts per poll and was a main driver of the
 
 from typing import Any
 
-from headlong_web.chat_links import resolve_source_url
-from headlong_web.trajectory import CHAT_MESSAGE_TYPES as MESSAGE_TYPES
+from librarian_web.chat_links import resolve_source_url
+from librarian_web.trajectory import CHAT_MESSAGE_TYPES as MESSAGE_TYPES
 
 
 def chat_view(

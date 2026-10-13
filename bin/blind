@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (bin/librarian-env).
+for _le in "$(dirname "${BASH_SOURCE[0]}")/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/bin/librarian-env"; do
+    # shellcheck source=/dev/null
+    if [[ -f "$_le" ]]; then . "$_le"; break; fi
+done; unset _le
+
 set -euo pipefail
 
 # blind — run a subagent that cannot see the mind's trajectory.
@@ -119,7 +125,7 @@ printf 'blind: %s run in %s\n' "${role:-adhoc}" "${work#"$PWD"/}" >&2
 # runtime's outcome rule instead.
 answer=$(cd "$work/files" && env -u _SHELLM_PARENT_TRAJ_ID -u _SHELLM_PARENT_RUN -u _SHELLM_ROOT_RUNDIR \
     -u TRAJ_ID -u ROOT_TRAJ_ID -u SHELLM_TRIGGER_STEP_ID -u SHELLM_RUN_ID_OUT \
-    HEADLONG_LIBRARIAN=0 LIBRARIAN_STORE=/nonexistent/librarian.sqlite \
+    LIBRARIAN_MEMORY=0 LIBRARIAN_STORE=/nonexistent/librarian.sqlite \
     shellm -q --max-iterations "$iters" ${model_args[@]+"${model_args[@]}"} ${env_args[@]+"${env_args[@]}"} \
     --workdir "$work/files" --traj-dir "$work/traj" --prompt-file "$work/prompt.md") \
     || die "subagent failed (rc=$?); its trajectory is in $work/traj"

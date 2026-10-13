@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (bin/librarian-env).
+for _le in "$(dirname "${BASH_SOURCE[0]}")/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/bin/librarian-env"; do
+    # shellcheck source=/dev/null
+    if [[ -f "$_le" ]]; then . "$_le"; break; fi
+done; unset _le
+
 set -euo pipefail
 
 # shellm — Recursive LM in Bash
@@ -40,9 +46,9 @@ _shellm_load_env() {
 }
 _SHELLM_SCRIPT_PATH=$(realpath "${BASH_SOURCE[0]:-$0}" 2>/dev/null || printf '%s\n' "${BASH_SOURCE[0]:-$0}")
 _shellm_load_env ".env" || true
-# State home: HEADLONG_HOME (framework) or SHELLM_HOME (tool-level; the
-# thinkers dispatcher exports it per-identity) if set; else ~/.headlong.
-_shellm_home="${HEADLONG_HOME:-${SHELLM_HOME:-$HOME/.headlong}}"
+# State home: LIBRARIAN_HOME (framework) or SHELLM_HOME (tool-level; the
+# thinkers dispatcher exports it per-identity) if set; else ~/.librarian.
+_shellm_home="${LIBRARIAN_HOME:-${SHELLM_HOME:-$HOME/.librarian}}"
 _shellm_load_env "${SHELLM_CONF_DIR:-$_shellm_home}/.env" || true
 SHELLM_TRAJ_DIR="${SHELLM_TRAJ_DIR:-${TRAJ_DIR:-$_shellm_home/trajectories}}"
 SHELLM_ENVS_DIR="${SHELLM_ENVS_DIR:-$_shellm_home/envs}"
@@ -180,7 +186,7 @@ die() { echo "shellm: error: $*" >&2; exit 1; }
 # touches ONLY a loopback authority host — a substring replace would mangle
 # hosts like mylocalhost.dev or path segments containing the name, and
 # redirect a Bearer-keyed request to a host nobody configured. The same
-# helpers exist in tools/headlong-init (this repo duplicates small helpers
+# helpers exist in tools/librarian-init (this repo duplicates small helpers
 # rather than sharing a lib; keep the copies identical).
 
 # _shellm_url_host <url> — the authority's host, IPv6 brackets stripped.
@@ -305,7 +311,7 @@ Options:
                          earlier steps included) or "run" (only this run's
                          steps, prompt pinned whole)
   --traj-dir DIR         Trajectory directory (default: <state-home>/trajectories,
-                         where the state home is ~/.headlong)
+                         where the state home is ~/.librarian)
   --var NAME=VALUE       Set env var for generated code (repeatable)
   --var NAME             Forward NAME from the current environment. Use this for
                          secrets: the value stays off every command line
@@ -1102,7 +1108,7 @@ docker_setup() {
     local -a install_packages=(jq curl python3 tmux sudo)
 
     local tool tool_path
-    local -a shellm_tools=(llm traj context shellm-explore headlong skills mem shellm-docker shellm-docker-broker)
+    local -a shellm_tools=(llm traj context shellm-explore librarian skills mem shellm-docker shellm-docker-broker)
     for tool in "${shellm_tools[@]}"; do
         tool_path=$(resolve_shellm_tool_path "$shellm_path" "$tool" || true)
         [[ -n "$tool_path" ]] || continue
@@ -2111,7 +2117,7 @@ build_system_prompt() {
         printf '%s\n' "$SHELLM_SYSTEM_PROMPT"
     else
     cat <<'SYSPROMPT'
-You are running in shellm, headlong's bash agent loop: you solve tasks by generating and executing bash code.
+You are running in shellm, librarian's bash agent loop: you solve tasks by generating and executing bash code.
 
 IMPORTANT: End your response with exactly ONE ```bash code block. Your response is NOT streamed — code blocks are not executed until your entire response is complete. Combine multiple steps into a single script. Only the first code block is executed; all others are silently discarded.
 Never use <tool_call>, <function=bash>, <parameter=...> or <bash> tags: this runtime is not a tool-calling API and only reads ```bash fences.
@@ -2664,12 +2670,12 @@ run_loop() {
             die "--docker-access $SHELLM_DOCKER_ACCESS requested, but shellm cannot reach a Docker daemon from here"
         fi
         if [[ ! -f /.dockerenv || "$SHELLM_ALLOW_NESTED_DOCKER" == "1" ]]; then
-            # The operator was promised a sandbox (headlong-init writes
+            # The operator was promised a sandbox (librarian-init writes
             # SHELLM_REQUIRE_DOCKER=1 when Docker was present at install
             # time): a dead daemon is then a hard error, never a silent
             # fallback to running on the host.
             if [[ "$SHELLM_REQUIRE_DOCKER" == "1" ]]; then
-                die "SHELLM_REQUIRE_DOCKER=1 is set, but no Docker daemon is reachable. Start Docker, or set SHELLM_REQUIRE_DOCKER=0 in your Headlong .env to allow unsandboxed runs."
+                die "SHELLM_REQUIRE_DOCKER=1 is set, but no Docker daemon is reachable. Start Docker, or set SHELLM_REQUIRE_DOCKER=0 in your Librarian .env to allow unsandboxed runs."
             fi
             progress "\033[1;33mWARNING: Docker not found — running on host. Use of Docker is recommended!\033[0m"
         fi

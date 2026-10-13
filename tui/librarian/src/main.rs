@@ -402,8 +402,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while i < args.len() {
         match args[i].as_str() {
             "-h" | "--help" | "help" => {
-                println!("headlong-tui — Interactive terminal UI for Headlong\n");
-                println!("Usage: headlong-tui [MODE] [--from NAME]\n");
+                println!("librarian-tui — Interactive terminal UI for Librarian\n");
+                println!("Usage: librarian-tui [MODE] [--from NAME]\n");
                 println!("Modes:");
                 println!("  chat        Chat with the identity (default)");
                 println!("  thinkers    Monitor & control thinkers");

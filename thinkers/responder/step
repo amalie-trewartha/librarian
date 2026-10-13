@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (bin/librarian-env).
+for _le in "$(dirname "${BASH_SOURCE[0]}")/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/bin/librarian-env"; do
+    # shellcheck source=/dev/null
+    if [[ -f "$_le" ]]; then . "$_le"; break; fi
+done; unset _le
+
 set -euo pipefail
 
 # responder/step — Immediate chat reply thinker.
@@ -407,7 +413,7 @@ fi
 # Reply voice and shape
 # ---------------------------------------------------------------------------
 # The voice is concrete bans, not adjectives. The 2026-09-16 replay of 57
-# real prompts (headlong-experiments/responder-defer) showed "first person,
+# real prompts (librarian-experiments/responder-defer) showed "first person,
 # natural, conversational, concise" left 94% of replies with em dashes, a
 # third over 400 characters and a fifth in three or more paragraphs; this
 # block cut those to 3%, 3% and 0% and a blind judge preferred its
@@ -743,7 +749,7 @@ fi
 #
 # The model does not always put the DEFER line first, or only once. Nemotron
 # has emitted it after the holding text, and on 2026-09-14 twice: the holding
-# sentence glued onto the first copy ("...headlong mainLet me open that PR
+# sentence glued onto the first copy ("...librarian mainLet me open that PR
 # for you.") and a clean copy on the next line, so line 1 became the request
 # and line 2, still starting "DEFER:", was sent to Nick. So: the request is
 # the first DEFER line wherever it is (a shorter DEFER line that is a prefix

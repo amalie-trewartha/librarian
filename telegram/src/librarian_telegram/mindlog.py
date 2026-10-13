@@ -4,7 +4,7 @@ The trajectory is append-only JSONL; the bridge keeps a persisted byte
 offset so restarts neither replay old steps nor miss new ones. Only
 complete (newline-terminated) lines are consumed.
 
-Copied from headlong_slack.mindlog (the bridges are independent uv
+Copied from librarian_slack.mindlog (the bridges are independent uv
 projects) — keep fixes in sync.
 """
 
@@ -17,7 +17,7 @@ from typing import Any, Callable, Iterator
 
 
 def find_trajectory(identity_dir: Path) -> Path:
-    """Locate the mind log, mirroring headlong_web.discovery.find_root_traj_dir."""
+    """Locate the mind log, mirroring librarian_web.discovery.find_root_traj_dir."""
     info = {}
     info_txt = identity_dir / "info.txt"
     if info_txt.is_file():
@@ -35,7 +35,7 @@ def find_trajectory(identity_dir: Path) -> Path:
         for candidate in sorted(traj_root.iterdir()):
             if (candidate / "trajectory.jsonl").is_file():
                 return candidate / "trajectory.jsonl"
-    raise SystemExit(f"headlong-telegram-bridge: no trajectory.jsonl under {traj_root}")
+    raise SystemExit(f"librarian-telegram-bridge: no trajectory.jsonl under {traj_root}")
 
 
 def read_new(path: Path, offset: int) -> tuple[list[dict[str, Any]], int]:

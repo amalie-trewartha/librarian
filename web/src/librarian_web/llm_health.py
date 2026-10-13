@@ -18,8 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from statistics import median
 
-from headlong_web import discovery, liveness
-from headlong_web.env import getenv
+from librarian_web import discovery, liveness
+from librarian_web.env import getenv
 
 # Scan at most this much of the tail of each mind log
 _TAIL_BYTES = 400 * 1024
@@ -146,8 +146,13 @@ def _identity_signals(identity: discovery.IdentityInfo, now: float) -> dict | No
 
 
 def _state_home() -> Path:
-    """Same resolution as bin/llm: HEADLONG_HOME, SHELLM_HOME, ~/.headlong."""
-    return Path(getenv("HEADLONG_HOME") or os.path.expanduser("~/.headlong"))
+    """Same resolution as bin/llm: LIBRARIAN_HOME (or HEADLONG_HOME), SHELLM_HOME,
+    then ~/.librarian, or ~/.headlong when only that exists."""
+    home = getenv("LIBRARIAN_HOME")
+    if home:
+        return Path(home)
+    new, old = Path(os.path.expanduser("~/.librarian")), Path(os.path.expanduser("~/.headlong"))
+    return old if (old.is_dir() and not new.is_dir()) else new
 
 
 def last_call() -> dict | None:

@@ -7,9 +7,9 @@ Reference documentation.
 - [project-mode-setup.md](project-mode-setup.md) takes a fresh machine to a
   running project-mode agent (long unattended research runs), Bedrock
   credentials and budgets included.
-- [headlong-bedrock-env](headlong-bedrock-env) writes a new install's
-  `~/.headlong/.env` (and its rotatable key file) from an `aws.env`. Run
-  `docs/headlong-bedrock-env ~/aws.env --check`.
+- [librarian-bedrock-env](librarian-bedrock-env) writes a new install's
+  `~/.librarian/.env` (and its rotatable key file) from an `aws.env`. Run
+  `docs/librarian-bedrock-env ~/aws.env --check`.
 - [shellm.md](shellm.md) is the shellm engine reference: the loop,
   context passing, Docker sandboxing, envs, the `llm` tool, and options.
 - [RELEASING.md](RELEASING.md) is the playbook for tagging a release on

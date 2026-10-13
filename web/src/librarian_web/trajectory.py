@@ -16,8 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from headlong_web.chat_links import resolve_source_url
-from headlong_web.env import getenv
+from librarian_web.chat_links import resolve_source_url
+from librarian_web.env import getenv
 
 # Cap on the SOURCE bytes of raw step records kept parsed in memory, per
 # cached trajectory (Python dicts run ~6x the jsonl bytes — audel's 590MB
@@ -26,7 +26,7 @@ from headlong_web.env import getenv
 # ids, run links) but drop `raw`; any window rehydrates with one
 # contiguous disk read via the recorded byte spans (append-only file, so
 # spans never move).
-_RAW_BUDGET_BYTES = int(getenv("HEADLONG_WEB_RAW_CACHE_MB", "48")) * 1024 * 1024
+_RAW_BUDGET_BYTES = int(getenv("LIBRARIAN_WEB_RAW_CACHE_MB", "48")) * 1024 * 1024
 
 # Cold-parse read size: refresh streams the jsonl in chunks this big,
 # evicting between chunks, so first-load peak memory is O(budget + chunk)

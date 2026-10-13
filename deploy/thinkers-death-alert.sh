@@ -1,8 +1,26 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (same mapping as bin/librarian-env).
+if [[ -z "${LIBRARIAN_MEMORY+x}" && -n "${HEADLONG_LIBRARIAN+x}" ]]; then export LIBRARIAN_MEMORY="$HEADLONG_LIBRARIAN"; fi
+if [[ -z "${LIBRARIAN_SRC+x}" && -n "${HEADLONG_LIBRARIAN_SRC+x}" ]]; then export LIBRARIAN_SRC="$HEADLONG_LIBRARIAN_SRC"; fi
+for _le_hv in $(compgen -A variable HEADLONG_ 2>/dev/null); do
+    case "$_le_hv" in HEADLONG_LIBRARIAN|HEADLONG_LIBRARIAN_SRC) continue ;; esac
+    _le_lv="LIBRARIAN_${_le_hv#HEADLONG_}"
+    if [[ -z "${!_le_lv+x}" ]]; then export "$_le_lv=${!_le_hv}"; fi
+done
+unset _le_hv _le_lv
+if [[ -z "${LIBRARIAN_HOME:-}" && -n "${HOME:-}" && ! -d "$HOME/.librarian" && -d "$HOME/.headlong" ]]; then
+    export LIBRARIAN_HOME="$HOME/.headlong"
+fi
+if [[ -z "${LIBRARIAN_THINKERS_TEMPLATES:-}" && -n "${HOME:-}" ]]; then
+    if [[ ! -d "$HOME/.librarian-thinkers" && -d "$HOME/.headlong-thinkers" ]]; then
+        export LIBRARIAN_THINKERS_TEMPLATES="$HOME/.headlong-thinkers"
+    fi
+fi
+
 set -euo pipefail
 
 # deploy/thinkers-death-alert.sh — per-death and back-up Slack notices for
-# headlong-thinkers@<identity>.service. Companion to
+# librarian-thinkers@<identity>.service. Companion to
 # deploy/thinkers-failure-alert.sh (which, with Restart=on-failure on the
 # unit, only fires when auto-restart gives up); this one fires on EVERY
 # unclean death and on the recovery:
@@ -21,7 +39,7 @@ set -euo pipefail
 # otherwise stay silent (normal starts are not news).
 #
 # Same failure-open contract as thinkers-failure-alert.sh: missing config
-# degrades to a line in /var/tmp/headlong-thinkers-alert.log, never a unit
+# degrades to a line in /var/tmp/librarian-thinkers-alert.log, never a unit
 # failure — the alert path must not add its own failure mode on top of a
 # dead mind.
 
@@ -29,9 +47,9 @@ APP_DIR="${1:?usage: thinkers-death-alert.sh APP_DIR IDENTITY died|started}"
 IDENT="${2:?identity name required}"
 MODE="${3:?mode required (died|started)}"
 
-FALLBACK_LOG="/var/tmp/headlong-thinkers-alert.log"
+FALLBACK_LOG="/var/tmp/librarian-thinkers-alert.log"
 RUN_DIR="$APP_DIR/.identities/$IDENT/run"
-unit="headlong-thinkers@${IDENT}.service"
+unit="librarian-thinkers@${IDENT}.service"
 
 if [[ -r "$APP_DIR/.env" ]]; then
     set -a
@@ -40,18 +58,18 @@ if [[ -r "$APP_DIR/.env" ]]; then
     set +a
 fi
 
-# Framework var: HEADLONG_ first, legacy SHELLM_ fallback (the box .env still
+# Framework var: LIBRARIAN_ first, legacy SHELLM_ fallback (the box .env still
 # carries the old name until it is rewritten).
-ALERT_CHANNEL="${HEADLONG_ALERT_CHANNEL:-${SHELLM_ALERT_CHANNEL:-}}"
-# Posting token: HEADLONG_ALERT_TOKEN (seeded by deploy/split-bridge-env.sh;
+ALERT_CHANNEL="${LIBRARIAN_ALERT_CHANNEL:-${SHELLM_ALERT_CHANNEL:-}}"
+# Posting token: LIBRARIAN_ALERT_TOKEN (seeded by deploy/split-bridge-env.sh;
 # ideally a dedicated alert-only app). The bridge's own token is in
 # .env.bridge, which this script cannot read inside the thinkers sandbox.
-ALERT_TOKEN="${HEADLONG_ALERT_TOKEN:-${SLACK_BOT_TOKEN:-}}"
+ALERT_TOKEN="${LIBRARIAN_ALERT_TOKEN:-${SLACK_BOT_TOKEN:-}}"
 
 post_slack() {
     local text="$1"
     if [[ -z "$ALERT_TOKEN" || -z "$ALERT_CHANNEL" ]]; then
-        printf '%s [thinkers-death-alert] %s (%s); Slack not configured (need HEADLONG_ALERT_TOKEN + HEADLONG_ALERT_CHANNEL in %s/.env)\n' \
+        printf '%s [thinkers-death-alert] %s (%s); Slack not configured (need LIBRARIAN_ALERT_TOKEN + LIBRARIAN_ALERT_CHANNEL in %s/.env)\n' \
             "$(date -u +%FT%TZ)" "$unit" "$MODE" "$APP_DIR" >> "$FALLBACK_LOG"
         return 0
     fi

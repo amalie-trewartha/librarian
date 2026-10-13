@@ -8,7 +8,7 @@ bridge wrote the token to journald on every poll.
 import io
 import logging
 
-from headlong_telegram.cli import RedactingFormatter, configure_logging, redact
+from librarian_telegram.cli import RedactingFormatter, configure_logging, redact
 
 TOKEN_URL = "https://api.telegram.org/bot123456789:FAKE-token-for-tests_not-a-real-one/getUpdates"
 

@@ -643,7 +643,7 @@ def _add_body(p: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="librarian", description="Headlong's memory store and context packer.")
+    p = argparse.ArgumentParser(prog="librarian", description="Librarian's memory store and context packer.")
     p.add_argument("--store", help="store path (default $LIBRARIAN_STORE or $IDENTITY_DIR/librarian/store.sqlite)")
     p.add_argument("--text", dest="text_mode", action="store_true", help="human/model-readable output instead of JSON")
     p.add_argument("--json", action="store_true", help="JSON output (default)")

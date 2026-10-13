@@ -3,7 +3,7 @@
 #
 # Usage: deploy/scripts/collab status [--check]     every box: state, address, user, launch time
 #        deploy/scripts/collab check [<box>]         on-box audit: sshd settings, root, keys, ports,
-#                                                    upgrades, SSH activity, Headlong health
+#                                                    upgrades, SSH activity, Librarian health
 #        deploy/scripts/collab keys <box>            push the applied ssh_public_keys to the box
 #                                                    (edit terraform.tfvars, terraform apply, then this)
 #        deploy/scripts/collab run <box> '<command>' one command on a box over SSM (24KB output cap)
@@ -87,9 +87,9 @@ acc=$(journalctl -u ssh --since -7d --no-pager 2>/dev/null | grep -c "Accepted p
 fail=$(journalctl -u ssh --since -24h --no-pager 2>/dev/null | grep -cE "Invalid user|Failed|authentication failure" || true)
 echo "ssh   ${acc:-0} key logins in 7d, ${fail:-0} failed attempts in 24h (background scanning is normal)"
 journalctl -u ssh --since -7d --no-pager 2>/dev/null | grep "Accepted publickey" | tail -3 | sed "s/^/      /"
-echo "web   $(curl -fsS localhost:8080/api/health 2>/dev/null || echo DOWN) unit $(systemctl is-active headlong-web 2>/dev/null)"
+echo "web   $(curl -fsS localhost:8080/api/health 2>/dev/null || echo DOWN) unit $(systemctl is-active librarian-web 2>/dev/null)"
 echo "code  $(sudo -u shellm git -C /opt/shellm/app log -1 --oneline 2>/dev/null || echo "no checkout yet")"
-minds=$(systemctl list-units "headlong-thinkers@*" --no-legend --plain 2>/dev/null | awk "{print \$1\" \"\$4}" | paste -sd", " -)
+minds=$(systemctl list-units "librarian-thinkers@*" --no-legend --plain 2>/dev/null | awk "{print \$1\" \"\$4}" | paste -sd", " -)
 echo "minds ${minds:-none running}"
 echo "disk  $(df -h / | awk "NR==2 {print \$5\" of \"\$2\" used\"}")"
 echo "up    $(uptime -p 2>/dev/null)"
@@ -169,7 +169,7 @@ echo \"authorized_keys for \$u now has \$(grep -cE '^(ssh-|ecdsa-|sk-)' \"/home/
 do_ssh_config() {
     local box
     for box in $(box_names); do
-        printf 'Host headlong-%s\n    HostName %s\n    User %s\n    IdentitiesOnly yes\n\n' \
+        printf 'Host librarian-%s\n    HostName %s\n    User %s\n    IdentitiesOnly yes\n\n' \
             "$box" "$(box_field "$box" public_ip)" "$(box_field "$box" user)"
     done
 }

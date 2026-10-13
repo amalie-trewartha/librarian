@@ -1,4 +1,4 @@
-from headlong_telegram import tgfmt
+from librarian_telegram import tgfmt
 
 
 def test_to_html_escapes_and_converts():

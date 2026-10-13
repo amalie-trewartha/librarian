@@ -143,7 +143,7 @@ Audel mind log export, built $(date -u +%FT%TZ) on the box.
 Identity: $(basename "$IDENT_DIR")   Root trajectory: $(basename "$ROOT")
 Steps: $(wc -l < "$D/trajectory.jsonl")   Source size: $(stat -c %s "$TRAJ") bytes
 
-trajectory.jsonl is Headlong's append-only mind log, one JSON step per
+trajectory.jsonl is Librarian's append-only mind log, one JSON step per
 line, oldest first. Line 1 is the trajectory header. Useful fields:
 type, ts, step_id, source, content. Step types you will see:
   message        chat in/out (from, to; source "chat" = stamped by bin/chat)
@@ -160,7 +160,7 @@ Quick looks:
   jq -r 'select(.type=="message") | "\(.ts) \(.from)->\(.to): \(.content)"' trajectory.jsonl
   jq -r 'select(.type=="thought") | "\(.ts) \(.content)"' trajectory.jsonl | less
   jq -r '.type' trajectory.jsonl | sort | uniq -c | sort -rn
-The Headlong repo (github.com/laude-institute/headlong) has bin/view for
+The Librarian repo (github.com/amalie-trewartha/librarian) has bin/view for
 a rendered read of a trajectory file.
 EOF
 

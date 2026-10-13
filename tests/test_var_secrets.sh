@@ -47,7 +47,7 @@ export PATH="$WORK/toolbin:$PATH"
 export LLM_COUNT="$WORK/count"
 export LLM_SCRIPT="$WORK/script"
 export HOME="$WORK/home"
-export HEADLONG_HOME="$WORK/home/.headlong"
+export LIBRARIAN_HOME="$WORK/home/.librarian"
 export ANTHROPIC_API_KEY="test-key"
 export SHELLM_MODEL="test-model"
 export SHELLM_ENV=local
@@ -136,7 +136,7 @@ else
 fi
 
 # --- 3. recorded command is redacted; literal value nowhere in state ----------
-row=$(grep -rh '"type":"shellm-run"' "$HEADLONG_HOME" 2>/dev/null | tail -1)
+row=$(grep -rh '"type":"shellm-run"' "$LIBRARIAN_HOME" 2>/dev/null | tail -1)
 if [[ -n "$row" ]] && grep -qF 'OPENROUTER_API_KEY=<redacted>' <<<"$row" \
     && grep -qF 'SERVICE_URL=<redacted>' <<<"$row" \
     && grep -qF 'DATABASE_DSN=<redacted>' <<<"$row" \
@@ -165,17 +165,17 @@ if ! grep -qF "$INHERITED_URL" <<<"$row"; then
 else
     bad "inherited endpoint is absent from the shellm command record"
 fi
-hits=$(grep -rlF "$LEGACY" "$HEADLONG_HOME" "$WORK/wd" 2>/dev/null | wc -l | tr -d ' ')
+hits=$(grep -rlF "$LEGACY" "$LIBRARIAN_HOME" "$WORK/wd" 2>/dev/null | wc -l | tr -d ' ')
 if [[ "$hits" -eq 0 ]]; then
     ok "legacy literal value is nowhere under the state home or workdir"
 else
-    bad "legacy literal value is nowhere under the state home or workdir" "$(grep -rlF "$LEGACY" "$HEADLONG_HOME" "$WORK/wd" | head -3)"
+    bad "legacy literal value is nowhere under the state home or workdir" "$(grep -rlF "$LEGACY" "$LIBRARIAN_HOME" "$WORK/wd" | head -3)"
 fi
-hits=$(grep -rlF "$SECRET" "$HEADLONG_HOME" 2>/dev/null | wc -l | tr -d ' ')
+hits=$(grep -rlF "$SECRET" "$LIBRARIAN_HOME" 2>/dev/null | wc -l | tr -d ' ')
 if [[ "$hits" -eq 0 ]]; then
     ok "forwarded secret is nowhere under the state home"
 else
-    bad "forwarded secret is nowhere under the state home" "$(grep -rlF "$SECRET" "$HEADLONG_HOME" | head -3)"
+    bad "forwarded secret is nowhere under the state home" "$(grep -rlF "$SECRET" "$LIBRARIAN_HOME" | head -3)"
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

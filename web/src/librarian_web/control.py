@@ -1,5 +1,5 @@
 """Mutations: shell out to the repo's bash CLIs (thinkers, chat, identity,
-headlong-killall) with the same environment `identity shell` would set.
+librarian-killall) with the same environment `identity shell` would set.
 
 Process management stays in bash — this module only builds env, serializes
 concurrent mutations per identity, and maps CLI failures to HTTP errors.
@@ -15,18 +15,18 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-from headlong_web import envfile
-from headlong_web.discovery import IdentityInfo, _parse_info_txt
-from headlong_web.env import getenv
+from librarian_web import envfile
+from librarian_web.discovery import IdentityInfo, _parse_info_txt
+from librarian_web.env import getenv
 
-# Repo layout: <repo>/web/src/headlong_web/control.py -> <repo>/bin
+# Repo layout: <repo>/web/src/librarian_web/control.py -> <repo>/bin
 BIN_DIR = Path(
-    getenv("HEADLONG_BIN_DIR") or Path(__file__).resolve().parents[3] / "bin"
+    getenv("LIBRARIAN_BIN_DIR") or Path(__file__).resolve().parents[3] / "bin"
 )
-# Management CLIs (identity, headlong-killall) live in <repo>/tools, apart from
+# Management CLIs (identity, librarian-killall) live in <repo>/tools, apart from
 # the core agent tools in bin/.
 TOOLS_DIR = Path(
-    getenv("HEADLONG_TOOLS_DIR") or Path(__file__).resolve().parents[3] / "tools"
+    getenv("LIBRARIAN_TOOLS_DIR") or Path(__file__).resolve().parents[3] / "tools"
 )
 
 DEFAULT_TIMEOUT = 60
@@ -106,27 +106,27 @@ def _wrap(cli: str, *args: str) -> list[str]:
 
 
 # --- systemd-managed dispatchers -------------------------------------------
-# On provisioned boxes HEADLONG_THINKERSCTL (legacy SHELLM_THINKERSCTL) points
+# On provisioned boxes LIBRARIAN_THINKERSCTL (legacy SHELLM_THINKERSCTL) points
 # at a root-owned wrapper
-# (deploy/headlong-thinkersctl, sudo rule in deploy/sudoers-headlong-thinkers)
+# (deploy/librarian-thinkersctl, sudo rule in deploy/sudoers-librarian-thinkers)
 # that maps start/stop/restart/is-active onto `systemctl <action>
-# headlong-thinkers@<identity>`. Routing the dispatcher lifecycle through it
-# gives each mind its own cgroup instead of headlong-web's — a dash-started
+# librarian-thinkers@<identity>`. Routing the dispatcher lifecycle through it
+# gives each mind its own cgroup instead of librarian-web's — a dash-started
 # dispatcher used to die orphaned when this service was OOM-killed or
 # restarted (2026-08-10 outage). Unset (dev, tests): the direct CLI paths
 # below behave exactly as before.
 
 
 def _thinkersctl_path() -> str:
-    return getenv("HEADLONG_THINKERSCTL", "")
+    return getenv("LIBRARIAN_THINKERSCTL", "")
 
 
 def _thinkersctl(
     action: str, identity_name: str, timeout: int = DEFAULT_TIMEOUT
 ) -> subprocess.CompletedProcess:
-    # HEADLONG_THINKERSCTL_SUDO (legacy SHELLM_THINKERSCTL_SUDO) exists for
+    # LIBRARIAN_THINKERSCTL_SUDO (legacy SHELLM_THINKERSCTL_SUDO) exists for
     # tests, which can't sudo; empty string means "run the wrapper directly".
-    sudo = getenv("HEADLONG_THINKERSCTL_SUDO", "sudo -n").split()
+    sudo = getenv("LIBRARIAN_THINKERSCTL_SUDO", "sudo -n").split()
     cmd = [*sudo, _thinkersctl_path(), action, identity_name]
     try:
         return subprocess.run(
@@ -140,7 +140,7 @@ def _thinkersctl(
     except subprocess.TimeoutExpired as exc:
         raise HTTPException(
             status_code=500,
-            detail={"message": f"headlong-thinkersctl {action} timed out after {timeout}s"},
+            detail={"message": f"librarian-thinkersctl {action} timed out after {timeout}s"},
         ) from exc
 
 
@@ -450,7 +450,7 @@ def identity_import(root: Path, archive: Path, name: str | None = None) -> dict:
 def killall(dry_run: bool = False) -> dict:
     env = os.environ.copy()
     env["PATH"] = f"{BIN_DIR}:{TOOLS_DIR}:{env.get('PATH', '')}"
-    args = [str(TOOLS_DIR / "headlong-killall")] + (["--dry-run"] if dry_run else [])
+    args = [str(TOOLS_DIR / "librarian-killall")] + (["--dry-run"] if dry_run else [])
     proc = run_cli(args, env, BIN_DIR.parent)
     _raise_for_failure(proc)
     return {"ok": True, "dry_run": dry_run, "stdout": proc.stdout, "stderr": proc.stderr}

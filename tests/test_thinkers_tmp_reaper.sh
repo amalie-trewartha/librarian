@@ -38,7 +38,7 @@ mkdir -p "$ROOT/shellm-run.old/tmp" "$ROOT/shellm-run.new" "$ROOT/shellm-exec.ol
 : > "$ROOT/shellm-run.old/tmp/x"
 age "$ROOT/shellm-run.old" 90000; age "$ROOT/shellm-exec.old" 90000; age "$ROOT/keep-me.old" 90000
 
-out=$(HEADLONG_TMP_ROOT="$ROOT" bash "$SCRIPT" /nonexistent ident 2>&1); rc=$?
+out=$(LIBRARIAN_TMP_ROOT="$ROOT" bash "$SCRIPT" /nonexistent ident 2>&1); rc=$?
 [[ "$rc" -eq 0 ]] && ok "exits 0" || bad "exits 0" "rc=$rc $out"
 
 [[ -e "$ROOT/tmp.bigold" ]]      && bad "big stale file reaped"        || ok "big stale file reaped"
@@ -52,18 +52,18 @@ out=$(HEADLONG_TMP_ROOT="$ROOT" bash "$SCRIPT" /nonexistent ident 2>&1); rc=$?
 grep -q 'reaped 2 files, 2 dirs' <<< "$out" && ok "summary line counts what went" || bad "summary line counts what went" "$out"
 
 # nothing to do → no summary line, still exit 0
-out=$(HEADLONG_TMP_ROOT="$ROOT" bash "$SCRIPT" 2>&1); rc=$?
+out=$(LIBRARIAN_TMP_ROOT="$ROOT" bash "$SCRIPT" 2>&1); rc=$?
 [[ "$rc" -eq 0 && -z "$out" ]] && ok "quiet when there is nothing to reap" || bad "quiet when there is nothing to reap" "rc=$rc $out"
 
 # a missing root is not an error
-HEADLONG_TMP_ROOT="$TMP/nope" bash "$SCRIPT" >/dev/null 2>&1 && ok "missing root exits 0" || bad "missing root exits 0"
+LIBRARIAN_TMP_ROOT="$TMP/nope" bash "$SCRIPT" >/dev/null 2>&1 && ok "missing root exits 0" || bad "missing root exits 0"
 
 # --- safety: roots it must refuse, and names it must handle ------------------
 mkdir -p "$ROOT"
 : > "$ROOT/tmp.bait"; age "$ROOT/tmp.bait" 90000
 refused() { # refused ROOT LABEL: script exits 0, says "refusing", touches nothing
     local out
-    out=$(HEADLONG_TMP_ROOT="$1" bash "$SCRIPT" 2>&1); local rc=$?
+    out=$(LIBRARIAN_TMP_ROOT="$1" bash "$SCRIPT" 2>&1); local rc=$?
     if [[ "$rc" -eq 0 ]] && grep -q 'refusing' <<< "$out" && [[ -e "$ROOT/tmp.bait" ]]; then ok "refuses $2"
     else bad "refuses $2" "rc=$rc $out"; fi
 }
@@ -71,12 +71,12 @@ refused / "the root directory"
 refused "$HOME" "HOME"
 refused /usr "a system dir"
 FAKE_HOME="$TMP/homeish/tmp"; mkdir -p "$FAKE_HOME"
-if out=$(HOME="$TMP/homeish" HEADLONG_TMP_ROOT="$TMP" bash "$SCRIPT" 2>&1) && grep -q 'refusing' <<< "$out"; then
+if out=$(HOME="$TMP/homeish" LIBRARIAN_TMP_ROOT="$TMP" bash "$SCRIPT" 2>&1) && grep -q 'refusing' <<< "$out"; then
     ok "refuses an ancestor of HOME even inside the temp tree"
 else bad "refuses an ancestor of HOME even inside the temp tree" "$out"; fi
 # HOME_ancestor check must not misfire when HOME merely shares a prefix string
 mkdir -p "$TMP/rootx"; : > "$TMP/rootx/tmp.old"; age "$TMP/rootx/tmp.old" 90000
-HOME="$TMP/rootxy" HEADLONG_TMP_ROOT="$TMP/rootx" bash "$SCRIPT" >/dev/null 2>&1
+HOME="$TMP/rootxy" LIBRARIAN_TMP_ROOT="$TMP/rootx" bash "$SCRIPT" >/dev/null 2>&1
 [[ -e "$TMP/rootx/tmp.old" ]] && bad "prefix-only HOME match does not block" || ok "prefix-only HOME match does not block"
 # a symlink root resolves before the check
 ln -s / "$ROOT/to-root"
@@ -87,7 +87,7 @@ rm -f "$ROOT/to-root"
 mkdir -p "$TMP/target"; : > "$TMP/target/keep"
 ln -s "$TMP/target" "$ROOT/shellm-run.link"; age "$ROOT/shellm-run.link" 90000
 mkdir -p "$ROOT/shellm-run.withlink"; ln -s "$TMP/target" "$ROOT/shellm-run.withlink/out"; age "$ROOT/shellm-run.withlink" 90000
-HEADLONG_TMP_ROOT="$ROOT" bash "$SCRIPT" >/dev/null 2>&1
+LIBRARIAN_TMP_ROOT="$ROOT" bash "$SCRIPT" >/dev/null 2>&1
 [[ -e "$TMP/target/keep" ]] && ok "symlink targets outside the root survive" || bad "symlink targets outside the root survive"
 [[ -L "$ROOT/shellm-run.link" ]] && ok "a symlink named like a run dir is not touched" || bad "a symlink named like a run dir is not touched"
 [[ -e "$ROOT/shellm-run.withlink" ]] && bad "stale run dir holding a symlink is removed" || ok "stale run dir holding a symlink is removed"
@@ -96,7 +96,7 @@ big "$ROOT/tmp.with space"; age "$ROOT/tmp.with space" 3600
 big "$ROOT/tmp.line1
 line2"; age "$ROOT/tmp.line1
 line2" 3600
-HEADLONG_TMP_ROOT="$ROOT" bash "$SCRIPT" >/dev/null 2>&1
+LIBRARIAN_TMP_ROOT="$ROOT" bash "$SCRIPT" >/dev/null 2>&1
 [[ -e "$ROOT/tmp.with space" ]] && bad "name with a space reaped" || ok "name with a space reaped"
 [[ -e "$ROOT/tmp.line1
 line2" ]] && bad "name with a newline reaped" || ok "name with a newline reaped"

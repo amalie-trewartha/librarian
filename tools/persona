@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (bin/librarian-env).
+for _le in "$(dirname "${BASH_SOURCE[0]}")/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/bin/librarian-env"; do
+    # shellcheck source=/dev/null
+    if [[ -f "$_le" ]]; then . "$_le"; break; fi
+done; unset _le
+
 set -euo pipefail
 
-# persona — talk to and manage a Headlong identity by name, from anywhere.
+# persona — talk to and manage a Librarian identity by name, from anywhere.
 # No cd, no `identity shell` needed.
 #
-# headlong-init links each identity's name to this tool (e.g. `ada`), so the
+# librarian-init links each identity's name to this tool (e.g. `ada`), so the
 # name IS the command:
 #
 #   ada                    chat with them (TUI if built, simple loop otherwise)
@@ -20,12 +26,12 @@ set -euo pipefail
 
 die() { printf 'persona: error: %s\n' "$*" >&2; exit 1; }
 
-# HEADLONG_* env names win; the SHELLM_* internal names stay because the
+# LIBRARIAN_* env names win; the SHELLM_* internal names stay because the
 # tools underneath (thinkers, llm, shellm) still read them.
-# State home: HEADLONG_HOME/SHELLM_HOME if set; else ~/.headlong.
-SHELLM_HOME="${HEADLONG_HOME:-${SHELLM_HOME:-$HOME/.headlong}}"
-SHELLM_APP_DIR="${HEADLONG_APP_DIR:-${SHELLM_APP_DIR:-}}"
-SHELLM_WEB_ARGS="${HEADLONG_WEB_ARGS:-${SHELLM_WEB_ARGS:-}}"
+# State home: LIBRARIAN_HOME/SHELLM_HOME if set; else ~/.librarian.
+SHELLM_HOME="${LIBRARIAN_HOME:-${SHELLM_HOME:-$HOME/.librarian}}"
+SHELLM_APP_DIR="${LIBRARIAN_APP_DIR:-${SHELLM_APP_DIR:-}}"
+SHELLM_WEB_ARGS="${LIBRARIAN_WEB_ARGS:-${SHELLM_WEB_ARGS:-}}"
 
 # ---------------------------------------------------------------------------
 # Locate the checkout and the identity
@@ -55,11 +61,11 @@ _resolve_app_dir() {
     return 1
 }
 
-APP_DIR=$(_resolve_app_dir) || die "can't find the headlong checkout. Set HEADLONG_APP_DIR=/path/to/headlong"
+APP_DIR=$(_resolve_app_dir) || die "can't find the librarian checkout. Set LIBRARIAN_APP_DIR=/path/to/librarian"
 export PATH="$APP_DIR/bin:$APP_DIR/tools:$PATH"
 IDENTITY_ROOT="$APP_DIR/.identities"
 
-# Env files, real environment first (same layering as llm and headlong-init).
+# Env files, real environment first (same layering as llm and librarian-init).
 # Without this, activate's THINK_MODEL fallback can't see SHELLM_MODEL and
 # the mind starts on the wrong model.
 _load_env() {
@@ -97,7 +103,7 @@ fi
 
 # The command name to show in messages (`ada stop` vs `persona ada stop`):
 # the bare name only if it actually resolves to a persona link — it may
-# instead be an unrelated command or a headlong tool (e.g. an identity named
+# instead be an unrelated command or a librarian tool (e.g. an identity named
 # "chat").
 CMD="persona $NAME"
 if [[ "$(readlink "$(command -v "$NAME" 2>/dev/null)" 2>/dev/null)" == *"/persona" ]]; then
@@ -203,10 +209,10 @@ cmd_start() {
     if _dispatcher_pid >/dev/null; then
         echo "$NAME's mind is already running."
     else
-        # Keep this set in step with headlong-init: the responder is what
+        # Keep this set in step with librarian-init: the responder is what
         # answers the human. Starting only the monolith leaves every message
         # waiting on its long reasoning loop, so a stop/start cycle silently
-        # destroys interactive latency until the next headlong-init.
+        # destroys interactive latency until the next librarian-init.
         thinkers start monolith responder
         echo "$NAME is thinking again."
     fi
@@ -232,8 +238,8 @@ cmd_status() {
     # Project mode: open questions for a human go first, every time, for as
     # long as they are open (design/long_autonomy.md).
     if [[ -f "$IDENTITY_ROOT/$NAME/workdir/project/charter.md" ]]; then
-        "$APP_DIR/tools/headlong-project" banner "$IDENTITY_ROOT/$NAME" 2>/dev/null || true
-        echo "project: $APP_DIR/tools/headlong-project status $NAME"
+        "$APP_DIR/tools/librarian-project" banner "$IDENTITY_ROOT/$NAME" 2>/dev/null || true
+        echo "project: $APP_DIR/tools/librarian-project status $NAME"
         echo
     fi
     local pid
@@ -266,7 +272,7 @@ _dash_start() {
     mkdir -p "$SHELLM_HOME/logs" "$SHELLM_HOME/run"
     pid=$(cat "$pidfile" 2>/dev/null || true)
     if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
-        command -v uv >/dev/null 2>&1 || { echo "the dash needs uv — run headlong-init to set it up" >&2; return 1; }
+        command -v uv >/dev/null 2>&1 || { echo "the dash needs uv — run librarian-init to set it up" >&2; return 1; }
         # In a container, bind on all interfaces so a published port works
         if [[ -z "${SHELLM_WEB_ARGS:-}" && ( -f /.dockerenv || -f /run/.containerenv ) ]]; then
             SHELLM_WEB_ARGS="--host 0.0.0.0"
@@ -274,11 +280,11 @@ _dash_start() {
         echo "Starting the dash..." >&2
         : > "$log"
         # shellcheck disable=SC2086
-        nohup headlong-web "$APP_DIR" ${SHELLM_WEB_ARGS:-} >>"$log" 2>&1 &
+        nohup librarian-web "$APP_DIR" ${SHELLM_WEB_ARGS:-} >>"$log" 2>&1 &
         printf '%s\n' "$!" > "$pidfile"
         local _
         for _ in $(seq 1 300); do
-            grep -qE '(shellm|shelly|headlong)-web serving' "$log" 2>/dev/null && break
+            grep -qE '(shellm|shelly|librarian)-web serving' "$log" 2>/dev/null && break
             kill -0 "$(cat "$pidfile")" 2>/dev/null || { tail -20 "$log" >&2; echo "the dash failed to start (log: $log)" >&2; return 1; }
             sleep 1
         done
@@ -301,8 +307,8 @@ _dash_wait_ready() {
     return 0
 }
 
-# _dash_stop — stop the dash started by _dash_start (or headlong-init). The
-# pid file holds the `headlong-web` wrapper; take its whole process tree so
+# _dash_stop — stop the dash started by _dash_start (or librarian-init). The
+# pid file holds the `librarian-web` wrapper; take its whole process tree so
 # the uv/python server underneath goes too.
 _dash_stop() {
     local pidfile="$SHELLM_HOME/run/web.pid" pid
@@ -365,7 +371,7 @@ cmd_say() {
 
 cmd_chat() {
     _activate
-    if command -v headlong-tui >/dev/null 2>&1 || command -v shellm-tui >/dev/null 2>&1; then
+    if command -v librarian-tui >/dev/null 2>&1 || command -v shellm-tui >/dev/null 2>&1; then
         exec chat repl
     fi
     # Simple fallback loop when the Rust TUI isn't built
@@ -410,7 +416,7 @@ cmd_chat() {
 
 # Collects the identity dir (trajectory, rollups, memories, thinker logs,
 # persona files), the state-home logs and a report.txt with versions and
-# status, into ~/headlong-bugreport-<name>-<stamp>.tgz. The agent's workdir
+# status, into ~/librarian-bugreport-<name>-<stamp>.tgz. The agent's workdir
 # is left out (arbitrary user files, can be large). Every text file in the
 # bundle goes through _redact_tree first: the literal values of every
 # credential-looking variable from the env files and the live environment,
@@ -429,11 +435,11 @@ Usage: $CMD bugreport [--out FILE] [--include-workdir]
 
 Bundle what a developer needs to debug $NAME into one .tgz you can attach to
 a bug report: the identity (trajectory, rollups, memories, thinker logs),
-the Headlong logs, and a report.txt with versions, status and the layout.
+the Librarian logs, and a report.txt with versions, status and the layout.
 API keys and other credential-looking values are scrubbed; your .env is not
 included. Look inside before sending if you are unsure:
     tar tzf FILE            # list
-    tar xzf FILE            # unpack; then read headlong-bugreport-*/report.txt
+    tar xzf FILE            # unpack; then read librarian-bugreport-*/report.txt
 EOF
                 return 0 ;;
             *) die "bugreport: unknown option: $1" ;;
@@ -441,12 +447,12 @@ EOF
     done
     command -v python3 >/dev/null 2>&1 || die "bugreport requires python3 for secret scrubbing"
     local stamp; stamp=$(date +%Y%m%d-%H%M%S)
-    [[ -n "$out" ]] || out="$HOME/headlong-bugreport-$NAME-$stamp.tgz"
+    [[ -n "$out" ]] || out="$HOME/librarian-bugreport-$NAME-$stamp.tgz"
     local iddir="$IDENTITY_ROOT/$NAME"
-    local stage; stage=$(mktemp -d "${TMPDIR:-/tmp}/headlong-bugreport.XXXXXX")
+    local stage; stage=$(mktemp -d "${TMPDIR:-/tmp}/librarian-bugreport.XXXXXX")
     # shellcheck disable=SC2064
     trap "rm -rf '$stage'" EXIT RETURN
-    local top="$stage/headlong-bugreport-$NAME-$stamp"
+    local top="$stage/librarian-bugreport-$NAME-$stamp"
     mkdir -p "$top/identity" "$top/home"
 
     echo "Collecting $NAME's identity..." >&2
@@ -501,7 +507,7 @@ EOF
 _bugreport_text() {
     local iddir="$1"; shift
     local -a big=("$@")
-    echo "headlong bug report bundle"
+    echo "librarian bug report bundle"
     echo "generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "identity: $NAME"
     echo "identity dir: $iddir"
@@ -509,8 +515,8 @@ _bugreport_text() {
     echo "app dir: $APP_DIR"
     echo
     echo "== versions"
-    echo "headlong commit: $(git -C "$APP_DIR" rev-parse --short HEAD 2>/dev/null || echo '(not a git checkout)')"
-    echo "headlong branch: $(git -C "$APP_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+    echo "librarian commit: $(git -C "$APP_DIR" rev-parse --short HEAD 2>/dev/null || echo '(not a git checkout)')"
+    echo "librarian branch: $(git -C "$APP_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
     local dirty; dirty=$(git -C "$APP_DIR" status --short 2>/dev/null | wc -l | tr -d ' ')
     echo "local edits in checkout: ${dirty:-?} file(s)"
     echo "os: $(uname -srm 2>/dev/null)"

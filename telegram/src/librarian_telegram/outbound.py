@@ -58,7 +58,7 @@ class RecentPosts:
 
 
 # --- delivery notices -------------------------------------------------------
-# Copied from headlong_slack.outbound (the bridges are independent uv
+# Copied from librarian_slack.outbound (the bridges are independent uv
 # projects) — keep the step shape in sync. See design/outbound_delivery.md.
 
 def _append_step_via_traj(serve_root: Path, traj_path: Path, step: dict[str, Any]) -> None:

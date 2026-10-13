@@ -1,6 +1,6 @@
 import pytest
 
-from headlong_slack import outbound
+from librarian_slack import outbound
 
 
 @pytest.fixture(autouse=True)

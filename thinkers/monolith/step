@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (bin/librarian-env).
+for _le in "$(dirname "${BASH_SOURCE[0]}")/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/bin/librarian-env"; do
+    # shellcheck source=/dev/null
+    if [[ -f "$_le" ]]; then . "$_le"; break; fi
+done; unset _le
+
 set -euo pipefail
 
 # monolith/step — The whole mind in one thinker.
@@ -319,7 +325,7 @@ if [[ "$project_mode" -eq 1 ]]; then
     # pack and runs the day's maintenance; without a store or the tool it prints
     # nothing and the section falls back to today's excerpt. Its signal lines
     # (CAPTURE, LIBRARIAN SUGGESTION) join the routing signals.
-    if [[ "${HEADLONG_LIBRARIAN:-1}" != 0 ]] && command -v librarian >/dev/null 2>&1; then
+    if [[ "${LIBRARIAN_MEMORY:-1}" != 0 ]] && command -v librarian >/dev/null 2>&1; then
         librarian_pack=$(printf '%s' "$project_hints" | _prompt_section librarian librarian runtime pre \
             --ritual "$(_project_due_ritual)" --phase "$(_project_phase)" --budget "${LIBRARIAN_PACK_TOKENS:-8000}") || librarian_pack=""
         [[ -s "$state_dir/librarian_signals" ]] && project_hints="${project_hints}$(cat "$state_dir/librarian_signals")

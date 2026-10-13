@@ -13,10 +13,10 @@ import threading
 import time
 from pathlib import Path
 
-from headlong_web import discovery
-from headlong_web.env import getenv
+from librarian_web import discovery
+from librarian_web.env import getenv
 
-log = logging.getLogger("headlong-web.push")
+log = logging.getLogger("librarian-web.push")
 
 STORE_DIR = ".web-push"
 VAPID_PEM = "vapid_private.pem"
@@ -199,7 +199,7 @@ class PushWatcher(threading.Thread):
                     subscription_info=target["subscription"],
                     data=payload,
                     vapid_private_key=str(pem_path),
-                    vapid_claims={"sub": getenv("HEADLONG_VAPID_SUB", "mailto:admin@example.com")},
+                    vapid_claims={"sub": getenv("LIBRARIAN_VAPID_SUB", "mailto:admin@example.com")},
                 )
             except WebPushException as exc:
                 status = getattr(exc.response, "status_code", None)

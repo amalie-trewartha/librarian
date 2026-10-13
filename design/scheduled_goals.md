@@ -111,7 +111,7 @@ A clock line, always:
 - Now: Thursday 2026-09-17 22:52 PDT (2026-09-18 05:52Z).
 ```
 
-The zone comes from `HEADLONG_TZ` in `.env`, default UTC.
+The zone comes from `LIBRARIAN_TZ` in `.env`, default UTC.
 
 One line per scheduled goal:
 
@@ -180,7 +180,7 @@ window due, expired goal skipped). It passes under bash 3.2.
 1. Build and test locally. Run the macOS bash 3.2 gate.
 2. Deploy, then sync `monolith` and `_lib` to both identities. No restart.
 3. Add `schedule` and `tz` to Audel's papers goal by hand and trim its body.
-   Set `HEADLONG_TZ=America/Los_Angeles` on both boxes and in both SSM
+   Set `LIBRARIAN_TZ=America/Los_Angeles` on both boxes and in both SSM
    parameters.
 4. Tell Audel in one message what changed: the signal tells it when a
    window is due, and the key makes the send happen once.

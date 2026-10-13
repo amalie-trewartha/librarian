@@ -10,7 +10,7 @@ one Swift file, zero dependencies, no new server work.
 
 ## What it talks to
 
-The existing `headlong-web` HTTP API (`web/src/headlong_web/server.py`) — the
+The existing `librarian-web` HTTP API (`web/src/librarian_web/server.py`) — the
 same API the phone PWA uses. It is identical for local
 (`http://localhost:8080`) and remote (`https://chat.shellm.net`):
 

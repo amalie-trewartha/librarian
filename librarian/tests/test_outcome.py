@@ -1,6 +1,6 @@
 import unittest
 
-from headlong_librarian import outcome
+from librarian import outcome
 
 
 def ev(**kw) -> outcome.WakeEvidence:

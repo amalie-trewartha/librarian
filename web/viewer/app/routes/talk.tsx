@@ -15,7 +15,7 @@ import {
 } from "~/lib/pwa";
 
 export function meta() {
-  return [{ title: "Headlong · talk" }];
+  return [{ title: "Librarian · talk" }];
 }
 
 function relativeTime(iso: string | null): string {

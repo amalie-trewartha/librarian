@@ -3,8 +3,8 @@
 import base64
 import threading
 
-from headlong_slack import outbound
-from headlong_slack.config import Config
+from librarian_slack import outbound
+from librarian_slack.config import Config
 
 
 def _cfg(tmp_path):

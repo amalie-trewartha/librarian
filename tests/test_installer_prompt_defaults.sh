@@ -13,13 +13,13 @@ bad() { fail=$((fail+1)); printf 'FAIL %s\n' "$1"; }
 # Extract only the small decision helpers. Their dependencies are replaced
 # below so the tests do not need a tty, Docker, a key, or a model server.
 eval "$(sed -n '/^_location_offer_available()/,/^}/p' "$REPO/install.sh")"
-eval "$(sed -n '/^ask_yn()/,/^}/p' "$REPO/tools/headlong-init")"
-eval "$(sed -n '/^_ask_local_or_cloud()/,/^}/p' "$REPO/tools/headlong-init")"
+eval "$(sed -n '/^ask_yn()/,/^}/p' "$REPO/tools/librarian-init")"
+eval "$(sed -n '/^_ask_local_or_cloud()/,/^}/p' "$REPO/tools/librarian-init")"
 
 # A bootstrap answer is temporary process state. The checkout installer sees
 # the marker and skips its copy of the location question before checking the
 # tty or Docker again.
-export HEADLONG_INSTALL_LOCATION_CHOSEN=1
+export LIBRARIAN_INSTALL_LOCATION_CHOSEN=1
 if _location_offer_available; then
     bad "location choice: checkout would ask again"
 else
@@ -42,7 +42,7 @@ else
     ok "ask_yn: explicit no default returns no"
 fi
 
-export HEADLONG_PROVIDER=""
+export LIBRARIAN_PROVIDER=""
 export SHELLM_API_URL=""
 export LLM_API_URL=""
 export LLM_PROVIDER=""

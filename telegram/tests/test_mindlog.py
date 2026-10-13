@@ -2,7 +2,7 @@ import json
 import threading
 import time
 
-from headlong_telegram.mindlog import find_trajectory, follow, read_new
+from librarian_telegram.mindlog import find_trajectory, follow, read_new
 
 
 def _append(path, obj, newline=True):

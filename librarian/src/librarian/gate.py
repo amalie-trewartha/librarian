@@ -24,7 +24,7 @@ _PATH = re.compile(r"(?:^|\s|\()(?:~|\.{0,2})?/[\w.\-]+(?:/[\w.\-]+)*")
 _BACKTICK = re.compile(r"`[^`\n]+`")
 _COMMAND = re.compile(
     r"(?m)^\s*(?:\$ |(?:sudo |env |time )?(?:git|pip3?|uv|python3?|colcon|cmake|make|docker|npm|cargo|curl|grep|ls|cd|"
-    r"pytest|bash|sh|jq|awk|sed|traj|mem|llm|shellm|blind|delegate|librarian|headlong-\w+)\b)"
+    r"pytest|bash|sh|jq|awk|sed|traj|mem|llm|shellm|blind|delegate|librarian|librarian-\w+)\b)"
 )
 
 

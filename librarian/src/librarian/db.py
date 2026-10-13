@@ -55,7 +55,7 @@ def parse_ts(value: Optional[str]) -> Optional[dt.datetime]:
     s = value.strip()
     if s.endswith("Z"):
         s = s[:-1] + "+00:00"
-    # Headlong writes offsets like -0700; Python wants -07:00.
+    # Librarian writes offsets like -0700; Python wants -07:00.
     if len(s) >= 5 and s[-5] in "+-" and s[-3] != ":" and s[-4:].isdigit():
         s = s[:-2] + ":" + s[-2:]
     try:

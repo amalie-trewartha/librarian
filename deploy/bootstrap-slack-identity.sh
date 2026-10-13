@@ -1,11 +1,29 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (same mapping as bin/librarian-env).
+if [[ -z "${LIBRARIAN_MEMORY+x}" && -n "${HEADLONG_LIBRARIAN+x}" ]]; then export LIBRARIAN_MEMORY="$HEADLONG_LIBRARIAN"; fi
+if [[ -z "${LIBRARIAN_SRC+x}" && -n "${HEADLONG_LIBRARIAN_SRC+x}" ]]; then export LIBRARIAN_SRC="$HEADLONG_LIBRARIAN_SRC"; fi
+for _le_hv in $(compgen -A variable HEADLONG_ 2>/dev/null); do
+    case "$_le_hv" in HEADLONG_LIBRARIAN|HEADLONG_LIBRARIAN_SRC) continue ;; esac
+    _le_lv="LIBRARIAN_${_le_hv#HEADLONG_}"
+    if [[ -z "${!_le_lv+x}" ]]; then export "$_le_lv=${!_le_hv}"; fi
+done
+unset _le_hv _le_lv
+if [[ -z "${LIBRARIAN_HOME:-}" && -n "${HOME:-}" && ! -d "$HOME/.librarian" && -d "$HOME/.headlong" ]]; then
+    export LIBRARIAN_HOME="$HOME/.headlong"
+fi
+if [[ -z "${LIBRARIAN_THINKERS_TEMPLATES:-}" && -n "${HOME:-}" ]]; then
+    if [[ ! -d "$HOME/.librarian-thinkers" && -d "$HOME/.headlong-thinkers" ]]; then
+        export LIBRARIAN_THINKERS_TEMPLATES="$HOME/.headlong-thinkers"
+    fi
+fi
+
 set -euo pipefail
 
 # deploy/bootstrap-slack-identity.sh — idempotent bootstrap for the Slack
 # persona: create the identity if missing, install its persona prompt, and
 # make sure the monolith thinker dispatcher is running.
 #
-# Runs as the shellm user via headlong-slack-agent.service (oneshot); safe to
+# Runs as the shellm user via librarian-slack-agent.service (oneshot); safe to
 # re-run any time. Usage: bootstrap-slack-identity.sh [APP_DIR]
 
 APP_DIR="${1:-/opt/shellm/app}"
@@ -74,19 +92,19 @@ set -o pipefail
 # step that fails silently; don't detect, just stop.
 echo "==> Restarting thinkers with current environment"
 # Prefer the per-identity systemd unit (own cgroup; see
-# deploy/headlong-thinkers@.service) — its start path also stops any stale
+# deploy/librarian-thinkers@.service) — its start path also stops any stale
 # dispatcher and re-sources the env. Fall back to the direct start on boxes
 # provisioned before the unit existed.
-if [[ -x /usr/local/bin/headlong-thinkersctl ]] \
-    && sudo -n /usr/local/bin/headlong-thinkersctl restart "$name"; then
-    echo "==> Thinkers running under headlong-thinkers@$name"
+if [[ -x /usr/local/bin/librarian-thinkersctl ]] \
+    && sudo -n /usr/local/bin/librarian-thinkersctl restart "$name"; then
+    echo "==> Thinkers running under librarian-thinkers@$name"
 else
     echo "==> thinkers unit unavailable — starting directly (legacy path)"
     # --self: this oneshot is an authorized stop path (it restarts the
     # dispatcher right below), so opt out of the in-flight-step guard in
     # `thinkers stop` rather than rely on how narrowly it matches. A
     # dispatcher from an earlier bootstrap run shares this cgroup
-    # (headlong-slack-agent's), but is not that unit's main process, so
+    # (librarian-slack-agent's), but is not that unit's main process, so
     # stopping it sweeps nothing.
     thinkers stop --self || true
     echo "==> Starting monolith + responder thinkers"

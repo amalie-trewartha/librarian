@@ -1,24 +1,30 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (bin/librarian-env).
+for _le in "$(dirname "${BASH_SOURCE[0]}")/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/bin/librarian-env"; do
+    # shellcheck source=/dev/null
+    if [[ -f "$_le" ]]; then . "$_le"; break; fi
+done; unset _le
+
 set -euo pipefail
 
-# headlong-project — put an identity into project mode for a long unattended
+# librarian-project — put an identity into project mode for a long unattended
 # research run, and report on it (design/long_autonomy.md).
 #
-#   headlong-project init <identity> --spec FILE [--charter FILE] [--preferences FILE]... [--fresh-memory]
+#   librarian-project init <identity> --spec FILE [--charter FILE] [--preferences FILE]... [--fresh-memory]
 #                         [--days N | --end YYYY-MM-DD] [--daily-tokens N]
 #                         [--total-tokens N] [--daily-usd X] [--total-usd X]
 #                         [--time-scale N] [--reference FILE]...
 #                         [--keep-persona] [--force]
-#   headlong-project status <identity>       open questions first, then health
-#   headlong-project questions <identity> [--open|--closed|--all]
-#   headlong-project answer <identity> <Qn> "<answer>"   (or the answer on stdin)
-#   headlong-project banner <identity>       just the open-questions block
-#   headlong-project deadline <identity> [--days N | --end YYYY-MM-DD]
-#   headlong-project queue <identity> [list|approve|reject <id> [note]]
-#   headlong-project probe <identity>
-#   headlong-project preferences <identity> [list|add "<text>"]
-#   headlong-project librarian <identity> <librarian args...>
-#   headlong-project update-pristine <identity>
+#   librarian-project status <identity>       open questions first, then health
+#   librarian-project questions <identity> [--open|--closed|--all]
+#   librarian-project answer <identity> <Qn> "<answer>"   (or the answer on stdin)
+#   librarian-project banner <identity>       just the open-questions block
+#   librarian-project deadline <identity> [--days N | --end YYYY-MM-DD]
+#   librarian-project queue <identity> [list|approve|reject <id> [note]]
+#   librarian-project probe <identity>
+#   librarian-project preferences <identity> [list|add "<text>"]
+#   librarian-project librarian <identity> <librarian args...>
+#   librarian-project update-pristine <identity>
 #
 # <identity> is a name under <app>/.identities/ or a path to an identity dir.
 #
@@ -54,17 +60,17 @@ set -euo pipefail
 # identity's project-pristine/ after a human edited them there, and pushes
 # them into project/ (the only sanctioned way to change the charter or spec).
 
-die() { printf 'headlong-project: error: %s\n' "$*" >&2; exit 1; }
+die() { printf 'librarian-project: error: %s\n' "$*" >&2; exit 1; }
 HERE="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
 APP="$(dirname "$HERE")"
 # A copy install puts this file in ~/.local/bin; the checkout is then named
 # by the state home's app_dir file.
 if [[ ! -d "$APP/identities/project" ]]; then
-    for _h in "${HEADLONG_HOME:-$HOME/.headlong}" "$HOME/.shellm"; do
+    for _h in "${LIBRARIAN_HOME:-$HOME/.librarian}" "$HOME/.shellm"; do
         [[ -f "$_h/app_dir" ]] && { APP=$(cat "$_h/app_dir"); break; }
     done
 fi
-TEMPLATE="${HEADLONG_PROJECT_TEMPLATE:-$APP/identities/project}"
+TEMPLATE="${LIBRARIAN_PROJECT_TEMPLATE:-$APP/identities/project}"
 # Use this checkout's tools (llm --spend above all): another program named
 # llm earlier on PATH, such as the Python llm CLI, broke spend reporting.
 export PATH="$APP/bin:$APP/tools:$PATH"
@@ -170,14 +176,14 @@ cmd_init() {
         fi
         local existed=0; [[ -f "$id/librarian/store.sqlite" ]] && existed=1
         local -a seed_args=(); (( existed )) || seed_args=(--seed "$TEMPLATE/identity-core.md")
-        if IDENTITY_DIR="$id" IDENTITY_NAME="$name" HEADLONG_LIBRARIAN_SRC="$APP/librarian/src" librarian -q init \
+        if IDENTITY_DIR="$id" IDENTITY_NAME="$name" LIBRARIAN_SRC="$APP/librarian/src" librarian -q init \
             ${seed_args[@]+"${seed_args[@]}"} \
             --import-skills "$pd/skills" --import-addenda "$pd/addenda.md" --project "$(cat "$pp/project_id")"; then
             for r in ${prefs[@]+"${prefs[@]}"}; do
-                IDENTITY_DIR="$id" HEADLONG_LIBRARIAN_SRC="$APP/librarian/src" librarian -q import --preferences "$r" \
+                IDENTITY_DIR="$id" LIBRARIAN_SRC="$APP/librarian/src" librarian -q import --preferences "$r" \
                     --tags "team:$(basename "${r%.*}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-')" --author human || true
             done
-            IDENTITY_DIR="$id" HEADLONG_LIBRARIAN_SRC="$APP/librarian/src" librarian -q export --project-dir "$pd" --project "$(cat "$pp/project_id")" || true
+            IDENTITY_DIR="$id" LIBRARIAN_SRC="$APP/librarian/src" librarian -q export --project-dir "$pd" --project "$(cat "$pp/project_id")" || true
             lib_note="$id/librarian/store.sqlite ($( (( existed )) && printf 'kept from earlier projects' || printf 'new; core identity seeded'))${prefs[*]:+; preferences: ${#prefs[@]} file(s)}"
         else
             lib_note="librarian init failed; the wake falls back to the plain project excerpt"
@@ -186,7 +192,7 @@ cmd_init() {
     if command -v git >/dev/null 2>&1; then
         git -C "$pd" init -q
         git -C "$pd" add -A
-        git -C "$pd" -c user.name="$name" -c user.email="$name@headlong.local" commit -q -m "project initialized from spec $(basename "$spec")"
+        git -C "$pd" -c user.name="$name" -c user.email="$name@librarian.local" commit -q -m "project initialized from spec $(basename "$spec")"
     fi
     if [[ "$keep" -ne 1 ]]; then
         [[ -f "$id/core_identity_prompt.md" && ! -f "$id/core_identity_prompt.md.pre-project" ]] \
@@ -206,9 +212,9 @@ EOF
     fi
     touch "$id/.env"
     {
-        grep -vE '^(PROJECT_DAILY_TOKENS|PROJECT_TOTAL_TOKENS|PROJECT_DAILY_USD|PROJECT_TOTAL_USD|PROJECT_TIME_SCALE|HEADLONG_LIBRARIAN_SRC|LIBRARIAN_PACK_TOKENS)=' "$id/.env" || true
+        grep -vE '^(PROJECT_DAILY_TOKENS|PROJECT_TOTAL_TOKENS|PROJECT_DAILY_USD|PROJECT_TOTAL_USD|PROJECT_TIME_SCALE|LIBRARIAN_SRC|LIBRARIAN_PACK_TOKENS)=' "$id/.env" || true
         printf 'PROJECT_DAILY_TOKENS=%s\n' "$tokens"
-        printf 'HEADLONG_LIBRARIAN_SRC=%s\n' "$APP/librarian/src"
+        printf 'LIBRARIAN_SRC=%s\n' "$APP/librarian/src"
         printf 'LIBRARIAN_PACK_TOKENS=%s\n' "${LIBRARIAN_PACK_TOKENS:-8000}"
         if [[ -n "$total" ]]; then printf 'PROJECT_TOTAL_TOKENS=%s\n' "$total"; fi
         if [[ -n "$dusd" ]]; then printf 'PROJECT_DAILY_USD=%s\n' "$dusd"; fi
@@ -223,7 +229,7 @@ EOF
     fi
     [[ -n "$total" ]] && printf '  run cap:  %s tokens in total\n' "$total"
     [[ "$scale" != 1 ]] && printf '  clock:    %sx real time: the %s-day run takes %s real hours\n' "$scale" "$days" $(( days * 24 / scale ))
-    printf '  ends:     %s (move it with: headlong-project deadline %s --days N)\n' "$(date -d "@$end_at" '+%Y-%m-%d %H:%M %Z' 2>/dev/null || date -r "$end_at" '+%Y-%m-%d %H:%M %Z')" "$name"
+    printf '  ends:     %s (move it with: librarian-project deadline %s --days N)\n' "$(date -d "@$end_at" '+%Y-%m-%d %H:%M %Z' 2>/dev/null || date -r "$end_at" '+%Y-%m-%d %H:%M %Z')" "$name"
     printf 'Restart the mind to pick it up: persona %s stop; persona %s start\n' "$name" "$name"
 }
 
@@ -250,8 +256,8 @@ _load() {
     while IFS= read -r kv; do
         k="${kv%%=*}"
         [[ -n "${!k:-}" ]] || export "$kv"
-    done < <(grep -E '^(PROJECT_[A-Z_]+|LIBRARIAN_[A-Z_]+|HEADLONG_LIBRARIAN[A-Z_]*|HEADLONG_TZ|LLM_PRICE_SCALE)=[^ ]*$' "$ID/.env" 2>/dev/null || true)
-    [[ -n "${HEADLONG_LIBRARIAN_SRC:-}" ]] || export HEADLONG_LIBRARIAN_SRC="$APP/librarian/src"
+    done < <(grep -E '^(PROJECT_[A-Z_]+|LIBRARIAN_[A-Z_]+|LIBRARIAN_MEMORY[A-Z_]*|LIBRARIAN_TZ|LLM_PRICE_SCALE)=[^ ]*$' "$ID/.env" 2>/dev/null || true)
+    [[ -n "${LIBRARIAN_SRC:-}" ]] || export LIBRARIAN_SRC="$APP/librarian/src"
     # shellcheck disable=SC1091
     source "$APP/thinkers/_lib/project.sh"
 }
@@ -282,7 +288,7 @@ cmd_deadline() {
             printf 'active\nThe run was extended by a human to %s; the earlier final report is in reports/.\n' "$(_pj_date "$e" %F)" > "$PD/STATE"
             if [[ -d "$PD/.git" ]]; then
                 git -C "$PD" add -A reports reviews STATE >/dev/null 2>&1 || true
-                git -C "$PD" -c user.name=human -c user.email=human@headlong.local \
+                git -C "$PD" -c user.name=human -c user.email=human@librarian.local \
                     commit -q -m "run extended to $(_pj_date "$e" %F) by a human" -- reports reviews STATE >/dev/null 2>&1 || true
             fi
             printf 'The run had finished; it is reopened (STATE active) and will close again at the new end.\n'
@@ -304,7 +310,7 @@ cmd_banner() {
     _load "${1:-}"; _project_question_banner brief
     if _lib_on; then
         local n; n=$(_lib queue list 2>/dev/null | jq 'length' 2>/dev/null) || n=0
-        (( n > 0 )) && printf '!!! Librarian check-in queue: %s item(s) need a human — headlong-project queue %s\n' "$n" "$IDENTITY_NAME"
+        (( n > 0 )) && printf '!!! Librarian check-in queue: %s item(s) need a human — librarian-project queue %s\n' "$n" "$IDENTITY_NAME"
     fi
     return 0
 }
@@ -318,14 +324,14 @@ cmd_queue() {
     case "$action" in
         list) _lib --text queue list --status "${qid:-pending}" ;;
         approve|reject)
-            [[ -n "$qid" ]] || die "usage: headlong-project queue <identity> approve|reject <id> [note]"
+            [[ -n "$qid" ]] || die "usage: librarian-project queue <identity> approve|reject <id> [note]"
             _lib --text queue "$action" "$qid" ${1:+--note "$*"}
             _lib -q export --project-dir "$PD" --project "$(cat "$ID/project-pristine/project_id" 2>/dev/null)" || true
             if [[ -d "$PD/.git" ]]; then
                 git -C "$PD" add -A >/dev/null 2>&1 || true
-                git -C "$PD" -c user.name=human -c user.email=human@headlong.local commit -q -m "human ${action}d librarian queue item $qid" >/dev/null 2>&1 || true
+                git -C "$PD" -c user.name=human -c user.email=human@librarian.local commit -q -m "human ${action}d librarian queue item $qid" >/dev/null 2>&1 || true
             fi ;;
-        *) die "usage: headlong-project queue <identity> [list|approve|reject] [id] [note]" ;;
+        *) die "usage: librarian-project queue <identity> [list|approve|reject] [id] [note]" ;;
     esac
 }
 
@@ -346,7 +352,7 @@ cmd_preferences() {
         add)
             local text="$*"; [[ -n "$text" ]] || text=$(cat); [[ -n "$text" ]] || die "empty preference"
             _lib --text propose --type preference --summary "$(printf '%s' "$text" | cut -c1-200)" --body "$text" --tags team:stated --author human --status active ;;
-        *) die 'usage: headlong-project preferences <identity> [list|add "<text>"]' ;;
+        *) die 'usage: librarian-project preferences <identity> [list|add "<text>"]' ;;
     esac
 }
 
@@ -376,7 +382,7 @@ cmd_questions() {
 
 cmd_answer() {
     local ident="${1:-}" qid="${2:-}"
-    [[ -n "$ident" && "$qid" =~ ^[Qq][0-9]+$ ]] || die 'usage: headlong-project answer <identity> <Qn> "<answer>"'
+    [[ -n "$ident" && "$qid" =~ ^[Qq][0-9]+$ ]] || die 'usage: librarian-project answer <identity> <Qn> "<answer>"'
     shift 2
     local text="$*"
     [[ -n "$text" ]] || text=$(cat)
@@ -387,7 +393,7 @@ cmd_answer() {
     _project_number_questions
     local q="$PD/questions.md" kind
     kind=$(_project_question_rows | awk -F'\037' -v id="$qid" '$1 == id {print $2}')
-    [[ -n "$kind" ]] || die "no question $qid in $q (see: headlong-project questions $IDENTITY_NAME)"
+    [[ -n "$kind" ]] || die "no question $qid in $q (see: librarian-project questions $IDENTITY_NAME)"
     [[ "$kind" == open || "$kind" == human-waiting ]] || printf 'note: %s is already closed (%s); recording the answer anyway, and the agent will see it.\n' "$qid" "$kind" >&2
     local line="Answer: $text (human, $(_pj_date "$(_pj_now)" %F))" tmp
     tmp=$(mktemp)
@@ -408,7 +414,7 @@ cmd_answer() {
     _project_write_summary
     if [[ -d "$PD/.git" ]]; then
         git -C "$PD" add questions.md questions-summary.md
-        git -C "$PD" -c user.name=human -c user.email=human@headlong.local \
+        git -C "$PD" -c user.name=human -c user.email=human@librarian.local \
             commit -q -m "human answer to $qid" -- questions.md questions-summary.md
     fi
     printf 'Recorded the answer to %s. %s applies it on its next wake.\n' "$qid" "$IDENTITY_NAME"

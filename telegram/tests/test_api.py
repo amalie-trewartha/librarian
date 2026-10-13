@@ -9,7 +9,7 @@ that escapes those two takes the bridge down.
 import httpx
 import pytest
 
-from headlong_telegram.api import ApiError, Bot
+from librarian_telegram.api import ApiError, Bot
 
 
 def bot_returning(response_factory):

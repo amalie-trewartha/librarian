@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# headlong-bedrock-env — write a new install's Headlong .env from an aws.env.
+# librarian-bedrock-env — write a new install's Librarian .env from an aws.env.
 #
-#   headlong-bedrock-env AWS_ENV [--force] [--check] [--app DIR]
+#   librarian-bedrock-env AWS_ENV [--force] [--check] [--app DIR]
 #                        [--model ID] [--fast-model ID] [--coldeyes ID]
 #
 # AWS_ENV is a file of KEY=VALUE lines with AWS_REGION and either
 # AWS_BEARER_TOKEN_BEDROCK (a Bedrock API key) or AWS_ACCESS_KEY_ID +
 # AWS_SECRET_ACCESS_KEY (+ AWS_SESSION_TOKEN). It writes, under the state home
-# (HEADLONG_HOME, default ~/.headlong):
+# (LIBRARIAN_HOME, default ~/.librarian):
 #
 #   bedrock-token  the bearer key alone (mode 600). llm re-reads it on every
 #                  call, so a rotated key is installed by overwriting it.
@@ -25,7 +25,7 @@ set -euo pipefail
 # existing .env is kept unless --force (it is then backed up first). No secret
 # is printed.
 
-die() { printf 'headlong-bedrock-env: error: %s\n' "$*" >&2; exit 1; }
+die() { printf 'librarian-bedrock-env: error: %s\n' "$*" >&2; exit 1; }
 
 src="" force=0 check=0 app="" model="" fast="" coldeyes=""
 while [[ $# -gt 0 ]]; do
@@ -41,7 +41,7 @@ while [[ $# -gt 0 ]]; do
         *) src="$1"; shift ;;
     esac
 done
-[[ -n "$src" && -f "$src" ]] || die "give the aws.env file (headlong-bedrock-env --help)"
+[[ -n "$src" && -f "$src" ]] || die "give the aws.env file (librarian-bedrock-env --help)"
 
 # Read the values in a subshell so nothing leaks into this script's env.
 read_var() { ( set -a; . "$src" >/dev/null 2>&1; set +a; printf '%s' "${!1:-}" ); }
@@ -62,7 +62,7 @@ fi
 model="${model:-$geo.anthropic.claude-opus-5-5}"
 fast="${fast:-$geo.anthropic.claude-haiku-4-5-20251001-v1:0}"
 
-home="${HEADLONG_HOME:-$HOME/.headlong}"
+home="${LIBRARIAN_HOME:-$HOME/.librarian}"
 here="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
 app="${app:-$(dirname "$here")}"
 mkdir -p "$home"
@@ -73,7 +73,7 @@ fi
 
 umask 077
 {
-    printf '# Written by headlong-bedrock-env from %s on %s\n' "$(basename "$src")" "$(date -u +%Y-%m-%d)"
+    printf '# Written by librarian-bedrock-env from %s on %s\n' "$(basename "$src")" "$(date -u +%Y-%m-%d)"
     printf 'SHELLM_MODEL=%s\n' "$model"
     printf 'SHELLM_FAST_MODEL=%s\n' "$fast"
     printf 'AWS_REGION=%s\n' "$region"
@@ -86,8 +86,8 @@ umask 077
         [[ -n "$session" ]] && printf 'AWS_SESSION_TOKEN=%s\n' "$session"
     fi
     printf '# Run the agent'"'"'s commands in a Docker sandbox; refuse to run without one.\n'
-    printf 'SHELLM_REQUIRE_DOCKER=1\nHEADLONG_UNSANDBOXED=0\n'
-    printf 'HEADLONG_TZ=UTC\n'
+    printf 'SHELLM_REQUIRE_DOCKER=1\nLIBRARIAN_UNSANDBOXED=0\n'
+    printf 'LIBRARIAN_TZ=UTC\n'
     printf '# Cost estimates use first-party list prices; 1.1 covers the Bedrock regional premium.\n'
     printf 'LLM_PRICE_SCALE=1.1\n'
     if [[ -n "$coldeyes" ]]; then
@@ -107,7 +107,7 @@ if [[ "$check" -eq 1 ]]; then
     llm_bin="$app/bin/llm"; [[ -x "$llm_bin" ]] || llm_bin=$(command -v llm)
     for m in "$model" "$fast" ${coldeyes:+"$coldeyes"}; do
         printf 'check %s: ' "$m"
-        HEADLONG_HOME="$home" LLM_USAGE_LEDGER=/dev/null LLM_MAX_RETRIES=0 \
+        LIBRARIAN_HOME="$home" LLM_USAGE_LEDGER=/dev/null LLM_MAX_RETRIES=0 \
             "$llm_bin" -t 16 -m "$m" "Reply with one word: ready" 2>&1 | tail -n 1
     done
 fi

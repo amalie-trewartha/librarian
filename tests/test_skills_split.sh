@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tests/test_skills_split.sh — the core `skills` reads (list, show, prompt,
-# list-json) and forwards every manager subcommand to tools/headlong-skills,
+# list-json) and forwards every manager subcommand to tools/librarian-skills,
 # which sources the core for its helpers.
 #
 # Why: bin/skills was split on 2026-09-04 so the package manager stops counting
@@ -56,7 +56,7 @@ check "frontmatter-less skill is listed by directory name" grep -q 'bare: (no de
 check "core list survives a frontmatter-less skill"  grep -q 'bare' <<<"$out"
 check "core show --requires on a plain skill"      grep -q 'No requirements' <<<"$("$REPO/bin/skills" show greet --requires 2>&1)"
 
-# Forwarding from a checkout: bin/skills finds ../tools/headlong-skills.
+# Forwarding from a checkout: bin/skills finds ../tools/librarian-skills.
 PATH="/usr/bin:/bin" out=$("$REPO/bin/skills" check greet 2>&1); rc=$?
 check "core forwards 'check' to the manager (exit 0)" test "$rc" -eq 0
 check "forwarded check reports the skill"   grep -qi 'greet\|requirement' <<<"$out"
@@ -65,14 +65,14 @@ check "core forwards 'remote' (exit 0)"      test "$rc" -eq 0
 check "core help does not advertise install" bash -c '! "$0" --help | grep -q "^  skills install"' "$REPO/bin/skills"
 
 # The manager standing alone, and finding the core as a PREFIX sibling.
-check "manager list works"                  grep -q 'greet' <<<"$("$REPO/tools/headlong-skills" list 2>&1)"
-check "manager help advertises install"     bash -c '"$0" --help | grep -q "install"' "$REPO/tools/headlong-skills"
-mkdir -p "$H/prefix"; cp "$REPO/bin/skills" "$REPO/tools/headlong-skills" "$H/prefix/"
-check "manager finds a sibling core in PREFIX" grep -q 'greet' <<<"$("$H/prefix/headlong-skills" list 2>&1)"
+check "manager list works"                  grep -q 'greet' <<<"$("$REPO/tools/librarian-skills" list 2>&1)"
+check "manager help advertises install"     bash -c '"$0" --help | grep -q "install"' "$REPO/tools/librarian-skills"
+mkdir -p "$H/prefix"; cp "$REPO/bin/skills" "$REPO/tools/librarian-skills" "$H/prefix/"
+check "manager finds a sibling core in PREFIX" grep -q 'greet' <<<"$("$H/prefix/librarian-skills" list 2>&1)"
 check "core in PREFIX forwards to sibling manager" bash -c 'PATH="$1:/usr/bin:/bin" "$1/skills" check greet' _ "$H/prefix"
-mv "$H/prefix/headlong-skills" "$H/prefix/hs.bak"
+mv "$H/prefix/librarian-skills" "$H/prefix/hs.bak"
 out=$(PATH="/usr/bin:/bin" "$H/prefix/skills" install foo 2>&1); rc=$?
-check "core without a manager fails with a hint"  bash -c 'test "$1" -ne 0 && grep -q "headlong-skills" <<<"$2"' _ "$rc" "$out"
+check "core without a manager fails with a hint"  bash -c 'test "$1" -ne 0 && grep -q "librarian-skills" <<<"$2"' _ "$rc" "$out"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

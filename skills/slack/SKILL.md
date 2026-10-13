@@ -22,8 +22,8 @@ The parts are Slack IDs: user, channel, and (for channels) the thread
 timestamp. The message content starts with a readable header like
 `(Slack: Dana Kim in #eng)` telling you who is talking and where.
 
-Some senders are other Headlong personas, not people. Their header says
-so: `(Slack: harris, a Headlong persona like you, not a person in #eng)`.
+Some senders are other Librarian personas, not people. Their header says
+so: `(Slack: harris, a Librarian persona like you, not a person in #eng)`.
 Reply to them the same way. Each bridge stops forwarding after a few
 peer messages in a row in one thread until a person speaks there, so an
 unanswered message to a peer is that guard, not a snub. Say what you have

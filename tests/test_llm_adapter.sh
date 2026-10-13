@@ -62,8 +62,8 @@ printf 'adapter says ok'
 EOF
 chmod +x "$WORK/adapter"
 
-export HEADLONG_HOME="$WORK/home"   # bin/llm writes run/llm_health.json here
-mkdir -p "$HEADLONG_HOME"
+export LIBRARIAN_HOME="$WORK/home"   # bin/llm writes run/llm_health.json here
+mkdir -p "$LIBRARIAN_HOME"
 export ADAPTER_ARGS="$WORK/adapter_args"
 export ADAPTER_STDIN="$WORK/adapter_stdin"
 export ADAPTER_SYS="$WORK/adapter_sys"
@@ -215,10 +215,10 @@ if [[ "$rc" -ne 0 ]] && grep -q 'LLM_MAX_TIME deadline' "$WORK/stderr"; then
 else
     bad "deadline expiry fails the call even when the adapter exits 0 on TERM" "rc=$rc: $(head -1 "$WORK/stderr")"
 fi
-if jq -e '.ok == false' "$HEADLONG_HOME/run/llm_health.json" >/dev/null 2>&1; then
+if jq -e '.ok == false' "$LIBRARIAN_HOME/run/llm_health.json" >/dev/null 2>&1; then
     ok "deadline failure is recorded in the health marker"
 else
-    bad "deadline failure is recorded in the health marker" "$(cat "$HEADLONG_HOME/run/llm_health.json" 2>/dev/null)"
+    bad "deadline failure is recorded in the health marker" "$(cat "$LIBRARIAN_HOME/run/llm_health.json" 2>/dev/null)"
 fi
 
 # An adapter that ignores TERM entirely is KILLed after the grace period.
@@ -292,10 +292,10 @@ if [[ "$rc" -ne 0 ]] && grep -q 'adapter exited 3' "$WORK/stderr"; then
 else
     bad "nonzero adapter exit fails the call with the code reported" "rc=$rc: $(head -1 "$WORK/stderr")"
 fi
-if jq -e '.ok == false' "$HEADLONG_HOME/run/llm_health.json" >/dev/null 2>&1; then
+if jq -e '.ok == false' "$LIBRARIAN_HOME/run/llm_health.json" >/dev/null 2>&1; then
     ok "adapter failure is recorded in the health marker"
 else
-    bad "adapter failure is recorded in the health marker" "$(cat "$HEADLONG_HOME/run/llm_health.json" 2>/dev/null)"
+    bad "adapter failure is recorded in the health marker" "$(cat "$LIBRARIAN_HOME/run/llm_health.json" 2>/dev/null)"
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

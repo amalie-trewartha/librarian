@@ -1,8 +1,8 @@
 # Core identity
 
-Seeded into the librarian store as identity.core nodes by `headlong-project
+Seeded into the librarian store as identity.core nodes by `librarian-project
 init`. Humans only: these change through the check-in queue
-(`headlong-project queue <name> approve <id>`), never by the agent. Each
+(`librarian-project queue <name> approve <id>`), never by the agent. Each
 `###` block is one node of at most about forty tokens, drawn from the
 charter's non-negotiables. Keep the set to ten or fewer.
 

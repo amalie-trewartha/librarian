@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from headlong_web import control, llm_health
-from headlong_web.server import create_app
+from librarian_web import control, llm_health
+from librarian_web.server import create_app
 
 ROOT_TRAJ = "eaeaeaea-9999-4999-8999-999999999999"
 
@@ -169,13 +169,13 @@ def _write_marker(home: Path, payload: dict) -> None:
 
 
 def test_last_call_absent(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("HEADLONG_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("LIBRARIAN_HOME", str(tmp_path / "home"))
     assert llm_health.last_call() is None
 
 
 def test_last_call_credit_failure_overrides_status(tmp_path: Path, monkeypatch):
     home = tmp_path / "home"
-    monkeypatch.setenv("HEADLONG_HOME", str(home))
+    monkeypatch.setenv("LIBRARIAN_HOME", str(home))
     _write_marker(
         home,
         {
@@ -202,7 +202,7 @@ def test_last_call_credit_failure_overrides_status(tmp_path: Path, monkeypatch):
 
 def test_last_call_ok_keeps_passive_status(tmp_path: Path, monkeypatch):
     home = tmp_path / "home"
-    monkeypatch.setenv("HEADLONG_HOME", str(home))
+    monkeypatch.setenv("LIBRARIAN_HOME", str(home))
     _write_marker(home, {"ok": True, "ts": "2026-08-22T09:00:00Z", "provider": "anthropic", "model": "m"})
     root = _mk_identity(tmp_path, _thoughts(12, newest_minutes_ago=1, gap_s=30))
     llm_health._cache.update(ts=0.0, root=None, payload=None)
@@ -221,7 +221,7 @@ def test_last_call_ok_keeps_passive_status(tmp_path: Path, monkeypatch):
 
 def test_last_call_garbage_ignored(tmp_path: Path, monkeypatch):
     home = tmp_path / "home"
-    monkeypatch.setenv("HEADLONG_HOME", str(home))
+    monkeypatch.setenv("LIBRARIAN_HOME", str(home))
     (home / "run").mkdir(parents=True)
     (home / "run" / "llm_health.json").write_text("{not json")
     assert llm_health.last_call() is None

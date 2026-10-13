@@ -40,7 +40,7 @@ line() {
 }
 
 out=$(line)
-grep -q '^Runtime: headlong [0-9a-f]\{7,\} (stub checkout)' <<< "$out" && ok "runtime line names the stub checkout" || bad "runtime line names the stub checkout" "$out"
+grep -q '^Runtime: librarian [0-9a-f]\{7,\} (stub checkout)' <<< "$out" && ok "runtime line names the stub checkout" || bad "runtime line names the stub checkout" "$out"
 ! grep -q 'read-only inside a wake' <<< "$out" && ok "writable checkout: no boundary sentence" || bad "writable checkout: no boundary sentence" "$out"
 
 chmod a-w "$ROOT/bin"

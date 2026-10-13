@@ -1,9 +1,27 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (same mapping as bin/librarian-env).
+if [[ -z "${LIBRARIAN_MEMORY+x}" && -n "${HEADLONG_LIBRARIAN+x}" ]]; then export LIBRARIAN_MEMORY="$HEADLONG_LIBRARIAN"; fi
+if [[ -z "${LIBRARIAN_SRC+x}" && -n "${HEADLONG_LIBRARIAN_SRC+x}" ]]; then export LIBRARIAN_SRC="$HEADLONG_LIBRARIAN_SRC"; fi
+for _le_hv in $(compgen -A variable HEADLONG_ 2>/dev/null); do
+    case "$_le_hv" in HEADLONG_LIBRARIAN|HEADLONG_LIBRARIAN_SRC) continue ;; esac
+    _le_lv="LIBRARIAN_${_le_hv#HEADLONG_}"
+    if [[ -z "${!_le_lv+x}" ]]; then export "$_le_lv=${!_le_hv}"; fi
+done
+unset _le_hv _le_lv
+if [[ -z "${LIBRARIAN_HOME:-}" && -n "${HOME:-}" && ! -d "$HOME/.librarian" && -d "$HOME/.headlong" ]]; then
+    export LIBRARIAN_HOME="$HOME/.headlong"
+fi
+if [[ -z "${LIBRARIAN_THINKERS_TEMPLATES:-}" && -n "${HOME:-}" ]]; then
+    if [[ ! -d "$HOME/.librarian-thinkers" && -d "$HOME/.headlong-thinkers" ]]; then
+        export LIBRARIAN_THINKERS_TEMPLATES="$HOME/.headlong-thinkers"
+    fi
+fi
+
 set -uo pipefail
 
 # deploy/thinkers-tmp-reaper.sh — sweep the shared temp dir of what a
 # killed run left behind. Runs as the shellm user from
-# headlong-thinkers-silence@<identity>.service, every five minutes, next to
+# librarian-thinkers-silence@<identity>.service, every five minutes, next to
 # the silence and disk checks. Only the box deploy (deploy/setup.sh,
 # deploy/update.sh) installs that unit; the laptop installer never does.
 #
@@ -26,24 +44,24 @@ set -uo pipefail
 #     invoking user, never through symlinks (-type f / -type d), names
 #     passed NUL-delimited, and trees removed without crossing mount points;
 #   - and only when old enough:
-#       files  > HEADLONG_TMP_REAP_MB (100 MB) and older than
-#                HEADLONG_TMP_REAP_MIN (30 min)
+#       files  > LIBRARIAN_TMP_REAP_MB (100 MB) and older than
+#                LIBRARIAN_TMP_REAP_MIN (30 min)
 #       dirs   shellm-run.* / shellm-exec.* older than
-#                HEADLONG_TMP_REAP_DIR_HOURS (24 h)
-#       files  tmp.* older than HEADLONG_TMP_REAP_DIR_HOURS
+#                LIBRARIAN_TMP_REAP_DIR_HOURS (24 h)
+#       files  tmp.* older than LIBRARIAN_TMP_REAP_DIR_HOURS
 #
 # Usage: thinkers-tmp-reaper.sh [APP_DIR IDENTITY]   (args accepted, unused)
 
-BIG_MB="${HEADLONG_TMP_REAP_MB:-100}"
-BIG_MIN="${HEADLONG_TMP_REAP_MIN:-30}"
-DIR_HOURS="${HEADLONG_TMP_REAP_DIR_HOURS:-24}"
+BIG_MB="${LIBRARIAN_TMP_REAP_MB:-100}"
+BIG_MIN="${LIBRARIAN_TMP_REAP_MIN:-30}"
+DIR_HOURS="${LIBRARIAN_TMP_REAP_DIR_HOURS:-24}"
 
 refuse() { printf 'thinkers-tmp-reaper: refusing: %s\n' "$1" >&2; exit 0; }
 
 [[ "$(id -u)" -eq 0 ]] && refuse "running as root"
 me=$(id -un)
 
-TMP_ROOT="${HEADLONG_TMP_ROOT:-${TMPDIR:-/tmp}}"
+TMP_ROOT="${LIBRARIAN_TMP_ROOT:-${TMPDIR:-/tmp}}"
 [[ -d "$TMP_ROOT" ]] || exit 0
 # Resolve symlinks and relative parts before judging the path.
 TMP_ROOT=$(cd "$TMP_ROOT" 2>/dev/null && pwd -P) || exit 0

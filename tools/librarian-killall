@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (bin/librarian-env).
+for _le in "$(dirname "${BASH_SOURCE[0]}")/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/bin/librarian-env"; do
+    # shellcheck source=/dev/null
+    if [[ -f "$_le" ]]; then . "$_le"; break; fi
+done; unset _le
+
 set -euo pipefail
 
-# headlong-killall — panic button: kill every Headlong-related process.
+# librarian-killall — panic button: kill every Librarian-related process.
 #
 # Targets (by exact argv patterns, not a loose grep, so editors, greps, and
-# shells that merely mention shellm/headlong paths are never touched):
+# shells that merely mention shellm/librarian paths are never touched):
 #   - shellm agent loops (bin/shellm, tools/shellm-explore, bin/sub, bin/chat)
 #   - llm API callers and their streaming curl children
 #   - thinkers dispatchers and thinker step scripts
 #   - traj tail followers and orphaned `tail -F .../trajectory.jsonl` feeders
 #   - per-run docker containers (name shellm-<pid>)
-#   - headlong-web dash (only with --web; it burns no tokens)
+#   - librarian-web dash (only with --web; it burns no tokens)
 #
 # Matched processes are killed with their full descendant trees, so code
 # being executed by an agent dies with it. TERM first, KILL after a grace
@@ -18,10 +24,10 @@ set -euo pipefail
 
 usage() {
     cat >&2 <<'EOF'
-Usage: headlong-killall [-n|--dry-run] [--web]
+Usage: librarian-killall [-n|--dry-run] [--web]
 
   -n, --dry-run   List what would be killed, kill nothing
-  --web           Also kill the headlong-web dash
+  --web           Also kill the librarian-web dash
   -h, --help      Show this help
 EOF
     exit "${1:-0}"
@@ -49,10 +55,10 @@ PATTERNS=(
     'tail -n 0 -F [^ ]*trajectory\.jsonl'
 )
 if [[ "$KILL_WEB" -eq 1 ]]; then
-    # The dash: `uv run --project <app>/web headlong-web ...` and the venv
+    # The dash: `uv run --project <app>/web librarian-web ...` and the venv
     # entry point under it. Anchored on those shapes, not on the bare name,
-    # so a shell merely mentioning headlong-web (systemctl, grep) is not hit.
-    PATTERNS+=('(uv run --project [^ ]+ |/\.venv/bin/)(headlong|shellm|shelly)-web( |$)')
+    # so a shell merely mentioning librarian-web (systemctl, grep) is not hit.
+    PATTERNS+=('(uv run --project [^ ]+ |/\.venv/bin/)(librarian|shellm|shelly)-web( |$)')
 fi
 
 # Never kill ourselves or our ancestors (running this from inside an agent

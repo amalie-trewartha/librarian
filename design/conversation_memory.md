@@ -226,7 +226,7 @@ memory file from Part 4 gets an `aliases` list in its frontmatter, and
 ways, and unlinked aliases fall back to the first layer.
 
 - The Slack bridge already puts the display name in the inbound header,
-  e.g. "Andy Konwinski in #headlong-bot". Stamping a `display_name` field on
+  e.g. "Andy Konwinski in #librarian-bot". Stamping a `display_name` field on
   the message step gives a cheap link to a phone chat name like pwa-andy.
 - The agent learns it. When someone says "this is Andy from Slack" on the
   phone chat, the monolith's `learn` function adds the alias.
@@ -431,7 +431,7 @@ Replies from before the deploy carry no fields and are not counted.
 ### Experiment A. Reconstruction baseline, done
 
 The reconstruction scripts used for the tables above live in the private
-experiments repo at `headlong-experiments/responder-memory/`. They should
+experiments repo at `librarian-experiments/responder-memory/`. They should
 be re-run once after Parts 1 and 2 deploy to
 confirm the zero context share drops to zero for every gap under 7 days.
 After Part 6 ships the real `context_msgs` field replaces the
@@ -469,7 +469,7 @@ The 2026-08-29 ablations showed that Grok's behavior on the monolith
 depends on accumulated prompt state in ways that are hard to predict, so
 the filter change gets a controlled replay before it touches Audel. Use the
 private replay harness at
-`~/laude/repos/headlong-experiments/audel-proactivity/controlled-replay/`.
+`~/laude/repos/librarian-experiments/audel-proactivity/controlled-replay/`.
 
 - Conditions. The current filter, and the Part 3 filter (no reasoning,
   collapsed idle and error, final kept).
@@ -512,7 +512,7 @@ inner life excerpt because there was no conversation to anchor to.
 Decision. Ship Part 1 with timestamps. Hold Part 4 until its summary
 prompt has the facts only rule and the saved 22 cases rerun clean (a few
 minutes, about 40 cents). Results and every prompt and reply:
-`headlong-experiments/responder-memory/experiment-c/`.
+`librarian-experiments/responder-memory/experiment-c/`.
 
 Rerun, same day, with Part 4 as built (condition D: Part 1 history with
 age stamps and current time, plus the notes block from the facts only

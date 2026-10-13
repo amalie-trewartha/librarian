@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# tests/test_bridge_env.sh — the bridge launchers read Headlong's .env files.
+# tests/test_bridge_env.sh — the bridge launchers read Librarian's .env files.
 #
 # Usage: tests/test_bridge_env.sh
 #
-# Covers, for tools/headlong-slack-bridge and tools/headlong-telegram-bridge:
+# Covers, for tools/librarian-slack-bridge and tools/librarian-telegram-bridge:
 #   1. A variable set only in the checkout's .env reaches the bridge.
 #   2. A variable set only in the state home's .env reaches the bridge.
 #   3. A variable already in the environment wins over both, so systemd's
@@ -27,39 +27,39 @@ ok()  { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 bad() { fail=$((fail+1)); printf 'FAIL %s%s\n' "$1" "${2:+ — $2}"; }
 
 mkdir -p "$WORK/bin" "$WORK/app/tools" "$WORK/app/slack" "$WORK/app/telegram" \
-         "$WORK/home/.headlong"
-cp "$REPO/tools/headlong-slack-bridge" "$REPO/tools/headlong-telegram-bridge" \
+         "$WORK/home/.librarian"
+cp "$REPO/tools/librarian-slack-bridge" "$REPO/tools/librarian-telegram-bridge" \
    "$WORK/app/tools/"
 
 cat > "$WORK/bin/uv" <<'STUB'
 #!/usr/bin/env bash
 printf 'BOT=%s\n' "${SLACK_BOT_TOKEN:-${TELEGRAM_BOT_TOKEN:-unset}}"
-printf 'IDENTITY=%s\n' "${HEADLONG_SLACK_IDENTITY:-${HEADLONG_TELEGRAM_IDENTITY:-unset}}"
+printf 'IDENTITY=%s\n' "${LIBRARIAN_SLACK_IDENTITY:-${LIBRARIAN_TELEGRAM_IDENTITY:-unset}}"
 STUB
 chmod +x "$WORK/bin/uv"
 
 export PATH="$WORK/bin:$PATH"
 export HOME="$WORK/home"
-export HEADLONG_HOME="$WORK/home/.headlong"
+export LIBRARIAN_HOME="$WORK/home/.librarian"
 
 # Run one launcher with a clean environment except what the caller names.
 run() {
     local script="$1"; shift
     env -u SLACK_BOT_TOKEN -u TELEGRAM_BOT_TOKEN \
-        -u HEADLONG_SLACK_IDENTITY -u HEADLONG_TELEGRAM_IDENTITY \
+        -u LIBRARIAN_SLACK_IDENTITY -u LIBRARIAN_TELEGRAM_IDENTITY \
         "$@" "$WORK/app/tools/$script" 2>/dev/null
 }
 
 for bridge in slack telegram; do
-    script="headlong-${bridge}-bridge"
+    script="librarian-${bridge}-bridge"
     if [[ "$bridge" == slack ]]; then
-        token_var=SLACK_BOT_TOKEN; id_var=HEADLONG_SLACK_IDENTITY
+        token_var=SLACK_BOT_TOKEN; id_var=LIBRARIAN_SLACK_IDENTITY
     else
-        token_var=TELEGRAM_BOT_TOKEN; id_var=HEADLONG_TELEGRAM_IDENTITY
+        token_var=TELEGRAM_BOT_TOKEN; id_var=LIBRARIAN_TELEGRAM_IDENTITY
     fi
 
     printf '%s=from-app-env\n' "$token_var" > "$WORK/app/.env"
-    printf 'export %s=from-home-env\n' "$id_var" > "$HEADLONG_HOME/.env"
+    printf 'export %s=from-home-env\n' "$id_var" > "$LIBRARIAN_HOME/.env"
 
     out=$(run "$script")
     [[ "$out" == *"BOT=from-app-env"* ]] \
@@ -77,7 +77,7 @@ for bridge in slack telegram; do
     # The same key in both files: the checkout wins, the order every other
     # _load_env copy uses (bin/llm, tools/persona, bin/shellm, common.sh).
     printf '%s=from-app-env\n' "$token_var" > "$WORK/app/.env"
-    printf '%s=from-home-env\n' "$token_var" > "$HEADLONG_HOME/.env"
+    printf '%s=from-home-env\n' "$token_var" > "$LIBRARIAN_HOME/.env"
     out=$(run "$script")
     [[ "$out" == *"BOT=from-app-env"* ]] \
         && ok "$script: checkout .env wins over state home" \
@@ -85,7 +85,7 @@ for bridge in slack telegram; do
 
     # Sourcing the .env must not let a command's stdout ride into a value...
     printf 'echo loading\n%s=xoxb-clean\n' "$token_var" > "$WORK/app/.env"
-    rm -f "$HEADLONG_HOME/.env"
+    rm -f "$LIBRARIAN_HOME/.env"
     out=$(run "$script")
     [[ "$out" == *"BOT=xoxb-clean"* ]] \
         && ok "$script: a command's stdout stays out of the value" \
@@ -95,13 +95,13 @@ for bridge in slack telegram; do
     # silently loading nothing while the operator hunts a "missing" token.
     printf '%s="unterminated\n' "$token_var" > "$WORK/app/.env"
     err=$(env -u SLACK_BOT_TOKEN -u TELEGRAM_BOT_TOKEN \
-        -u HEADLONG_SLACK_IDENTITY -u HEADLONG_TELEGRAM_IDENTITY \
+        -u LIBRARIAN_SLACK_IDENTITY -u LIBRARIAN_TELEGRAM_IDENTITY \
         "$WORK/app/tools/$script" 2>&1 >/dev/null)
     [[ "$err" == *"could not read"* ]] \
         && ok "$script: a malformed .env warns instead of staying silent" \
         || bad "$script: a malformed .env warns instead of staying silent" "$err"
 
-    rm -f "$WORK/app/.env" "$HEADLONG_HOME/.env"
+    rm -f "$WORK/app/.env" "$LIBRARIAN_HOME/.env"
     out=$(run "$script")
     [[ "$out" == *"BOT=unset"* ]] \
         && ok "$script: no .env is not an error" \

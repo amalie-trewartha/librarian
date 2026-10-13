@@ -72,8 +72,8 @@ EOF
 chmod +x "$WORK/bin/curl"
 export PATH="$WORK/bin:$PATH"
 
-export HEADLONG_HOME="$WORK/home"   # bin/llm writes run/llm_health.json here
-mkdir -p "$HEADLONG_HOME"
+export LIBRARIAN_HOME="$WORK/home"   # bin/llm writes run/llm_health.json here
+mkdir -p "$LIBRARIAN_HOME"
 export CURL_ARGS="$WORK/curl_args"
 export CURL_PAYLOAD="$WORK/curl_payload"
 export CURL_HEADERS="$WORK/curl_headers"

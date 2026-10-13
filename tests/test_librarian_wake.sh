@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/test_librarian_wake.sh — the librarian inside a project-mode wake
 # (design/librarian.md). Drives the real thinkers/monolith/step against a
-# throwaway identity set up by headlong-project init, with a stubbed shellm
+# throwaway identity set up by librarian-project init, with a stubbed shellm
 # that captures the --prompt-file and writes trajectory steps. Pins:
 #   - the memory pack sits in the project section (after the references,
 #     before project memory) and replaces the life and related sections;
@@ -12,11 +12,11 @@
 #     signal that clears once a matching skill is proposed;
 #   - the same error in three wakes raises a LIBRARIAN SUGGESTION;
 #   - the daily ritual runs maintenance once;
-#   - degrade paths: HEADLONG_LIBRARIAN=0, no store, a failing librarian.
+#   - degrade paths: LIBRARIAN_MEMORY=0, no store, a failing librarian.
 # No LLM calls, no docker.
 set -uo pipefail
 unset IDENTITY_DIR IDENTITY_NAME MEM_DIR TRAJ_DIR TRAJ_ID ROOT_TRAJ_ID PROJECT_DIR LIBRARIAN_STORE LIBRARIAN_NOW \
-    HEADLONG_LIBRARIAN_SRC HEADLONG_LIBRARIAN PROJECT_NOW PROJECT_TIME_SCALE PROJECT_DAILY_TOKENS 2>/dev/null
+    LIBRARIAN_SRC LIBRARIAN_MEMORY PROJECT_NOW PROJECT_TIME_SCALE PROJECT_DAILY_TOKENS 2>/dev/null
 HERE="$(cd "$(dirname "$0")" && pwd)"; REPO="$(dirname "$HERE")"; STEP="$REPO/thinkers/monolith/step"
 export PATH="$REPO/tools:$REPO/bin:$PATH"
 pass=0; fail=0
@@ -37,7 +37,7 @@ printf 'I am {{identity_name}}, a curious companion.\n' > "$ID/core_identity_pro
 TRAJ="$ID/trajectories/$TRAJ_ID/trajectory.jsonl"; : > "$TRAJ"
 printf 'test-token\n' > "$ID/run/dispatcher.token"
 printf '# Green hydrogen in Texas\nEstimate the levelized cost in 2030.\n' > "$WORK/spec.md"
-LIBRARIAN_LLM=0 "$REPO/tools/headlong-project" init "$ID" --spec "$WORK/spec.md" >/dev/null 2>&1 || { echo "FAIL init"; exit 1; }
+LIBRARIAN_LLM=0 "$REPO/tools/librarian-project" init "$ID" --spec "$WORK/spec.md" >/dev/null 2>&1 || { echo "FAIL init"; exit 1; }
 P="$ID/workdir/project"
 export IDENTITY_DIR="$ID"
 PROJECT_ID=$(cat "$ID/project-pristine/project_id")
@@ -85,7 +85,7 @@ WAKE='{"type":"monolith-wake","content":"wake","source":"monolith-timer"}'
 run_step() {  # run_step [ENV=VAL ...]
     printf '%s' "$WAKE" | env PATH="$WORK/stub:$PATH" IDENTITY_DIR="$ID" IDENTITY_NAME=ada MEM_DIR="$ID/memories" \
         TRAJ_DIR="$ID/trajectories" TRAJ_ID="$TRAJ_ID" HOME="$WORK/home" LIBRARIAN_LLM=0 \
-        HEADLONG_LIBRARIAN_SRC="$REPO/librarian/src" MONOLITH_TIERED_MEMORY=1 "$@" "$STEP" >> "$WORK/step.log" 2>&1
+        LIBRARIAN_SRC="$REPO/librarian/src" MONOLITH_TIERED_MEMORY=1 "$@" "$STEP" >> "$WORK/step.log" 2>&1
 }
 last_episode() { L search --type episode --limit 1 --no-log | jq -r '.[0].id'; }
 episode_outcome() { L show "$1" | jq -r '.outcome.value + " | " + .outcome.criterion'; }
@@ -173,9 +173,9 @@ rows=$(python3 -c "import sqlite3; c=sqlite3.connect('$ID/librarian/store.sqlite
 eq "a second wake adds no maintenance row" "$rows" 1
 
 # ── 6. degrade paths ─────────────────────────────────────────────────────────
-run_step HEADLONG_LIBRARIAN=0 STUB_JOURNAL="off"
+run_step LIBRARIAN_MEMORY=0 STUB_JOURNAL="off"
 prompt=$(cat "$WORK/prompt")
-hasnt "HEADLONG_LIBRARIAN=0 removes the pack" "$prompt" "Your memory pack (from the librarian store"
+hasnt "LIBRARIAN_MEMORY=0 removes the pack" "$prompt" "Your memory pack (from the librarian store"
 has "the old journal tail returns" "$prompt" "Last 5 journal entries"
 has "related/life logic is untouched when off" "$prompt" "Project memory (project/project-memory.md"
 mv "$ID/librarian" "$ID/librarian.aside"
@@ -195,7 +195,7 @@ n_err=$(grep -c '"section":"librarian"' "$TRAJ" || true)
 eq "a failing librarian is an error step" "$n_err" 1
 
 # ── 7. blind never sees the store ────────────────────────────────────────────
-has "blind runs with the librarian off" "$(cat "$REPO/bin/blind")" "HEADLONG_LIBRARIAN=0"
+has "blind runs with the librarian off" "$(cat "$REPO/bin/blind")" "LIBRARIAN_MEMORY=0"
 has "the --bin list forwards librarian" "$(sed -n '/for cmd in mem traj/p' "$REPO/thinkers/_lib/common.sh")" "librarian"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

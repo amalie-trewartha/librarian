@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (bin/librarian-env).
+for _le in "$(dirname "${BASH_SOURCE[0]}")/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/bin/librarian-env"; do
+    # shellcheck source=/dev/null
+    if [[ -f "$_le" ]]; then . "$_le"; break; fi
+done; unset _le
+
 set -euo pipefail
 
 # pr-committee — review a GitHub PR with a committee of frontier models.
@@ -12,7 +18,7 @@ set -euo pipefail
 # Chair: one strong model merges the final round — dedupes, counts
 # agreement, checks each finding against the diff, and writes the report.
 #
-# Model calls go through Headlong's bin/llm, so OPENROUTER_API_KEY from the
+# Model calls go through Librarian's bin/llm, so OPENROUTER_API_KEY from the
 # repo .env (or the state home's .env) is all the auth needed for every vendor.
 #
 # Usage:
@@ -98,8 +104,8 @@ STAMP=$(date +%Y%m%d-%H%M%S)
 # Gather the brief: metadata, full changed files, diff
 # ---------------------------------------------------------------------------
 
-# State home for run dirs: HEADLONG_HOME/SHELLM_HOME if set; else ~/.headlong.
-_pc_home="${HEADLONG_HOME:-${SHELLM_HOME:-$HOME/.headlong}}"
+# State home for run dirs: LIBRARIAN_HOME/SHELLM_HOME if set; else ~/.librarian.
+_pc_home="${LIBRARIAN_HOME:-${SHELLM_HOME:-$HOME/.librarian}}"
 
 if [[ -n "$DIFF_RANGE" ]]; then
     # Local range mode: everything from git, nothing from GitHub.

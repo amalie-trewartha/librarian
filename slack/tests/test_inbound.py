@@ -1,9 +1,9 @@
 """Inbound reaction filter: only our messages (and DMs) land in the mind log."""
 
-from headlong_slack.inbound import reaction_text, reaction_to_inbound
+from librarian_slack.inbound import reaction_text, reaction_to_inbound
 from types import SimpleNamespace
 
-from headlong_slack import inbound
+from librarian_slack import inbound
 
 BOT = "U_BOT"
 
@@ -92,9 +92,9 @@ import time
 import httpx
 import pytest
 
-from headlong_slack.config import Config
-from headlong_slack.inbound import Inbound
-from headlong_slack.state import ActiveThreads
+from librarian_slack.config import Config
+from librarian_slack.inbound import Inbound
+from librarian_slack.state import ActiveThreads
 
 
 BOT = "U_BOT"
@@ -167,7 +167,7 @@ class _FakeClient:
     def conversations_info(self, channel):
         if channel.startswith("D"):
             return {"channel": {"is_im": True, "user": NICK}}
-        return {"channel": {"name": "headlong-bot", "is_im": False}}
+        return {"channel": {"name": "librarian-bot", "is_im": False}}
 
     def chat_postMessage(self, **kwargs):
         raise AssertionError(f"unexpected chat_postMessage {kwargs}")
@@ -265,7 +265,7 @@ class _Posted:
 @pytest.fixture
 def posted(monkeypatch):
     p = _Posted()
-    monkeypatch.setattr("headlong_slack.inbound.httpx.post", p)
+    monkeypatch.setattr("librarian_slack.inbound.httpx.post", p)
     return p
 
 
@@ -459,7 +459,7 @@ def make_inbound(client):
     bridge.bot_user_id = "UBOT"
     bridge.names = Names()
     bridge.app = SimpleNamespace(client=client)
-    bridge._chat_url = "http://headlong.test/chat"
+    bridge._chat_url = "http://librarian.test/chat"
     return bridge
 
 
@@ -774,7 +774,7 @@ class _RefusedResponse:
 
     def raise_for_status(self):
         raise httpx.HTTPStatusError(
-            "409", request=httpx.Request("POST", "http://headlong.test/chat"), response=self  # type: ignore[arg-type]
+            "409", request=httpx.Request("POST", "http://librarian.test/chat"), response=self  # type: ignore[arg-type]
         )
 
 

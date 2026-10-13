@@ -2,7 +2,7 @@
 
 import pytest
 
-from headlong_slack import config
+from librarian_slack import config
 
 
 def _identity(root, name):
@@ -16,11 +16,11 @@ def _identity(root, name):
 def _tokens(monkeypatch):
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
     monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
-    monkeypatch.delenv("HEADLONG_SLACK_IDENTITY", raising=False)
+    monkeypatch.delenv("LIBRARIAN_SLACK_IDENTITY", raising=False)
     monkeypatch.delenv("SHELLM_SLACK_IDENTITY", raising=False)
     # config.load mkdirs the state dir, so an ambient override would make
     # these tests write outside tmp_path.
-    monkeypatch.delenv("HEADLONG_SLACK_STATE_DIR", raising=False)
+    monkeypatch.delenv("LIBRARIAN_SLACK_STATE_DIR", raising=False)
     monkeypatch.delenv("SHELLM_SLACK_STATE_DIR", raising=False)
 
 
@@ -54,7 +54,7 @@ def test_env_var_wins_over_the_default_symlink(tmp_path, monkeypatch):
     _identity(tmp_path, "ada")
     _identity(tmp_path, "bo")
     (tmp_path / ".identities" / "default").symlink_to("ada")
-    monkeypatch.setenv("HEADLONG_SLACK_IDENTITY", "bo")
+    monkeypatch.setenv("LIBRARIAN_SLACK_IDENTITY", "bo")
 
     assert config.load(tmp_path).identity == "bo"
 
@@ -64,7 +64,7 @@ def test_no_var_and_no_default_names_the_variable(tmp_path):
 
     with pytest.raises(SystemExit) as exc:
         config.load(tmp_path)
-    assert "HEADLONG_SLACK_IDENTITY" in str(exc.value)
+    assert "LIBRARIAN_SLACK_IDENTITY" in str(exc.value)
 
 
 def test_a_dangling_default_link_names_the_link(tmp_path):

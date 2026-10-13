@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # deploy/thinkers-service.sh — ExecStart/ExecStop body for
-# headlong-thinkers@<identity>.service. Runs as the shellm user.
+# librarian-thinkers@<identity>.service. Runs as the shellm user.
 #
 # Usage: thinkers-service.sh APP_DIR IDENTITY start|stop
 #
@@ -11,7 +11,7 @@ set -euo pipefail
 # start every enabled thinker by name. Named start matters: the CLI's bare
 # start only arms the dispatcher, while named start also kicks each thinker
 # once so the mind actually wakes up (same reason the dash expands "start
-# all" to explicit names, web/src/headlong_web/server.py).
+# all" to explicit names, web/src/librarian_web/server.py).
 #
 # stop: drain stop, then wait for in-flight steps to finish so systemd's
 # final cgroup sweep (KillMode=control-group) reaps only what refused to
@@ -57,6 +57,24 @@ set +o pipefail
 # shellcheck disable=SC1091
 source "$ID_DIR/activate"
 set -eu
+# Librarian names are canonical; Headlong spellings still work (same mapping as bin/librarian-env).
+if [[ -z "${LIBRARIAN_MEMORY+x}" && -n "${HEADLONG_LIBRARIAN+x}" ]]; then export LIBRARIAN_MEMORY="$HEADLONG_LIBRARIAN"; fi
+if [[ -z "${LIBRARIAN_SRC+x}" && -n "${HEADLONG_LIBRARIAN_SRC+x}" ]]; then export LIBRARIAN_SRC="$HEADLONG_LIBRARIAN_SRC"; fi
+for _le_hv in $(compgen -A variable HEADLONG_ 2>/dev/null); do
+    case "$_le_hv" in HEADLONG_LIBRARIAN|HEADLONG_LIBRARIAN_SRC) continue ;; esac
+    _le_lv="LIBRARIAN_${_le_hv#HEADLONG_}"
+    if [[ -z "${!_le_lv+x}" ]]; then export "$_le_lv=${!_le_hv}"; fi
+done
+unset _le_hv _le_lv
+if [[ -z "${LIBRARIAN_HOME:-}" && -n "${HOME:-}" && ! -d "$HOME/.librarian" && -d "$HOME/.headlong" ]]; then
+    export LIBRARIAN_HOME="$HOME/.headlong"
+fi
+if [[ -z "${LIBRARIAN_THINKERS_TEMPLATES:-}" && -n "${HOME:-}" ]]; then
+    if [[ ! -d "$HOME/.librarian-thinkers" && -d "$HOME/.headlong-thinkers" ]]; then
+        export LIBRARIAN_THINKERS_TEMPLATES="$HOME/.headlong-thinkers"
+    fi
+fi
+
 set -o pipefail
 [[ -n "${IDENTITY_NAME:-}" ]] || { echo "error: activate did not set IDENTITY_NAME" >&2; exit 1; }
 

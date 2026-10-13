@@ -1,8 +1,8 @@
-# headlong-librarian
+# librarian
 
-The Librarian: Headlong's memory store and context packer for project-mode
+The Librarian: Librarian's memory store and context packer for project-mode
 minds. Implements the design in the repository's `Librarian Memory & Context
-System for a Long-Running Autonomous Agent.md`; the Headlong-specific
+System for a Long-Running Autonomous Agent.md`; the Librarian-specific
 decisions are in `design/librarian.md`.
 
 Standard library only at runtime (sqlite3 with FTS5, json, re, argparse):
@@ -10,7 +10,7 @@ the same code runs on the host from the monolith step and inside the shellm
 sandbox from the mind's own bash, through the `tools/librarian` wrapper.
 
 ```
-src/headlong_librarian/
+src/librarian/
   db.py         store, schema, clock (LIBRARIAN_NOW / PROJECT_NOW / PROJECT_TIME_SCALE), ULIDs
   model.py      node envelope, tags, tokens, insert/supersede/edges
   gate.py       the quality gate every write passes

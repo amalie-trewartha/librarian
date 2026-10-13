@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tests/test_project_mode.sh — project mode for long unattended runs
-# (design/long_autonomy.md): headlong-project init, the read-only guard, the
+# (design/long_autonomy.md): librarian-project init, the read-only guard, the
 # wake-prompt section, ritual scheduling, dated question defaults, the token
 # budget and rest floors, the stall signal, the git commit of project/, and
 # blind's isolation from the parent trajectory.
@@ -12,7 +12,7 @@
 
 set -uo pipefail
 unset IDENTITY_DIR IDENTITY_NAME MEM_DIR TRAJ_DIR TRAJ_ID ROOT_TRAJ_ID PROJECT_DIR PROJECT_DAILY_TOKENS \
-    PROJECT_DAILY_AT PROJECT_FREETIME HEADLONG_PROJECT_MODE _SHELLM_PARENT_TRAJ_ID 2>/dev/null
+    PROJECT_DAILY_AT PROJECT_FREETIME LIBRARIAN_PROJECT_MODE _SHELLM_PARENT_TRAJ_ID 2>/dev/null
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(dirname "$HERE")"
@@ -43,7 +43,7 @@ printf '# Brief\nEstimate the levelized cost of green hydrogen in Texas in 2030.
 
 # ── init ─────────────────────────────────────────────────────────────────────
 printf '# An exemplar LCA\nGoal and scope...\n' > "$WORK/exemplar.md"
-out=$("$REPO/tools/headlong-project" init "$ID" --spec "$WORK/spec.md" --reference "$WORK/exemplar.md" 2>&1); rc=$?
+out=$("$REPO/tools/librarian-project" init "$ID" --spec "$WORK/spec.md" --reference "$WORK/exemplar.md" 2>&1); rc=$?
 eq "init succeeds" "$rc" 0
 P="$ID/workdir/project"
 for f in charter.md spec.md deliverable.md project-memory.md journal.md questions.md addenda.md STATE roles/adversary.md roles/coldeyes.md roles/explorer.md; do
@@ -58,15 +58,15 @@ eq "one initial commit" "$(git -C "$P" rev-list --count HEAD 2>/dev/null)" 1
 [[ -d "$P/model" ]] && ok "init creates model/" || bad "init creates model/"
 has "persona replaced with project persona" "$(cat "$ID/core_identity_prompt.md")" "research agent assigned to one long project"
 has "old persona kept" "$(cat "$ID/core_identity_prompt.md.pre-project")" "curious companion"
-out=$("$REPO/tools/headlong-project" init "$ID" --spec "$WORK/spec.md" 2>&1); rc=$?
+out=$("$REPO/tools/librarian-project" init "$ID" --spec "$WORK/spec.md" 2>&1); rc=$?
 [[ $rc -ne 0 ]] && ok "second init refused without --force" || bad "second init refused without --force"
 has "init sets the default 2M daily budget" "$(cat "$ID/.env")" "PROJECT_DAILY_TOKENS=2000000"
 
-export IDENTITY_DIR="$ID" IDENTITY_NAME=ada HEADLONG_TZ=UTC
+export IDENTITY_DIR="$ID" IDENTITY_NAME=ada LIBRARIAN_TZ=UTC
 # shellcheck disable=SC1091
 source "$REPO/thinkers/_lib/project.sh"
 _project_on && ok "project mode detected" || bad "project mode detected"
-HEADLONG_PROJECT_MODE=0 _project_on && bad "HEADLONG_PROJECT_MODE=0 disables" || ok "HEADLONG_PROJECT_MODE=0 disables"
+LIBRARIAN_PROJECT_MODE=0 _project_on && bad "LIBRARIAN_PROJECT_MODE=0 disables" || ok "LIBRARIAN_PROJECT_MODE=0 disables"
 
 # ── guard ────────────────────────────────────────────────────────────────────
 chmod u+w "$P/charter.md"; printf 'I may edit my rules.\n' > "$P/charter.md"
@@ -133,7 +133,7 @@ cat >> "$P/questions.md" <<'EOF'
 Blocking: yes
 Default: 8% real
 Default-by: 2026-10-05
-Answer: (a human writes here, or runs: headlong-project answer <name> <Qn> "...". Never you.)
+Answer: (a human writes here, or runs: librarian-project answer <name> <Qn> "...". Never you.)
 
 ### 2026-10-02 — Electrolyzer type — STATUS: open
 Blocking: no
@@ -182,13 +182,13 @@ has "agent-written answer is unverified" "$rows" "Q5	unverified"
 # ── humans: banner, answer, provenance, summary ──────────────────────────────
 ban=$(_project_question_banner)
 has "banner shouts the open count" "$ban" "!!! 4 OPEN QUESTION(S) FOR A HUMAN"
-has "banner says how to answer" "$ban" "headlong-project answer ada <Qn>"
+has "banner says how to answer" "$ban" "librarian-project answer ada <Qn>"
 has "banner marks blocking" "$ban" "Q1 [BLOCKING]  Discount rate"
 has "banner: default due now" "$ban" "default due now (2026-10-05)"
 has "banner: future default date" "$ban" "default applies on 2026-10-20"
 has "banner: never defaults" "$ban" "will NOT default"
 has "banner: unverified answer" "$ban" "no human wrote the answer: Q5"
-out=$("$REPO/tools/headlong-project" answer "$ID" Q2 "Use alkaline, it is cheaper at this scale" 2>&1); rc=$?
+out=$("$REPO/tools/librarian-project" answer "$ID" Q2 "Use alkaline, it is cheaper at this scale" 2>&1); rc=$?
 eq "answer command succeeds" "$rc" 0
 has "answer line written" "$(grep -A4 '^### Q2' "$P/questions.md")" "Answer: Use alkaline, it is cheaper at this scale (human, "
 eq "answer committed as human" "$(git -C "$P" log -1 --format=%an)" "human"
@@ -197,7 +197,7 @@ has "question stays open until applied" "$(grep '^### Q2' "$P/questions.md")" "S
 has "human answer recognized from git" "$(_project_human_answers)" "Q2"
 has "agent signal: apply the human answer" "$(_project_signals)" 'HUMAN ANSWER: a human answered Q2'
 has "banner: human answer waiting" "$(_project_question_banner)" "answered by a human; the agent applies it"
-out=$("$REPO/tools/headlong-project" answer "$ID" Q9 "x" 2>&1); rc=$?
+out=$("$REPO/tools/librarian-project" answer "$ID" Q9 "x" 2>&1); rc=$?
 [[ $rc -ne 0 ]] && ok "answer to an unknown id refused" || bad "answer to an unknown id refused"
 # A human edits by hand between wakes; the pre-wake commit attributes it.
 sed -i 's/^Default-by: never$/Default-by: never\nAnswer: per kg of H2 at the plant gate/' "$P/questions.md"
@@ -217,11 +217,11 @@ has "summary: open human answer waiting" "$sum" "**Q3** Functional unit"
 has "summary: closed by default" "$sum" "| Q1 | Discount rate | 2026-10-01 | Default (no human answer) |"
 has "summary: closed by human" "$sum" "| Q2 | Electrolyzer type | 2026-10-02 | Human answer | Use alkaline"
 has "summary: unverified flagged" "$sum" "UNVERIFIED"
-out=$("$REPO/tools/headlong-project" questions "$ID" --closed 2>&1)
+out=$("$REPO/tools/librarian-project" questions "$ID" --closed 2>&1)
 has "questions --closed: human" "$out" "HUMAN ANSWER: Use alkaline"
 has "questions --closed: default" "$out" "DEFAULT USED (no human answer)"
 hasnt "questions --closed hides the open banner" "$out" "OPEN QUESTION"
-out=$(PROJECT_NOW="$PROJECT_NOW" "$REPO/tools/headlong-project" status "$ID" 2>&1)
+out=$(PROJECT_NOW="$PROJECT_NOW" "$REPO/tools/librarian-project" status "$ID" 2>&1)
 has "status leads with open questions" "$(printf '%s' "$out" | head -1)" "OPEN QUESTION(S) FOR A HUMAN"
 has "status shows the budget from .env" "$out" "(cap 2000000 tokens); whole run:"
 sed -i 's/^\(### Q5 .*STATUS: \)answered/\1moot/' "$P/questions.md"   # tidy for what follows
@@ -308,13 +308,13 @@ _project_should_skip_rest reactive && bad "a reactive wake still runs" || ok "a 
 hasnt "no stale nag after the end" "$(_project_signals)" "DELIVERABLE STALE"
 # A human extends the run.
 git -C "$P" add -A >/dev/null; git -C "$P" -c user.name=ada -c user.email=a@x commit -qm "final" >/dev/null
-out=$(PROJECT_NOW="$PROJECT_NOW" "$REPO/tools/headlong-project" deadline "$ID" --end 2099-01-01 2>&1); rc=$?
+out=$(PROJECT_NOW="$PROJECT_NOW" "$REPO/tools/librarian-project" deadline "$ID" --end 2099-01-01 2>&1); rc=$?
 eq "deadline --end succeeds" "$rc" 0
 has "extension reopens a finished run" "$out" "reopened"
 [[ ! -f "$P/reports/final.md" ]] && ls "$P"/reports/final-superseded-*.md >/dev/null 2>&1 && ok "old final report kept under a dated name" || bad "old final report kept under a dated name"
 has "STATE back to active" "$(head -1 "$P/STATE")" "active"
 eq "extension committed as human" "$(git -C "$P" log -1 --format=%an)" "human"
-out=$("$REPO/tools/headlong-project" deadline "$ID" --end 2020-01-01 2>&1); rc=$?
+out=$("$REPO/tools/librarian-project" deadline "$ID" --end 2020-01-01 2>&1); rc=$?
 [[ $rc -ne 0 ]] && ok "an end in the past is refused" || bad "an end in the past is refused"
 setend '2026-10-15 00:00'; rm -f "$P"/reports/final-superseded-*.md
 PROJECT_NOW=$(ep '2026-10-06 09:00')

@@ -109,8 +109,8 @@ chmod +x "$WORK/bin/opencode-fake"
 export CODING_AGENT_OPENCODE_BIN="$WORK/bin/opencode-fake"
 mkdir -p "$WORK/identity"
 touch "$WORK/identity/core_identity_prompt.md"
-"$REPO/bin/headlong-opencode" install --identity "$WORK/identity" >/dev/null
-"$REPO/bin/headlong-opencode" enable --identity "$WORK/identity" >/dev/null
+"$REPO/bin/librarian-opencode" install --identity "$WORK/identity" >/dev/null
+"$REPO/bin/librarian-opencode" enable --identity "$WORK/identity" >/dev/null
 export PATH="$WORK/identity/extensions/opencode/bin:$PATH"
 
 new_fixture() {
@@ -309,7 +309,7 @@ is "pre-existing output: content preserved" keep "$(cat "$FIXTURE_REPO/preexisti
 is "source output symlink: status unchanged" "$placement_before" "$(git -C "$FIXTURE_REPO" status --porcelain)"
 TMPDIR="$FIXTURE_REPO" coding-agent --repo "$FIXTURE_REPO" --task anything --verify true >"$WORK/placement.stdout" 2>"$WORK/placement.stderr"
 is "default output in source: rejected" 2 "$?"
-is "default output in source: temporary directory removed" '' "$(find "$FIXTURE_REPO" -maxdepth 1 -name 'headlong-coding-agent.*' -print)"
+is "default output in source: temporary directory removed" '' "$(find "$FIXTURE_REPO" -maxdepth 1 -name 'librarian-coding-agent.*' -print)"
 
 # K. A directory-backed gitlink must be fingerprinted or fail closed.
 # Load the production function without running the CLI lifecycle.

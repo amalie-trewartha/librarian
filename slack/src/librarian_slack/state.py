@@ -88,7 +88,7 @@ class ActiveThreads:
 class PeerGuard:
     """Bounds bot-to-bot traffic so two personas cannot talk forever.
 
-    Two Headlong personas in one thread each answer every message the
+    Two Librarian personas in one thread each answer every message the
     other posts. Without a bound that is an infinite loop billed to two
     LLM keys. Two limits, both counted on the messages this bridge
     forwards from peers:

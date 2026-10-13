@@ -1,13 +1,13 @@
-# headlong-telegram-bridge
+# librarian-telegram-bridge
 
-A Telegram Bot API bridge that connects one Headlong identity to Telegram.
+A Telegram Bot API bridge that connects one Librarian identity to Telegram.
 Approved people DM the bot, their messages land in the identity's mind log
 as `message` steps, and the identity's replies come back to the same chat.
 
 ## How it works
 
 ```
-Telegram <=(long-poll getUpdates)=> headlong-telegram-bridge
+Telegram <=(long-poll getUpdates)=> librarian-telegram-bridge
     inbound:  message -> from_name "telegram-<user_id>-<chat_id>"
               -> POST <web>/api/identities/<id>/chat
     outbound: tail trajectory.jsonl -> message steps where from=<identity>
@@ -48,14 +48,14 @@ The admin (you) is approved automatically on first start.
 export TELEGRAM_BOT_TOKEN=...       # from @BotFather
 export TELEGRAM_ADMIN_ID=...        # your numeric user id; message the bot
                                     # once and read it from the bridge log
-export HEADLONG_TELEGRAM_IDENTITY=ada  # optional; defaults to the `default`
+export LIBRARIAN_TELEGRAM_IDENTITY=ada  # optional; defaults to the `default`
                                        # identity link (legacy
                                        # SHELLM_TELEGRAM_IDENTITY still honored)
-tools/headlong-telegram-bridge [ROOT]   # ROOT = serve root, default repo root
+tools/librarian-telegram-bridge [ROOT]   # ROOT = serve root, default repo root
 ```
 
-The launcher loads `<checkout>/.env` and then `$HEADLONG_HOME/.env` (default
-`~/.headlong/.env`), the same two files `persona` and `llm` read, so the token
+The launcher loads `<checkout>/.env` and then `$LIBRARIAN_HOME/.env` (default
+`~/.librarian/.env`), the same two files `persona` and `llm` read, so the token
 can live in an env file instead of the calling shell. Anything already exported
 wins.
 
@@ -65,10 +65,10 @@ which does not use this launcher and reads the root-owned
 own environment, as described above.
 
 The identity must exist (`identity new <name>`) with a running dispatcher
-(`thinkers start monolith responder`), and headlong-web must be serving the same root
-(default `http://127.0.0.1:8080`, override with `HEADLONG_WEB_URL`; legacy `SHELLM_WEB_URL` still honored).
+(`thinkers start monolith responder`), and librarian-web must be serving the same root
+(default `http://127.0.0.1:8080`, override with `LIBRARIAN_WEB_URL`; legacy `SHELLM_WEB_URL` still honored).
 
-Other settings are `HEADLONG_TELEGRAM_STATE_DIR`, legacy
+Other settings are `LIBRARIAN_TELEGRAM_STATE_DIR`, legacy
 `SHELLM_TELEGRAM_STATE_DIR` (allowlist, cursors, update offset, default
 `<identity>/run/telegram-bridge/`).
 
@@ -117,7 +117,7 @@ The env file does not survive an instance rebuild. After a rebuild,
 repeat step 3 and 4. `deploy/scripts/status` (which `rebuild` runs at
 the end) prints a loud `telegram: NOT SET UP` reminder on the slack
 stack whenever the env file is missing. To turn the bridge off, `sudo systemctl stop
-headlong-telegram-bridge` mutes it without touching the agent, and
+librarian-telegram-bridge` mutes it without touching the agent, and
 removing `/etc/shellm/telegram.env` keeps it from coming back on the
 next deploy.
 

@@ -154,7 +154,7 @@ STUB
 (
     cd "$WORK/loop/wd" || exit 1
     export PATH="$WORK/loop/toolbin:$PATH" SHELLM_ENV=local
-    export HEADLONG_HOME="$WORK/loop/state" SHELLM_HOME="$WORK/loop/state"
+    export LIBRARIAN_HOME="$WORK/loop/state" SHELLM_HOME="$WORK/loop/state"
     export SHELLM_CONF_DIR="$WORK/loop/state" SHELLM_TRAJ_DIR="$WORK/loop/state/trajectories"
     export SHELLM_MODEL=test-model RESPONSE_FILE="$WORK/loop/response"
     unset IDENTITY_DIR IDENTITY_NAME TRAJ_DIR TRAJ_ID ROOT_TRAJ_ID _SHELLM_PARENT_TRAJ_ID

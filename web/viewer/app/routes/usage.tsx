@@ -28,7 +28,7 @@ import { fetchIdentityStatus, fetchUsage, refreshUsage } from "~/lib/api";
 import type { UsageDay } from "~/lib/types";
 
 export function meta() {
-  return [{ title: "Headlong · usage" }];
+  return [{ title: "Librarian · usage" }];
 }
 
 // --- formatting ------------------------------------------------------------

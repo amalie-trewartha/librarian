@@ -124,7 +124,7 @@ def _open_store() -> Optional[db.Store]:
                 marker.write_text(db.now_iso())
             except OSError:
                 pass
-            print("librarian: no store for this identity (headlong-project init creates one); packs disabled", file=sys.stderr)
+            print("librarian: no store for this identity (librarian-project init creates one); packs disabled", file=sys.stderr)
         return None
     return db.Store.open(path)
 

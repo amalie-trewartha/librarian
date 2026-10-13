@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# headlong-thinkersctl — root-owned wrapper that lets the shellm user manage
+# librarian-thinkersctl — root-owned wrapper that lets the shellm user manage
 # per-identity thinker units without a wildcard in sudoers. Installed to
 # /usr/local/bin by deploy/setup.sh; the sudo rule
-# (deploy/sudoers-headlong-thinkers) permits exactly this path and nothing
-# else. A sudoers wildcard like `systemctl stop headlong-thinkers@*` would
-# match spaces too (`stop headlong-thinkers@x sshd`), so the validation
+# (deploy/sudoers-librarian-thinkers) permits exactly this path and nothing
+# else. A sudoers wildcard like `systemctl stop librarian-thinkers@*` would
+# match spaces too (`stop librarian-thinkers@x sshd`), so the validation
 # lives here instead.
 #
-# Usage: headlong-thinkersctl start|stop|restart|is-active IDENTITY
+# Usage: librarian-thinkersctl start|stop|restart|is-active IDENTITY
 
 usage() {
-    echo "usage: headlong-thinkersctl start|stop|restart|is-active IDENTITY" >&2
+    echo "usage: librarian-thinkersctl start|stop|restart|is-active IDENTITY" >&2
     exit 2
 }
 
@@ -40,10 +40,10 @@ esac
 # the check exits quietly while the dispatcher is down.
 case "$action" in
     start|restart)
-        if [[ -f /etc/systemd/system/headlong-thinkers-silence@.timer ]]; then
-            /usr/bin/systemctl enable --now "headlong-thinkers-silence@${ident}.timer" >/dev/null 2>&1 || true
+        if [[ -f /etc/systemd/system/librarian-thinkers-silence@.timer ]]; then
+            /usr/bin/systemctl enable --now "librarian-thinkers-silence@${ident}.timer" >/dev/null 2>&1 || true
         fi
         ;;
 esac
 
-exec /usr/bin/systemctl "$action" "headlong-thinkers@${ident}.service"
+exec /usr/bin/systemctl "$action" "librarian-thinkers@${ident}.service"

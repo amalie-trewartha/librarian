@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from headlong_web import trajectory
-from headlong_web.server import create_app
+from librarian_web import trajectory
+from librarian_web.server import create_app
 
 ROOT_TRAJ = "fbfbfbfb-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
@@ -245,7 +245,7 @@ def test_eviction_and_window_rehydration(traj_dir: Path):
 
 
 def test_search_spans_evicted_history(traj_dir: Path):
-    from headlong_web import search
+    from librarian_web import search
 
     jsonl = traj_dir / "trajectory.jsonl"
     _write(jsonl, [_step(i) for i in range(1, 60)], append=True)
@@ -277,7 +277,7 @@ def test_run_command_rehydrates_after_eviction(traj_dir: Path):
 
 
 def test_chat_index_survives_eviction(traj_dir: Path):
-    from headlong_web import chat
+    from librarian_web import chat
 
     jsonl = traj_dir / "trajectory.jsonl"
     source_url = "https://laudesters.slack.com/archives/C1/p1788451200123456"

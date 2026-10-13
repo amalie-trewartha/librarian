@@ -1,4 +1,4 @@
-# Installing Headlong
+# Installing Librarian
 
 The short version is in the [README](../README.md). This page has every
 variant.
@@ -6,7 +6,7 @@ variant.
 ## The one-liner
 
 ```bash
-curl -fsSL https://headlong.ai/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/install.sh | bash
 ```
 
 The installer first looks for Docker, because the agent writes and runs
@@ -17,28 +17,28 @@ real shell commands and Docker is the sandbox for them.
   your machine with the agent's shell commands still sandboxed in Docker,
   or, not recommended and behind another typed `yes`, on your machine
   with no sandbox at all. The unsandboxed choice sticks across re-runs;
-  set `HEADLONG_UNSANDBOXED=0` in `~/.headlong/.env` and re-run
-  `headlong-init` to turn the sandbox on.
+  set `LIBRARIAN_UNSANDBOXED=0` in `~/.librarian/.env` and re-run
+  `librarian-init` to turn the sandbox on.
 - With Docker installed but not running, it asks you to start Docker and
   checks again.
 - With no Docker at all, it stops and warns you: the agent's commands
   would run directly on your machine as your user. You must type the word
   `yes` to continue without a sandbox.
 
-On the host path it then clones the repo to `~/.headlong/app`, symlinks
+On the host path it then clones the repo to `~/.librarian/app`, symlinks
 the tools into `~/.local/bin`, and asks where the model should come from.
 
-- **A local model server.** Headlong supports Ollama, LM Studio, vLLM,
+- **A local model server.** Librarian supports Ollama, LM Studio, vLLM,
   llama.cpp, and other servers with an OpenAI compatible API. Answer `y`
   at the prompt and enter the server address, such as
-  `http://localhost:1234` for LM Studio. Headlong adds `/v1` when it is
-  missing. Enter an API key only when the server requires one. Headlong
+  `http://localhost:1234` for LM Studio. Librarian adds `/v1` when it is
+  missing. Enter an API key only when the server requires one. Librarian
   asks the server for its model list, or lets you type a model name when
   the server does not publish that list. It then checks a chat completion
-  before the mind starts. Headlong does not install a server or download
+  before the mind starts. Librarian does not install a server or download
   models, so start the server before you install.
 - **A cloud provider.** Paste an API key for Anthropic, OpenAI, Gemini,
-  OpenRouter, or OpenCode. `headlong-init` identifies the provider from
+  OpenRouter, or OpenCode. `librarian-init` identifies the provider from
   the key prefix.
 
 A host install saves a localhost model URL as localhost, so thinkers and
@@ -85,7 +85,7 @@ installer from the checkout, so what executes is the same code you can
 read here. To read first:
 
 ```bash
-curl -fsSLO https://headlong.ai/install.sh
+curl -fsSLO https://raw.githubusercontent.com/amalie-trewartha/librarian/main/install.sh
 less install.sh && bash install.sh --init
 ```
 
@@ -99,9 +99,9 @@ installer apt-installs its own dependencies (as root in a fresh
 container) and the dashboard binds `0.0.0.0` so the published port works.
 
 ```bash
-docker run -it --name headlong --restart unless-stopped -p 8080:8080 \
+docker run -it --name librarian --restart unless-stopped -p 8080:8080 \
   --add-host host.docker.internal:host-gateway buildpack-deps:curl \
-  bash -c 'curl -fsSL https://headlong.ai/install.sh | bash; exec bash'
+  bash -c 'curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/install.sh | bash; exec bash'
 ```
 
 Paste your key, answer the interview, then open http://localhost:8080 on
@@ -113,13 +113,13 @@ and the mind and dashboard come back up on their own.
 Day-to-day:
 
 ```bash
-docker exec -it headlong bash -l   # drop back into your agent's world
-docker stop headlong               # pause everything
-docker start headlong              # resume
-docker rm -f headlong              # delete the agent and its whole world
+docker exec -it librarian bash -l   # drop back into your agent's world
+docker stop librarian               # pause everything
+docker start librarian              # resume
+docker rm -f librarian              # delete the agent and its whole world
 ```
 
-Pasting the run command a second time fails with "name headlong already in
+Pasting the run command a second time fails with "name librarian already in
 use". That means your agent already exists; `docker exec` is how you get
 back to it.
 
@@ -133,48 +133,48 @@ default, so a script or a coding agent can install with no interaction:
 
 ```bash
 export OPENROUTER_API_KEY=sk-or-...   # or ANTHROPIC_/OPENAI_/GEMINI_API_KEY
-export HEADLONG_IDENTITY_NAME=ada       # optional; the interview's answers
-export HEADLONG_IDENTITY_VIBE="curious, warm, and plainspoken"
-export HEADLONG_IDENTITY_FOCUS="learning how their own mind works"
-export HEADLONG_IDENTITY_USER="I'm Sam, a programmer trying Headlong out"
-curl -fsSL https://headlong.ai/install.sh | bash
+export LIBRARIAN_IDENTITY_NAME=ada       # optional; the interview's answers
+export LIBRARIAN_IDENTITY_VIBE="curious, warm, and plainspoken"
+export LIBRARIAN_IDENTITY_FOCUS="learning how their own mind works"
+export LIBRARIAN_IDENTITY_USER="I'm Sam, a programmer trying Librarian out"
+curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/install.sh | bash
 ```
 
 A key must be in the environment **for a cloud provider**; everything
-else is optional. `HEADLONG_NO_DASH=1` and `HEADLONG_NO_THINKERS=1`
+else is optional. `LIBRARIAN_NO_DASH=1` and `LIBRARIAN_NO_THINKERS=1`
 skip those parts.
 
 A local model server can also be selected without a tty.
 
 ```bash
-export HEADLONG_PROVIDER=local
-export HEADLONG_LOCAL_URL=http://localhost:11434/v1   # the server's base URL
-# export HEADLONG_LOCAL_API_KEY=...   # only if the server wants a token
-# export HEADLONG_LOCAL_MODEL=qwen3:8b  # default: first model the server lists
-curl -fsSL https://headlong.ai/install.sh | bash
+export LIBRARIAN_PROVIDER=local
+export LIBRARIAN_LOCAL_URL=http://localhost:11434/v1   # the server's base URL
+# export LIBRARIAN_LOCAL_API_KEY=...   # only if the server wants a token
+# export LIBRARIAN_LOCAL_MODEL=qwen3:8b  # default: first model the server lists
+curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/install.sh | bash
 ```
 
-With no tty and no cloud key, set `HEADLONG_PROVIDER=local` and
-`HEADLONG_LOCAL_URL`. The server must be reachable. If the server does
-not publish a model list, also set `HEADLONG_LOCAL_MODEL`.
+With no tty and no cloud key, set `LIBRARIAN_PROVIDER=local` and
+`LIBRARIAN_LOCAL_URL`. The server must be reachable. If the server does
+not publish a model list, also set `LIBRARIAN_LOCAL_MODEL`.
 
 With no tty there is nobody to answer the sandbox question, so on a
 machine without a working Docker daemon the install stops unless
-`HEADLONG_UNSANDBOXED=1` is set. Setting it accepts that the agent's
+`LIBRARIAN_UNSANDBOXED=1` is set. Setting it accepts that the agent's
 shell commands run directly on the machine. Inside a container it is not
 needed; the container already is the sandbox.
 
 When Docker is present, the installer writes `SHELLM_REQUIRE_DOCKER=1`
-to `~/.headlong/.env`. From then on, a Docker daemon that stops answering
+to `~/.librarian/.env`. From then on, a Docker daemon that stops answering
 is a hard error for the agent's runs instead of a silent fall back to
 running on the host. Set it to `0` there if you want the old best-effort
 behavior.
 
-The installer writes `status.json` in the state home (`~/.headlong`) with
+The installer writes `status.json` in the state home (`~/.librarian`) with
 the outcome:
 
 ```bash
-jq -r '.mind.status, .dash.status, .dash.url' ~/.headlong/status.json
+jq -r '.mind.status, .dash.status, .dash.url' ~/.librarian/status.json
 ```
 
 [AGENTS.md](../AGENTS.md) covers operating a running identity: paths,
@@ -183,20 +183,20 @@ logs, health checks, and the sharp edges.
 ## From a checkout
 
 ```bash
-git clone https://github.com/laude-institute/headlong.git
-cd headlong
+git clone https://github.com/amalie-trewartha/librarian.git
+cd librarian
 ./install.sh            # add --init to also bootstrap an identity + dash
 ```
 
 This copies the tools in `bin/` and `tools/` to `~/.local/bin`, the core
 skills to `~/.skills/core-skills`, the bundled thinker templates to
-`~/.headlong-thinkers`, and builds the Rust TUI if cargo is present.
+`~/.librarian-thinkers`, and builds the Rust TUI if cargo is present.
 
-`headlong-init --dry-run` walks the Docker sandbox question interactively
+`librarian-init --dry-run` walks the Docker sandbox question interactively
 without writing or starting anything, which is handy for seeing what the
 install will ask on a given machine. Setting
-`HEADLONG_FAKE_DOCKER=ok|down|missing` fakes the Docker probe and
-`HEADLONG_NO_TTY=1` forces the no-terminal behavior, so every path can be
+`LIBRARIAN_FAKE_DOCKER=ok|down|missing` fakes the Docker probe and
+`LIBRARIAN_NO_TTY=1` forces the no-terminal behavior, so every path can be
 rehearsed anywhere. Use `--symlinks` to
 symlink instead (edits take effect without reinstalling), or
 `--prefix /usr/local/bin` for a different location.
@@ -219,59 +219,59 @@ last four characters (`<redacted sk-o...cdef>`) so two keys can be told
 apart, passwords are masked whole. The agent's
 `workdir/` is left out unless you pass `--include-workdir`. Look inside
 first if you want: `tar tzf <file>` lists it; unpack it with `tar xzf
-<file>` and read `headlong-bugreport-*/report.txt` for the summary.
+<file>` and read `librarian-bugreport-*/report.txt` for the summary.
 
 Where things live, if you would rather pick files by hand: the state home is
-`~/.headlong/` (`logs/`, `status.json`, `.env`), the checkout is
-`~/.headlong/app/`, and the agent is `~/.headlong/app/.identities/<name>/`
+`~/.librarian/` (`logs/`, `status.json`, `.env`), the checkout is
+`~/.librarian/app/`, and the agent is `~/.librarian/app/.identities/<name>/`
 with the root trajectory at `trajectories/*-root/trajectory.jsonl` and the
 thinker logs under `run/logs/`.
 
 ## Stopping and uninstalling
 
 `ada stop` pauses the mind (the thinkers) and `ada start` resumes it. If
-something is running away, `headlong-killall` stops every Headlong process on
+something is running away, `librarian-killall` stops every Librarian process on
 the machine (dispatchers, thinker steps, shellm runs, the dashboard);
-`headlong-killall --dry-run` shows what it would stop.
+`librarian-killall --dry-run` shows what it would stop.
 
-To see what Headlong has on a machine and what is running (read-only, works
+To see what Librarian has on a machine and what is running (read-only, works
 even when nothing is on PATH):
 
 ```bash
-curl -fsSL https://headlong.ai/status.sh | bash
+curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/status.sh | bash
 ```
 
-To remove Headlong from the machine:
+To remove Librarian from the machine:
 
 ```bash
-curl -fsSL https://headlong.ai/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/amalie-trewartha/librarian/main/uninstall.sh | bash
 ```
 
 (or `./uninstall.sh` / `./install.sh --uninstall` from a checkout). It shows
-what is running and what it will remove, asks once, stops every Headlong
+what is running and what it will remove, asks once, stops every Librarian
 process, and deletes what the installer put in place. Your agent's
 identities (memories, trajectory) are moved to
-`~/headlong-identities-backup-<date>/` unless you say to delete them.
+`~/librarian-identities-backup-<date>/` unless you say to delete them.
 `--dry-run` shows the plan without changing anything; `--yes` skips the
 prompts (for scripts); `uninstall.sh --help` lists the rest. If you
 installed from your own clone with `./install.sh`, the clone and the
 identities inside it are left alone.
 
-By hand, the installer touches these places, and removing them uninstalls Headlong:
+By hand, the installer touches these places, and removing them uninstalls Librarian:
 
-- `~/.headlong/` — the state home: `.env` (your API key), `status.json`,
-  logs, and, for the one-liner, the checkout itself in `~/.headlong/app/`.
+- `~/.librarian/` — the state home: `.env` (your API key), `status.json`,
+  logs, and, for the one-liner, the checkout itself in `~/.librarian/app/`.
   Identities live inside the checkout at `<app>/.identities/`, so this is
   also where your agent's memories and trajectory are. Copy that directory
   first if you want to keep them.
 - `~/.local/bin/` — one symlink (or copy) per tool, plus a symlink named
   after each identity (`ada`) that points at `persona`. `ls -l
-  ~/.local/bin | grep -i headlong` finds them.
-- `~/.skills/core-skills/` and `~/.headlong-thinkers/` — the bundled
+  ~/.local/bin | grep -i librarian` finds them.
+- `~/.skills/core-skills/` and `~/.librarian-thinkers/` — the bundled
   skills and thinker templates.
 - A `PATH` line the installer offered to add to your shell rc file
   (`~/.zshrc` or `~/.bashrc`).
 
-Run `headlong-killall` first so nothing is writing while you delete. For the
-Docker variant, `docker rm -f headlong` removes the container and everything
+Run `librarian-killall` first so nothing is writing while you delete. For the
+Docker variant, `docker rm -f librarian` removes the container and everything
 in it.

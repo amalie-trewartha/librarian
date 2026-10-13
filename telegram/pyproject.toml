@@ -1,14 +1,16 @@
 [project]
-name = "headlong-telegram-bridge"
+name = "librarian-telegram-bridge"
 version = "0.1.0"
-description = "Telegram Bot API bridge for a Headlong identity"
+description = "Telegram Bot API bridge for a Librarian identity"
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.27",
 ]
 
 [project.scripts]
-headlong-telegram-bridge = "headlong_telegram.cli:main"
+librarian-telegram-bridge = "librarian_telegram.cli:main"
+# Back-compat alias from the Headlong era (deployed units, operator habits).
+headlong-telegram-bridge = "librarian_telegram.cli:main"
 
 [dependency-groups]
 dev = [
@@ -20,4 +22,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/headlong_telegram"]
+packages = ["src/librarian_telegram"]

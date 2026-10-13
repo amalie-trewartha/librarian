@@ -17,7 +17,7 @@
 #   3. --out picks the path; --help works; an unknown option is an error.
 #
 # Everything runs under a throwaway HOME / app dir, so the real
-# ~/.headlong and the repo's own .identities are never touched.
+# ~/.librarian and the repo's own .identities are never touched.
 
 set -uo pipefail
 
@@ -38,14 +38,14 @@ check_not() { local label="$1"; shift; if "$@" >/dev/null 2>&1; then bad "$label
 # app dir = the repo's bin/ + tools/ with its own .identities; state home with
 # an .env holding two secrets and one plain setting.
 export HOME="$WORK/home"
-export HEADLONG_HOME="$WORK/home/.headlong"
-export HEADLONG_APP_DIR="$WORK/app"
+export LIBRARIAN_HOME="$WORK/home/.librarian"
+export LIBRARIAN_APP_DIR="$WORK/app"
 export TMPDIR="$WORK/tmp"
-mkdir -p "$HOME" "$HEADLONG_HOME/logs" "$HEADLONG_APP_DIR" "$TMPDIR"
-ln -s "$REPO/bin" "$HEADLONG_APP_DIR/bin"
-ln -s "$REPO/tools" "$HEADLONG_APP_DIR/tools"
-ln -s "$REPO/thinkers" "$HEADLONG_APP_DIR/thinkers"
-ln -s "$REPO/identities" "$HEADLONG_APP_DIR/identities"
+mkdir -p "$HOME" "$LIBRARIAN_HOME/logs" "$LIBRARIAN_APP_DIR" "$TMPDIR"
+ln -s "$REPO/bin" "$LIBRARIAN_APP_DIR/bin"
+ln -s "$REPO/tools" "$LIBRARIAN_APP_DIR/tools"
+ln -s "$REPO/thinkers" "$LIBRARIAN_APP_DIR/thinkers"
+ln -s "$REPO/identities" "$LIBRARIAN_APP_DIR/identities"
 export PATH="$REPO/bin:$REPO/tools:$PATH"
 
 KEY="sk-or-v1-0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -56,7 +56,7 @@ PRIVATE_DSN="$SERVICE_URL/private-secret-suffix"
 export BROKEN_SECRET=$'first-line\nsecond-line'
 export JSON_PASSWORD='prefix"json-secret-suffix'
 export JSON_TOKEN='ab"c-token-value-0123456789-xyz'
-cat > "$HEADLONG_HOME/.env" <<ENV
+cat > "$LIBRARIAN_HOME/.env" <<ENV
 OPENROUTER_API_KEY=$KEY
 SUPABASE_DB_PASSWORD=$PW
 DATABASE_DSN=$DSN
@@ -64,12 +64,12 @@ SERVICE_URL=$SERVICE_URL
 PRIVATE_DSN=$PRIVATE_DSN
 SHELLM_MODEL=anthropic/claude-sonnet-4.5
 ENV
-printf 'headlong-web serving on http://127.0.0.1:8080\n' > "$HEADLONG_HOME/logs/web.log"
-printf 'init ok\n' > "$HEADLONG_HOME/logs/init.log"
+printf 'librarian-web serving on http://127.0.0.1:8080\n' > "$LIBRARIAN_HOME/logs/web.log"
+printf 'init ok\n' > "$LIBRARIAN_HOME/logs/init.log"
 
-(cd "$HEADLONG_APP_DIR" && identity new alpha >/dev/null 2>&1) || { bad "identity new alpha"; exit 1; }
-ID="$HEADLONG_APP_DIR/.identities/alpha"
-ln -s alpha "$HEADLONG_APP_DIR/.identities/default"
+(cd "$LIBRARIAN_APP_DIR" && identity new alpha >/dev/null 2>&1) || { bad "identity new alpha"; exit 1; }
+ID="$LIBRARIAN_APP_DIR/.identities/alpha"
+ln -s alpha "$LIBRARIAN_APP_DIR/.identities/default"
 cat > "$ID/.env" <<ENV
 IDENTITY_PASSWORD=identity-password-canary
 IDENTITY_CONFIG=identity-config-canary
@@ -113,13 +113,13 @@ check "stderr names the file"            grep -qF "  $OUT" "$WORK/stderr"
 X="$WORK/x"; mkdir -p "$X"
 tar -xzf "$OUT" -C "$X" || { bad "bundle is a valid tgz"; exit 1; }
 ok "bundle is a valid tgz"
-TOP=$(ls -d "$X"/headlong-bugreport-alpha-* 2>/dev/null | head -1)
-check "top dir named headlong-bugreport-alpha-<stamp>" test -d "$TOP"
+TOP=$(ls -d "$X"/librarian-bugreport-alpha-* 2>/dev/null | head -1)
+check "top dir named librarian-bugreport-alpha-<stamp>" test -d "$TOP"
 
 # 1. contents
 check "report.txt present"                test -s "$TOP/report.txt"
 check "report: identity name"             grep -q '^identity: alpha$' "$TOP/report.txt"
-check "report: headlong commit line"      grep -q '^headlong commit: ' "$TOP/report.txt"
+check "report: librarian commit line"      grep -q '^librarian commit: ' "$TOP/report.txt"
 check "report: model visible (not a secret)" grep -q '^SHELLM_MODEL=anthropic/claude-sonnet-4.5' "$TOP/report.txt"
 check "report: env names listed, values hidden" grep -q '^OPENROUTER_API_KEY=<hidden>$' "$TOP/report.txt"
 check "report: status section"            grep -q '^mind: ' "$TOP/report.txt"
@@ -205,7 +205,7 @@ if [[ -s "$WORK/redact-state/python-args" ]] \
 else
     bad "redactor argv contains no private literals"
 fi
-check_not "implementation writes no secret helper script" grep -q 'headlong-redact' "$REPO/tools/persona"
+check_not "implementation writes no secret helper script" grep -q 'librarian-redact' "$REPO/tools/persona"
 
 # 4. options
 check "--include-workdir adds workdir" bash -c '
@@ -214,13 +214,13 @@ check "--include-workdir adds workdir" bash -c '
 check_not "--include-workdir still leaves .env out" bash -c \
     'tar -tzf "$1" | grep -q "/identity/.env$"' _ "$WORK/b2.tgz"
 check "default --out lands in HOME"    bash -c '
-    out=$(persona alpha bugreport 2>/dev/null) && [[ "$out" == "$HOME/headlong-bugreport-alpha-"*.tgz && -s "$out" ]]'
+    out=$(persona alpha bugreport 2>/dev/null) && [[ "$out" == "$HOME/librarian-bugreport-alpha-"*.tgz && -s "$out" ]]'
 check "--help exits 0 and mentions Usage" bash -c 'persona alpha bugreport --help | grep -q "^Usage:"'
 check_not "unknown option is an error"    persona alpha bugreport --bogus
 check "appears in persona --help"         bash -c 'persona alpha --help | grep -q bugreport'
-check_not "no stray staging dirs left"    bash -c 'ls -d "${TMPDIR:-/tmp}"/headlong-bugreport.* 2>/dev/null | grep -q .'
+check_not "no stray staging dirs left"    bash -c 'ls -d "${TMPDIR:-/tmp}"/librarian-bugreport.* 2>/dev/null | grep -q .'
 check_not "no secret-bearing sed scripts exist" bash -c \
-    'find "$1" -name "headlong-redact.*" -print -quit | grep -q .' _ "$WORK"
+    'find "$1" -name "librarian-redact.*" -print -quit | grep -q .' _ "$WORK"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

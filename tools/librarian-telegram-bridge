@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
+# Librarian names are canonical; Headlong spellings still work (bin/librarian-env).
+for _le in "$(dirname "${BASH_SOURCE[0]}")/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/../../bin/librarian-env" "$(dirname "${BASH_SOURCE[0]}")/bin/librarian-env"; do
+    # shellcheck source=/dev/null
+    if [[ -f "$_le" ]]; then . "$_le"; break; fi
+done; unset _le
+
 set -euo pipefail
 
-# headlong-telegram-bridge — Telegram Bot API bridge for a Headlong identity.
+# librarian-telegram-bridge — Telegram Bot API bridge for a Librarian identity.
 #
 # Usage:
-#   headlong-telegram-bridge [ROOT] [--verbose]
+#   librarian-telegram-bridge [ROOT] [--verbose]
 #
-# ROOT defaults to the headlong repo (parent of this script's directory).
+# ROOT defaults to the librarian repo (parent of this script's directory).
 # Requires uv. Configuration via env: TELEGRAM_BOT_TOKEN, TELEGRAM_ADMIN_ID,
-# HEADLONG_TELEGRAM_IDENTITY (defaults to the identity the `default`
-# link points at), HEADLONG_WEB_URL (SHELLM_* names still honored as
+# LIBRARIAN_TELEGRAM_IDENTITY (defaults to the identity the `default`
+# link points at), LIBRARIAN_WEB_URL (SHELLM_* names still honored as
 # fallbacks).
 #
 # Note: the production systemd unit does NOT use this script — it execs the
@@ -17,18 +23,18 @@ set -euo pipefail
 # to write the service-owned venv). This launcher is for local dev.
 
 # Resolve through symlinks (install.sh --symlinks puts this on PATH), then
-# fall back to the checkout recorded by install.sh / headlong-init.
+# fall back to the checkout recorded by install.sh / librarian-init.
 ROOT_DIR="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.." && pwd)"
 if [[ ! -d "$ROOT_DIR/telegram" ]]; then
-    _home="${HEADLONG_HOME:-${SHELLM_HOME:-$HOME/.headlong}}"
+    _home="${LIBRARIAN_HOME:-${SHELLM_HOME:-$HOME/.librarian}}"
     _rec=$(cat "$_home/app_dir" 2>/dev/null || true)
     if [[ -n "$_rec" && -d "$_rec/telegram" ]]; then ROOT_DIR="$_rec"
     elif [[ -d "$_home/app/telegram" ]]; then ROOT_DIR="$_home/app"
-    else echo "headlong-telegram-bridge: can't find the headlong checkout (telegram/ missing); set HEADLONG_HOME or run from a checkout" >&2; exit 1
+    else echo "librarian-telegram-bridge: can't find the librarian checkout (telegram/ missing); set LIBRARIAN_HOME or run from a checkout" >&2; exit 1
     fi
 fi
 
-# Headlong's env files, loaded the way tools/persona and bin/llm load them:
+# Librarian's env files, loaded the way tools/persona and bin/llm load them:
 # what is already exported wins, so the production unit's root-owned
 # /etc/shellm/telegram.env (which does not use this launcher at all) stays
 # authoritative where it exists. Without this the bridge is the only entry
@@ -49,9 +55,9 @@ _load_env() {
     return 0
 }
 _load_env "$ROOT_DIR/.env" || true
-_load_env "${HEADLONG_HOME:-${SHELLM_HOME:-$HOME/.headlong}}/.env" || true
+_load_env "${LIBRARIAN_HOME:-${SHELLM_HOME:-$HOME/.librarian}}/.env" || true
 
-command -v uv >/dev/null 2>&1 || { echo "headlong-telegram-bridge: uv is required (https://docs.astral.sh/uv/)" >&2; exit 1; }
+command -v uv >/dev/null 2>&1 || { echo "librarian-telegram-bridge: uv is required (https://docs.astral.sh/uv/)" >&2; exit 1; }
 
 # First arg is ROOT if it isn't a flag; all remaining args pass through.
 if [[ $# -gt 0 && "${1:0:1}" != "-" ]]; then
@@ -61,4 +67,4 @@ else
     serve_root="$ROOT_DIR"
 fi
 
-exec uv run --project "$ROOT_DIR/telegram" headlong-telegram-bridge "$serve_root" "$@"
+exec uv run --project "$ROOT_DIR/telegram" librarian-telegram-bridge "$serve_root" "$@"

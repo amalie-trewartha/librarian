@@ -20,8 +20,8 @@ identity plus two web servers that wedged the wake loop for seven hours
 ## Layers
 
 1. **Read-only runtime from inside the wake** (built). A drop-in on
-   `headlong-thinkers@.service` (`deploy/thinkers-sandbox.sh`,
-   `HEADLONG_SANDBOX`, default on): `ProtectSystem=strict`, the shellm
+   `librarian-thinkers@.service` (`deploy/thinkers-sandbox.sh`,
+   `LIBRARIAN_SANDBOX`, default on): `ProtectSystem=strict`, the shellm
    home writable, the app checkout read-only, the identity directory
    writable inside it, `/tmp` and `/var/tmp` shared and writable,
    `.env.bridge` inaccessible. Mount rules on the
@@ -32,7 +32,7 @@ identity plus two web servers that wedged the wake loop for seven hours
    and pull requests, which it already does.
 2. **Secret split** (built). `deploy/split-bridge-env.sh` moves the
    Slack bot and app tokens to `.env.bridge`, loaded only by the bridge
-   unit. Alerts post with `HEADLONG_ALERT_TOKEN`, seeded as a copy of the
+   unit. Alerts post with `LIBRARIAN_ALERT_TOKEN`, seeded as a copy of the
    bot token and meant to be replaced by a dedicated alert-only app.
    Telegram already had this shape.
 3. **Identities out of the checkout** (built). The real directory is
@@ -62,6 +62,6 @@ directives, as user `shellm`: writes to `app/bin`, `app/.env`, a new
 `app/.identities/<x>`, `/etc` and `/run` denied; writes to the identity
 directory (by name and through the `default` symlink), `~/.cache`,
 `/tmp` and `/var/tmp` allowed; `.env.bridge` unreadable; the sudo
-wrapper (`headlong-thinkersctl`) still works, generic sudo is refused by
+wrapper (`librarian-thinkersctl`) still works, generic sudo is refused by
 sudoers as before. Tests: `tests/test_thinkers_sandbox.sh`,
 `tests/test_split_bridge_env.sh`.

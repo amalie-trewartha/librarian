@@ -48,11 +48,11 @@ def handler(event, _context):
     env = _env_values(os.environ["ENV_PARAMETER"])
     # Prefer the alert-only app token (deploy/split-bridge-env.sh); the
     # bridge bot token is the pre-split fallback.
-    token = env.get("HEADLONG_ALERT_TOKEN") or env.get("SLACK_BOT_TOKEN")
+    token = env.get("LIBRARIAN_ALERT_TOKEN") or env.get("SLACK_BOT_TOKEN")
     channel = env.get("SHELLM_ALERT_CHANNEL")
     if not token or not channel:
         raise RuntimeError(
-            "HEADLONG_ALERT_TOKEN (or SLACK_BOT_TOKEN) / SHELLM_ALERT_CHANNEL missing from env parameter"
+            "LIBRARIAN_ALERT_TOKEN (or SLACK_BOT_TOKEN) / SHELLM_ALERT_CHANNEL missing from env parameter"
         )
 
     req = urllib.request.Request(

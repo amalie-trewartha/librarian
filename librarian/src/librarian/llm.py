@@ -1,4 +1,4 @@
-"""Bridge to Headlong's ``llm`` CLI, with model tiers by role.
+"""Bridge to Librarian's ``llm`` CLI, with model tiers by role.
 
 Every stage that calls a model is optional: when no model resolves, or the
 call fails, the caller gets ``None`` and takes its deterministic path.
@@ -62,7 +62,7 @@ def resolve_model(role: str) -> Optional[str]:
 
 
 def llm_bin() -> Optional[str]:
-    explicit = _env("HEADLONG_LLM_BIN")
+    explicit = _env("LIBRARIAN_LLM_BIN")
     if explicit:
         return explicit
     return shutil.which("llm")

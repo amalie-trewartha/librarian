@@ -50,7 +50,7 @@ chmod +x "$WORK/toolbin/llm"
 
 export PATH="$WORK/toolbin:$PATH"
 export HOME="$WORK/home"
-export HEADLONG_HOME="$WORK/home/.headlong"
+export LIBRARIAN_HOME="$WORK/home/.librarian"
 export ANTHROPIC_API_KEY="test-key"
 export SHELLM_MODEL="test-model"
 export SHELLM_ENV=local

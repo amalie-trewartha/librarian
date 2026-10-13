@@ -1,7 +1,7 @@
 import unittest
 
 from helpers import StoreCase
-from headlong_librarian import gate, model, queue
+from librarian import gate, model, queue
 
 
 def cand(**kw) -> gate.Candidate:

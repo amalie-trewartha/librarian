@@ -26,7 +26,7 @@ import { slackConversationUrl, slackSourceUrl } from "~/lib/source-links";
 import { cn } from "~/lib/utils";
 
 export function meta() {
-  return [{ title: "Headlong · chat" }];
+  return [{ title: "Librarian · chat" }];
 }
 
 const MY_NAME_KEY = "shellm-chat-from";

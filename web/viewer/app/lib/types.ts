@@ -248,7 +248,7 @@ export interface Recap {
   episodes?: RecapEpisode[];
 }
 
-/** One UTC day of the usage series (see headlong_web/usage.py). */
+/** One UTC day of the usage series (see librarian_web/usage.py). */
 export interface UsageDay {
   rows: number;
   in_msg: number;
