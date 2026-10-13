@@ -6,6 +6,6 @@ and the smaller tools around them. The table in the root
 [README](../README.md) says what each one does, and
 [docs/shellm.md](../docs/shellm.md) is the engine reference.
 
-Code in `bin/` and `thinkers/` counts against the under-10K-lines core
+Code in `bin/` and `thinkers/` counts against the core line cap (20K by cloc, see .github/workflows/ci.yml)
 (`cloc bin/ thinkers/`), so keep additions small. Tooling that runs
 around the mind rather than inside it belongs in [tools/](../tools/).
