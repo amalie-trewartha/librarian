@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# headlong-web — Web viewer for Headlong mind logs and trajectory trees.
+#
+# Usage:
+#   headlong-web [ROOT] [--dev] [--port N] [--rebuild]
+#
+# ROOT defaults to the headlong repo (parent of this script's directory).
+# Requires uv (backend) and bun, pnpm, or npm (frontend; auto-detected in
+# that order, override with HEADLONG_WEB_JS=bun|pnpm|npm).
+
+# Resolve through symlinks (install.sh --symlinks puts this on PATH), then
+# fall back to the checkout recorded by install.sh / headlong-init.
+ROOT_DIR="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.." && pwd)"
+if [[ ! -d "$ROOT_DIR/web" ]]; then
+    _home="${HEADLONG_HOME:-${SHELLM_HOME:-$HOME/.headlong}}"
+    _rec=$(cat "$_home/app_dir" 2>/dev/null || true)
+    if [[ -n "$_rec" && -d "$_rec/web" ]]; then ROOT_DIR="$_rec"
+    elif [[ -d "$_home/app/web" ]]; then ROOT_DIR="$_home/app"
+    else echo "headlong-web: can't find the headlong checkout (web/ missing); set HEADLONG_HOME or run from a checkout" >&2; exit 1
+    fi
+fi
+
+command -v uv >/dev/null 2>&1 || { echo "headlong-web: uv is required (https://docs.astral.sh/uv/)" >&2; exit 1; }
+
+# First arg is ROOT if it isn't a flag; all remaining args pass through.
+if [[ $# -gt 0 && "${1:0:1}" != "-" ]]; then
+    serve_root="$1"
+    shift
+else
+    serve_root="$ROOT_DIR"
+fi
+
+exec uv run --project "$ROOT_DIR/web" headlong-web "$serve_root" "$@"

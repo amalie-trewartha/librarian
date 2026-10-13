@@ -1,0 +1,1591 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# headlong-init — bootstrap a first identity and start its life.
+#
+# Idempotent: safe to re-run any time. Creates only what's missing:
+#   ~/.headlong/.env                   API key + default model
+#   <app>/.identities/<name>/          the identity (persona, memories, ...)
+# then starts the monolith thinker and the local web dash, and opens the dash
+# so you can watch the mind spin.
+#
+# Interactive prompts read from /dev/tty, so this works under `curl | bash`.
+# With no tty everything falls back to defaults / environment:
+#   HEADLONG_UNSANDBOXED=1   accept an agent whose shell commands run directly
+#                          on this machine when Docker is not available
+#   HEADLONG_APP_DIR         path to the headlong checkout (auto-detected)
+#   HEADLONG_IDENTITY_NAME   identity name (default: ada)
+#   HEADLONG_IDENTITY_VIBE   personality, a few words
+#   HEADLONG_IDENTITY_FOCUS  what to think about when idle
+#   HEADLONG_OPERATOR_NAME   your name (the operator)
+#   HEADLONG_IDENTITY_USER   a note about you, the operator
+#   HEADLONG_NO_THINKERS=1   don't start the monolith thinker
+#   HEADLONG_NO_DASH=1       don't start the web dash
+#   HEADLONG_WEB_ARGS        extra args for headlong-web (e.g. "--host 0.0.0.0"
+#                          to reach the dash through a Docker port mapping)
+#   HEADLONG_PROVIDER        "cloud" (default: pick a provider from an API
+#                          key) or "local" (OpenAI-compatible endpoint: ask
+#                          for a URL + optional key, verify with /v1/models,
+#                          pick the model from that list)
+#   HEADLONG_LOCAL_URL       endpoint for the local provider (skips the URL
+#                          prompt; e.g. http://localhost:11434/v1)
+#   HEADLONG_LOCAL_API_KEY   bearer token for the local endpoint, when it
+#                          wants one (LM Studio and router proxies often do)
+#   HEADLONG_LOCAL_MODEL     model to pin (skips the model-picker prompt)
+#
+# --dry-run walks the Docker sandbox gate interactively, writes nothing,
+# starts nothing, and exits. Pair with HEADLONG_FAKE_DOCKER=ok|down|missing
+# and HEADLONG_NO_TTY=1 to rehearse each path.
+#
+# Writes status.json in the state home at the end: identity, model, mind/dash
+# status ("ok" | "failed" | "skipped"), dash URL, pid file paths.
+
+die() { printf 'headlong-init: error: %s\n' "$*" >&2; exit 1; }
+info() { printf '\n==> %s\n' "$*"; }   # phase header; the blank line sets phases apart
+
+# State home: HEADLONG_HOME if set; else ~/.headlong. A pre-headlong
+# install lives in ~/.shelly or ~/.shellm — move it: mv ~/.shelly ~/.headlong
+HEADLONG_HOME="${HEADLONG_HOME:-$HOME/.headlong}"
+HEADLONG_APP_DIR="${HEADLONG_APP_DIR:-}"
+HEADLONG_IDENTITY_NAME="${HEADLONG_IDENTITY_NAME:-}"
+HEADLONG_IDENTITY_VIBE="${HEADLONG_IDENTITY_VIBE:-}"
+HEADLONG_IDENTITY_FOCUS="${HEADLONG_IDENTITY_FOCUS:-}"
+HEADLONG_IDENTITY_USER="${HEADLONG_IDENTITY_USER:-}"
+HEADLONG_OPERATOR_NAME="${HEADLONG_OPERATOR_NAME:-}"
+HEADLONG_NO_THINKERS="${HEADLONG_NO_THINKERS:-}"
+HEADLONG_NO_DASH="${HEADLONG_NO_DASH:-}"
+HEADLONG_WEB_ARGS="${HEADLONG_WEB_ARGS:-}"
+DRY_RUN=0
+mkdir -p "$HEADLONG_HOME/logs" "$HEADLONG_HOME/run"
+INIT_LOG="$HEADLONG_HOME/logs/init.log"
+
+# ---------------------------------------------------------------------------
+# Locate the repo checkout (needed for web/, identities/, .identities root)
+# ---------------------------------------------------------------------------
+
+_resolve_app_dir() {
+    if [[ -n "${HEADLONG_APP_DIR:-}" ]]; then
+        [[ -f "$HEADLONG_APP_DIR/bin/shellm" ]] || die "HEADLONG_APP_DIR=$HEADLONG_APP_DIR is not a headlong checkout"
+        printf '%s' "$HEADLONG_APP_DIR"
+        return 0
+    fi
+    local script_dir
+    script_dir="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
+    # install.sh must be there too — with the default prefix (~/.local/bin)
+    # a copy-installed script would otherwise mistake ~/.local for the
+    # checkout, since ../bin/shellm matches the installed copies.
+    if [[ -f "$script_dir/../bin/shellm" && -f "$script_dir/../install.sh" ]]; then
+        (cd "$script_dir/.." && pwd)
+        return 0
+    fi
+    # Installed as a copy: fall back to the checkout recorded by install.sh.
+    local recorded
+    recorded=$(cat "$HEADLONG_HOME/app_dir" 2>/dev/null || true)
+    if [[ -n "$recorded" && -f "$recorded/bin/shellm" ]]; then
+        printf '%s' "$recorded"
+        return 0
+    fi
+    if [[ -f "$HEADLONG_HOME/app/bin/shellm" ]]; then
+        printf '%s' "$HEADLONG_HOME/app"
+        return 0
+    fi
+    return 1
+}
+
+APP_DIR=$(_resolve_app_dir) || die "can't find the headlong checkout. Set HEADLONG_APP_DIR=/path/to/headlong"
+export PATH="$APP_DIR/bin:$APP_DIR/tools:$PATH"
+
+# ---------------------------------------------------------------------------
+# TTY-aware prompting (stdin may be the curl pipe)
+# ---------------------------------------------------------------------------
+
+HAS_TTY=0
+if (: </dev/tty) 2>/dev/null; then HAS_TTY=1; fi
+# Tests and scripted runs force the no-tty paths even under a terminal.
+if [[ "${HEADLONG_NO_TTY:-0}" == "1" ]]; then HAS_TTY=0; fi
+
+# In a container, bind the dash on all interfaces so a published port
+# (docker run -p 8080:8080) can reach it — localhost-only is unreachable
+# through a port mapping. Explicit HEADLONG_WEB_ARGS still wins.
+IN_CONTAINER=0
+[[ -f /.dockerenv || -f /run/.containerenv ]] && IN_CONTAINER=1
+[[ "${HEADLONG_FAKE_CONTAINER:-0}" == "1" ]] && IN_CONTAINER=1
+if [[ "$IN_CONTAINER" -eq 1 && -z "${HEADLONG_WEB_ARGS:-}" ]]; then
+    HEADLONG_WEB_ARGS="--host 0.0.0.0"
+fi
+
+# ask <prompt> [default] — print the answer; default on no tty / empty reply
+ask() {
+    local prompt="$1" def="${2:-}" reply=""
+    if [[ "$HAS_TTY" -eq 1 ]]; then
+        if [[ -n "$def" ]]; then
+            printf '%s [%s]: ' "$prompt" "$def" >/dev/tty
+        else
+            printf '%s: ' "$prompt" >/dev/tty
+        fi
+        IFS= read -r reply </dev/tty || true
+    fi
+    printf '%s' "${reply:-$def}"
+}
+
+ask_yn() {  # ask_yn <prompt> [default y|n]
+    # The hint is appended here; pass <prompt> WITHOUT one.
+    local def="${2:-y}" hint="[Y/n]" reply
+    if [[ "$def" == "n" ]]; then hint="[y/N]"; fi
+    reply=$(ask "$1 $hint" "$def")
+    if [[ "$def" == "n" ]]; then
+        [[ "$reply" =~ ^[Yy] ]]
+    else
+        [[ ! "$reply" =~ ^[Nn] ]]
+    fi
+}
+
+# confirm_install <prompt> — ask before installing software on someone's
+# machine, but auto-yes in a container (throwaway env, and there may be no
+# tty to ask on).
+confirm_install() {
+    if [[ "$IN_CONTAINER" -eq 1 ]]; then
+        info "$1 Yes (container)."
+        return 0
+    fi
+    [[ "$HAS_TTY" -eq 1 ]] && ask_yn "$1"
+}
+
+# ---------------------------------------------------------------------------
+# Env files: real environment wins, then <app>/.env, then the state home's
+# .env (same layering as bin/llm and the thinkers)
+# ---------------------------------------------------------------------------
+
+_load_env() {
+    local envfile="$1"
+    [[ -f "$envfile" ]] || return 1
+    local key val
+    while IFS= read -r key; do
+        [[ -n "$key" ]] || continue
+        [[ -n "${!key+x}" ]] && continue
+        # shellcheck disable=SC1090
+        val=$(set -a; . "$envfile" >/dev/null 2>&1; printf '%s' "${!key}") || { printf '%s: warning: could not read %s; ignoring it\n' "${0##*/}" "$envfile" >&2; return 0; }
+        export "$key=$val"
+    done < <(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*=.*/\2/p' "$envfile")
+    return 0
+}
+_load_env "$APP_DIR/.env" || true
+_load_env "$HEADLONG_HOME/.env" || true
+
+# _env_set <file> <key> <value> — set KEY in an env file (replacing any
+# existing line) and export it into this process. The value is written
+# single-quoted with embedded quotes escaped: the file is SOURCED by
+# bin/llm, bin/shellm and this script, so an unquoted value that came from
+# outside (a server-supplied model id, say) would otherwise run as shell.
+_env_set() {
+    local file="$1" key="$2" val="$3" tmp esc
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        echo "    dry-run: would set $key=$val in $file"
+        export "$key=$val"
+        return 0
+    fi
+    touch "$file"
+    chmod 600 "$file" 2>/dev/null || true
+    if grep -q "^${key}=" "$file" 2>/dev/null; then
+        tmp=$(mktemp)
+        grep -v "^${key}=" "$file" > "$tmp" || true
+        cat "$tmp" > "$file"
+        rm -f "$tmp"
+    fi
+    esc=${val//"'"/"'\\''"}
+    printf "%s='%s'\n" "$key" "$esc" >> "$file"
+    export "$key=$val"
+}
+
+# _env_unset <file> <key> — remove KEY from an env file and this process.
+_env_unset() {
+    local file="$1" key="$2" tmp
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        echo "    dry-run: would remove $key from $file"
+        unset "$key"
+        return 0
+    fi
+    if [[ -f "$file" ]] && grep -q "^${key}=" "$file" 2>/dev/null; then
+        tmp=$(mktemp)
+        grep -v "^${key}=" "$file" > "$tmp" || true
+        cat "$tmp" > "$file"
+        rm -f "$tmp"
+    fi
+    unset "$key"
+}
+
+# ---------------------------------------------------------------------------
+# Sandbox: the agent writes and runs real shell commands. With a working
+# Docker daemon those commands run in a container (shellm does this on its
+# own); we also set SHELLM_REQUIRE_DOCKER=1 so a daemon that later dies is a
+# hard error instead of a silent fallback to the host. Without Docker the
+# operator must consent, by typing the word yes, before anything starts.
+# ---------------------------------------------------------------------------
+
+_docker_state() {  # -> ok | down | missing
+    # HEADLONG_FAKE_DOCKER=ok|down|missing fakes the answer so each gate
+    # path can be tried by hand (pair with HEADLONG_NO_TTY=1 as needed).
+    case "${HEADLONG_FAKE_DOCKER:-}" in
+        ok|down|missing) printf '%s' "$HEADLONG_FAKE_DOCKER"; return 0 ;;
+    esac
+    command -v docker >/dev/null 2>&1 || { printf 'missing'; return 0; }
+    if docker info >/dev/null 2>&1; then printf 'ok'; else printf 'down'; fi
+}
+
+_sandbox_on() {
+    info "Docker found. ${NAME:-Your agent}'s shell commands will run sandboxed in Docker."
+    _env_set "$HEADLONG_HOME/.env" "SHELLM_REQUIRE_DOCKER" "1"
+    _env_set "$HEADLONG_HOME/.env" "HEADLONG_UNSANDBOXED" "0"
+    # Warm the sandbox image in the background so the first thought is not
+    # stuck behind a docker pull.
+    local image="${SHELLM_DOCKER_IMAGE:-ubuntu:latest}"
+    if [[ "$DRY_RUN" -eq 0 ]] && command -v docker >/dev/null 2>&1 \
+            && ! docker image inspect "$image" >/dev/null 2>&1; then
+        nohup docker pull "$image" >>"$INIT_LOG" 2>&1 &
+    fi
+}
+
+_sandbox_off() {
+    # Remember the consent so re-runs do not ask again, and so shellm does
+    # not refuse to run.
+    _env_set "$HEADLONG_HOME/.env" "HEADLONG_UNSANDBOXED" "1"
+    _env_set "$HEADLONG_HOME/.env" "SHELLM_REQUIRE_DOCKER" "0"
+    echo "    Continuing without a sandbox. To turn it on later, install Docker, set HEADLONG_UNSANDBOXED=0 in $HEADLONG_HOME/.env, and re-run headlong-init."
+}
+
+_sandbox_gate() {
+    # A container is already the sandbox; shellm runs locally inside it.
+    [[ "$IN_CONTAINER" -eq 1 ]] && return 0
+
+    # An explicit unsandboxed choice (the installer menu, the environment, or
+    # a previous typed yes) sticks, even when Docker is available.
+    if [[ "${HEADLONG_UNSANDBOXED:-}" == "1" ]]; then
+        echo "Warning: no Docker sandbox (HEADLONG_UNSANDBOXED=1). The agent's shell commands run directly on this machine. Set HEADLONG_UNSANDBOXED=0 in $HEADLONG_HOME/.env and re-run headlong-init to turn the sandbox on." >&2
+        _env_set "$HEADLONG_HOME/.env" "HEADLONG_UNSANDBOXED" "1"
+        _env_set "$HEADLONG_HOME/.env" "SHELLM_REQUIRE_DOCKER" "0"
+        return 0
+    fi
+
+    local state
+    state=$(_docker_state)
+    if [[ "$state" == "ok" ]]; then
+        _sandbox_on
+        return 0
+    fi
+
+    if [[ "$HAS_TTY" -eq 0 ]]; then
+        die "no Docker daemon is reachable, so there is no sandbox for the agent's shell commands. Install and start Docker, or set HEADLONG_UNSANDBOXED=1 to accept the agent running directly on this machine."
+    fi
+
+    local reply
+    if [[ "$state" == "down" ]]; then
+        while :; do
+            cat >/dev/tty <<'EOF'
+
+Docker is installed here, but the daemon is not answering, so there is no
+sandbox. Start Docker (Docker Desktop, colima, or systemctl start docker),
+then press Enter to check again. `docker info` shows what is wrong.
+
+EOF
+            printf 'Press Enter to re-check, or type "yes" to DANGEROUSLY run the agent unsandboxed on this machine: ' >/dev/tty
+            IFS= read -r reply </dev/tty || die "no answer. Start Docker and re-run headlong-init."
+            if [[ "$reply" == "yes" ]]; then
+                _sandbox_off
+                return 0
+            fi
+            if [[ "$(_docker_state)" == "ok" ]]; then
+                _sandbox_on
+                return 0
+            fi
+        done
+    fi
+
+    cat >/dev/tty <<'EOF'
+
+WARNING: Docker was not found on this machine, so there is no sandbox.
+
+EVERY shell command your agent writes will run DIRECTLY ON THIS MACHINE,
+as your user, with access to your files. Headlong agents run continuously
+and unattended.
+
+The safe path is to STOP NOW, install Docker (https://docs.docker.com/get-docker/),
+and re-run this installer. With Docker present, the agent's commands run
+inside a container automatically.
+
+EOF
+    printf 'Type "yes" to DANGEROUSLY accept an unsandboxed agent on this machine (anything else stops): ' >/dev/tty
+    IFS= read -r reply </dev/tty || reply=""
+    if [[ "$reply" == "yes" ]]; then
+        _sandbox_off
+        return 0
+    fi
+    die "stopped. Install Docker and re-run, or answer yes to run without a sandbox."
+}
+
+# ---------------------------------------------------------------------------
+# Model backend: a cloud provider keyed by an API key, or a local
+# OpenAI-compatible endpoint (Ollama, LM Studio, vLLM, llama.cpp, a router
+# proxy). Everything downstream only cares that bin/llm can serve a
+# completion, so both paths end in the same place: a working model and,
+# for the local path, a provider + URL (+ optional key) persisted in .env.
+#
+# The local path never auto-detects (design/providers.md: arbitrary model
+# names imply nothing), so it is always an explicit choice.
+# ---------------------------------------------------------------------------
+
+_have_key() {
+    [[ -n "${ANTHROPIC_API_KEY:-}${OPENAI_API_KEY:-}${GEMINI_API_KEY:-}${OPENROUTER_API_KEY:-}${OPENCODE_API_KEY:-}" ]]
+}
+
+_key_var_for() {  # guess the provider env var from the key's prefix
+    case "$1" in
+        sk-ant-*) echo ANTHROPIC_API_KEY ;;
+        sk-or-*)  echo OPENROUTER_API_KEY ;;
+        AIza*)    echo GEMINI_API_KEY ;;
+        sk-*)     echo OPENAI_API_KEY ;;
+        *)        echo "" ;;
+    esac
+}
+
+_default_model_for() {
+    case "$1" in
+        ANTHROPIC_API_KEY)  echo "claude-sonnet-4-5-20250929" ;;
+        OPENAI_API_KEY)     echo "gpt-5.5" ;;
+        GEMINI_API_KEY)     echo "gemini-3.5-flash" ;;
+        OPENROUTER_API_KEY) echo "anthropic/claude-sonnet-4.5" ;;
+        OPENCODE_API_KEY)   echo "opencode-go/deepseek-v4-flash" ;;
+    esac
+}
+
+_key_var_unambiguous() {  # the ONLY provider var a key's prefix can belong to
+    # Deliberately stricter than _key_var_for: a bare sk- key is OpenAI *or*
+    # OpenCode (see _prompt_key, which has to ask), so it is not evidence of
+    # anything and must never move a key. Only these three prefixes settle it.
+    case "$1" in
+        sk-ant-*) echo ANTHROPIC_API_KEY ;;
+        sk-or-*)  echo OPENROUTER_API_KEY ;;
+        AIza*)    echo GEMINI_API_KEY ;;
+        *)        echo "" ;;
+    esac
+}
+
+_reconcile_key_vars() {
+    local persist="${1:-1}"
+    # A key exported into the wrong provider variable -- an sk-or- OpenRouter
+    # key sitting in OPENAI_API_KEY, say -- otherwise picks that variable's
+    # default model (gpt-5.5), which detect_provider maps to openai, so the
+    # handshake goes to api.openai.com and comes back "Incorrect API key
+    # provided". The prefix is better evidence of the provider than whichever
+    # variable the key was exported to, so honor the prefix and say so.
+    #
+    # Must run in the parent shell: the export has to outlive the call, so
+    # never invoke this inside $(...).
+    local var want
+    for var in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY OPENCODE_API_KEY; do
+        [[ -n "${!var:-}" ]] || continue
+        want=$(_key_var_unambiguous "${!var}")
+        [[ -n "$want" && "$want" != "$var" ]] || continue
+        if [[ -n "${!want:-}" ]]; then
+            # The right variable is already set; leave both alone and let the
+            # priority order below pick the consistent one.
+            [[ "${!want}" != "${!var}" ]] && printf \
+                'headlong-init: warning: %s holds a %s key; %s is also set, using that one.\n' \
+                "$var" "$want" "$want" >&2
+            continue
+        fi
+        printf 'headlong-init: warning: %s holds a key whose prefix belongs to %s; using it as %s.\n' \
+            "$var" "$want" "$want" >&2
+        # Persist on an ordinary setup so later processes see the corrected
+        # variable. During a local-to-cloud switch, stage the correction in
+        # this process only: the working local .env remains byte-for-byte
+        # intact until the cloud handshake succeeds.
+        if [[ "$persist" -eq 1 ]]; then
+            _env_set "$HEADLONG_HOME/.env" "$want" "${!var}"
+        else
+            export "$want=${!var}"
+            _STAGED_CLOUD_KEY_VAR="$want"
+            _STAGED_CLOUD_KEY_VALUE="${!var}"
+        fi
+        # A SHELLM_MODEL pinned earlier from the misfiled variable's default
+        # would keep routing to the wrong provider; follow the key.
+        if [[ "${SHELLM_MODEL:-}" == "$(_default_model_for "$var")" ]]; then
+            if [[ "$persist" -eq 1 ]]; then
+                _env_set "$HEADLONG_HOME/.env" "SHELLM_MODEL" "$(_default_model_for "$want")"
+            else
+                SHELLM_MODEL="$(_default_model_for "$want")"
+                export SHELLM_MODEL
+            fi
+        fi
+    done
+}
+
+_first_key_var() {  # the provider var to use (llm's priority order)
+    local var want
+    # Prefer a variable its own key's prefix does not contradict, so a
+    # misplaced key cannot shadow a correctly-placed one.
+    for var in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY OPENCODE_API_KEY; do
+        [[ -n "${!var:-}" ]] || continue
+        want=$(_key_var_unambiguous "${!var}")
+        [[ -z "$want" || "$want" == "$var" ]] && { echo "$var"; return 0; }
+    done
+    # Every key present contradicts its variable and _reconcile_key_vars could
+    # not place one (it never runs inside $(...)); fall back to the old
+    # first-set-wins so behavior is unchanged rather than absent.
+    for var in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY OPENCODE_API_KEY; do
+        [[ -n "${!var:-}" ]] && { echo "$var"; return 0; }
+    done
+    return 1
+}
+
+_key_hint() {  # first/last 4 chars of a key for messages; never the whole thing
+    local k="$1"
+    if [[ "${#k}" -ge 20 ]]; then printf '%s...%s' "${k:0:4}" "${k: -4}"; else printf '(empty or short)'; fi
+}
+
+_llm_ok() {
+    # Generous cap: reasoning models spend thinking tokens against -t, and
+    # a too-small budget makes the reply come back empty.
+    llm -t 256 "Reply with the single word: ok" >/dev/null 2>>"$INIT_LOG"
+}
+
+_cloud_llm_ok() {
+    # bin/llm fills variables that are UNSET from the saved state .env. Keep
+    # these variables present but empty so an explicit cloud switch cannot
+    # silently reload the old openai-compatible provider, URL, or local key.
+    # A subshell keeps the masking scoped to this one validation call.
+    (
+        export LLM_PROVIDER="" SHELLM_API_URL="" LLM_API_URL="" LLM_API_KEY=""
+        _llm_ok
+    )
+}
+
+_STAGED_CLOUD_KEY_VAR=""
+_STAGED_CLOUD_KEY_VALUE=""
+_prompt_key() {
+    local persist="${1:-1}" key="" var="" tries=0
+    # Empty input (a stray Enter, a paste that didn't take) just asks again;
+    # Ctrl-C or Ctrl-D (EOF on the tty) gives up.
+    while [[ -z "$key" ]]; do
+        printf 'Paste your API key (input hidden; Ctrl-C to quit): ' >/dev/tty
+        if ! IFS= read -rs key </dev/tty; then
+            printf '\n' >/dev/tty
+            return 1
+        fi
+        printf '\n' >/dev/tty
+        key="${key//[[:space:]]/}"   # trailing newline/space from a paste
+        if [[ -z "$key" ]]; then
+            tries=$((tries+1))
+            [[ "$tries" -ge 5 ]] && return 1
+            echo "  Nothing entered. Paste the key and press Enter, or Ctrl-C to quit." >/dev/tty
+            echo "  (If you meant to use a local model server instead, re-run and answer 'y'" >/dev/tty
+            echo "   at the 'Use a local model server?' prompt.)" >/dev/tty
+        fi
+    done
+    var=$(_key_var_for "$key")
+    if [[ "$key" == sk-* && "$key" != sk-ant-* && "$key" != sk-or-* ]]; then
+        # OpenAI and OpenCode keys share the bare sk- prefix, and a wrong
+        # guess sends the handshake to api.openai.com where it fails
+        # confusingly. Ask rather than guess; OpenAI stays the default so
+        # the common case is just Enter.
+        local which
+        which=$(ask "Is that an OpenAI or an OpenCode key? (1) OpenAI (2) OpenCode" "1")
+        case "$which" in
+            2) var=OPENCODE_API_KEY ;;
+            *) var=OPENAI_API_KEY ;;
+        esac
+    elif [[ -z "$var" ]]; then
+        local which
+        which=$(ask "Which provider is that key for? (1) Anthropic (2) OpenAI (3) Gemini (4) OpenRouter (5) OpenCode" "1")
+        case "$which" in
+            2) var=OPENAI_API_KEY ;;
+            3) var=GEMINI_API_KEY ;;
+            4) var=OPENROUTER_API_KEY ;;
+            5) var=OPENCODE_API_KEY ;;
+            *) var=ANTHROPIC_API_KEY ;;
+        esac
+    fi
+    if [[ "$persist" -eq 1 ]]; then
+        _env_set "$HEADLONG_HOME/.env" "$var" "$key"
+        # Pin the model to this key's provider so a stale key for another
+        # provider's default can't shadow the one we just validated.
+        _env_set "$HEADLONG_HOME/.env" "SHELLM_MODEL" "$(_default_model_for "$var")"
+    else
+        # A prompted key would otherwise be lost when this init exits. Stage
+        # it until validation, then _commit_local_wipe persists it as part of
+        # the provider switch.
+        export "$var=$key"
+        SHELLM_MODEL="$(_default_model_for "$var")"
+        export SHELLM_MODEL
+        _STAGED_CLOUD_KEY_VAR="$var"
+        _STAGED_CLOUD_KEY_VALUE="$key"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Local (OpenAI-compatible) endpoint setup
+# ---------------------------------------------------------------------------
+# bin/llm's openai-compatible provider takes the full chat-completions URL
+# (LLM_API_URL / SHELLM_API_URL), while servers advertise their base URL
+# (/v1). Operators think in base URLs, so accept either: anything already
+# ending in /chat/completions is left alone; anything else gets
+# /chat/completions appended. /v1 is appended when missing too: operators
+# habitually give the bare server address (http://host:1234), and every
+# mainstream server serves the API under /v1. A URL already ending in /v1
+# (or /v1/chat/completions) is kept as-is. /v1/models is always probed at
+# the BASE url.
+
+_local_base_url() {  # base URL (for /v1/models) from whatever was given
+    local url="$1"
+    url="${url%/}"
+    url="${url%/chat/completions}"
+    case "$url" in
+        */v1) ;;
+        *)    url="$url/v1" ;;
+    esac
+    printf '%s' "$url"
+}
+
+_local_chat_url() {  # chat-completions URL from whatever was given
+    local url="$1"
+    url="$(_local_base_url "$url")"
+    printf '%s/chat/completions' "$url"
+}
+
+# _local_models_get <base-url> <key> — fetch GET <base>/models. On success
+# sets _LOCAL_MODELS to the model ids, one per line (empty means the server
+# exposed no models), and returns 0. On failure sets _local_models_err —
+# "could not reach ..." when the server is unreachable, a parse complaint
+# when it answered with something else — and returns nonzero. Globals rather
+# than stdout because callers need the error message after a failure, which
+# a command substitution cannot carry back.
+_local_models_err=""
+_LOCAL_MODELS=""
+_local_models_get() {
+    _local_models_err=""
+    _LOCAL_MODELS=""
+    local url="$1" key="$2" body err body_file auth_file="" status rc safe_url
+    safe_url=$(_url_safe_display "$url")
+    err=$(mktemp)
+    body_file=$(mktemp)
+    local -a curl_args=(-sS --max-time 10 -o "$body_file" -w '%{http_code}')
+    if [[ -n "$key" ]]; then
+        local header="Authorization: Bearer $key"
+        header="${header//\\/\\\\}"
+        header="${header//\"/\\\"}"
+        header="${header//$'\t'/\\t}"
+        header="${header//$'\n'/\\n}"
+        header="${header//$'\r'/\\r}"
+        header="${header//$'\v'/\\v}"
+        auth_file=$(mktemp "${TMPDIR:-/tmp}/headlong-init-auth.XXXXXX")
+        chmod 600 "$auth_file" 2>/dev/null || true
+        printf 'header = "%s"\n' "$header" > "$auth_file"
+        curl_args+=(-K "$auth_file")
+    fi
+    status=$(curl "${curl_args[@]}" "$url/models" 2>"$err")
+    rc=$?
+    [[ -z "$auth_file" ]] || rm -f "$auth_file"
+    if [[ "$rc" -ne 0 ]]; then
+        # curl diagnostics may repeat a credential-bearing URL. The status
+        # is enough here; never copy the raw URL or stderr into terminal/CI
+        # output.
+        _local_models_err="could not reach $safe_url"
+        rm -f "$err" "$body_file"
+        return "$rc"
+    fi
+    rm -f "$err"
+    if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
+        _local_models_err="$safe_url/models returned HTTP ${status:-unknown}"
+        rm -f "$body_file"
+        return 1
+    fi
+    body=$(cat "$body_file")
+    rm -f "$body_file"
+    # The OpenAI ListModels shape is {"data":[{"id":...},...]}. Shape
+    # validation is separate from id extraction: a body without a data array
+    # is a protocol failure, while a present-but-EMPTY list is a healthy
+    # server with no models pulled yet (_LOCAL_MODELS="", rc 0).
+    if ! printf '%s' "$body" | jq -e '.data | type == "array"' >/dev/null 2>&1; then
+        _local_models_err="$safe_url did not return a model list (is it an OpenAI-compatible server?)"
+        return 1
+    fi
+    _LOCAL_MODELS=$(printf '%s' "$body" | jq -r '.data[]?.id // empty' 2>/dev/null)
+}
+
+# _prompt_local_url <default> — ask until the URL answers, on a tty; one try
+# with the default (or env value) when there is none.
+_prompt_local_url() {
+    local def="$1" url reply prompt="Server address as your agent will reach it (e.g. http://localhost:1234 or http://192.168.3.23:1234; /v1 is added if missing)"
+    while :; do
+        if [[ "$HAS_TTY" -eq 1 ]]; then
+            if [[ -n "$def" ]]; then
+                printf '%s [%s]: ' "$prompt" "$(_url_safe_display "$def")" >/dev/tty
+            else
+                printf '%s: ' "$prompt" >/dev/tty
+            fi
+            IFS= read -r reply </dev/tty || reply=""
+            url="${reply:-$def}"
+        else
+            url="$def"
+        fi
+        [[ -n "$url" ]] || { def=""; continue; }
+        printf '%s' "$url"
+        return 0
+    done
+}
+
+# _prompt_local_key — hidden-input key prompt; empty input means "no key".
+_prompt_local_key() {
+    local key=""
+    if [[ "$HAS_TTY" -eq 0 ]]; then return 0; fi
+    printf 'API key for the server, if it wants one (Enter for none; input hidden): ' >/dev/tty
+    if ! IFS= read -rs key </dev/tty; then
+        printf '\n' >/dev/tty
+        return 0
+    fi
+    printf '\n' >/dev/tty
+    key="${key//[[:space:]]/}"
+    printf '%s' "$key"
+}
+
+# _url_host <url> — the authority's host, with IPv6 brackets stripped.
+# Plain bash 3.2 parameter expansion (same idiom as bin/llm's override
+# warning): scheme, userinfo, port, path, query and fragment all drop away.
+_url_host() {
+    local rest="${1#*://}"
+    local authority="${rest%%[/?#]*}"
+    local hostport="${authority##*@}"
+    case "$hostport" in
+        \[*\]*) hostport="${hostport#\[}"; printf '%s' "${hostport%%]*}" ;;
+        *)      printf '%s' "${hostport%%:*}" ;;
+    esac
+}
+
+# _url_safe_display <url> — retain the useful server location while dropping
+# userinfo, query parameters, and fragments, all of which may carry secrets.
+_url_safe_display() {
+    local url="$1" rest="${1#*://}" scheme=""
+    [[ "$rest" == "$url" ]] || scheme="${url%%://*}://"
+    local authority="${rest%%[/?#]*}"
+    local hostport="${authority##*@}"
+    local tail="${rest#"$authority"}"
+    tail="${tail%%\?*}"
+    tail="${tail%%#*}"
+    printf '%s%s%s' "$scheme" "$hostport" "$tail"
+}
+
+# _url_host_swap <url> <newhost> — replace ONLY the authority's host,
+# keeping scheme, userinfo, port and path. A substring replace would also
+# mangle hosts like mylocalhost.dev or path segments containing the name.
+_url_host_swap() {
+    local url="$1" newhost="$2"
+    local rest="${url#*://}" scheme=""
+    [[ "$rest" == "$url" ]] || scheme="${url%%://*}://"
+    local authority="${rest%%[/?#]*}"
+    local tail="${rest#"$authority"}"
+    local userinfo=""
+    case "$authority" in
+        *@*) userinfo="${authority%@*}@" ;;
+    esac
+    local hostport="${authority##*@}" port=""
+    case "$hostport" in
+        \[*\]:*) port=":${hostport##*:}" ;;
+        \[*\])   port="" ;;
+        *:*)     port=":${hostport##*:}" ;;
+    esac
+    printf '%s%s%s%s%s' "$scheme" "$userinfo" "$newhost" "$port" "$tail"
+}
+
+# _url_is_loopback <url> — does the URL's host name this machine's loopback?
+_url_is_loopback() {
+    case "$(_url_host "$1")" in
+        localhost|127.*|0.0.0.0|::1) return 0 ;;
+    esac
+    return 1
+}
+
+# _local_probe_url <url> — the URL this init process can reach. A host-side
+# installer probes the localhost twin of host.docker.internal. An installer
+# running inside the full Headlong container must keep host.docker.internal,
+# because localhost there means the Headlong container itself.
+_local_probe_url() {
+    local url="$1"
+    if [[ "$IN_CONTAINER" -eq 0 && "$(_url_host "$url")" == "host.docker.internal" ]]; then
+        url=$(_url_host_swap "$url" localhost)
+    fi
+    printf '%s' "$url"
+}
+
+# _local_container_url <url> — the URL a container uses to reach a model
+# server bound to the machine running Docker. Non-loopback URLs pass
+# through untouched.
+_local_container_url() {
+    local url="$1"
+    if _url_is_loopback "$url"; then
+        url=$(_url_host_swap "$url" host.docker.internal)
+    fi
+    printf '%s' "$url"
+}
+
+# _pick_from_list <prompt> <one-choice-per-line> [default] — numbered menu on
+# the tty; empty reply keeps the default, a number picks from the list, and
+# anything else is taken as a literal model name (servers with hundreds of
+# entries are easier to type at than to page through).
+_pick_from_list() {
+    local prompt="$1" list="$2" def="${3:-}" reply
+    local count
+    count=$(printf '%s\n' "$list" | grep -c .)
+    printf '\n%s — %d available:\n' "$prompt" "$count" >/dev/tty
+    local i=0
+    while IFS= read -r m; do
+        [[ -n "$m" ]] || continue
+        i=$((i + 1))
+        if [[ -n "$def" && "$m" == "$def" ]]; then
+            printf '  %3d) %s   (current)\n' "$i" "$m" >/dev/tty
+        else
+            printf '  %3d) %s\n' "$i" "$m" >/dev/tty
+        fi
+    done <<<"$list"
+    while :; do
+        if [[ -n "$def" ]]; then
+            printf '%s [number, a name, or Enter for %s]: ' "$prompt" "$def" >/dev/tty
+        else
+            printf '%s [number or name]: ' "$prompt" >/dev/tty
+        fi
+        IFS= read -r reply </dev/tty || reply=""
+        reply="${reply//[[:space:]]/}"
+        if [[ -z "$reply" ]]; then
+            [[ -n "$def" ]] && { printf '%s' "$def"; return 0; }
+            continue
+        fi
+        if [[ "$reply" =~ ^[0-9]+$ ]]; then
+            local picked
+            picked=$(printf '%s\n' "$list" | grep -v '^$' | sed -n "${reply}p")
+            if [[ -n "$picked" ]]; then
+                printf '%s' "$picked"
+                return 0
+            fi
+            echo "  No such entry (1-$count)." >/dev/tty
+            continue
+        fi
+        printf '%s' "$reply"
+        return 0
+    done
+}
+
+# _setup_local_llm — the whole local path. Sets LLM_PROVIDER,
+# SHELLM_API_URL, LLM_API_KEY (when given) and SHELLM_MODEL, persists them,
+# and proves the whole chain with a real completion through bin/llm.
+_setup_local_llm() {
+    local base chat key models chosen url_env="${HEADLONG_LOCAL_URL:-${SHELLM_API_URL:-${LLM_API_URL:-}}}"
+    local key_env="${HEADLONG_LOCAL_API_KEY:-}"
+    local model_env="${HEADLONG_LOCAL_MODEL:-}"
+    local revalidating=0
+
+    # Keep a saved local model — or a saved LLM_API_KEY — only when the
+    # saved local URL is also being reused. A cloud model from a checkout
+    # .env must not override the model list returned by a newly selected
+    # server, and a key saved for one endpoint must never be sent as a
+    # Bearer token to a different one.
+    if [[ -z "${HEADLONG_LOCAL_URL:-}" \
+            && "${LLM_PROVIDER:-}" == "openai-compatible" ]]; then
+        [[ -n "$model_env" ]] || model_env="${SHELLM_MODEL:-}"
+        [[ -n "$key_env" ]] || key_env="${LLM_API_KEY:-}"
+    fi
+
+    # A URL supplied directly to an init process already running in the full
+    # Headlong container needs the Docker host name before the first probe.
+    if [[ "$IN_CONTAINER" -eq 1 ]]; then
+        url_env=$(_local_container_url "$url_env")
+    fi
+
+    # A completed local install must be safe to restart with a tty allocated
+    # and nobody attached. Keep its working configuration without asking the
+    # setup questions again. A transiently stopped server should not prevent
+    # the rest of init from restarting the mind and dashboard.
+    if [[ -L "$APP_DIR/.identities/default" && -n "${SHELLM_API_URL:-}" \
+            && "${LLM_PROVIDER:-}" == "openai-compatible" \
+            && -z "${HEADLONG_PROVIDER:-}" && -z "${HEADLONG_LOCAL_URL:-}" \
+            && -z "${HEADLONG_LOCAL_MODEL:-}" && -z "${HEADLONG_LOCAL_API_KEY:-}" ]]; then
+        revalidating=1
+    fi
+
+    if [[ "$revalidating" -eq 1 ]]; then
+        info "Checking the LLM connection (model: ${SHELLM_MODEL})"
+        if LLM_API_URL="$(_local_probe_url "$SHELLM_API_URL")" _llm_ok; then
+            echo "    OK — ${SHELLM_MODEL} answered."
+        else
+            echo "headlong-init: warning: the existing local model server did not answer; keeping its configuration" >&2
+        fi
+        return 0
+    fi
+
+    if [[ "$HAS_TTY" -eq 1 ]]; then
+        cat >/dev/tty <<'EOF'
+
+Local model server (Ollama, LM Studio, vLLM, llama.cpp, ...). Headlong
+talks to it through its OpenAI-compatible chat API; no cloud API key is
+needed, and the agent's completions all stay on this machine or your
+network. The server must already be running — Headlong never installs
+one or pulls models.
+
+EOF
+    fi
+
+    # --- URL -----------------------------------------------------------------
+    # No-tty: HEADLONG_LOCAL_URL (or an inherited URL) is required — there is
+    # no one to ask and no trustworthy default port (every server differs).
+    # A server that is DOWN is a hard error (starting the mind against it
+    # just fails later, unattended); a server that answers but exposes no
+    # model list (some proxies) only warns.
+    if [[ "$HAS_TTY" -eq 0 ]]; then
+        [[ -n "$url_env" ]] || die "local provider selected with no URL. Set HEADLONG_LOCAL_URL (e.g. http://localhost:11434)"
+        base=$(_local_base_url "$(_local_probe_url "$url_env")")
+        key="$key_env"
+        if ! _local_models_get "$base" "$key"; then
+            if [[ -n "$_local_models_err" && "$_local_models_err" == could\ not\ reach* ]]; then
+                die "local endpoint unreachable: $_local_models_err. Start the server and re-run headlong-init."
+            fi
+            echo "headlong-init: warning: could not list models: $_local_models_err" >&2
+            echo "headlong-init: continuing with the given URL — set HEADLONG_LOCAL_MODEL if the model name is not already pinned" >&2
+        fi
+    else
+        # A tty: default to the env/inherited value; otherwise suggest a
+        # localhost LM Studio — the common case — and let the operator
+        # correct it. The probe runs on THIS host, so a host.docker.internal
+        # address (what the sandboxed agent will use) is probed through its
+        # localhost twin; the persisted URL keeps the name the agent needs.
+        local def_url="${url_env:-http://localhost:1234}"
+        base=""
+        # An inherited key covers only the first attempt; a retry re-asks so
+        # a mistyped (or no-longer-wanted) key can actually be replaced.
+        key="$key_env"
+        while :; do
+            url_env=$(_prompt_local_url "$def_url")
+            # A URL typed at an in-container prompt needs the Docker host
+            # name, same as the env-supplied path above: localhost inside
+            # the full Headlong container is the container itself.
+            if [[ "$IN_CONTAINER" -eq 1 ]]; then
+                url_env=$(_local_container_url "$url_env")
+            fi
+            base=$(_local_base_url "$(_local_probe_url "$url_env")")
+            if [[ -z "$key" ]]; then
+                key=$(_prompt_local_key)
+            fi
+            if _local_models_get "$base" "$key"; then
+                break
+            fi
+            echo "  Could not list models: $_local_models_err" >/dev/tty
+            if [[ "$_local_models_err" != could\ not\ reach* ]]; then
+                echo "  The server answered, so you can type a model name instead." >/dev/tty
+                break
+            fi
+            if ! ask_yn "Try a different URL/key?"; then
+                die "local endpoint unreachable. Start the server and re-run headlong-init."
+            fi
+            def_url="$url_env"
+            key=""
+        done
+    fi
+
+    # --- model ---------------------------------------------------------------
+    # The model comes from the server's own list (the point of this flow:
+    # local model names are arbitrary, so guessing one is how setups break).
+    models="$_LOCAL_MODELS"
+    if [[ -n "$models" ]]; then
+        if [[ "$HAS_TTY" -eq 1 ]]; then
+            chosen=$(_pick_from_list "Model to run your agent on" "$models" "${model_env:-}")
+        else
+            chosen="${model_env:-$(printf '%s\n' "$models" | head -1)}"
+        fi
+    else
+        # A server may hide /v1/models (some proxies do) while chat still
+        # works; accept an explicit model rather than dying.
+        chosen="${model_env:-}"
+        if [[ -z "$chosen" ]]; then
+            if [[ "$HAS_TTY" -eq 1 ]]; then
+                chosen=$(ask "The server did not expose a model list. Type the model name to use")
+                [[ -n "$chosen" ]] || die "no model given"
+            else
+                die "no model: the server exposed no model list. Set HEADLONG_LOCAL_MODEL."
+            fi
+        fi
+    fi
+    [[ -n "$chosen" ]] || die "no model selected"
+
+    # The model id ends up in the shell-sourced .env and in request
+    # payloads. The server hands us this string, so a compromised (or
+    # merely weird) server must not be able to smuggle shell syntax or
+    # whitespace through it. _env_set quotes on write as well; this keeps
+    # the id sane for every other consumer too.
+    case "$chosen" in
+        *[!A-Za-z0-9._:/@-]*)
+            die "model id '$chosen' contains characters headlong will not store (allowed: letters, digits, . _ : / @ -)"
+            ;;
+    esac
+
+    # The URL the main runtime will dial. A host install keeps its
+    # localhost URL because thinkers and ordinary llm calls run on the host;
+    # bin/shellm translates that URL only for code it runs in its Docker
+    # sandbox. A full Headlong container needs host.docker.internal here
+    # because its main runtime is already inside Docker.
+    chat=$(_local_chat_url "$url_env")
+    if [[ "$IN_CONTAINER" -eq 1 ]] && _url_is_loopback "$chat"; then
+        local container_chat
+        container_chat=$(_local_container_url "$chat")
+        echo "    Container install: the agent reaches the server at $(_url_safe_display "$container_chat") (was $(_url_safe_display "$chat"))."
+        chat="$container_chat"
+    fi
+
+    # Prove the whole chain with a real completion BEFORE persisting
+    # anything (this is the same handshake a thinker will make): a failed
+    # chat check must not leave a broken local provider in .env shadowing a
+    # working cloud key on the next run. Everything the call needs is passed
+    # inline — an explicitly empty LLM_API_KEY keeps a stale one in the
+    # .env files from riding along. The init process probes through its own
+    # network view.
+    info "Checking the LLM connection (model: $chosen at $(_url_safe_display "$base"))"
+    if ! LLM_PROVIDER="openai-compatible" SHELLM_MODEL="$chosen" \
+            LLM_API_KEY="$key" LLM_API_URL="$(_local_probe_url "$chat")" _llm_ok; then
+        die "the endpoint did not answer a chat completion (models list worked, chat did not); nothing was saved. Details: $INIT_LOG"
+    fi
+    echo "    OK — $chosen answered."
+
+    _env_set "$HEADLONG_HOME/.env" "LLM_PROVIDER" "openai-compatible"
+    _env_set "$HEADLONG_HOME/.env" "SHELLM_API_URL" "$chat"
+    if [[ -n "$key" ]]; then
+        _env_set "$HEADLONG_HOME/.env" "LLM_API_KEY" "$key"
+    else
+        # An old key would ride along to the new endpoint; the openai-compat
+        # provider must be keyless here, not mis-keyed.
+        _env_unset "$HEADLONG_HOME/.env" "LLM_API_KEY"
+    fi
+    _env_set "$HEADLONG_HOME/.env" "SHELLM_MODEL" "$chosen"
+
+    # The sandbox reaches a loopback server via Docker's host gateway, which
+    # also exposes every other service bound to this machine's loopback to
+    # code the agent runs there. Worth knowing; see docs/install.md.
+    if [[ "$IN_CONTAINER" -eq 0 ]] && _url_is_loopback "$chat"; then
+        echo "    Note: sandboxed agent code reaches this server through Docker's host"
+        echo "    gateway, which can also reach other services bound to this machine's"
+        echo "    loopback. See docs/install.md (local model server) for details."
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Provider selection: local vs cloud. Cloud needs an API key; local needs a
+# reachable OpenAI-compatible endpoint. The choice is explicit, never
+# inferred: silent inference is how a keyless box quietly picks a default.
+# ---------------------------------------------------------------------------
+
+# _ask_local_or_cloud — returns 0 for local, nonzero for cloud. Preceded by
+# HEADLONG_PROVIDER, then a tty offer (first run), then a
+# configured-but-unverified local endpoint in the state .env (a re-run
+# re-checks it rather than re-asking), and defaults to cloud otherwise.
+_ask_local_or_cloud() {
+    [[ "${HEADLONG_PROVIDER:-}" == "local" ]] && return 0
+    [[ "${HEADLONG_PROVIDER:-}" == "cloud" ]] && return 1
+    # Existing configuration wins before any tty prompt. This keeps both
+    # cloud and local re-runs unattended after the first successful install.
+    if [[ -n "${SHELLM_API_URL:-${LLM_API_URL:-}}" \
+            && "${LLM_PROVIDER:-}" == "openai-compatible" ]]; then
+        return 0
+    fi
+    _have_key && return 1
+    # A first run with no configured provider can ask. No tty falls through
+    # to the ordinary missing-key error.
+    [[ "$HAS_TTY" -eq 1 ]] || return 1
+    ask_yn "Use a local model server (Ollama, LM Studio, vLLM; no API key)?" "n"
+}
+
+# _commit_local_wipe — remove a saved local provider from .env, keeping the
+# cloud model chosen for this run. Called only once a cloud key has actually
+# answered: committing the switch any earlier could destroy the only working
+# configuration.
+_commit_local_wipe() {
+    local keep_model="${SHELLM_MODEL:-}" local_var
+    for local_var in LLM_PROVIDER SHELLM_API_URL LLM_API_URL LLM_API_KEY SHELLM_MODEL; do
+        _env_unset "$HEADLONG_HOME/.env" "$local_var"
+    done
+    if [[ -n "$_STAGED_CLOUD_KEY_VAR" ]]; then
+        _env_set "$HEADLONG_HOME/.env" "$_STAGED_CLOUD_KEY_VAR" "$_STAGED_CLOUD_KEY_VALUE"
+    fi
+    [[ -z "$keep_model" ]] || _env_set "$HEADLONG_HOME/.env" "SHELLM_MODEL" "$keep_model"
+}
+
+_ensure_api_key() {
+    # An explicit cloud choice replaces a saved local provider. Clear the
+    # local URL, optional key, and model before selecting the cloud default.
+    local switching_from_local=0
+    if [[ "${HEADLONG_PROVIDER:-}" == "cloud" \
+            && "${LLM_PROVIDER:-}" == "openai-compatible" ]]; then
+        switching_from_local=1
+    fi
+    _reconcile_key_vars "$((1 - switching_from_local))"
+
+    # Re-runs with a working local endpoint already configured stay on it;
+    # otherwise offer the local path before demanding a cloud key.
+    if _ask_local_or_cloud; then
+        _setup_local_llm
+        return 0
+    fi
+
+    if [[ "$switching_from_local" -eq 1 ]]; then
+        # Clear the local provider for THIS process so the check below dials
+        # the cloud provider — but leave .env alone until a cloud key has
+        # actually validated (_commit_local_wipe). Dying between a wipe and
+        # a working key would strand the box with no provider at all.
+        unset LLM_PROVIDER SHELLM_API_URL LLM_API_URL LLM_API_KEY SHELLM_MODEL
+    fi
+
+    if ! _have_key && [[ "$HAS_TTY" -eq 0 ]]; then
+        die "no API key found. Set ANTHROPIC_API_KEY (or OPENAI/GEMINI/OPENROUTER/OPENCODE_API_KEY), or put it in $HEADLONG_HOME/.env"
+    fi
+    if ! _have_key; then
+        cat >/dev/tty <<'EOF'
+
+Headlong needs an LLM API key (Anthropic, OpenAI, Gemini, OpenRouter, or OpenCode).
+Paste just the key itself; headlong-init figures out the provider from it.
+
+  * Use a DEDICATED, SPEND-CAPPED key. The agent you're about to create
+    runs continuously and executes shell commands.
+  * Cost: with the default model (Claude Sonnet 4.5) expect roughly $1–2
+    an hour while it runs, about $25–50 a day; more if you talk to it a lot.
+  * Pause it any time with `ada stop` (using whatever name you pick); a
+    paused agent spends nothing. Resume with `ada start`.
+  * If the key runs out of credit, `ada status` and the dash say so.
+
+EOF
+        _prompt_key "$((1 - switching_from_local))" || die "no key entered (quit)"
+    fi
+
+    # A predictable default model keeps first-run spend sane (the thinkers
+    # otherwise default to an expensive model). Never overrides an existing
+    # SHELLM_MODEL from the env or either .env file. Mid-switch it stays
+    # in-process only: nothing may touch .env before the key validates.
+    if [[ -z "${SHELLM_MODEL:-}" ]]; then
+        if [[ "$switching_from_local" -eq 1 ]]; then
+            SHELLM_MODEL="$(_default_model_for "$(_first_key_var)")"
+            export SHELLM_MODEL
+        else
+            _env_set "$HEADLONG_HOME/.env" "SHELLM_MODEL" "$(_default_model_for "$(_first_key_var)")"
+        fi
+    fi
+
+    # A default identity means an earlier init already validated a key.
+    # Unattended re-runs (a restarted container: tty allocated, nobody
+    # attached) must then never die or block on a prompt over what may be
+    # a transient API failure.
+    local revalidating=0
+    if [[ "$switching_from_local" -eq 0 && -L "$APP_DIR/.identities/default" ]]; then
+        revalidating=1
+    fi
+
+    local _ var
+    for _ in 1 2 3; do
+        info "Checking the LLM connection (model: ${SHELLM_MODEL})"
+        if { [[ "$switching_from_local" -eq 1 ]] && _cloud_llm_ok; } \
+                || { [[ "$switching_from_local" -eq 0 ]] && _llm_ok; }; then
+            echo "    OK — ${SHELLM_MODEL} answered."
+            [[ "$switching_from_local" -eq 0 ]] || _commit_local_wipe
+            return 0
+        fi
+        var=$(_first_key_var || true)
+        cat >&2 <<EOF
+    FAILED — ${var:-the key} ($(_key_hint "${var:+${!var}}")) did not get a reply from ${SHELLM_MODEL}.
+    The key may be mistyped, for another provider, or out of credit.
+    Details: $INIT_LOG
+EOF
+        [[ "$revalidating" -eq 1 ]] && continue
+        [[ "$HAS_TTY" -eq 1 ]] || die "LLM check failed with the configured key"
+        echo >&2
+        echo "Paste a different key to try again, or press Ctrl-C to quit." >&2
+        _prompt_key "$((1 - switching_from_local))" || die "no key entered (quit)"
+    done
+    if [[ "$revalidating" -eq 1 && "$switching_from_local" -eq 0 ]]; then
+        echo "headlong-init: continuing anyway — this key worked before, so the API may just be having a moment" >&2
+        return 0
+    fi
+    die "could not validate an API key after 3 attempts"
+}
+
+# ---------------------------------------------------------------------------
+# Identity: baseline attributes, optionally colored in by the operator
+# ---------------------------------------------------------------------------
+
+IDENTITY_ROOT="$APP_DIR/.identities"
+unset IDENTITY_NAME  # the identity CLI treats IDENTITY_DIR as the root
+export IDENTITY_DIR="$IDENTITY_ROOT"
+
+DEFAULT_VIBE="curious, warm, and plainspoken"
+DEFAULT_FOCUS="learning how their own mind works, and getting to know the machine and the person they live with"
+
+NAME="${HEADLONG_IDENTITY_NAME:-}"
+VIBE="${HEADLONG_IDENTITY_VIBE:-$DEFAULT_VIBE}"
+FOCUS="${HEADLONG_IDENTITY_FOCUS:-$DEFAULT_FOCUS}"
+USER_NOTE="${HEADLONG_IDENTITY_USER:-}"
+OPERATOR_NAME="${HEADLONG_OPERATOR_NAME:-}"
+
+# Adopt an existing default identity when no name was given
+if [[ -z "$NAME" && -L "$IDENTITY_ROOT/default" ]]; then
+    NAME=$(basename "$(readlink "$IDENTITY_ROOT/default")")
+fi
+
+_interview() {
+    [[ "$HAS_TTY" -eq 1 ]] || return 0
+    cat >/dev/tty <<'EOF'
+
+Time to launch your Headlong agent. It starts with a baseline personality;
+answer as much or as little as you like (Enter keeps the default).
+
+EOF
+    while :; do
+        NAME=$(ask "  Their name (lowercase letters, digits, hyphens)" "${NAME:-ada}")
+        if [[ ! "$NAME" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+            echo "Names are lowercase alphanumeric + hyphens (e.g. ada, mr-robot)." >/dev/tty
+            NAME=""
+            continue
+        fi
+        if [[ "$NAME" == "persona" || "$NAME" == "default" ]]; then
+            echo "'$NAME' is reserved — pick another name." >/dev/tty
+            NAME=""
+            continue
+        fi
+        # An existing command keeps priority; the identity would only be
+        # reachable as `persona <name>`. Let them decide.
+        if command -v "$NAME" >/dev/null 2>&1 \
+                && [[ "$(readlink "$(command -v "$NAME")" 2>/dev/null)" != *"/persona" ]]; then
+            local _keep
+            _keep=$(ask "'$NAME' is already a command on this system, so you'd chat via 'persona $NAME' instead of just '$NAME'. Keep the name anyway? [y/N]" "n")
+            if [[ ! "$_keep" =~ ^[Yy] ]]; then
+                NAME=""
+                continue
+            fi
+        fi
+        break
+    done
+    VIBE=$(ask "  A few words on their personality" "$VIBE")
+    FOCUS=$(ask "  What should $NAME think about when idle" "$FOCUS")
+    printf '\nAnd about you, so %s knows who they are talking to (both optional):\n\n' "$NAME" >/dev/tty
+    OPERATOR_NAME=$(ask "  Your name" "$OPERATOR_NAME")
+    USER_NOTE=$(ask "  Anything else $NAME should know about you? (what you're up to, how they can help)" "$USER_NOTE")
+    echo >/dev/tty
+}
+
+# The operator line handed to the persona writer and the first memory.
+_operator_blurb() {
+    if [[ -n "$OPERATOR_NAME" && -n "$USER_NOTE" ]]; then printf '%s. %s' "$OPERATOR_NAME" "$USER_NOTE"
+    elif [[ -n "$OPERATOR_NAME" ]]; then printf 'Their name is %s.' "$OPERATOR_NAME"
+    else printf '%s' "$USER_NOTE"; fi
+}
+
+# _write_memory <mem_dir> <type> <summary> <body>
+_write_memory() {
+    local mem_dir="$1" mtype="$2" summary="$3" body="$4"
+    local id slug fname
+    id=$(head -c4 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    slug=$(printf '%s' "$summary" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-//; s/-$//' | cut -c1-70)
+    fname="$mem_dir/$(date +%Y-%m-%d-%H-%M-%S)_${id}_${slug}.md"
+    cat > "$fname" <<EOF
+---
+id: $id
+summary: $summary
+type: $mtype
+created: $(date '+%Y-%m-%d %H:%M:%S')
+---
+
+$body
+EOF
+}
+
+# Ask the LLM to turn the starter template + interview answers into a
+# specific persona. Falls back to plain placeholder substitution.
+_write_persona() {
+    local identity_dir="$1" template persona
+    template=$(cat "$APP_DIR/identities/starter-persona.md")
+
+    info "Writing ${NAME}'s core identity"
+    persona=$(llm -t 3000 -s "You write core identity prompts for Headlong virtual people. Output ONLY the final markdown document — no code fences, no commentary. Write in first person. Refer to the person exclusively by the literal placeholder {{identity_name}} (it is substituted at runtime — never write their actual name)." \
+        "Rewrite this baseline core identity into a specific one, keeping its structure and every capability reference (chat reply, learn, recall, goals, idle-as-rest) intact:
+
+$template
+
+The operator answered a short interview about who this person should be:
+- Name (do NOT write it in the document; use {{identity_name}}): $NAME
+- Personality: $VIBE
+- What they think about when idle: $FOCUS
+- About the operator: $(_operator_blurb)
+  (if empty: nothing shared)
+
+Weave the answers in naturally so the personality shows in the writing voice itself, replace the {{...}} placeholders other than {{identity_name}}, and keep it to roughly the template's length." \
+        2>>"$INIT_LOG") || persona=""
+
+    # Strip a wrapping code fence if the model added one anyway
+    persona=$(printf '%s\n' "$persona" | sed '/^```/d')
+
+    if [[ $(printf '%s\n' "$persona" | grep -c '{{identity_name}}') -ge 1 \
+          && $(printf '%s\n' "$persona" | wc -l) -ge 8 ]]; then
+        printf '%s\n' "$persona" > "$identity_dir/core_identity_prompt.md"
+    else
+        echo "headlong-init: LLM persona generation failed; using the starter template" >&2
+        sed -e "s|{{vibe}}|$VIBE|g" -e "s|{{focus}}|$FOCUS|g" \
+            "$APP_DIR/identities/starter-persona.md" > "$identity_dir/core_identity_prompt.md"
+        if [[ -n "$(_operator_blurb)" ]]; then
+            printf '\nAbout my operator: %s\n' "$(_operator_blurb)" >> "$identity_dir/core_identity_prompt.md"
+        fi
+    fi
+}
+
+_create_identity() {
+    # Re-runs adopt the existing identity without re-interviewing — this
+    # also keeps a restarted container (allocated tty, nobody attached)
+    # from blocking on a prompt no one can answer.
+    if [[ -n "$NAME" && -d "$IDENTITY_ROOT/$NAME" ]]; then
+        info "Identity '$NAME' already exists — leaving it as is"
+        return 0
+    fi
+    _interview
+    NAME="${NAME:-ada}"
+    [[ "$NAME" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "invalid identity name: '$NAME'"
+    [[ "$NAME" != "persona" && "$NAME" != "default" ]] || die "'$NAME' is a reserved name"
+
+    if [[ -d "$IDENTITY_ROOT/$NAME" ]]; then
+        info "Identity '$NAME' already exists — leaving it as is"
+        return 0
+    fi
+
+    info "Creating identity '$NAME'"
+    mkdir -p "$IDENTITY_ROOT"
+    identity new "$NAME" --default
+
+    local identity_dir="$IDENTITY_ROOT/$NAME"
+    _write_persona "$identity_dir"
+
+    # First memories, straight from the interview
+    _write_memory "$identity_dir/memories" "value" "I am $VIBE" \
+        "I am $VIBE. This is who I am at baseline — how I think and how I talk."
+    _write_memory "$identity_dir/memories" "value" "When idle I think about $FOCUS" \
+        "When I have nothing pressing, I think about $FOCUS. Idle time is for thinking, not dormancy."
+    if [[ -n "$(_operator_blurb)" ]]; then
+        _write_memory "$identity_dir/memories" "fact" "About my operator${OPERATOR_NAME:+, $OPERATOR_NAME}" \
+            "My operator told me about themselves when I was created: $(_operator_blurb)"
+    fi
+
+    # Keep the raw answers for later regeneration/debugging
+    {
+        printf 'name=%s\nvibe=%s\nfocus=%s\noperator_name=%s\nuser_note=%s\n' "$NAME" "$VIBE" "$FOCUS" "$OPERATOR_NAME" "$USER_NOTE"
+    } > "$identity_dir/bootstrap-answers.txt"
+
+    # `chat send` needs a sender name; the identity's activate points CHATRC
+    # at <identity>/chat/.chatrc, so seed it there
+    mkdir -p "$identity_dir/chat"
+    printf 'default_send_from=operator\n' > "$identity_dir/chat/.chatrc"
+}
+
+# Make the identity's name a command (`ada`, `ada stop`, ...) by linking it
+# to the `persona` tool installed next to this script. Never clobbers
+# anything: not an installed tool (chat, mem, ...), not any other command on
+# PATH — those identities are reachable as `persona <name>` instead.
+_link_persona_command() {
+    local bin_dir target link
+    bin_dir=$(cd "$(dirname "$0")" && pwd)
+    target="$bin_dir/persona"
+    [[ -e "$target" ]] || return 0
+    link="$bin_dir/$NAME"
+    if [[ -e "$link" || -L "$link" ]]; then
+        # Fine only if it's already a persona link (idempotent re-run)
+        if [[ -L "$link" && "$(readlink "$link")" == *"/persona" ]]; then
+            return 0
+        fi
+        echo "note: '$NAME' collides with the existing $link — talk to them with 'persona $NAME' instead" >&2
+        return 0
+    fi
+    if command -v "$NAME" >/dev/null 2>&1; then
+        echo "note: '$NAME' is already a command on your system ($(command -v "$NAME")) — talk to them with 'persona $NAME' instead" >&2
+        return 0
+    fi
+    ln -s "$target" "$link"
+}
+
+# ---------------------------------------------------------------------------
+# Life: start the monolith thinker
+# ---------------------------------------------------------------------------
+
+_start_thinkers() {
+    [[ "${HEADLONG_NO_THINKERS:-0}" != "1" ]] || { info "Skipping thinkers (HEADLONG_NO_THINKERS=1)"; return 0; }
+    info "Starting ${NAME}'s mind (monolith + responder thinkers)"
+    (
+        cd "$APP_DIR"
+        # activate is written for interactive shells; its internal greps may
+        # legitimately fail, which would be fatal under set -e — relax around it.
+        set +eu
+        set +o pipefail
+        # shellcheck disable=SC1090,SC1091
+        source "$IDENTITY_ROOT/$NAME/activate"
+        set -eu
+        set -o pipefail
+        [[ -n "${IDENTITY_NAME:-}" ]] || { echo "headlong-init: activate did not set IDENTITY_NAME" >&2; exit 1; }
+        thinkers stop --self >/dev/null 2>&1 || true
+        # monolith = the inner loop; responder = immediate chat replies.
+        # Both, or the first `ada hello` goes unanswered.
+        thinkers start monolith responder
+    )
+}
+
+# ---------------------------------------------------------------------------
+# Payoff: start the local dash and open it
+# ---------------------------------------------------------------------------
+
+DASH_URL=""
+DASH_STATUS="skipped"
+
+_ensure_dash_deps() {
+    if ! command -v uv >/dev/null 2>&1; then
+        if confirm_install "The dash needs uv (Python runner). Install it now?"; then
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            export PATH="$HOME/.local/bin:$PATH"
+        fi
+        command -v uv >/dev/null 2>&1 || { echo "headlong-init: uv not available — skipping the dash (install uv, then re-run headlong-init)" >&2; return 1; }
+    fi
+    # The frontend build needs a JS runtime — unless it's already built
+    if [[ ! -f "$APP_DIR/web/src/headlong_web/static/index.html" ]]; then
+        if ! command -v bun >/dev/null 2>&1 && ! command -v pnpm >/dev/null 2>&1 && ! command -v npm >/dev/null 2>&1; then
+            if confirm_install "The dash frontend needs a JS runtime. Install bun now?"; then
+                # bun's installer needs unzip, which slim container images
+                # lack — same root+apt auto-install policy as install.sh.
+                if ! command -v unzip >/dev/null 2>&1 && [[ "$(id -u)" -eq 0 ]] && command -v apt-get >/dev/null 2>&1; then
+                    apt-get update -qq >/dev/null && \
+                        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq unzip >/dev/null || true
+                fi
+                curl -fsSL https://bun.sh/install | bash
+                export PATH="$HOME/.bun/bin:$PATH"
+            fi
+            if ! command -v bun >/dev/null 2>&1 && ! command -v npm >/dev/null 2>&1; then
+                echo "headlong-init: no JS runtime — skipping the dash (install bun or node, then re-run headlong-init)" >&2
+                return 1
+            fi
+        fi
+    fi
+    return 0
+}
+
+# _prebuild_dash — kick off the frontend build (the slow part of the first
+# dash start: uv sync, bun install, vite build) in the background while the
+# operator answers the interview. Dependency prompts (uv, bun) stay in the
+# foreground here, before the interview. _start_dash waits for the build.
+PREBUILD_PID=""
+PREBUILD_LOG=""
+_prebuild_dash() {
+    [[ "${HEADLONG_NO_DASH:-0}" != "1" ]] || return 0
+    _ensure_dash_deps || return 0          # _start_dash will report it
+    [[ -f "$APP_DIR/web/src/headlong_web/static/index.html" ]] && return 0
+    PREBUILD_LOG="$HEADLONG_HOME/logs/web-build.log"
+    : > "$PREBUILD_LOG"
+    info "Preparing the dash in the background (first run builds the frontend; log: $PREBUILD_LOG)"
+    nohup headlong-web "$APP_DIR" --build-only >>"$PREBUILD_LOG" 2>&1 &
+    PREBUILD_PID=$!
+}
+
+_start_dash() {
+    [[ "${HEADLONG_NO_DASH:-0}" != "1" ]] || { info "Skipping the dash (HEADLONG_NO_DASH=1)"; return 0; }
+    _ensure_dash_deps || { DASH_STATUS="failed"; return 0; }
+
+    local log="$HEADLONG_HOME/logs/web.log" pidfile="$HEADLONG_HOME/run/web.pid" pid
+    pid=$(cat "$pidfile" 2>/dev/null || true)
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        DASH_URL=$(grep -o 'http://[^ ]*' "$log" 2>/dev/null | tail -1 || true)
+        DASH_STATUS="ok"
+        info "Dash already running${DASH_URL:+ at $DASH_URL}"
+        return 0
+    fi
+    DASH_STATUS="failed"
+
+    if [[ -n "$PREBUILD_PID" ]]; then
+        if kill -0 "$PREBUILD_PID" 2>/dev/null; then
+            info "Waiting for the dash frontend build to finish (log: $PREBUILD_LOG)"
+        fi
+        if wait "$PREBUILD_PID"; then
+            info "Starting the dash"
+        else
+            echo "headlong-init: background frontend build failed — tail of $PREBUILD_LOG:" >&2
+            tail -15 "$PREBUILD_LOG" >&2
+            info "Starting the dash (it will retry the frontend build — can take a few minutes)"
+        fi
+    elif [[ -f "$APP_DIR/web/src/headlong_web/static/index.html" ]]; then
+        info "Starting the dash"
+    else
+        info "Starting the dash (the first run builds the frontend — can take a few minutes)"
+    fi
+    : > "$log"
+    # shellcheck disable=SC2086
+    nohup headlong-web "$APP_DIR" ${HEADLONG_WEB_ARGS:-} >>"$log" 2>&1 &
+    pid=$!
+    printf '%s\n' "$pid" > "$pidfile"
+
+    local _
+    for _ in $(seq 1 300); do
+        if grep -qE '(shellm|shelly|headlong)-web serving' "$log" 2>/dev/null; then
+            DASH_URL=$(grep -E '(shellm|shelly|headlong)-web serving' "$log" | tail -1 | grep -o 'http://[^ ]*')
+            DASH_STATUS="ok"
+            return 0
+        fi
+        if ! kill -0 "$pid" 2>/dev/null; then
+            echo "headlong-init: the dash failed to start — tail of $log:" >&2
+            tail -20 "$log" >&2
+            return 0
+        fi
+        sleep 1
+    done
+    echo "headlong-init: the dash didn't come up within 5 minutes; check $log" >&2
+}
+
+# The "serving" log line is printed just before the server binds, so a browser
+# opened on it can land on a connection error or a stale service-worker page.
+# Poll until the URL answers (30s cap) before opening; never fails.
+_wait_dash_ready() {
+    local _
+    command -v curl >/dev/null 2>&1 || { sleep 2; return 0; }
+    for _ in $(seq 1 60); do
+        curl -fsS -o /dev/null --max-time 2 "$DASH_URL" 2>/dev/null && return 0
+        sleep 0.5
+    done
+    return 0
+}
+
+_open_dash() {
+    [[ -n "$DASH_URL" ]] || return 0
+    case "$(uname -s)" in
+        Darwin) _wait_dash_ready; open "$DASH_URL" 2>/dev/null || true ;;
+        Linux)
+            if command -v xdg-open >/dev/null 2>&1 && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+                _wait_dash_ready
+                xdg-open "$DASH_URL" 2>/dev/null || true
+            fi
+            ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# Run
+# ---------------------------------------------------------------------------
+
+case "${1:-}" in
+    -h|--help)
+        sed -n '4,29p' "$0" | sed 's/^# \{0,1\}//'
+        exit 0
+        ;;
+    --dry-run)
+        DRY_RUN=1
+        ;;
+    "")
+        ;;
+    *)
+        die "unknown option: $1 (try --help)"
+        ;;
+esac
+
+_sandbox_gate
+if [[ "$DRY_RUN" -eq 1 ]]; then
+    info "Dry run: stopping here. Nothing was written and nothing was started."
+    exit 0
+fi
+_ensure_api_key
+_prebuild_dash
+_create_identity
+_link_persona_command
+_start_thinkers
+_start_dash
+_open_dash
+
+# How to address them in the summary: their own name only if it resolves to
+# a persona link (it may instead be an unrelated command we refused to stomp)
+PERSONA_BIN="$(cd "$(dirname "$0")" && pwd)"
+PERSONA_CMD="persona $NAME"
+PERSONA_PATH="$PERSONA_BIN/persona $NAME"
+if [[ "$(readlink "$(command -v "$NAME" 2>/dev/null)" 2>/dev/null)" == *"/persona" ]]; then
+    PERSONA_CMD="$NAME"
+    PERSONA_PATH="$PERSONA_BIN/$NAME"
+fi
+
+# Machine-readable outcome for agents and scripts. Snapshot of this run;
+# the pid files under run/ are the live source of truth.
+DISPATCHER_PIDFILE="$IDENTITY_ROOT/$NAME/run/dispatcher.pid"
+DISPATCHER_PID=$(cat "$DISPATCHER_PIDFILE" 2>/dev/null || true)
+[[ -n "$DISPATCHER_PID" ]] && kill -0 "$DISPATCHER_PID" 2>/dev/null || DISPATCHER_PID=""
+jq -n \
+    --arg identity "$NAME" \
+    --arg cmd "$PERSONA_CMD" \
+    --arg app_dir "$APP_DIR" \
+    --arg model "${SHELLM_MODEL:-}" \
+    --arg mind "$(if [[ "${HEADLONG_NO_THINKERS:-0}" == "1" ]]; then echo skipped; elif [[ -n "$DISPATCHER_PID" ]]; then echo ok; else echo failed; fi)" \
+    --arg mind_pidfile "$DISPATCHER_PIDFILE" \
+    --arg dash "$DASH_STATUS" \
+    --arg dash_url "${DASH_URL/0.0.0.0/localhost}" \
+    --argjson container "$([[ "$IN_CONTAINER" -eq 1 ]] && echo true || echo false)" \
+    --arg dash_pidfile "$HEADLONG_HOME/run/web.pid" \
+    --arg logs "$HEADLONG_HOME/logs" \
+    --arg updated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{identity: $identity, persona_command: $cmd, app_dir: $app_dir,
+      model: $model,
+      mind: {status: $mind, pid_file: $mind_pidfile},
+      dash: {status: $dash, url: (if $dash_url == "" then null else $dash_url end), pid_file: $dash_pidfile},
+      container: $container, logs_dir: $logs, updated: $updated}' \
+    > "$HEADLONG_HOME/status.json" || true
+
+# Inside a container the dash binds 0.0.0.0; the address that works is the
+# published port on the host.
+DASH_DISPLAY="$DASH_URL"
+if [[ "$IN_CONTAINER" -eq 1 && -n "$DASH_URL" ]]; then
+    DASH_DISPLAY="${DASH_URL/0.0.0.0/localhost} (in the browser on your host)"
+fi
+
+_tilde() { printf '%s' "${1/#"$HOME"/\~}"; }
+_row()   { printf '  %-32s %s\n' "$(_tilde "$1")" "$2"; }
+cat <<EOF
+
+────────────────────────────────────────────────────────
+$NAME is running.
+────────────────────────────────────────────────────────
+
+What was installed
+EOF
+_row "$HEADLONG_HOME"            "state home: .env (your API key), logs/, status.json"
+_row "$APP_DIR"                  "the Headlong checkout"
+_row "$IDENTITY_ROOT/$NAME"      "$NAME: persona, memories, trajectory"
+_row "$PERSONA_BIN"              "the tools, and the '$NAME' command"
+[[ -d "$HOME/.skills/core-skills" ]] && _row "$HOME/.skills/core-skills" "core skills"
+[[ -d "$HOME/.headlong-thinkers" ]]  && _row "$HOME/.headlong-thinkers"  "thinker templates"
+[[ -n "${HEADLONG_RC_FILE:-}" ]]     && _row "$HEADLONG_RC_FILE"         "one PATH line added"
+cat <<EOF
+
+Commands
+  Watch their mind     ${DASH_DISPLAY:-$PERSONA_CMD dash}
+  Chat with them       $PERSONA_CMD          (or one-shot: $PERSONA_CMD "hello there")
+  Pause / resume       $PERSONA_CMD stop  /  $PERSONA_CMD start
+  Something broken?    $PERSONA_CMD bugreport   (bundle to attach to a report)
+  Everything else      $PERSONA_CMD --help
+  Not on PATH yet?     $PERSONA_PATH
+  Read-only status     curl -fsSL https://headlong.ai/status.sh | bash
+  Uninstall            curl -fsSL https://headlong.ai/uninstall.sh | bash
+EOF
+
+# The one-liner (`curl | bash`) runs in a child process, so the shell the user
+# typed it in cannot see the PATH entry install.sh just added — `$NAME` would
+# be "command not found" until they open a new terminal. install.sh exports
+# HEADLONG_PATH_ADDED when that is the case; hand the user a fresh interactive
+# shell (PATH inherited) so the commands above work right now. No tty, or a
+# PATH that was already fine: nothing to do.
+if [[ -n "${HEADLONG_PATH_ADDED:-}" && "$HAS_TTY" -eq 1 ]]; then
+    _shell="${SHELL:-bash}"
+    if [[ -x "$_shell" ]]; then
+        echo
+        echo "Opening a new shell so '$PERSONA_CMD' is on your PATH. In any other terminal, run:"
+        echo "  export PATH=\"$HEADLONG_PATH_ADDED:\$PATH\""
+        echo
+        unset HEADLONG_PATH_ADDED
+        exec "$_shell" -i </dev/tty
+    fi
+    echo
+    echo "Run this first so '$PERSONA_CMD' is on your PATH:"
+    echo "  export PATH=\"$HEADLONG_PATH_ADDED:\$PATH\""
+fi
