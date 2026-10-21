@@ -215,7 +215,7 @@ EOF
         grep -vE '^(PROJECT_DAILY_TOKENS|PROJECT_TOTAL_TOKENS|PROJECT_DAILY_USD|PROJECT_TOTAL_USD|PROJECT_TIME_SCALE|LIBRARIAN_SRC|LIBRARIAN_PACK_TOKENS)=' "$id/.env" || true
         printf 'PROJECT_DAILY_TOKENS=%s\n' "$tokens"
         printf 'LIBRARIAN_SRC=%s\n' "$APP/librarian/src"
-        printf 'LIBRARIAN_PACK_TOKENS=%s\n' "${LIBRARIAN_PACK_TOKENS:-8000}"
+        printf 'LIBRARIAN_PACK_TOKENS=%s\n' "${LIBRARIAN_PACK_TOKENS:-5000}"
         if [[ -n "$total" ]]; then printf 'PROJECT_TOTAL_TOKENS=%s\n' "$total"; fi
         if [[ -n "$dusd" ]]; then printf 'PROJECT_DAILY_USD=%s\n' "$dusd"; fi
         if [[ -n "$tusd" ]]; then printf 'PROJECT_TOTAL_USD=%s\n' "$tusd"; fi
