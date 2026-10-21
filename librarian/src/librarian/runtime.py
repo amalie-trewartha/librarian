@@ -150,11 +150,31 @@ def _late_outcomes(store: db.Store, pd: Optional[Path], project: Optional[str]) 
     recur_days = _env_int("LIBRARIAN_RECUR_WINDOW_DAYS", RECUR_WINDOW_DAYS_DEFAULT)
     ref = db.now()
     report: dict = {"amended": []}
-    human_deliverable_edits: list[str] = []
-    if pd is not None and (pd / ".git").exists():
-        log = _git(pd, "log", "--author=human", "--format=%cI", "--", "deliverable.md")
-        human_deliverable_edits = [ln.strip() for ln in log.splitlines() if ln.strip()]
+    # Each human edit of deliverable.md corrects the mind's last write of it, so
+    # only the episode that made that write is blamed, not every episode in the
+    # window (between-wake commits are authored "human" even when they hold a
+    # crashed wake's or a background job's output).
+    corrected: set[str] = set()
     eps = model.nodes_where(store, "type = 'episode' AND project IS ? ORDER BY created", (project,))
+    if pd is not None and (pd / ".git").exists():
+        log = _git(pd, "log", "--format=%cI %an", "--", "deliverable.md")
+        mind_ts: Optional[db.dt.datetime] = None
+        for ln in reversed([ln.split(" ", 1) for ln in log.splitlines() if ln.strip()]):
+            t = db.parse_ts(ln[0])
+            if t is None:
+                continue
+            if len(ln) > 1 and ln[1].strip() == "human":
+                if mind_ts is not None and t - mind_ts <= db.dt.timedelta(days=window_days):
+                    last = None
+                    for ep in eps:
+                        c = db.parse_ts(ep.created)
+                        if c is not None and c <= mind_ts:
+                            last = ep
+                    if last is not None:
+                        corrected.add(last.id)
+                mind_ts = None
+            else:
+                mind_ts = t
     recent_errors: dict[str, str] = {}  # signature -> last ts seen
     for r in store.q("SELECT errors, ts FROM progress_log WHERE project IS ? ORDER BY id", (project,)):
         try:
@@ -168,16 +188,10 @@ def _late_outcomes(store: db.Store, pd: Optional[Path], project: Optional[str]) 
             continue
         oc = (ep.outcome or {}).get("value")
         created = db.parse_ts(ep.created)
-        # Human corrected the deliverable after this episode and within the window → failure.
-        if oc in ("success", "partial") and created is not None:
-            for ts in human_deliverable_edits:
-                t = db.parse_ts(ts)
-                if t and created < t <= created + db.dt.timedelta(days=window_days):
-                    rep = lifecycle.amend_outcome(store, ep.id, "failure", "human corrected deliverable")
-                    report["amended"].append({"episode": ep.id, "to": "failure", "reversed": rep.reversed})
-                    break
-            else:
-                pass
+        # A human corrected the deliverable this episode wrote → failure.
+        if oc in ("success", "partial") and created is not None and ep.id in corrected:
+            rep = lifecycle.amend_outcome(store, ep.id, "failure", "human corrected deliverable")
+            report["amended"].append({"episode": ep.id, "to": "failure", "reversed": rep.reversed})
         # Non-recurrence: a partial episode that cited a skill whose signature never came back.
         if oc == "partial" and age >= recur_days:
             cited = [r[0] for r in store.q("SELECT node_id FROM citations WHERE episode_id = ?", (ep.id,))]
@@ -414,6 +428,14 @@ def _ritual_written(ritual: Optional[str], dirty: list[str], pd: Path) -> bool:
     return False
 
 
+def _added_lines(pd: Path, f: str) -> str:
+    """The lines this wake added to ``f``: the + side of its diff, or the whole file when it is new."""
+    diff = _git(pd, "diff", "--", f)
+    if not diff.strip():
+        return _read(pd / f, 60000)
+    return "\n".join(ln[1:] for ln in diff.splitlines() if ln.startswith("+") and not ln.startswith("+++"))
+
+
 def _review_texts(pd: Path, dirty: list[str]) -> dict[str, str]:
     out = {}
     for f in dirty:
@@ -517,17 +539,31 @@ def post(rc: int, run_id: Optional[str], stderr_tail: str, final: str, use_llm: 
     steps = _traj_steps(run_id)
     sigs = outcome.error_signatures(steps)
     tool_calls = sum(1 for s in steps if s.get("type") == "shell-output")
-    # Cited ids: fetch log, ULIDs in the run's steps, FINAL and the human-record diffs.
+    if rc != 0 and tool_calls == 0 and not (final or "").strip():
+        # The run never acted (e.g. the model API was down): no evidence about any memory, so no
+        # episode and no credit. Blaming the pack here would punish memories for an outage.
+        (rd / REQUEST_FILE).unlink(missing_ok=True)
+        sys.stdout.write(json.dumps({"episode": None, "outcome": None, "criterion": f"run never acted (rc={rc})"}) + "\n")
+        return 0
+    # Cited ids: fetch log, ULIDs the mind wrote in this run's steps, FINAL and the lines this
+    # wake added to the human records. The prompt (which carries the pack) and host feedback are
+    # not the mind's writing, and old record lines were cited by the wakes that wrote them.
     text_blob = final + "\n" + "\n".join(
-        str(s.get("thought") or "") + "\n" + str(s.get("content") or "") + "\n" + str(s.get("cmd") or "") for s in steps
+        str(s.get("thought") or "") + "\n" + str(s.get("content") or "") + "\n" + str(s.get("cmd") or "")
+        for s in steps
+        if s.get("type") not in ("prompt", "feedback")
     )
     for f in ("journal.md", "project-memory.md"):
         if f in dirty:
-            text_blob += "\n" + _git(pd, "diff", "--", f) + _read(pd / f, 60000)
+            text_blob += "\n" + _added_lines(pd, f)
     reviews = _review_texts(pd, dirty)
     for t in reviews.values():
         text_blob += "\n" + t
-    cited = [i for i in outcome.find_ulids(text_blob) if model.get_node(store, i, with_edges=False) is not None and i not in req.get("pack_ids", []) or i in req.get("task_ids", [])]
+    cited = [
+        i
+        for i in outcome.find_ulids(text_blob)
+        if model.get_node(store, i, with_edges=False) is not None and (i not in req.get("pack_ids", []) or i in req.get("task_ids", []))
+    ]
     verdicts = outcome.review_verdicts(reviews)
     known_ids = set(req.get("pack_ids", [])) | set(cited)
     for v in verdicts:

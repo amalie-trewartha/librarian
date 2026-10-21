@@ -84,8 +84,8 @@ def _parse_edges(raw: Optional[list[str]]) -> list[dict]:
 
 
 def _request_file() -> Optional[Path]:
-    ident = os.environ.get("IDENTITY_DIR", "").strip()
-    return (Path(ident) / "run" / "librarian_request.json") if ident else None
+    ident = db.identity_dir()
+    return (ident / "run" / "librarian_request.json") if ident else None
 
 
 def _current_request() -> dict:
@@ -219,12 +219,20 @@ def cmd_propose(args, out: Out) -> int:
         supersedes = model.resolve_id(store, args.supersedes)
         if supersedes is None:
             return out.error(f"no node matches {args.supersedes}", EXIT_NOTFOUND)
+    prov = _provenance(args)
+    # A proposal made during a wake names that wake: the request id of the
+    # wake's pack is its run_id. Without this, a mind that followed the
+    # prompt's propose recipe (no --source) was refused by the gate.
+    if not any(prov.get(k) for k in ("episode", "source", "run_id", "span")):
+        rid = _current_request().get("request_id")
+        if rid:
+            prov["run_id"] = rid
     cand = gate.Candidate(
         type=args.type,
         summary=args.summary,
         body=_read_body(args),
         tags=model.parse_tags(args.tags or []),
-        provenance=_provenance(args),
+        provenance=prov,
         confidence=args.confidence,
         valid_from=args.valid_from,
         valid_to=args.valid_to,
@@ -571,8 +579,8 @@ def cmd_eval(args, out: Out) -> int:
 
 def cmd_export(args, out: Out) -> int:
     store = _store(args)
-    ident = os.environ.get("IDENTITY_DIR", "").strip()
-    out_dir = Path(args.dir) if args.dir else (Path(ident) / "librarian" / "export" if ident else Path("librarian-export"))
+    ident = db.identity_dir()
+    out_dir = Path(args.dir) if args.dir else (ident / "librarian" / "export" if ident else Path("librarian-export"))
     pdir = Path(args.project_dir) if args.project_dir else None
     out.emit(exchange.export_store(store, out_dir, args.format, pdir, args.project), _r_kv)
     return EXIT_OK
@@ -663,7 +671,7 @@ def build_parser() -> argparse.ArgumentParser:
         s.add_argument("--type", required=True, choices=model.NODE_TYPES)
         s.add_argument("--summary", required=True)
         _add_body(s)
-        s.add_argument("--tags", action="append")
+        s.add_argument("--tags", action="extend", nargs="+", help="tags, comma- or space-separated")
         s.add_argument("--project")
         s.add_argument("--confidence", type=float, default=0.5)
         s.add_argument("--provenance", help="JSON object")
@@ -680,7 +688,7 @@ def build_parser() -> argparse.ArgumentParser:
         s.set_defaults(func=cmd_propose)
 
     s = sub.add_parser("search", help="summaries only")
-    s.add_argument("--tags", action="append")
+    s.add_argument("--tags", action="extend", nargs="+", help="tags, comma- or space-separated")
     s.add_argument("--text", dest="text", help="free text")
     s.add_argument("--type", choices=model.NODE_TYPES)
     s.add_argument("--project")
@@ -700,7 +708,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("pack", help="build a context pack")
     s.add_argument("--task", required=True)
-    s.add_argument("--tags", action="append")
+    s.add_argument("--tags", action="extend", nargs="+", help="tags, comma- or space-separated")
     s.add_argument("--project")
     s.add_argument("--phase", choices=model.PHASES)
     s.add_argument("--budget", type=int, default=8000)
@@ -720,7 +728,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--id")
     c.add_argument("--summary")
     _add_body(c)
-    c.add_argument("--tags", action="append")
+    c.add_argument("--tags", action="extend", nargs="+", help="tags, comma- or space-separated")
     c.add_argument("--outcome", required=True, choices=model.OUTCOMES)
     c.add_argument("--criterion")
     c.add_argument("--cite", action="append")
@@ -765,7 +773,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("progress")
     s.add_argument("--status", required=True)
-    s.add_argument("--tags", action="append")
+    s.add_argument("--tags", action="extend", nargs="+", help="tags, comma- or space-separated")
     s.add_argument("--phase", choices=model.PHASES)
     s.add_argument("--project")
     s.add_argument("--tool-calls", type=int, default=0)
@@ -793,12 +801,12 @@ def build_parser() -> argparse.ArgumentParser:
     c = ss.add_parser("propose")
     c.add_argument("--summary", required=True)
     _add_body(c)
-    c.add_argument("--tags", action="append")
+    c.add_argument("--tags", action="extend", nargs="+", help="tags, comma- or space-separated")
     c.add_argument("--evidence", action="append")
     c = ss.add_parser("edit")
     c.add_argument("--summary", required=True)
     _add_body(c)
-    c.add_argument("--tags", action="append")
+    c.add_argument("--tags", action="extend", nargs="+", help="tags, comma- or space-separated")
     c.add_argument("--occasion", required=True, choices=identity.OCCASIONS)
     c.add_argument("--occasion-key")
     c.add_argument("--trigger-id")

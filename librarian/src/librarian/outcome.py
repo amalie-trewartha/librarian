@@ -16,6 +16,10 @@ from .triggers import normalize_signature
 PHASE_MAP = {"build": "building", "harden": "reviewing", "final": "handoff", "ended": "handoff", "open": "building"}
 ULID_RE = re.compile(r"\b[0-9A-HJKMNP-TV-Z]{26}\b")
 _VERDICT_RE = re.compile(r"\b(SURVIVES|BROKEN|UNVERIFIABLE)\b")
+# A review that judged several claims names each verdict's memories on its own line.
+_MEMORIES_LINE_RE = re.compile(r"^\s*Memories\s+(SURVIVES|BROKEN|UNVERIFIABLE)\s*:(.*)$", re.M)
+# shellm's own death when the model API gives up (HTTP 429/5xx after its retries): an outage, not the mind's work.
+_MODEL_API_FAILURE_RE = re.compile(r"\bllm failed\b|\bAPI error \(HTTP (?:429|5\d\d)\)|transient API failure")
 
 
 def map_phase(project_phase: str, ritual: Optional[str], signals: str, debugging: bool = False) -> str:
@@ -52,7 +56,7 @@ def decide_outcome(ev: WakeEvidence) -> tuple[str, str, dict]:
     for v in ev.review_verdicts:
         for nid in v.get("ids", []):
             if v["verdict"] == "SURVIVES":
-                overrides[nid] = "success"
+                overrides.setdefault(nid, "success")
             elif v["verdict"] == "BROKEN":
                 overrides[nid] = "failure"
     for r in ev.recurred:
@@ -62,12 +66,19 @@ def decide_outcome(ev: WakeEvidence) -> tuple[str, str, dict]:
         return "success", f"ritual {kind} output written", overrides
     survived = [v for v in ev.review_verdicts if v["verdict"] == "SURVIVES" and v.get("ids")]
     broken = [v for v in ev.review_verdicts if v["verdict"] == "BROKEN" and v.get("ids")]
+    # A review judges the memories it names (the overrides above), not this wake's pack: the rest
+    # of the pack learns nothing, so the wake itself closes partial.
+    if survived and broken:
+        return "partial", f"adversary review mixed: {survived[0]['file']}", overrides
     if survived:
-        return "success", f"adversary review SURVIVES: {survived[0]['file']}", overrides
+        return "partial", f"adversary review SURVIVES: {survived[0]['file']}", overrides
     if broken:
-        return "failure", f"adversary review BROKEN: {broken[0]['file']}", overrides
+        return "partial", f"adversary review BROKEN: {broken[0]['file']}", overrides
     if "Max iterations" in (ev.stderr_tail or ""):
         return "failure", "step cap reached without FINAL", overrides
+    if ev.rc != 0 and _MODEL_API_FAILURE_RE.search(ev.stderr_tail or ""):
+        # Cut off mid-run by the model API: no evidence about the pack either way.
+        return "partial", f"run cut off by model API failure (rc={ev.rc})", overrides
     if ev.rc != 0:
         return "failure", f"run failed (rc={ev.rc})", overrides
     if ev.recurred:
@@ -91,6 +102,11 @@ def review_verdicts(files: dict[str, str]) -> list[dict]:
     """``{path: text}`` of new or changed review files → verdicts with the ids each cites."""
     out = []
     for path, text in files.items():
+        labeled = _MEMORIES_LINE_RE.findall(text or "")
+        if labeled:
+            for verdict, rest in labeled:
+                out.append({"file": path, "verdict": verdict, "ids": find_ulids(rest)})
+            continue
         verdicts = _VERDICT_RE.findall(text or "")
         if not verdicts:
             continue

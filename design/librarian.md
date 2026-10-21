@@ -54,7 +54,8 @@ humans    librarian-project queue|probe|preferences|librarian, committed to proj
   signal has no test suite in research work. The runtime decides from
   artifacts, in this order: a ritual's output file written → `success`; an
   adversary review that cites a packed memory → `success` or `failure` for
-  that memory (per-id override on the citation); step cap hit or a failed run
+  that memory (per-id override on the citation), while the wake itself closes
+  `partial` so the rest of its pack is not credited for an earlier claim; step cap hit or a failed run
   → `failure`; an error signature that recurred after a skill for it was
   packed → `failure` for that skill; a journal entry plus FINAL → `partial`;
   FINAL alone → `partial`; nothing → `unknown`. The agent's own activity is

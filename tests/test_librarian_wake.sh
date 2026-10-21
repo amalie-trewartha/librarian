@@ -57,10 +57,14 @@ rid="run-$RANDOM$RANDOM"; ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 [[ -n "${SHELLM_RUN_ID_OUT:-}" ]] && printf '%s' "$rid" > "$SHELLM_RUN_ID_OUT"
 step() { printf '%s\n' "$1" | jq -c --arg rid "$rid" --arg ts "$ts" '. + {run_id:$rid, ts:$ts, step_id:("s-" + (now|tostring) + "-" + (input_line_number|tostring) + "-" + (.type))}' >> "$STUB_TRAJ"; }
 step '{"type":"shellm-run"}'
+[[ -n "${STUB_PROMPT_TEXT:-}" ]] && step "$(jq -nc --arg c "$STUB_PROMPT_TEXT" '{type:"prompt", content:$c}')"
 case "${STUB_MODE:-plain}" in
   errors)   # the same error, every wake
     step '{"type":"reasoning","thought":"run it","cmd":"python3 model.py"}'
     step '{"type":"shell-output","stdout":"","stderr":"Traceback\nModuleNotFoundError: No module named '"'"'pint'"'"'","exit":1}' ;;
+  acted)    # one clean tool call (then e.g. the model API dies)
+    step '{"type":"reasoning","thought":"look","cmd":"ls"}'
+    step '{"type":"shell-output","stdout":"model.py","stderr":"","exit":0}' ;;
   resolve)  # two failures then the same family succeeds
     step '{"type":"reasoning","thought":"run it","cmd":"python3 model.py"}'
     step '{"type":"shell-output","stdout":"","stderr":"ModuleNotFoundError: No module named '"'"'pint'"'"'","exit":1}'
@@ -76,6 +80,7 @@ if [[ -n "${STUB_JOURNAL:-}" ]]; then printf '\n### 2026-10-01 12:00Z — %s\nTy
 if [[ -n "${STUB_REVIEW:-}" ]]; then mkdir -p "$STUB_PROJECT/reviews"; printf 'Claim rests on %s.\nVerdict: %s\n' "$STUB_CITE" "$STUB_REVIEW" > "$STUB_PROJECT/reviews/claim-$RANDOM.md"; fi
 if [[ -n "${STUB_RITUAL_FILE:-}" ]]; then mkdir -p "$(dirname "$STUB_PROJECT/$STUB_RITUAL_FILE")"; printf 'ritual done\n' > "$STUB_PROJECT/$STUB_RITUAL_FILE"; fi
 step '{"type":"final","content":"Did the thing"}'
+[[ -n "${STUB_STDERR:-}" ]] && printf '%s\n' "$STUB_STDERR" >&2
 [[ -n "${STUB_FINAL+x}" ]] && printf '%s\n' "$STUB_FINAL" || printf 'Did the thing. Next: more.\n'
 exit "${STUB_RC:-0}"
 STUB
@@ -116,18 +121,51 @@ has "the wake's commit carries FINAL" "$(git -C "$P" log -1 --format=%s)" "Did t
 # ── 2. outcomes from exogenous evidence ──────────────────────────────────────
 run_step STUB_CITE="$SK" STUB_REVIEW=SURVIVES STUB_JOURNAL="verified claim"
 EP2=$(last_episode)
-has "adversary SURVIVES closes success" "$(episode_outcome "$EP2")" "success | adversary review SURVIVES"
+has "adversary SURVIVES closes partial for the wake" "$(episode_outcome "$EP2")" "partial | adversary review SURVIVES"
 eq "the cited skill is now active" "$(L show "$SK" | jq -r .status)" active
 run_step STUB_CITE="$SK" STUB_REVIEW=BROKEN STUB_JOURNAL="broken claim"
 EP3=$(last_episode)
-has "adversary BROKEN closes failure" "$(episode_outcome "$EP3")" "failure | adversary review BROKEN"
+has "adversary BROKEN closes partial for the wake" "$(episode_outcome "$EP3")" "partial | adversary review BROKEN"
 eq "a failure lowers confidence" "$(L show "$SK" | jq -r '.confidence < 0.6')" true
+# The verdict is about the memory the review names, not the rest of the wake's pack.
+moved=$(python3 -I -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(*c.execute("select sum(node_id!=?), sum(node_id!=? and delta_conf!=0) from credit_log where episode_id=?", (sys.argv[2],)*2+(sys.argv[3],)).fetchone())' "$ID/librarian/store.sqlite" "$SK" "$EP3")
+[[ "${moved% *}" -ge 1 && "${moved#* }" == 0 ]] && ok "a review credits only the memories it names" || bad "a review credits only the memories it names" "other pack credits / moved: $moved"
+n_ep=$(L stats | jq -r '.nodes.by_type.episode'); c_sk=$(L show "$SK" | jq -r .confidence)
 run_step STUB_RC=1 STUB_FINAL=""
+eq "a run that never acted (API down) records no episode" "$(L stats | jq -r '.nodes.by_type.episode')" "$n_ep"
+eq "a run that never acted credits nothing" "$(L show "$SK" | jq -r .confidence)" "$c_sk"
+run_step STUB_MODE=errors STUB_RC=1 STUB_FINAL=""
 EP4=$(last_episode)
 eq "a failed run closes failure" "$(episode_outcome "$EP4")" "failure | run failed (rc=1)"
+c_sk=$(L show "$SK" | jq -r .confidence)
+run_step STUB_MODE=acted STUB_RC=1 STUB_FINAL="" STUB_CITE="$SK" \
+    STUB_STDERR="shellm: error: llm failed (exit 1): llm: error: API error (HTTP 503): Bedrock is unable to process your request."
+eq "a run the model API cut off mid-run closes partial" "$(episode_outcome "$(last_episode)")" "partial | run cut off by model API failure (rc=1)"
+eq "a run the model API cut off credits nothing" "$(L show "$SK" | jq -r .confidence)" "$c_sk"
 run_step STUB_FINAL=""
 EP5=$(last_episode)
 eq "no artifact closes unknown" "$(episode_outcome "$EP5")" "unknown | no measurable artifact"
+
+# ── 2a. a mixed review credits each memory by its own verdict ──────────────
+SK2=$(L propose --type skill --summary "ogr2ogr is missing in the sandbox: apt-get install gdal-bin" \
+    --body 'Fix: `apt-get install -y gdal-bin`; verified 2026-10-02.' --tags pkg:gdal,area:tooling --source journal --project "$PROJECT_ID" | jq -r .id)
+c_sk=$(L show "$SK" | jq -r .confidence); c_sk2=$(L show "$SK2" | jq -r .confidence)
+run_step STUB_CITE="$SK" STUB_REVIEW="SURVIVES for claim 1, BROKEN for claim 2
+Memories SURVIVES: $SK
+Memories BROKEN: $SK2" STUB_JOURNAL="mixed review"
+has "a mixed review closes partial" "$(episode_outcome "$(last_episode)")" "partial | adversary review mixed"
+eq "the surviving memory gains" "$(L show "$SK" | jq -r --argjson c "$c_sk" '.confidence > $c')" true
+eq "the broken memory loses" "$(L show "$SK2" | jq -r --argjson c "$c_sk2" '.confidence < $c')" true
+
+# ── 2b. only what the mind wrote this wake counts as cited ───────────────────
+cited_line() { L show "$1" | jq -r .body | grep '^Cited:' || true; }
+run_step STUB_PROMPT_TEXT="[TASK MEMORIES]
+- $SK · skill · ACTIVE" STUB_JOURNAL="no ids here"
+hasnt "an id only in the prompt is not cited" "$(cited_line "$(last_episode)")" "$SK"
+run_step STUB_JOURNAL="used $SK for the fix"
+has "an id in this wake's journal entry is cited" "$(cited_line "$(last_episode)")" "$SK"
+run_step STUB_JOURNAL="a later entry"
+hasnt "an id in an older journal entry is not cited again" "$(cited_line "$(last_episode)")" "$SK"
 
 # ── 3. resolved failure → CAPTURE signal → cleared by a skill ───────────────
 run_step STUB_MODE=resolve STUB_JOURNAL="fixed pint"

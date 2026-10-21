@@ -22,6 +22,8 @@ PRIORS: dict[str, dict[str, float]] = {
     "retrospective": {"planning": 0.50, "building": 0.10, "debugging": 0.20, "reviewing": 0.30, "handoff": 0.40},
     "preference": {"planning": 0.30, "building": 0.20, "debugging": 0.10, "reviewing": 0.40, "handoff": 0.30},
     "episode": {"planning": 0.20, "building": 0.00, "debugging": 0.20, "reviewing": 0.10, "handoff": 0.30},
+    # Sourced, often adversary-checked claims: wanted while building and most of all in review.
+    "fact": {"planning": 0.30, "building": 0.40, "debugging": 0.20, "reviewing": 0.50, "handoff": 0.30},
 }
 
 # Ranking half-lives on last_confirmed (days); None = no decay.
@@ -96,9 +98,11 @@ def recency(node: model.Node, ref=None) -> float:
 
 
 def reuse(node: model.Node) -> float:
+    # Uses that carried evidence (a success or failure), not use_count: every pack citation
+    # bumps use_count, so ranking on it would keep repacking whatever was packed before.
     s, f = node.success_count, node.failure_count
     share = s / float(s + f) if (s + f) > 0 else 0.5
-    return (math.log1p(node.use_count) / math.log1p(10)) * (0.5 + 0.5 * share)
+    return (math.log1p(s + f) / math.log1p(10)) * (0.5 + 0.5 * share)
 
 
 def cut1(c: recall.Candidate, q: recall.Query, exclude: set, priors: dict, ref=None) -> tuple[float, dict]:

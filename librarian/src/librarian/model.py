@@ -19,6 +19,7 @@ from . import db
 NODE_TYPES = (
     "skill",
     "decision",
+    "fact",
     "retrospective",
     "preference",
     "identity_core",
@@ -26,7 +27,7 @@ NODE_TYPES = (
     "episode",
 )
 IDENTITY_TYPES = ("identity_core", "identity_working")
-TASK_TYPES = ("skill", "decision", "retrospective", "episode")
+TASK_TYPES = ("skill", "decision", "fact", "retrospective", "episode")
 STATUSES = ("probationary", "active", "superseded", "archived", "disputed")
 LIVE_STATUSES = ("active", "probationary", "disputed")
 PHASES = ("planning", "building", "debugging", "reviewing", "handoff")

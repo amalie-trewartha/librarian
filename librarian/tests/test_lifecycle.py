@@ -1,3 +1,4 @@
+import os
 import unittest
 
 from helpers import StoreCase
@@ -309,6 +310,41 @@ class ConsolidateTest(StoreCase):
         rep = lifecycle.consolidate(self.store)
         self.assertEqual(rep["needs_review"], [a])
         self.assertGreaterEqual(self.store.q1("SELECT COUNT(*) FROM consolidation_log")[0], 6)
+
+
+class LateOutcomeTest(StoreCase):
+    def _commit(self, pd, who: str, when: str, text: str) -> None:
+        import subprocess
+        (pd / "deliverable.md").write_text(text)
+        env = dict(os.environ, GIT_AUTHOR_DATE=when, GIT_COMMITTER_DATE=when)
+        subprocess.run(["git", "-C", str(pd), "add", "-A"], check=True, env=env)
+        subprocess.run(["git", "-C", str(pd), "-c", f"user.name={who}", "-c", f"user.email={who}@x", "commit", "-qm", who], check=True, env=env)
+
+    def test_human_edit_blames_only_the_episode_that_wrote_the_deliverable(self):
+        # A between-wake "human" commit once failed every episode in the prior
+        # 7 days (727 in the live trial); only the last writer is corrected.
+        import subprocess
+        from pathlib import Path
+        from librarian import runtime
+        pd = Path(self.tmp.name) / "project"
+        pd.mkdir()
+        subprocess.run(["git", "init", "-q", str(pd)], check=True)
+        a = self.skill("a", ["pkg:x"])
+        self.at("2026-10-01T01:00:00Z")
+        early = self.episode("partial", [a]).episode_id
+        self._commit(pd, "cns", "2026-10-01T01:00:10Z", "v1")
+        self.at("2026-10-01T02:00:00Z")
+        writer = self.episode("success", [a]).episode_id
+        self._commit(pd, "cns", "2026-10-01T02:00:10Z", "v2")
+        self.at("2026-10-01T03:00:00Z")
+        later = self.episode("partial", [a]).episode_id
+        self._commit(pd, "human", "2026-10-01T04:00:00Z", "v2 corrected")
+        self.at("2026-10-01T05:00:00Z")
+        rep = runtime._late_outcomes(self.store, pd, "p-1")
+        self.assertEqual([x["episode"] for x in rep["amended"]], [writer])
+        self.assertEqual(self.node(writer).outcome["value"], "failure")
+        self.assertEqual(self.node(early).outcome["value"], "partial")
+        self.assertEqual(self.node(later).outcome["value"], "partial")
 
 
 if __name__ == "__main__":

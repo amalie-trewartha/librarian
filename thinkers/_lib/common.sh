@@ -802,6 +802,12 @@ _build_shellm_flags() {
         [[ -n "${!_lv:-}" ]] && printf '%s\n' "--var" "$_lv=${!_lv}"
     done
     [[ -n "${LIBRARIAN_SRC:-}" ]] && printf '%s\n' "--var" "SHELLM_RO_VARS=LIBRARIAN_SRC"
+    # The store, so the mind's own `librarian` calls find it (and, next to it,
+    # the wake's request file). A file path, not IDENTITY_DIR: a directory
+    # --var is a mount, and a changed mount list forces a new container.
+    if [[ -n "${LIBRARIAN_SRC:-}" && -n "${IDENTITY_DIR:-}" ]]; then
+        printf '%s\n' "--var" "LIBRARIAN_STORE=${LIBRARIAN_STORE:-$IDENTITY_DIR/librarian/store.sqlite}"
+    fi
 
     # Standard binaries. Keep this in sync with the tools promised to the
     # running mind in README.md and the stock identity prompt: a host-only tool

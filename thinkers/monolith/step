@@ -311,6 +311,22 @@ if [[ "$project_mode" -eq 1 ]]; then
         exit 0
     fi
     rm -f "$state_dir/project_budget_paused"
+    # Budget hold: near the daily cap, ordinary timer wakes make no model call
+    # (see _project_should_hold); rituals, matured defaults and human answers
+    # still run. One step marks the start of each hold.
+    if _project_should_hold "$wake_mode"; then
+        if [[ ! -f "$state_dir/project_budget_held" ]]; then
+            : > "$state_dir/project_budget_held"
+            jq -nc --arg c "budget hold (last project day: $(_project_fmt "$(_project_tokens_24h)") of $(_project_fmt "$(_project_cap_daily)"), hold line $(_project_fmt "$(_project_hold_line)")); ordinary wakes skip the model until usage falls, rituals still run" \
+                '{type:"idle", source:"monolith", reason:"budget-hold", content:$c}' | traj append >/dev/null 2>&1 || true
+        fi
+        _project_write_summary || true
+        _project_commit "budget hold: no wake" || true
+        next_delay=$(_pj_real_span "${PROJECT_BUDGET_HOLD_CHECK:-600}" 2>/dev/null) || next_delay=600
+        printf '  project budget hold: no model call; next check in %ss\n' "$next_delay" >&2
+        exit 0
+    fi
+    rm -f "$state_dir/project_budget_held"
     # Resting is free: blocked or done with nothing due, a timer wake makes
     # no model call (see _project_should_skip_rest).
     if _project_should_skip_rest "$wake_mode"; then
@@ -499,6 +515,7 @@ fi
 project_ledger_before=0
 if [[ "$project_mode" -eq 1 ]]; then
     project_ledger_before=$(_project_ledger_lines) || project_ledger_before=0
+    project_head_before=$(_project_head)
     # blind, inside the sandbox, sums the ledger past this mark and refuses
     # to start once the wake has spent its ceiling.
     project_wake_ceiling=$(_project_wake_ceiling) || project_wake_ceiling=0
@@ -636,6 +653,20 @@ did_thought=0
 # Any durable step (either tier) gates the fallback idle/error marker below.
 did_work=0
 [[ "$did_visible" -eq 1 || "$did_thought" -eq 1 ]] && did_work=1
+# Project mode: a spontaneous wake that changed no project work file is a rest
+# for pacing, whatever tools it ran (see _project_wake_changed). did_work keeps
+# its meaning: the run still left durable steps.
+if [[ "$project_mode" -eq 1 && "$wake_mode" != reactive ]]; then
+    if _project_wake_changed "${project_head_before:-}"; then
+        _project_note_wake work
+    else
+        _project_note_wake idle
+        if [[ "$did_visible" -eq 1 ]]; then
+            did_visible=0
+            printf '  project: no project file changed, counted as a rest (idle streak %s)\n' "$(_project_idle_streak)" >&2
+        fi
+    fi
+fi
 
 # Classify a no-durable-work run: a FAILED run (rc != 0) is not the same as a
 # calm decision to idle. Record the failure as a visible `error` step instead of

@@ -8,6 +8,7 @@ is hit, a COVERAGE line, 0–4 LIBRARIAN NOTES, and the request id.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -20,6 +21,7 @@ PREF_SHARE = 8
 PREF_CAP = 1000
 COVERAGE_EXTRA = 5
 NOTES_MAX = 4
+EPISODE_KEY_CHARS = 60
 
 MARK_CORE = "[IDENTITY: CORE]"
 MARK_WORKING = "[IDENTITY: WORKING]"
@@ -135,6 +137,16 @@ def _task_text(node: model.Node, body: str, truncated: bool) -> str:
     return head
 
 
+def _episode_key(node: model.Node) -> str:
+    """Near-duplicate key for an episode: the letters of its summary, cut to a prefix.
+
+    Repeated no-op wakes ("Rest: day budget nearly spent ($186.39/$200) ...") differ only in
+    their numbers; packing one of them says as much as packing all of them.
+    """
+    s = re.sub(r"[^a-z]+", " ", (node.summary or "").lower())
+    return s.strip()[:EPISODE_KEY_CHARS]
+
+
 def _conflicted_working(store: db.Store) -> set:
     out = set()
     for item in queue.list_items(store, "pending", "working_conflict"):
@@ -213,7 +225,9 @@ def build(store: db.Store, req: PackRequest) -> Pack:
         elif n.type == "preference":
             prefs_all.append(n)
 
-    # Preferences: relevant by tag overlap or applies_to, within a small share.
+    # Preferences: relevant by tag overlap or applies_to, within a small share. One tagged only
+    # team:* (a stated team value, e.g. from preferences.md) has no narrower scope, so it applies
+    # to every wake, after the tag-matched ones.
     qtags = set(q.tags)
     pref_budget = min(PREF_CAP, budget // PREF_SHARE)
     prefs: list[Entry] = []
@@ -221,7 +235,8 @@ def build(store: db.Store, req: PackRequest) -> Pack:
     for n in prefs_all:
         tj = model.jaccard(qtags, n.tags) if qtags else 0.0
         applies = any(e["type"] == "applies_to" and e["to"][4:] in qtags for e in model.node_edges(store, n.id)) if qtags else False
-        if tj > 0 or applies or not qtags:
+        team_wide = bool(n.tags) and all(t.startswith("team:") for t in n.tags)
+        if tj > 0 or applies or not qtags or team_wide:
             scored.append((tj + (0.5 if applies else 0.0), n))
     scored.sort(key=lambda x: (-x[0], x[1].created))
     pused = 0
@@ -238,11 +253,17 @@ def build(store: db.Store, req: PackRequest) -> Pack:
     task: list[Entry] = []
     truncated_ids: list[str] = []
     exclude = set(req.exclude_ids)
+    episode_keys: set[str] = set()
     untrusted = False
     for i, r in enumerate(ranked, start=1):
         n = r.node
         if n.id in exclude:
             continue
+        if n.type == "episode":
+            key = _episode_key(n)
+            if key in episode_keys:
+                continue
+            episode_keys.add(key)
         remaining = usable - used
         if remaining < MIN_REMAINING:
             break
@@ -337,7 +358,9 @@ def render_text(pack: Pack) -> str:
     out.append(f"{MARK_COVERAGE} {cov} — pull with `librarian search --tags … --text …` for anything else; `librarian fetch <id>` for a body")
     out.append(MARK_NOTES)
     out += [f"- {n}" for n in pack.notes]
-    out.append(f"{MARK_REQUEST} {pack.request_id}")
+    # Say what the id is: next to the COVERAGE line's "`librarian fetch <id>`"
+    # hint, live minds took it for a memory id and fetched it every wake.
+    out.append(f"{MARK_REQUEST} {pack.request_id} (this pack's request id, for the runtime; not a memory, so not fetchable)")
     return "\n".join(out)
 
 

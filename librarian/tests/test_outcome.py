@@ -11,13 +11,16 @@ class OutcomeRuleTest(unittest.TestCase):
     def test_table_in_order(self):
         self.assertEqual(outcome.decide_outcome(ev(ritual="daily 2026-10-01", ritual_output_written=True, rc=1))[:2], ("success", "ritual daily output written"))
         oc, crit, ov = outcome.decide_outcome(ev(review_verdicts=[{"file": "reviews/x.md", "verdict": "SURVIVES", "ids": ["A" * 26]}], final="done"))
-        self.assertEqual((oc, crit), ("success", "adversary review SURVIVES: reviews/x.md"))
+        self.assertEqual((oc, crit), ("partial", "adversary review SURVIVES: reviews/x.md"))
         self.assertEqual(ov, {"A" * 26: "success"})
         oc, crit, ov = outcome.decide_outcome(ev(review_verdicts=[{"file": "reviews/y.md", "verdict": "BROKEN", "ids": ["B" * 26]}], final="done", journal_dirty=True))
-        self.assertEqual(oc, "failure")
+        self.assertEqual((oc, crit), ("partial", "adversary review BROKEN: reviews/y.md"))
         self.assertEqual(ov, {"B" * 26: "failure"})
         self.assertEqual(outcome.decide_outcome(ev(stderr_tail="Max iterations (25) reached without final answer", rc=1))[:2], ("failure", "step cap reached without FINAL"))
         self.assertEqual(outcome.decide_outcome(ev(rc=2))[:2], ("failure", "run failed (rc=2)"))
+        api = "shellm: error: llm failed (exit 1): llm: error: API error (HTTP 503): Bedrock is unable to process your request."
+        self.assertEqual(outcome.decide_outcome(ev(rc=1, stderr_tail=api))[:2], ("partial", "run cut off by model API failure (rc=1)"))
+        self.assertEqual(outcome.decide_outcome(ev(rc=1, stderr_tail="Traceback: API error (HTTP 404) from my script"))[:2], ("failure", "run failed (rc=1)"))
         oc, crit, ov = outcome.decide_outcome(ev(recurred=[{"signature": "boom", "skill_id": "C" * 26}], final="x"))
         self.assertEqual((oc, crit), ("failure", "failure recurred: boom"))
         self.assertEqual(ov, {"C" * 26: "failure"})
@@ -72,6 +75,15 @@ class TrajectoryTest(unittest.TestCase):
     def test_single_failure_not_resolved(self):
         steps = self.steps()[2:]
         self.assertEqual(outcome.detect_resolved_failures(steps), [])
+
+    def test_mixed_review_credits_each_memory_by_its_own_verdict(self):
+        good, bad, other = "01J9W8K2M3N4P5Q6R7S8T9V0WX", "01J9W8K2M3N4P5Q6R7S8T9V0WY", "01J9W8K2M3N4P5Q6R7S8T9V0WZ"
+        text = f"BROKEN: claim 3 fails.\n(1) SURVIVES\n(3) BROKEN, see {other}\nMemories SURVIVES: {good}\nMemories BROKEN: {bad}\n"
+        v = outcome.review_verdicts({"reviews/m.md": text})
+        self.assertEqual([(x["verdict"], x["ids"]) for x in v], [("SURVIVES", [good]), ("BROKEN", [bad])])
+        oc, crit, ov = outcome.decide_outcome(ev(review_verdicts=v, final="x", journal_dirty=True))
+        self.assertEqual((oc, crit), ("partial", "adversary review mixed: reviews/m.md"))
+        self.assertEqual(ov, {good: "success", bad: "failure"})
 
     def test_find_ulids_and_verdicts(self):
         self.assertEqual(outcome.find_ulids("see 01J9W8K2M3N4P5Q6R7S8T9V0WX and again 01J9W8K2M3N4P5Q6R7S8T9V0WX"), ["01J9W8K2M3N4P5Q6R7S8T9V0WX"])

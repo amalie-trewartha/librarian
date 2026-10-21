@@ -187,7 +187,9 @@ _project_questions() {
         /^### / { flush(); next }
         t != "" && /^Blocking:/ { b = tolower($2) }
         t != "" && /^Default-by:/ { db = $2 }
-        t != "" && /^Default:/ { df = clean(substr($0, 9)) }
+        # "Default (revised 2026-10-16): ..." counts too; the last one wins. On a live
+        # run a revised default showed as "none given" in the status view.
+        t != "" && /^Default( *\([^)]*\))?:/ { x = $0; sub(/^Default( *\([^)]*\))?:/, "", x); df = clean(x) }
         t != "" && /^Answer:/ { an = clean(substr($0, 8)); if (an ~ /^\((filled in by a human|a human writes|none)/) an = ""; al = NR }   # () = the template placeholder
         t != "" && /^Resolution:/ { rs = clean(substr($0, 12)) }
         END { flush() }' "$q"
@@ -233,6 +235,26 @@ _project_question_rows() {
     done < <(_project_questions)
 }
 
+# The default to apply early because the mind is fully blocked (STATE blocked):
+# the earliest-dated open question, non-blocking ones first, then blocking.
+# Nothing while a default is already due or a human answer is waiting, and
+# never for "Default-by: never". Defaults otherwise wait for their date, which
+# the charter sets a few days out; a live run sat idle for 5 h behind defaults
+# 4-6 days away. One per wake: the next wake pulls the next if still blocked.
+# Prints id<US>title<US>default-by, or nothing. PROJECT_BLOCKED_DEFAULT=0 = off.
+_project_blocked_default() {
+    [[ "${PROJECT_BLOCKED_DEFAULT:-1}" != 0 && "$(_project_state)" == blocked ]] || return 0
+    local today; today=$(_pj_date "$(_pj_now)" %F)
+    _project_question_rows | awk -F'\037' -v today="$today" '
+        $2 == "human-waiting" { due = 1 }
+        $2 == "open" && $7 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ {
+            if ($7 <= today) due = 1
+            k = ($6 == "yes" ? "1" : "0") $7
+            if (pick == "" || k < best) { best = k; pick = $1 "\037" $3 "\037" $7 }
+        }
+        END { if (!due && pick != "") print pick }'
+}
+
 # The questions block for human-facing status: every open question, loudly,
 # for as long as it is open. $1 = "brief" for a one-screen version.
 _project_question_banner() {
@@ -240,7 +262,8 @@ _project_question_banner() {
     today=$(_pj_date "$(_pj_now)" %F)
     rows=$(_project_question_rows)
     open=$(printf '%s\n' "$rows" | awk -F'\037' '$2 == "open" || $2 == "human-waiting"' | grep -c . || true)
-    local name="${IDENTITY_NAME:-<name>}"
+    local name="${IDENTITY_NAME:-<name>}" early
+    early=$(_project_blocked_default | cut -d$'\037' -f1)
     if (( open == 0 )); then
         printf 'Open questions: none.\n'
     else
@@ -250,6 +273,7 @@ _project_question_banner() {
                 open)
                     if [[ -z "$db" ]]; then when="no default date set"
                     elif [[ "$db" == never ]]; then when="will NOT default; blocked until a human answers"
+                    elif [[ -n "$early" && "$id" == "$early" ]]; then when="the agent is blocked, so it applies this default at its next wake (date was $db)"
                     elif [[ "$db" > "$today" ]]; then when="default applies on $db"
                     else when="default due now ($db); the agent will apply it"; fi
                     printf '  %s%s  %s\n      opened %s; %s\n      default: %s\n' "$id" "$([[ "$b" == yes ]] && printf ' [BLOCKING]')" "$t" "${op:-?}" "$when" \
@@ -358,6 +382,37 @@ _project_over_budget() {
     if (( total > 0 )) && (( $(_project_tokens_total) >= total )); then return 0; fi
     (( cap > 0 )) || return 1
     (( $(_project_tokens_24h) >= cap ))
+}
+
+# Budget hold: a free pause before the hard cap. On the live trial
+# (2026-10-15/16) the mind chose to rest at about 90% of the daily dollar cap
+# to keep the rest for rituals, but STATE stayed active, so every rest wake was
+# a full model call: about $0.27 every 5 minutes, 127 rest wakes overnight
+# against 8 that worked, about $3/h. The runtime now keeps that reserve
+# itself. At PROJECT_BUDGET_HOLD of the daily cap (a fraction, default 0.9;
+# 0 or 1 or more = off) a timer wake makes no model call unless a ritual, a
+# matured default or a human answer is due, and checks again every
+# PROJECT_BUDGET_HOLD_CHECK project seconds (default 600). The cap is a
+# rolling day, so work resumes as soon as spend falls back under the line.
+_project_hold_line() {  # the hold line in budget units; 0 = no hold
+    local cap; cap=$(_project_cap_daily)
+    (( cap > 0 )) || { printf '0'; return 0; }
+    awk -v c="$cap" -v f="${PROJECT_BUDGET_HOLD:-0.9}" 'BEGIN { if (f+0 > 0 && f+0 < 1) printf "%d", c * f; else printf "0" }'
+}
+_project_budget_hold() {
+    local line; line=$(_project_hold_line)
+    (( line > 0 )) || return 1
+    (( $(_project_tokens_24h) >= line ))
+}
+# Should this wake skip the model for the budget hold? $1 = wake mode: a
+# reactive wake (someone wrote to the mind) always runs.
+_project_should_hold() {
+    [[ "${1:-}" == reactive ]] && return 1
+    _project_budget_hold || return 1
+    [[ -n "$(_project_due_ritual)" ]] && return 1
+    local sig; sig=$(_project_signals)
+    [[ "$sig" == *"- DEFAULT DUE"* || "$sig" == *"- HUMAN ANSWER"* ]] && return 1
+    return 0
 }
 
 # The ritual due now, if any, as "<kind> <arg>": "weekly 03", "daily
@@ -497,6 +552,12 @@ _project_signals() {
     if [[ -n "$matured" ]]; then
         printf -- '- DEFAULT DUE: no human answered %s by its date. Apply its default now: record the call and its risk in project-memory.md under "Interpretation calls made without a human", add a "Resolution: YYYY-MM-DD default applied: <the default used>" line, mark it STATUS: defaulted, and unpark the work behind it.\n' "$matured"
     fi
+    local early eid et edb
+    early=$(_project_blocked_default)
+    if [[ -n "$early" ]]; then
+        IFS=$'\037' read -r eid et edb <<< "$early"
+        printf -- '- DEFAULT DUE (early): STATE is blocked, so instead of idling until %s you apply the earliest open default now: %s "%s". Record the call and its risk in project-memory.md under "Interpretation calls made without a human", add a "Resolution: YYYY-MM-DD default applied early (agent blocked): <the default used>" line, mark it STATUS: defaulted, and unpark the work behind it. If nothing can move after that, keep STATE blocked and the next wake brings the next default forward.\n' "$edb" "$eid" "$et"
+    fi
     [[ -n "$unverified" ]] && printf -- '- QUESTION RECORD WRONG: %s is marked answered, but no human wrote its Answer line. Only a human answers. If you applied a default, mark it STATUS: defaulted with a Resolution line; otherwise set it back to open.\n' "$unverified"
     [[ -n "$nodef" ]] && printf -- '- These open questions have no Default-by line, so they can never resolve without a human: %s. Add a default and a date (or Default-by: never, on purpose).\n' "$nodef"
     (( open > 0 )) && printf -- '- Questions: %s open, %s blocking. Humans see every open question in their status view. Work an unblocked thread while they wait.\n' "$open" "$blocking"
@@ -526,6 +587,11 @@ _project_signals() {
             jm=$(_pj_mtime "$d/journal.md"); [[ -n "$jm" ]] || jm="$now"
             if (( now - jm > stall_h * 3600 )); then
                 printf -- '- STALL: STATE is active but the journal has not changed in %sh. Re-read the spec, pick the smallest checkable next step and do it, or write the blocker to questions.md and set STATE to blocked. Do not keep circling.\n' $(( (now - jm) / 3600 ))
+            fi
+            local idle_n nudge="${PROJECT_IDLE_NUDGE:-2}"
+            idle_n=$(_project_idle_streak)
+            if [[ "$nudge" =~ ^[0-9]+$ ]] && (( nudge > 0 && idle_n >= nudge )); then
+                printf -- '- IDLE: your last %s wakes changed no project file (STATE, librarian.md and questions-summary.md do not count), and each was a paid model call. The runtime now spaces these wakes out. If every thread is parked behind a question or a default date, set STATE to blocked: a blocked mind rests for free, still wakes for rituals, human answers and due defaults, and the runtime applies the earliest open default early. Set STATE back to active when something can move.\n' "$idle_n"
             fi ;;
     esac
     local wceil; wceil=$(_project_wake_ceiling)
@@ -546,8 +612,17 @@ _project_signals() {
         used=$(_project_tokens_24h)
         if (( used >= cap )); then
             printf -- '- BUDGET SPENT: %s of %s used in the last project day. Wakes are slowed until usage falls. Do only rituals and the cheapest essential work; prefer idle.\n' "$(_project_fmt "$used")" "$(_project_fmt "$cap")"
-        elif (( used * 10 >= cap * 8 )); then
-            printf -- '- BUDGET: %s of %s for the day used. Favor cheap, high-value steps.\n' "$(_project_fmt "$used")" "$(_project_fmt "$cap")"
+        else
+            local line; line=$(_project_hold_line)
+            if (( line > 0 && used >= line )); then
+                printf -- '- BUDGET HOLD: %s of %s for the day used, past the %s hold line. Ordinary wakes are paused for free and the rest is kept for rituals; this wake runs because a ritual, a default or a human answer is due. Do that, cheaply, and nothing else.\n' "$(_project_fmt "$used")" "$(_project_fmt "$cap")" "$(_project_fmt "$line")"
+            elif (( used * 10 >= cap * 8 )); then
+                if (( line > 0 )); then
+                    printf -- '- BUDGET: %s of %s for the day used. Favor cheap, high-value steps. At %s the runtime pauses ordinary wakes for free and keeps the rest for rituals, so keep working until then: do not rest to save budget, because a rest wake costs as much as a cheap step.\n' "$(_project_fmt "$used")" "$(_project_fmt "$cap")" "$(_project_fmt "$line")"
+                else
+                    printf -- '- BUDGET: %s of %s for the day used. Favor cheap, high-value steps.\n' "$(_project_fmt "$used")" "$(_project_fmt "$cap")"
+                fi
+            fi
         fi
     fi
     return 0
@@ -597,8 +672,65 @@ _project_delay_floor() {  # _project_delay_floor [tokens-this-wake]
                 local rest; rest=$(_pj_real_span "${PROJECT_REST:-3600}")
                 (( floor < rest )) && floor=$rest
             fi ;;
+        *)
+            # An active mind whose last wakes changed nothing waits too,
+            # unless something is due that it should act on at once.
+            local idle; idle=$(_project_idle_floor)
+            if (( idle > floor )); then
+                local sig; sig=$(_project_signals)
+                if [[ -z "$(_project_due_ritual)" && "$sig" != *"- DEFAULT DUE"* && "$sig" != *"- HUMAN ANSWER"* ]]; then
+                    floor=$idle
+                fi
+            fi ;;
     esac
     printf '%s' "$floor"
+}
+
+# Idle wakes. A wake that ran tools but changed no project work file (only
+# STATE, librarian.md or questions-summary.md, which every rest touches) is a
+# rest, however many commands it ran. Any tool call counts as visible work for
+# the backoff, so spontaneous rests came back to back at next delay 0: about 50
+# paid wakes an hour on the second live run once the mind ran out of unparked
+# work. The step counts such wakes in run/project_idle_streak; the streak floors
+# the next delay and, from PROJECT_IDLE_NUDGE on, adds an IDLE signal that
+# points at the free blocked rest.
+_PJ_IDLE_IGNORE=" STATE librarian.md questions-summary.md "
+_project_head() { git -C "$(_project_dir)" rev-parse -q --verify HEAD 2>/dev/null || true; }
+_project_wake_changed() {  # _project_wake_changed <HEAD before the wake>: 0 if a work file changed
+    local d before="${1:-}" files f
+    d=$(_project_dir)
+    [[ -d "$d/.git" ]] || return 0
+    files=$(git -C "$d" status --porcelain -uall 2>/dev/null | cut -c4-) || files=""
+    if [[ -n "$before" ]]; then
+        files+=$'\n'$(git -C "$d" diff --name-only "$before" HEAD 2>/dev/null) || true
+    fi
+    while IFS= read -r f; do
+        f=${f##* -> }; f=${f#\"}; f=${f%\"}
+        [[ -z "$f" || "$_PJ_IDLE_IGNORE" == *" $f "* ]] && continue
+        return 0
+    done <<< "$files"
+    return 1
+}
+_project_idle_streak() {
+    local n; n=$(cat "$IDENTITY_DIR/run/project_idle_streak" 2>/dev/null) || n=0
+    [[ "$n" =~ ^[0-9]+$ ]] || n=0
+    printf '%s' "$n"
+}
+_project_note_wake() {  # _project_note_wake idle|work
+    local n=0
+    [[ "${1:-}" == idle ]] && n=$(( $(_project_idle_streak) + 1 ))
+    mkdir -p "$IDENTITY_DIR/run" 2>/dev/null && printf '%s' "$n" > "$IDENTITY_DIR/run/project_idle_streak" 2>/dev/null || true
+}
+# Delay after the latest idle wake: PROJECT_IDLE_FLOOR project seconds (600),
+# doubling with each further idle wake up to PROJECT_IDLE_CAP (1800). 0 = off.
+_project_idle_floor() {
+    local n base="${PROJECT_IDLE_FLOOR:-600}" cap="${PROJECT_IDLE_CAP:-1800}" d i=1
+    n=$(_project_idle_streak)
+    [[ "$base" =~ ^[0-9]+$ && "$cap" =~ ^[0-9]+$ ]] && (( base > 0 && n > 0 )) || { printf 0; return 0; }
+    d=$base
+    while (( i < n && d < cap )); do d=$(( d * 2 )); i=$(( i + 1 )); done
+    (( d > cap )) && d=$cap
+    _pj_real_span "$d"
 }
 
 # Should this timer wake skip the model entirely? Resting must be free: a

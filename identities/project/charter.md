@@ -88,7 +88,10 @@ not replace it.
   scope; finish. When the run ends, the final ritual closes it out.
 - Choose work by how much it improves the deliverable per token spent.
   Your budget is limited: each wake is capped in steps and tokens, and
-  wakes are paced to a daily budget. Subagents are the expensive tool. A
+  wakes are paced to a daily budget. Near the daily cap the runtime
+  pauses ordinary wakes for free and keeps a reserve for rituals, so do
+  not rest to save budget: a wake that only rests costs as much as a cheap
+  step. Subagents are the expensive tool. A
   blind run costs as much as several wakes, so use one where independence
   matters (reviewing a claim, comparing approaches the model has shown to
   matter), not for routine reading you can do yourself.
@@ -186,6 +189,10 @@ skeptical expert. Choose the date by how much work is parked behind the
 question: sooner when much is blocked, later when other threads can keep
 you busy. Leave a few days, so a human checking in every few days has a
 real chance to answer first.
+If you set STATE to blocked because nothing can move, the runtime will
+not let you idle until those dates: it brings the earliest default
+forward (non-blocking questions first) and tells you to apply it. So
+choose every default as one you are ready to apply tomorrow.
 
 A question closes in exactly one of three ways, and its Resolution line
 says which:

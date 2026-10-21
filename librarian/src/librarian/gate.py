@@ -4,7 +4,8 @@ Rules (spec, "Capture"): a summary that answers "when would I want this?"
 in ≤ 60 tokens and does not repeat the body's first sentence; at least one
 namespaced tag; no near-duplicate (or the write becomes a supersession or a
 ``co_retrieved`` link instead); specifics in the body; provenance that
-points somewhere real. New nodes enter ``probationary``.
+points somewhere real. New nodes enter ``probationary``. A fact (a sourced,
+checkable finding) must also name where it came from: a URL, a DOI or a file.
 """
 
 from __future__ import annotations
@@ -17,11 +18,16 @@ from . import db, model, queue
 
 NEAR_DUP_SUMMARY = 0.6
 NEAR_DUP_BODY = 0.8
-SPECIFICS_TYPES = ("skill", "decision", "retrospective")
+SPECIFICS_TYPES = ("skill", "decision", "fact", "retrospective")
 
 _DIGIT = re.compile(r"\d")
 _PATH = re.compile(r"(?:^|\s|\()(?:~|\.{0,2})?/[\w.\-]+(?:/[\w.\-]+)*")
 _BACKTICK = re.compile(r"`[^`\n]+`")
+# A fact's source: a URL, a DOI, or a file path with an extension
+# (sources/nhts2022.md, /data/x.csv), relative paths included.
+_SOURCE = re.compile(
+    r"https?://\S+|\bdoi:\s*10\.\d{4,}/\S+|\b10\.\d{4,}/\S+|(?:^|[\s(`'\"])(?:~|\.{1,2})?/?[\w.\-]+(?:/[\w.\-]+)*\.[A-Za-z0-9]{1,8}\b"
+)
 _COMMAND = re.compile(
     r"(?m)^\s*(?:\$ |(?:sudo |env |time )?(?:git|pip3?|uv|python3?|colcon|cmake|make|docker|npm|cargo|curl|grep|ls|cd|"
     r"pytest|bash|sh|jq|awk|sed|traj|mem|llm|shellm|blind|delegate|librarian|librarian-\w+)\b)"
@@ -79,6 +85,10 @@ class GateResult:
         }
 
 
+def has_source(body: str) -> bool:
+    return bool(_SOURCE.search(body or ""))
+
+
 def has_specifics(body: str) -> bool:
     return bool(_DIGIT.search(body) or _PATH.search(body) or _BACKTICK.search(body) or _COMMAND.search(body))
 
@@ -113,6 +123,8 @@ def check(store: db.Store, cand: Candidate) -> list[str]:
             pass
     if cand.type in SPECIFICS_TYPES and not has_specifics(body):
         reasons.append("body needs specifics (a command, path, version, number or `backticked` name), not the lesson alone")
+    if cand.type == "fact" and not has_source(body):
+        reasons.append("a fact's body must name its source: a URL, a DOI, or the file it was read or computed from")
     if cand.type != "episode" and body and model.estimate_tokens(body) > model.BODY_MAX_TOKENS * 6:
         reasons.append(f"body is far over {model.BODY_MAX_TOKENS} tokens; split it into separate memories")
     author = cand.author

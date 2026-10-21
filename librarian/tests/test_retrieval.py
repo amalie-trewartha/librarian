@@ -114,6 +114,25 @@ class RankTest(StoreCase):
         ranked, _, _ = rank.rank(self.store, cands, recall.Query(tags=["pkg:y"]))
         self.assertEqual(ranked[0].node.id, c)
 
+    def test_reuse_counts_only_uses_with_evidence(self):
+        packed = self.skill("skill packed often", ["pkg:x"])
+        proven = self.skill("skill proven once", ["pkg:x"])
+        for _ in range(5):
+            self.episode("partial", [packed])
+        self.episode("success", [proven])
+        self.assertEqual(self.node(packed).use_count, 5)
+        self.assertEqual(rank.reuse(self.node(packed)), 0.0)
+        self.assertGreater(rank.reuse(self.node(proven)), 0.0)
+
+    def test_fact_has_phase_prior(self):
+        f = self.add("fact", "fare elasticity -0.40 (TRL593 Table 6.4)", ["area:transit"], body="Source: TRL593 Table 6.4, p. 112.")
+        e = self.add("episode", "fare elasticity -0.40 (TRL593 Table 6.4)", ["area:transit"], body="Source: TRL593 Table 6.4, p. 112.")
+        for phase in ("building", "reviewing"):
+            self.assertGreater(rank.prior(rank.PRIORS, "fact", phase), rank.prior(rank.PRIORS, "episode", phase))
+            _, cands = recall.recall(self.store, recall.Query(tags=["area:transit"], phase=phase))
+            ranked, _, _ = rank.rank(self.store, cands, recall.Query(tags=["area:transit"], phase=phase))
+            self.assertEqual([r.node.id for r in ranked[:2]], [f, e], phase)
+
     def test_priors_override_from_meta(self):
         with self.store.write():
             self.store.meta_set("rank.priors", '{"skill": {"planning": 5.0}}')
@@ -176,6 +195,14 @@ class PackTest(StoreCase):
         self.assertIn(self.p1, text)
         self.assertNotIn(self.p2, text)  # no tag overlap with the request
 
+    def test_team_wide_preference_reaches_every_pack(self):
+        p3 = self.pref("Cite primary sources.", ["team:robotics-sw"])
+        pk = pack.build(self.store, self.req())
+        ids = [e.node.id for e in pk.preferences]
+        self.assertIn(p3, ids)
+        self.assertNotIn(self.p2, ids)  # scoped to area:tooling, still filtered
+        self.assertEqual(ids[0], self.p1)  # tag-matched first
+
     def test_identity_section_is_byte_stable(self):
         a = pack.build(self.store, self.req())
         self.at("2026-10-05T00:00:00Z")
@@ -214,6 +241,17 @@ class PackTest(StoreCase):
         joined = " ".join(pk.notes)
         self.assertIn("disputed:", joined)
         self.assertIn("UNTRUSTED", joined)
+
+    def test_near_duplicate_episodes_packed_once(self):
+        # Live trial 2026-10-15: under the day-budget cap the mind woke every few minutes to rest,
+        # and 9 of 17 task rows were "Rest: day budget nearly spent ($186.39/$200) ..." variants.
+        tags = ["pkg:colcon", "area:build-system"]
+        rest = [self.episode("partial", [], summary=f"Rest: day budget nearly spent (${186 + i}.{i}9/$200){';' if i % 2 else '.'} STATE refreshed, no other changes.", tags=tags).episode_id for i in range(6)]
+        work = self.episode("partial", [], summary="Fixed the colcon eigen link error by pinning Eigen 3.4.", tags=tags).episode_id
+        pk = pack.build(self.store, self.req(budget=8000))
+        ids = pk.ids("task")
+        self.assertEqual(sum(1 for r in rest if r in ids), 1)
+        self.assertIn(work, ids)
 
     def test_working_under_conflict_not_rendered(self):
         from librarian import queue

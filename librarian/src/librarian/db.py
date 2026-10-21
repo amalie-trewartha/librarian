@@ -19,7 +19,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
-SCHEMA_VERSION = 1
+# 2: nodes.type gains 'fact' (a sourced, checkable finding). Store.open
+# migrates a version-1 store in place (_migrate).
+SCHEMA_VERSION = 2
 
 
 class StoreError(Exception):
@@ -77,9 +79,9 @@ def _started_at(env: dict) -> Optional[float]:
     v = env.get("PROJECT_STARTED_AT", "").strip()
     if v.isdigit():
         return float(v)
-    ident = env.get("IDENTITY_DIR", "")
+    ident = identity_dir(env)
     if ident:
-        p = Path(ident) / "project-pristine" / "started_at"
+        p = ident / "project-pristine" / "started_at"
         try:
             return float(p.read_text().strip())
         except (OSError, ValueError):
@@ -195,6 +197,26 @@ def is_ulid(s: str) -> bool:
 # ── store ────────────────────────────────────────────────────────────────────
 
 
+def identity_dir(env: Optional[dict] = None) -> Optional[Path]:
+    """The identity directory: IDENTITY_DIR, else the one LIBRARIAN_STORE sits
+    in when it has the standard <identity>/librarian/store.sqlite layout.
+
+    Inside the shellm sandbox only LIBRARIAN_STORE is passed (a directory
+    --var would change the container's mounts and force a new container), so
+    the mind's own librarian calls find the wake's request file this way.
+    """
+    e = os.environ if env is None else env
+    ident = e.get("IDENTITY_DIR", "").strip()
+    if ident:
+        return Path(ident)
+    p = e.get("LIBRARIAN_STORE", "").strip()
+    if p:
+        sp = Path(p)
+        if sp.name == "store.sqlite" and sp.parent.name == "librarian":
+            return sp.parent.parent
+    return None
+
+
 def default_store_path(env: Optional[dict] = None) -> Optional[Path]:
     e = os.environ if env is None else env
     p = e.get("LIBRARIAN_STORE", "").strip()
@@ -211,7 +233,7 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS nodes (
   id TEXT PRIMARY KEY,
-  type TEXT NOT NULL CHECK (type IN ('skill','decision','retrospective','preference',
+  type TEXT NOT NULL CHECK (type IN ('skill','decision','fact','retrospective','preference',
                                      'identity_core','identity_working','episode')),
   summary TEXT NOT NULL,
   body TEXT NOT NULL DEFAULT '',
@@ -482,7 +504,46 @@ class Store:
                 store.conn.execute("SELECT 1 FROM meta LIMIT 1").fetchone()
             except sqlite3.DatabaseError as exc:
                 raise StoreError(f"store at {p} is not a librarian store: {exc}") from exc
+        store._migrate()
         return store
+
+    def _migrate(self) -> None:
+        """Bring an older store up to SCHEMA_VERSION, in place.
+
+        1 → 2: the ``nodes.type`` CHECK gains 'fact'. SQLite cannot alter a
+        CHECK, so the table is rebuilt the documented way (foreign keys off,
+        new table, copy, drop, rename, foreign_key_check) in one transaction.
+        A live run's host step and sandbox may open the store at once: the
+        version is re-read under the write lock, so only one migrates.
+        """
+        try:
+            v = int(self.meta_get("schema_version") or 1)
+        except ValueError:
+            v = 1
+        if v >= SCHEMA_VERSION:
+            return
+        self.conn.execute("PRAGMA foreign_keys=OFF")
+        try:
+            with self.write():
+                v = int(self.meta_get("schema_version") or 1)
+                if v < 2:
+                    row = self.conn.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'nodes'").fetchone()
+                    if row is not None and "'fact'" not in row[0]:
+                        create = next(st for st in SCHEMA.split(";") if "CREATE TABLE IF NOT EXISTS nodes (" in st)
+                        self.conn.execute(create.replace("CREATE TABLE IF NOT EXISTS nodes (", "CREATE TABLE nodes_v2 ("))
+                        cols = ", ".join(r[1] for r in self.conn.execute("PRAGMA table_info(nodes)"))
+                        self.conn.execute(f"INSERT INTO nodes_v2 ({cols}) SELECT {cols} FROM nodes")
+                        self.conn.execute("DROP TABLE nodes")
+                        self.conn.execute("ALTER TABLE nodes_v2 RENAME TO nodes")
+                        for st in SCHEMA.split(";"):
+                            if "CREATE INDEX" in st and " ON nodes(" in st:
+                                self.conn.execute(st)
+                        bad = self.conn.execute("PRAGMA foreign_key_check").fetchall()
+                        if bad:
+                            raise StoreError(f"migration to schema 2 broke {len(bad)} foreign keys; rolled back")
+                    self.meta_set("schema_version", "2")
+        finally:
+            self.conn.execute("PRAGMA foreign_keys=ON")
 
     def close(self) -> None:
         self.conn.close()

@@ -166,6 +166,8 @@ cp "$P/questions.md" "$WORK/q.saved"
 printf '\n### 2026-10-04 — Unnumbered, written mid-wake — STATUS: open\nBlocking: no\nDefault-by: 2026-10-30\nAnswer:\n' >> "$P/questions.md"
 has "an unnumbered question with no answer is open, not human-answered" "$(_project_question_rows | tr '\037' '\t')" "Q?	open	Unnumbered"
 hasnt "no bogus HUMAN ANSWER signal for it" "$(_project_signals)" "HUMAN ANSWER"
+printf '\n### Q9 — 2026-10-04 — Revised default — STATUS: open\nBlocking: no\nDefault: old guess\nDefault (revised 2026-10-05): H = 0.47\nDefault-by: 2026-10-30\nAnswer:\n' >> "$P/questions.md"
+has "a revised Default line is the default humans see" "$(_project_question_rows | tr '\037' '\t' | grep '^Q9')" "default: H = 0.47"
 cp "$WORK/q.saved" "$P/questions.md"
 has "questions parsed with id, title, status, blocking, default-by" "$q" "Q1	Discount rate	open	yes	2026-10-05"
 eq "placeholder Answer counts as no answer" "$(printf '%s\n' "$q" | grep '^Q1' | cut -f7)" ""
@@ -240,14 +242,76 @@ _project_should_skip_rest spontaneous && bad "blocked: first rest wake runs the 
 _project_should_skip_rest spontaneous && ok "blocked: later rest wakes the same day skip it" || bad "blocked: later rest wakes the same day skip it"
 PROJECT_NOW=$((PROJECT_NOW + 90000)) _project_should_skip_rest spontaneous && bad "blocked: a day later it checks again" || ok "blocked: a day later it checks again"
 has "blocked signal" "$(_project_signals)" "STATE is blocked"
+# Fully blocked: the earliest default is pulled forward, non-blocking first.
+# (A live run idled 5 h behind defaults 4-6 days out.)
+cat >> "$P/questions.md" <<'EOF'
+
+### 2026-10-06 — Plant size — STATUS: open
+Blocking: yes
+Default: 100 MW
+Default-by: 2026-10-08
+
+### 2026-10-06 — Capacity factor — STATUS: open
+Blocking: no
+Default: 45%
+Default-by: 2026-10-12
+
+### 2026-10-06 — Stack life — STATUS: open
+Blocking: no
+Default: 80,000 h
+Default-by: 2026-10-10
+
+### 2026-10-06 — Grid mix — STATUS: open
+Blocking: no
+Default-by: never
+EOF
+git -C "$P" add -A >/dev/null; git -C "$P" -c user.name=ada -c user.email=a@x commit -qm "agent asks more" >/dev/null
+_project_number_questions
+eq "blocked: earliest non-blocking default is picked over an earlier blocking one" "$(_project_blocked_default | cut -d$'\037' -f1)" "Q8"
+sig=$(_project_signals)
+has "blocked: early default signalled" "$sig" 'DEFAULT DUE (early): STATE is blocked, so instead of idling until 2026-10-10 you apply the earliest open default now: Q8 "Stack life"'
+eq "blocked with an early default: no rest floor" "$(_project_delay_floor)" 0
+_project_should_skip_rest spontaneous && bad "blocked with an early default: the wake runs the model" || ok "blocked with an early default: the wake runs the model"
+ban=$(_project_question_banner)
+has "banner tells humans the default is coming early" "$ban" "the agent is blocked, so it applies this default at its next wake (date was 2026-10-10)"
+has "banner keeps the date for the others" "$ban" "default applies on 2026-10-12"
+sed -i 's/^\(### Q8 .*STATUS: \)open/\1defaulted/' "$P/questions.md"
+eq "next wake: the next non-blocking default" "$(_project_blocked_default | cut -d$'\037' -f1)" "Q7"
+sed -i 's/^\(### Q7 .*STATUS: \)open/\1defaulted/' "$P/questions.md"
+eq "then a blocking one; never-defaults are skipped" "$(_project_blocked_default | cut -d$'\037' -f1)" "Q6"
+eq "PROJECT_BLOCKED_DEFAULT=0 turns it off" "$(PROJECT_BLOCKED_DEFAULT=0 _project_blocked_default)" ""
+sig=$(PROJECT_NOW=$(ep '2026-10-09 09:00') _project_signals)
+hasnt "a matured default already due: nothing pulled early" "$sig" "DEFAULT DUE (early)"
+has "a matured default already due: the normal signal" "$sig" 'DEFAULT DUE: no human answered Q6 "Plant size"'
+"$REPO/tools/librarian-project" answer "$ID" Q9 "Texas 2030 ERCOT mix" >/dev/null 2>&1
+eq "a human answer waiting: nothing pulled early" "$(_project_blocked_default)" ""
+printf 'active\n' > "$P/STATE"
+sed -i 's/^\(### Q9 .*STATUS: \)open/\1answered/' "$P/questions.md"
+sed -i 's/^\(### Q6 .*STATUS: \)open/\1moot/' "$P/questions.md"
+printf 'blocked\nx\n' > "$P/STATE"
+eq "every open question closed or undated: nothing pulled early" "$(_project_blocked_default)" ""
 printf 'active\n' > "$P/STATE"
 ts_recent=$(TZ=UTC date -u -d "@$((PROJECT_NOW - 3600))" +%Y-%m-%dT%H:%M:%SZ)
 ts_old=$(TZ=UTC date -u -d "@$((PROJECT_NOW - 90000))" +%Y-%m-%dT%H:%M:%SZ)
 printf '{"ts":"%s","in_tok":900,"out_tok":100}\n{"ts":"%s","in_tok":500000,"out_tok":0}\n{"ts":"%s","in_tok":7000,"out_tok":1000}\n' \
     "$ts_recent" "$ts_old" "$ts_recent" > "$ID/usage/llm.jsonl"
 eq "tokens counted over 24h only" "$(_project_tokens_24h)" 9000
+PROJECT_DAILY_TOKENS=11000
+has "budget warning near the cap" "$(_project_signals)" "BUDGET: 9000 tokens of 11000 tokens"
+has "budget warning names the free hold line" "$(_project_signals)" "At 9900 tokens the runtime pauses ordinary wakes for free"
+_project_should_hold spontaneous && bad "under the hold line: wakes run" || ok "under the hold line: wakes run"
+# Budget hold (live trial 2026-10-16: 127 paid rest wakes overnight at about 90% of the cap).
 PROJECT_DAILY_TOKENS=10000
-has "budget warning near the cap" "$(_project_signals)" "BUDGET: 9000 tokens of 10000 tokens"
+eq "hold line is 90% of the daily cap" "$(_project_hold_line)" 9000
+has "at the hold line: BUDGET HOLD signal" "$(_project_signals)" "BUDGET HOLD: 9000 tokens of 10000 tokens"
+_project_should_hold spontaneous && ok "at the hold line: a timer wake skips the model" || bad "at the hold line: a timer wake skips the model"
+_project_should_hold reactive && bad "at the hold line: a reactive wake still runs" || ok "at the hold line: a reactive wake still runs"
+( _project_due_ritual() { printf 'daily 2026-10-01'; }; _project_should_hold spontaneous ) && bad "at the hold line: a due ritual still runs" || ok "at the hold line: a due ritual still runs"
+( _project_signals() { printf -- '- HUMAN ANSWER: Q1\n'; }; _project_should_hold spontaneous ) && bad "at the hold line: a human answer still runs" || ok "at the hold line: a human answer still runs"
+( _project_signals() { printf -- '- DEFAULT DUE: Q2\n'; }; _project_should_hold spontaneous ) && bad "at the hold line: a matured default still runs" || ok "at the hold line: a matured default still runs"
+PROJECT_BUDGET_HOLD=0 _project_should_hold spontaneous && bad "PROJECT_BUDGET_HOLD=0 turns the hold off" || ok "PROJECT_BUDGET_HOLD=0 turns the hold off"
+PROJECT_BUDGET_HOLD=1 _project_should_hold spontaneous && bad "PROJECT_BUDGET_HOLD=1 turns the hold off" || ok "PROJECT_BUDGET_HOLD=1 turns the hold off"
+PROJECT_BUDGET_HOLD=0.95 _project_should_hold spontaneous && bad "a higher hold line is not reached yet" || ok "a higher hold line is not reached yet"
 PROJECT_DAILY_TOKENS=8000
 has "budget spent signal" "$(_project_signals)" "BUDGET SPENT"
 eq "budget floor" "$(_project_delay_floor)" 1800
@@ -265,6 +329,49 @@ touch -d "@$((PROJECT_NOW - 20 * 3600))" "$P/journal.md"
 has "stall flagged after 12h without journal change" "$(_project_signals)" "STALL"
 touch -d "@$((PROJECT_NOW - 3600))" "$P/journal.md"
 hasnt "no stall when the journal moved" "$(_project_signals)" "STALL"
+
+# ── idle wakes (live trial 2026-10-16: ~50 paid "nothing due" wakes an hour) ─
+G="$WORK/idle-repo"; mkdir -p "$G/model"
+git -C "$G" init -q && printf 'active\n' > "$G/STATE" && printf 'j\n' > "$G/journal.md" && printf 'l\n' > "$G/librarian.md"
+git -C "$G" add -A && git -C "$G" -c user.name=t -c user.email=t@t commit -qm init
+(
+    _project_dir() { printf '%s' "$G"; }
+    h=$(_project_head)
+    [[ -n "$h" ]] && ok "idle: HEAD recorded before the wake" || bad "idle: HEAD recorded before the wake"
+    _project_wake_changed "$h" && bad "idle: a clean tree is no work" || ok "idle: a clean tree is no work"
+    printf 'resting\n' >> "$G/STATE"; printf 'x\n' >> "$G/librarian.md"; printf 'q\n' > "$G/questions-summary.md"
+    _project_wake_changed "$h" && bad "idle: STATE, librarian.md and questions-summary.md alone are no work" || ok "idle: STATE, librarian.md and questions-summary.md alone are no work"
+    printf 'new entry\n' >> "$G/journal.md"
+    _project_wake_changed "$h" && ok "idle: a journal edit is work" || bad "idle: a journal edit is work"
+    git -C "$G" add -A && git -C "$G" -c user.name=t -c user.email=t@t commit -qm wake
+    _project_wake_changed "$h" && ok "idle: work the mind committed itself still counts" || bad "idle: work the mind committed itself still counts"
+    h=$(_project_head); printf 'r\n' > "$G/model/result.json"
+    _project_wake_changed "$h" && ok "idle: a new untracked file is work" || bad "idle: a new untracked file is work"
+)
+rm -f "$ID/run/project_idle_streak"
+eq "idle: no streak yet" "$(_project_idle_streak)" 0
+eq "idle: no streak, no floor" "$(_project_idle_floor)" 0
+_project_note_wake idle
+eq "idle: one idle wake waits PROJECT_IDLE_FLOOR" "$(_project_idle_floor)" 600
+hasnt "idle: one idle wake gets no IDLE signal" "$(_project_signals)" "- IDLE:"
+_project_note_wake idle
+eq "idle: streak counts idle wakes" "$(_project_idle_streak)" 2
+eq "idle: the floor doubles per idle wake" "$(_project_idle_floor)" 1200
+has "idle: two idle wakes add the IDLE signal" "$(_project_signals)" "- IDLE: your last 2 wakes changed no project file"
+has "idle: the signal points at the free blocked rest" "$(_project_signals)" "set STATE to blocked: a blocked mind rests for free"
+eq "idle: an active mind's delay floor follows the streak" "$(PROJECT_PACE=0 _project_delay_floor 0)" 1200
+( _project_due_ritual() { printf 'daily 2026-10-01'; }; eq "idle: a due ritual is not delayed" "$(PROJECT_PACE=0 _project_delay_floor 0)" 0 )
+( _project_signals() { printf -- '- HUMAN ANSWER: Q1\n'; }; eq "idle: a human answer is not delayed" "$(PROJECT_PACE=0 _project_delay_floor 0)" 0 )
+_project_note_wake idle; _project_note_wake idle; _project_note_wake idle
+eq "idle: the floor stops at PROJECT_IDLE_CAP" "$(_project_idle_floor)" 1800
+eq "idle: PROJECT_IDLE_FLOOR=0 turns it off" "$(PROJECT_IDLE_FLOOR=0 _project_idle_floor)" 0
+hasnt "idle: PROJECT_IDLE_NUDGE=0 turns the signal off" "$(PROJECT_IDLE_NUDGE=0 _project_signals)" "- IDLE:"
+cp "$P/STATE" "$WORK/STATE.keep"; printf 'blocked\n' > "$P/STATE"
+hasnt "idle: no IDLE signal once STATE is blocked" "$(_project_signals)" "- IDLE:"
+cp "$WORK/STATE.keep" "$P/STATE"
+_project_note_wake work
+eq "idle: a working wake resets the streak" "$(_project_idle_streak)" 0
+eq "idle: and the floor" "$(_project_idle_floor)" 0
 
 # ── deadline, phases and the deliverable ─────────────────────────────────────
 setstart '2026-10-01 00:00'
@@ -363,6 +470,9 @@ eq "spend in micro-dollars" "$(_project_tokens_total)" 550000
 eq "spend formats as dollars" "$(_project_fmt "$(_project_tokens_total)")" '$0.55'
 eq "daily dollar cap in micro-dollars" "$(_project_cap_daily)" 1000000
 eq "wake ceiling: half the daily dollar cap" "$(_project_wake_ceiling)" 500000
+eq "dollar hold line: 90% of the daily cap" "$(_project_fmt "$(_project_hold_line)")" '$0.90'
+_project_budget_hold && bad "\$0.55 of \$1: no hold" || ok "\$0.55 of \$1: no hold"
+PROJECT_BUDGET_HOLD=0.5 _project_budget_hold && ok "\$0.55 past a \$0.50 hold line: hold" || bad "\$0.55 past a \$0.50 hold line: hold"
 has "wake budget signal in dollars" "$(_project_signals)" 'WAKE BUDGET: about $0.50'
 PROJECT_TOTAL_USD=0.5
 _project_over_budget && ok "over a dollar run cap" || bad "over a dollar run cap"
@@ -449,6 +559,10 @@ step=$(cat "$REPO/thinkers/monolith/step")
 has "step sources project.sh" "$step" '_lib/project.sh'
 has "step picks the project prompt" "$step" 'prompt-project.md'
 has "step commits project/" "$step" '_project_commit'
+has "step skips the model under the budget hold" "$step" '_project_should_hold "$wake_mode"'
+has "step records project HEAD before the run" "$step" 'project_head_before=$(_project_head)'
+has "step counts a no-change wake as a rest for the backoff" "$step" '_project_wake_changed "${project_head_before:-}"'
+has "step keeps reactive wakes out of the idle streak" "$step" '"$project_mode" -eq 1 && "$wake_mode" != reactive'
 has "step caps each wake's steps" "$step" 'project_iter_flags=(--max-iterations'
 has "blind caps its steps" "$(cat "$REPO/bin/blind")" '--max-iterations "$iters"'
 has "blind reaches the sandbox" "$(cat "$REPO/thinkers/_lib/common.sh")" 'chat recap blind'

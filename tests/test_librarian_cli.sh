@@ -59,6 +59,23 @@ out=$(librarian propose --type skill --summary "colcon picks the system Eigen: s
 eq "an identical proposal is merged, not written" "$(printf '%s' "$out" | jq -r .action)" merged
 eq "merge names the target" "$(printf '%s' "$out" | jq -r .merge_target)" "$SK"
 
+# The prompt's propose recipe passes no --source: during a wake the gate takes
+# the wake's request id as provenance. Inside the sandbox only LIBRARIAN_STORE
+# is set, and the request file is found next to the store. (The first live
+# librarian run lost its first decision to this.)
+DEC_BODY='Chose Bellingham WA: open EV-by-tract registrations (data.wa.gov f6w7-q2d2) and WTA GTFS need no key; rules out a synthetic city.'
+out=$(librarian propose --type decision --summary "When choosing the study city: a real city with key-free open data" \
+    --body "$DEC_BODY" --tags area:modeling --project p-1 2>&1); rc=$?
+eq "no request file and no --source is still refused" "$rc" 3
+printf '{"request_id": "REQ-WAKE-1", "project": "p-1"}\n' > "$ID/run/librarian_request.json"
+out=$(env -u IDENTITY_DIR LIBRARIAN_STORE="$ID/librarian/store.sqlite" librarian propose --type decision \
+    --summary "When choosing the study city: a real city with key-free open data" \
+    --body "$DEC_BODY" --tags area:modeling 2>&1); rc=$?
+eq "a sandbox proposal without --source is stored" "$rc" 0
+DEC=$(printf '%s' "$out" | jq -r .id)
+eq "its provenance names the wake" "$(python3 -c 'import sqlite3,sys,json; r=sqlite3.connect(sys.argv[1]).execute("select provenance from nodes where id=?",(sys.argv[2],)).fetchone(); print(json.loads(r[0]).get("run_id"))' "$ID/librarian/store.sqlite" "$DEC")" REQ-WAKE-1
+rm -f "$ID/run/librarian_request.json"
+
 # ── search and fetch ─────────────────────────────────────────────────────────
 out=$(librarian search --tags pkg:colcon --text "eigen link errors" 2>&1)
 eq "search finds the skill" "$(printf '%s' "$out" | jq -r '.[0].id')" "$SK"
@@ -76,6 +93,7 @@ out=$(librarian --text pack --task "colcon build fails with eigen link errors" -
 for m in "[IDENTITY: CORE]" "[IDENTITY: WORKING]" "[GROUP PREFERENCES]" "[TASK MEMORIES]" "[COVERAGE]" "[LIBRARIAN NOTES]" "[REQUEST]"; do
     has "pack has section $m" "$out" "$m"
 done
+has "the request line says it is not a memory" "$out" "not a memory, so not fetchable"
 first=$(printf '%s\n' "$out" | head -1); eq "pack starts with the core marker" "$first" "[IDENTITY: CORE]"
 has "pack carries the skill with its id" "$out" "$SK · skill · PROBATIONARY"
 has "coverage names the request tags" "$out" "[COVERAGE] pkg:colcon"

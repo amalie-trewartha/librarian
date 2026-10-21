@@ -45,6 +45,7 @@ deterministic shell, in the monolith step, around the model's run:
 | Charter and spec stay unedited | Runtime: restores them from `project-pristine/` every wake and logs an `error` step |
 | A ritual is due | Runtime: a ritual is due when its output file is missing (`daily/DATE.md`, `reports/week-NN.md`) |
 | A question's default has matured | Runtime: parses `questions.md` and raises DEFAULT DUE |
+| The mind is fully blocked (STATE blocked) | Runtime: brings the earliest dated default forward, non-blocking questions first, one per wake (DEFAULT DUE (early)) |
 | Budget | Runtime: sums the `usage/llm.jsonl` ledger over 24h, paces each wake by its own cost, and caps the steps in a wake |
 | Deadline | Runtime: shows days left and the phase (build, harden, final) on every wake. Flags a missing or stale deliverable. Runs a final ritual at the end, then rests. |
 | Question provenance | Runtime: commits between-wake edits as author "human", and checks who wrote each Answer line from git |
@@ -92,6 +93,10 @@ skipped because a timer fired while the mind was busy.
   date. When the date passes, the mind
   applies the default and records it, with its risk, where a human will
   find it. `Default-by: never` marks a question too important to guess.
+  If STATE is blocked and no default is due yet, the runtime does not
+  wait for the date: it raises the earliest dated default now,
+  non-blocking questions first, one per wake (a live run idled 5 hours
+  behind defaults 4-6 days out).
   The thread then stays blocked, and the report says so. This keeps the
   library's "stop rather than guess" rule while still ending every block.
   The alternatives were stalling for two weeks or guessing silently.
@@ -215,6 +220,26 @@ top of that:
   ceiling bounds that wake. Set the run cap below the true limit by one
   worst-case wake. A BUDGET warning appears at 80% of the daily cap, and a
   RUN BUDGET warning at 70% of the run cap.
+- **Budget hold, free.** At `PROJECT_BUDGET_HOLD` of the daily cap (0.9 by
+  default) a timer wake makes no model call unless a ritual, a matured
+  default or a human answer is due; a reactive wake always runs. It logs one
+  step per hold and re-checks every `PROJECT_BUDGET_HOLD_CHECK` (600s), and
+  work resumes as soon as the rolling day falls back under the line. The
+  reserve above the line is for rituals. (On the live trial the mind chose to
+  rest at about 90% to keep that reserve, with STATE still active, so every
+  rest wake was a full model call: 127 of them overnight, about $3/h.)
+- **Idle wakes are spaced out.** A spontaneous wake that changes no project
+  file except `STATE`, `librarian.md` and `questions-summary.md` counts as a
+  rest for pacing, however many tools it ran. Without this, any tool call
+  reset the backoff to zero. Then the next delay after an idle wake is
+  `PROJECT_IDLE_FLOOR` (600s), doubling with each further idle wake up to
+  `PROJECT_IDLE_CAP` (1800s), unless a ritual, a matured default or a human
+  answer is due. A working wake resets the streak. From `PROJECT_IDLE_NUDGE`
+  (2) idle wakes on, an IDLE signal tells an active mind to set STATE to
+  blocked if every thread is parked, because a blocked rest is free and pulls
+  the earliest default forward. (On the live trial, once its unparked work
+  ran out, the mind filled the gaps between small items with "nothing due"
+  rest wakes back to back: 49 of 62 wakes in two hours, about $19/h.)
 - **Settings are pinned at start.** The dispatcher exports the identity's
   `.env` when it starts, so a changed setting takes effect only after
   `<name> stop; <name> start`.
@@ -308,11 +333,17 @@ Read from the environment or the identity's `.env`:
 | `PROJECT_DELIVERABLE_BY_DAYS` | 1 | Days before a missing deliverable (crude model plus draft) is flagged |
 | `PROJECT_DELIVERABLE_STALE_HOURS` | 48 | Hours before an unchanged deliverable is flagged |
 | `PROJECT_BUDGET_REST` | 1800 | Minimum delay in seconds while over budget |
+| `PROJECT_BUDGET_HOLD` | 0.9 | Fraction of the daily cap at which ordinary wakes pause for free (0 = off) |
+| `PROJECT_BUDGET_HOLD_CHECK` | 600 | Seconds between checks during a budget hold |
 | `PROJECT_REST` | 3600 | Minimum delay in seconds while blocked or done |
+| `PROJECT_IDLE_FLOOR` | 600 | Delay in seconds after an active wake that changed no project file, doubling per further idle wake (0 = off) |
+| `PROJECT_IDLE_CAP` | 1800 | Longest idle-wake delay in seconds |
+| `PROJECT_IDLE_NUDGE` | 2 | Idle wakes in a row before the IDLE signal (0 = off) |
 | `PROJECT_DAILY_AT` | 21:00 | Local time (`LIBRARIAN_TZ`) that closes a project day |
 | `PROJECT_FREETIME` | 1 | Weekly free time on or off |
 | `PROJECT_FREETIME_DAY` | 5 | Day within the project week (0-based) when free time opens |
 | `PROJECT_STALL_HOURS` | 12 | Hours without a journal change before STALL |
+| `PROJECT_BLOCKED_DEFAULT` | 1 | When STATE is blocked, apply the earliest default early (0 = wait for each Default-by date) |
 | `PROJECT_JOURNAL_ENTRIES` | 5 | Journal entries shown per wake |
 | `PROJECT_MEMORY_MAX` / `PROJECT_SPEC_MAX` | 14000 / 16000 | Bytes of each shown per wake |
 | `BLIND_MODEL` | `SHELLM_MODEL` | Model for blind reviewers and explorers. A different model family makes a more independent reviewer; on Bedrock, `bedrock-converse/<model id>` reaches non-Claude models |
