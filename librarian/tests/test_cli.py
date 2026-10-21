@@ -205,6 +205,30 @@ class RunBTest(CliCase):
         rc, rows, _ = self.run_cli("search", "--text", "background python job")
         self.assertIn(qid, [r["id"] for r in rows])
 
+    def test_dismiss_logs_no_credit_and_ranks_lower(self):
+        from librarian import lifecycle, rank, recall
+        a = self.skill("colcon eigen fix amber", ["pkg:colcon"], project="p-1")
+        b = self.skill("colcon eigen fix birch", ["pkg:colcon"], project="p-1")
+        rid = "01M00000000000000000000REQ"
+        (self.ident / "run" / "librarian_request.json").write_text(json.dumps({"request_id": rid, "project": "p-1", "tags": ["pkg:colcon"]}))
+        rc, rows, _ = self.run_cli("dismiss", a, "--reason", "about arm64, this is x86")
+        self.assertEqual((rc, rows[0]["id"]), (0, a))
+        self.assertEqual(self.store.q1("SELECT project, reason FROM dismissals WHERE node_id = ?", (a,))[:], ("p-1", "about arm64, this is x86"))
+        rep = lifecycle.close_episode(self.store, outcome="success", criterion="t", summary="s", body="FINAL: x", project="p-1", cited=[a, b], dismissed=[a])
+        self.assertEqual({c["id"] for c in rep.cited}, {b})
+        q = recall.Query(task="colcon eigen fix", tags=["pkg:colcon"], project="p-1")
+        _, cands = recall.recall(self.store, q)
+        ranked, _, _ = rank.rank(self.store, cands, q, use_llm=False)
+        self.assertEqual(ranked[0].node.id, b)
+        self.assertEqual(next(r for r in ranked if r.node.id == a).reasons["dismissed"], rank.W_DISMISS)
+        self.assertEqual(rank.dismissal_penalty(self.store, "p-2"), {})
+        # A later explicit cite clears it.
+        self.at("2026-10-01T01:00:00Z")
+        lifecycle.close_episode(self.store, outcome="partial", criterion="t", summary="s2", body="FINAL: y", project="p-1", cited=[a])
+        self.assertEqual(rank.dismissal_penalty(self.store, "p-1"), {})
+        rc, _, _ = self.run_cli("dismiss", "01M00000000000000000000NONE", "--reason", "x")
+        self.assertEqual(rc, cli.EXIT_NOTFOUND)
+
 
 if __name__ == "__main__":
     unittest.main()

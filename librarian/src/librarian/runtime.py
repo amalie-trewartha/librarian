@@ -630,6 +630,8 @@ def post(rc: int, run_id: Optional[str], stderr_tail: str, final: str, use_llm: 
         cited_ids=cited,
     )
     oc, criterion, overrides = outcome.decide_outcome(ev)
+    dismissed = [r[0] for r in store.q("SELECT DISTINCT node_id FROM dismissals WHERE request_id = ?", (req["request_id"],))]
+    cited = [i for i in cited if i not in dismissed]
     body_parts = [f"FINAL: {final.strip()[:1500]}" if final.strip() else "FINAL: (none)"]
     if "journal.md" in dirty:
         body_parts.append("Journal diff:\n" + _git(pd, "diff", "--", "journal.md")[:2500])
@@ -653,6 +655,7 @@ def post(rc: int, run_id: Optional[str], stderr_tail: str, final: str, use_llm: 
             request_ids=[req["request_id"]],
             overrides=overrides,
             provenance={"author": "runtime", "run_id": run_id, "request_id": req["request_id"], "ritual": ritual, "noop": not cited and set(dirty) <= BOOKKEEPING_FILES},
+            dismissed=dismissed,
         )
     except ValueError as exc:
         print(f"librarian: episode not recorded: {exc}", file=sys.stderr)

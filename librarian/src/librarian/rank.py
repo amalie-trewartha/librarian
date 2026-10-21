@@ -55,6 +55,24 @@ LLM_TOP = 30
 # 1,095 packs (replies cut at max_tokens), so curated memory was ranked on tags
 # that matched nearly everything.
 LLM_MAX_TOKENS = 1500
+# Dismissals (librarian dismiss) push a memory down for its project: each recent
+# one since the memory was last cited costs W_DISMISS, up to DISMISS_CAP.
+W_DISMISS = 0.4
+DISMISS_CAP = 1.2
+DISMISS_WINDOW_DAYS = 3.0
+
+
+def dismissal_penalty(store: db.Store, project: Optional[str]) -> dict[str, float]:
+    since = db.iso(db.now() - db.dt.timedelta(days=DISMISS_WINDOW_DAYS))
+    rows = store.q(
+        """SELECT d.node_id, COUNT(*) FROM dismissals d
+           WHERE d.project IS ? AND d.ts >= ?
+             AND d.ts > COALESCE((SELECT MAX(e.created) FROM citations c JOIN nodes e ON e.id = c.episode_id
+                                  WHERE c.node_id = d.node_id AND c.source = 'cite'), '')
+           GROUP BY d.node_id""",
+        (project, since),
+    )
+    return {r[0]: min(DISMISS_CAP, W_DISMISS * r[1]) for r in rows}
 
 
 @dataclass
@@ -189,9 +207,13 @@ def rank(
     priors = load_priors(store)
     ref = db.now()
     idf = recall.tag_idf(store, recall.status_scope(q))
+    dismissed = dismissal_penalty(store, q.project)
     out: list[Ranked] = []
     for c in cands:
         s, reasons = cut1(c, q, exclude, priors, ref, idf)
+        if c.node.id in dismissed:
+            s -= dismissed[c.node.id]
+            reasons["dismissed"] = round(dismissed[c.node.id], 3)
         out.append(Ranked(c.node, s, s, None, reasons))
     out.sort(key=lambda r: (-r.score, -r.node.confidence, r.node.body_tokens))
     llm_used = False

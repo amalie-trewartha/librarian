@@ -21,7 +21,7 @@ from typing import Any, Iterator, Optional
 
 # 2: nodes.type gains 'fact' (a sourced, checkable finding). Store.open
 # migrates a version-1 store in place (_migrate).
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class StoreError(Exception):
@@ -336,6 +336,18 @@ CREATE TABLE IF NOT EXISTS citations (
   PRIMARY KEY (episode_id, node_id)
 );
 
+-- A memory the mind judged not to apply to a wake's step (librarian dismiss).
+CREATE TABLE IF NOT EXISTS dismissals (
+  id INTEGER PRIMARY KEY,
+  node_id TEXT NOT NULL,
+  request_id TEXT,
+  project TEXT,
+  tags TEXT NOT NULL DEFAULT '[]',
+  reason TEXT NOT NULL,
+  ts TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS dismissals_node ON dismissals(node_id, ts);
+
 CREATE TABLE IF NOT EXISTS credit_log (
   id INTEGER PRIMARY KEY,
   episode_id TEXT NOT NULL,
@@ -559,6 +571,12 @@ class Store:
                         for r in self.conn.execute("SELECT id, summary, body FROM nodes").fetchall():
                             self.conn.execute("INSERT INTO nodes_fts(node_id, summary, tags, keywords, body) VALUES (?,?,?,?,?)", model.fts_row(r[0], r[1], r[2], tags.get(r[0], [])))
                     self.meta_set("schema_version", "3")
+                if v < 4:
+                    # 3 → 4: the dismissals table.
+                    for st in SCHEMA.split(";"):
+                        if "dismissals" in st and st.strip():
+                            self.conn.execute(st)
+                    self.meta_set("schema_version", "4")
         finally:
             self.conn.execute("PRAGMA foreign_keys=ON")
 

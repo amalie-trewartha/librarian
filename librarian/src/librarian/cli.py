@@ -551,6 +551,29 @@ def cmd_queue(args, out: Out) -> int:
     return EXIT_OK
 
 
+def cmd_dismiss(args, out: Out) -> int:
+    """The mind judged these memories not to apply to this wake's step: log it.
+
+    A dismissed memory gets no credit from the wake, and the ranker pushes it
+    down for later wakes of the same project (rank.dismissal_penalty).
+    """
+    store = _store(args)
+    cur = _current_request()
+    rows = []
+    with store.write():
+        for ref in args.ids:
+            nid = model.resolve_id(store, ref)
+            if not nid or model.get_node(store, nid, with_edges=False) is None:
+                return out.error(f"no memory {ref}", EXIT_NOTFOUND)
+            store.ex(
+                "INSERT INTO dismissals(node_id, request_id, project, tags, reason, ts) VALUES (?,?,?,?,?,?)",
+                (nid, cur.get("request_id"), args.project or cur.get("project"), json.dumps(cur.get("tags", [])), args.reason, db.now_iso()),
+            )
+            rows.append({"id": nid, "dismissed": True})
+    out.emit(rows, _r_kv)
+    return EXIT_OK
+
+
 def cmd_capture(args, out: Out) -> int:
     store = _store(args)
     proj = args.project or _current_request().get("project")
@@ -793,6 +816,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("id")
     s.add_argument("--by", default="human")
     s.set_defaults(func=cmd_endorse)
+
+    s = sub.add_parser("dismiss", help="a memory does not apply to this wake's step (no credit; ranked lower later)")
+    s.add_argument("ids", nargs="+")
+    s.add_argument("--reason", required=True)
+    s.add_argument("--project")
+    s.set_defaults(func=cmd_dismiss)
 
     s = sub.add_parser("dispute")
     s.add_argument("id")

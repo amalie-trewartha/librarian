@@ -89,8 +89,13 @@ def close_episode(
     helpful: Optional[list[str]] = None,
     overrides: Optional[dict[str, str]] = None,
     provenance: Optional[dict] = None,
+    dismissed: Optional[list[str]] = None,
 ) -> CreditReport:
-    """Record (or create) an episode with its outcome and run credit assignment."""
+    """Record (or create) an episode with its outcome and run credit assignment.
+
+    Memories the mind dismissed this wake get no citation: it judged them not
+    to apply, so the wake's outcome says nothing about them.
+    """
     if outcome not in model.OUTCOMES:
         raise ValueError(f"bad outcome {outcome}")
     tags = model.parse_tags(tags or [])
@@ -125,12 +130,13 @@ def close_episode(
                 (json.dumps({"value": outcome, "criterion": criterion, "recorded": recorded}), episode_id),
             )
         ids: list[str] = []
+        skip = set(dismissed or [])
         for i in model.parse_ids(cited or []):
             rid = model.resolve_id(store, i)
-            if rid and rid not in ids and rid != episode_id:
+            if rid and rid not in ids and rid != episode_id and rid not in skip:
                 ids.append(rid)
         for i in logged_ids(store, request_ids or []):
-            if i not in ids and i != episode_id:
+            if i not in ids and i != episode_id and i not in skip:
                 ids.append(i)
         helpful_set = {model.resolve_id(store, h) or h for h in (helpful or [])}
         for nid in ids:

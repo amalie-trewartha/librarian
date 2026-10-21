@@ -357,7 +357,8 @@ class RunBRecallTest(StoreCase):
         path = self.store.path
         self.store.close()
         self.store = db.Store.open(path)
-        self.assertEqual(self.store.meta_get("schema_version"), "3")
+        self.assertEqual(self.store.meta_get("schema_version"), str(db.SCHEMA_VERSION))
+        self.assertIsNotNone(self.store.q1("SELECT name FROM sqlite_master WHERE name = 'dismissals'"))
         self.assertIn("llm_note", {r[1] for r in self.store.q("PRAGMA table_info(requests)")})
         _, cands = recall.recall(self.store, recall.Query(task="census"))
         self.assertIn(a, [c.node.id for c in cands])

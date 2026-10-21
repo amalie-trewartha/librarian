@@ -434,6 +434,22 @@ class RunBRuntimeTest(StoreCase):
         self.assertIn((a, b), pairs)
         self.assertNotIn((a, c), pairs)
 
+    def test_dismissed_in_a_wake_gets_no_credit(self):
+        import io, json
+        from contextlib import redirect_stdout
+        from librarian import runtime
+        self._project("# Project brief: mobility\n\nModel travel.\n", "p-1")
+        a = self.skill("a skill the wake dismissed", ["pkg:x"], project="p-1")
+        self._pre()
+        req = json.loads((self.ident / "run" / runtime.REQUEST_FILE).read_text())
+        with self.store.write():
+            self.store.ex("INSERT INTO dismissals(node_id, request_id, project, tags, reason, ts) VALUES (?,?,?,?,?,?)", (a, req["request_id"], "p-1", "[]", "not this step", "2026-10-01T00:00:00Z"))
+        with redirect_stdout(io.StringIO()) as out:
+            runtime.post(0, None, "", f"Did the work; dismissed {a}.", use_llm=False)
+        res = json.loads(out.getvalue())
+        self.assertNotIn(a, res["cited"])
+        self.assertIsNone(self.store.q1("SELECT 1 FROM citations WHERE node_id = ?", (a,)))
+
 
 if __name__ == "__main__":
     unittest.main()
