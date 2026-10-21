@@ -373,6 +373,55 @@ _project_note_wake work
 eq "idle: a working wake resets the streak" "$(_project_idle_streak)" 0
 eq "idle: and the floor" "$(_project_idle_floor)" 0
 
+# ── idle rest without a model call ───────────────────────────────────────────
+# An active mind on an idle streak skips the model (run A: 495 paid "Rest"
+# wakes, $142) until something changes, something is due, or an hour passes.
+# Nothing due: stub the ritual and signal checks (restored after).
+eval "_orig_due_ritual() $(declare -f _project_due_ritual | tail -n +2)"
+eval "_orig_signals() $(declare -f _project_signals | tail -n +2)"
+_project_due_ritual() { :; }; _project_signals() { :; }
+{
+    git -C "$P" add -A >/dev/null; git -C "$P" -c user.name=ada -c user.email=a@x commit -qm "before idle" >/dev/null
+    printf 'active\n' > "$P/STATE"
+    rm -f "$ID/run/project_last_real_wake"
+    _project_note_wake idle; _project_note_wake idle; _project_note_wake idle
+    _project_should_skip_idle spontaneous && bad "idle skip: no record of a real wake, the wake runs" || ok "idle skip: no record of a real wake, the wake runs"
+    _project_note_real_wake
+    _project_should_skip_idle spontaneous && ok "idle skip: three idle wakes and nothing changed, no model call" || bad "idle skip: three idle wakes and nothing changed, no model call"
+    _project_should_skip_idle reactive && bad "idle skip: a reactive wake always runs" || ok "idle skip: a reactive wake always runs"
+    PROJECT_IDLE_SKIP_STREAK=4 _project_should_skip_idle spontaneous && bad "idle skip: below PROJECT_IDLE_SKIP_STREAK the wake runs" || ok "idle skip: below PROJECT_IDLE_SKIP_STREAK the wake runs"
+    PROJECT_IDLE_SKIP_STREAK=0 _project_should_skip_idle spontaneous && bad "idle skip: PROJECT_IDLE_SKIP_STREAK=0 turns it off" || ok "idle skip: PROJECT_IDLE_SKIP_STREAK=0 turns it off"
+    PROJECT_NOW=$((PROJECT_NOW + 3600)) _project_should_skip_idle spontaneous && bad "idle skip: an hour after the last real wake the wake runs" || ok "idle skip: an hour after the last real wake the wake runs"
+    PROJECT_NOW=$((PROJECT_NOW + 1800)) PROJECT_IDLE_SKIP_MAX=1200 _project_should_skip_idle spontaneous && bad "idle skip: PROJECT_IDLE_SKIP_MAX sets that hour" || ok "idle skip: PROJECT_IDLE_SKIP_MAX sets that hour"
+    printf 'resting\n' >> "$P/STATE"; _project_write_summary
+    _project_should_skip_idle spontaneous && ok "idle skip: STATE and questions-summary.md alone change nothing" || bad "idle skip: STATE and questions-summary.md alone change nothing" "$(_project_newer_than_real_wake)"
+    printf 'blocked\n' > "$P/STATE"
+    _project_should_skip_idle spontaneous && bad "idle skip: only for STATE active (blocked has its own rest)" || ok "idle skip: only for STATE active (blocked has its own rest)"
+    printf 'active\n' > "$P/STATE"
+    ( _project_due_ritual() { printf 'daily 2026-10-01'; }; _project_should_skip_idle spontaneous ) && bad "idle skip: a due ritual runs the wake" || ok "idle skip: a due ritual runs the wake"
+    ( _project_signals() { printf -- '- DEFAULT DUE: Q1\n'; }; _project_should_skip_idle spontaneous ) && bad "idle skip: a matured default runs the wake" || ok "idle skip: a matured default runs the wake"
+    ( _project_signals() { printf -- '- HUMAN ANSWER: Q1\n'; }; _project_should_skip_idle spontaneous ) && bad "idle skip: a human answer runs the wake" || ok "idle skip: a human answer runs the wake"
+    mkdir -p "$P/.blind/run1"; printf 'done\n' > "$P/.blind/run1/report.md"
+    _project_should_skip_idle spontaneous && bad "idle skip: a background job's output under project/ runs the wake" || ok "idle skip: a background job's output under project/ runs the wake"
+    eq "idle skip: the new file is named" "$(_project_newer_than_real_wake)" ".blind/run1/report.md"
+    rm -rf "$P/.blind/run1"
+    _project_should_skip_idle spontaneous && ok "idle skip: back to skipping once it is gone" || bad "idle skip: back to skipping once it is gone"
+    printf 'between wakes\n' >> "$P/journal.md"; touch -d '-2 minutes' "$P/journal.md"; _project_commit_outside
+    _project_should_skip_idle spontaneous && bad "idle skip: a commit since the last real wake runs the wake" || ok "idle skip: a commit since the last real wake runs the wake"
+    _project_note_real_wake
+    _project_should_skip_idle spontaneous && ok "idle skip: a new real wake is the new baseline" || bad "idle skip: a new real wake is the new baseline"
+    chmod u+w "$P/spec.md"; printf '\nA second brief.\n' >> "$P/spec.md"; touch -d '-2 minutes' "$P/spec.md"
+    _project_should_skip_idle spontaneous && bad "idle skip: a new brief in spec.md runs the wake" || ok "idle skip: a new brief in spec.md runs the wake"
+    cp "$ID/project-pristine/spec.md" "$P/spec.md"; touch -d '-2 minutes' "$P/spec.md"; chmod a-w "$P/spec.md"
+    _project_should_skip_idle spontaneous && ok "idle skip: the same brief again skips" || bad "idle skip: the same brief again skips"
+    _project_note_wake work
+    _project_should_skip_idle spontaneous && bad "idle skip: a working wake ends the streak" || ok "idle skip: a working wake ends the streak"
+    git -C "$P" add -A >/dev/null; git -C "$P" -c user.name=ada -c user.email=a@x commit -qm "after idle" >/dev/null
+}
+eval "_project_due_ritual() $(declare -f _orig_due_ritual | tail -n +2)"
+eval "_project_signals() $(declare -f _orig_signals | tail -n +2)"
+rm -f "$ID/run/project_last_real_wake"; _project_note_wake work
+
 # ── deadline, phases and the deliverable ─────────────────────────────────────
 setstart '2026-10-01 00:00'
 setend() { chmod u+w "$ID/project-pristine/end_at" 2>/dev/null; printf '%s' "$(ep "$1")" > "$ID/project-pristine/end_at"; }

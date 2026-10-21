@@ -347,6 +347,8 @@ Environment:
                           (default 8; set empty for unlimited)
   SHELLM_EFFORT           Thinking effort level (low/medium/high/xhigh/max)
   SHELLM_SYSTEM_PROMPT    Override the default system prompt text
+  SHELLM_STABLE_SYSTEM_PROMPT  1 = no run directory path or clock in the system
+                          prompt, so it is the same every run (prompt caching)
   SHELLM_TRAJ_DIR         Trajectory directory
   SHELLM_ENVS_DIR         Env/container state directory
   SHELLM_WORKDIRS_DIR     Working directories base
@@ -2301,10 +2303,22 @@ SYSPROMPT
         fi
     fi
 
+    # SHELLM_STABLE_SYSTEM_PROMPT=1 keeps this prompt byte-identical from run
+    # to run: the run directory is named by its variable and the clock line is
+    # left out. The prompt caches put the system prompt ahead of every message,
+    # so a per-run path or a timestamp here changes the prefix of every call and
+    # no run can read what an earlier run cached. The monolith sets it: its wake
+    # prompt carries its own clock, and on run A only 5 of 1,155 wake-first
+    # calls read any cache.
+    local stable="${SHELLM_STABLE_SYSTEM_PROMPT:-0}"
     if [[ -n "$rundir" ]]; then
         echo ""
         echo "## Current run"
-        echo "- Transient run directory: $rundir (for generated code output; available as \$SHELLM_RUNDIR)"
+        if [[ "$stable" == 1 ]]; then
+            echo "- Transient run directory: \$SHELLM_RUNDIR (for generated code output; a new one every run)"
+        else
+            echo "- Transient run directory: $rundir (for generated code output; available as \$SHELLM_RUNDIR)"
+        fi
         echo "- Trajectory and sub-run monitoring use \$TRAJ_DIR and \$TRAJ_ID."
     fi
 
@@ -2323,7 +2337,11 @@ SYSPROMPT
     echo "- Hostname: $(hostname)"
     echo "- User: $(whoami)"
     echo "- Shell: $BASH_VERSION"
-    echo "- Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if [[ "$stable" == 1 ]]; then
+        echo "- Date: run \`date\` (left out here so this prompt stays the same from run to run)"
+    else
+        echo "- Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    fi
     local pkgmgrs=""
     for cmd in apt apt-get brew dnf yum pacman apk zypper nix-env pkg port emerge snap flatpak pip pip3 npm yarn conda cargo gem go; do
         command -v "$cmd" >/dev/null 2>&1 && pkgmgrs="${pkgmgrs:+$pkgmgrs, }$cmd"

@@ -339,6 +339,9 @@ Read from the environment or the identity's `.env`:
 | `PROJECT_IDLE_FLOOR` | 600 | Delay in seconds after an active wake that changed no project file, doubling per further idle wake (0 = off) |
 | `PROJECT_IDLE_CAP` | 1800 | Longest idle-wake delay in seconds |
 | `PROJECT_IDLE_NUDGE` | 2 | Idle wakes in a row before the IDLE signal (0 = off) |
+| `PROJECT_IDLE_SKIP_STREAK` | 3 | Idle wakes in a row after which an active mind's timer wakes skip the model until a file under project/ changes, spec.md changes, a ritual, default or human answer is due, or `PROJECT_IDLE_SKIP_MAX` passes (0 = off) |
+| `PROJECT_IDLE_SKIP_MAX` | 3600 | Project seconds after the last wake that ran the model before an idle mind gets a real wake again |
+| `PROJECT_CACHE_TTL` | 1h | Prompt-cache TTL for the stable head of the wake prompt (sets `LLM_CACHE_TTL` for the wake; empty = the five-minute default) |
 | `PROJECT_DAILY_AT` | 21:00 | Local time (`LIBRARIAN_TZ`) that closes a project day |
 | `PROJECT_FREETIME` | 1 | Weekly free time on or off |
 | `PROJECT_FREETIME_DAY` | 5 | Day within the project week (0-based) when free time opens |
@@ -355,7 +358,7 @@ Read from the environment or the identity's `.env`:
 | `PROJECT_FALLBACK_USD_PER_MTOK` | 5 | Dollar rate assumed for a call with no cost estimate (an unpriced model) |
 | `LIBRARIAN_MEMORY` | 1 | 0 turns the librarian hooks off; wakes get the plain project excerpt |
 | `LIBRARIAN_SRC` | `<app>/librarian/src` (set by init) | The librarian package, mounted read-only into the sandbox |
-| `LIBRARIAN_PACK_TOKENS` | 8000 | Memory pack budget per wake, in estimated tokens |
+| `LIBRARIAN_PACK_TOKENS` | 5000 | Memory pack budget per wake, in estimated tokens |
 | `LIBRARIAN_MODEL`, `LIBRARIAN_MODEL_<ROLE>`, `LIBRARIAN_LLM` | tier defaults | Models for the librarian's optional stages, per role; `LIBRARIAN_LLM=0` skips them all (design/librarian.md) |
 
 ## What a budget counts
@@ -367,7 +370,7 @@ Read from the environment or the identity's `.env`:
   full, which made a mostly cached run read as about 4x its cost.
 - **Dollar budgets** (`--daily-usd`, `--total-usd`) sum the `cost_usd`
   estimate that `llm` writes on each ledger record: list prices per model,
-  with cache writes at 1.25x input and cache reads at their own rate. Dollars
+  with cache writes at 1.25x input (2x for one-hour writes) and cache reads at their own rate. Dollars
   are the unit to use when cheaper models are in play: a Haiku delegate's
   tokens cost a quarter of Opus's, but a token budget counts them the same.
 

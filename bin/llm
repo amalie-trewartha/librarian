@@ -714,6 +714,61 @@ if [[ -z "$LLM_MESSAGES" ]]; then
     LLM_MESSAGES=$(printf '%s' "$LLM_PROMPT" | jq -Rs '[{"role":"user","content":.}]')
 fi
 
+# Cache-break markers. A caller that knows where its prompt stops being
+# stable puts a line holding only LLM_CACHE_BREAK there (the monolith's wake
+# prompt does: after the charter and spec, and after project-memory.md). On
+# Anthropic-format providers with caching on, _anthropic_cache_breakpoints
+# splits the text into blocks at the markers and puts a breakpoint on the
+# block before each one, so the stable head is cached on its own and read back
+# on the next wake even when what follows it changed. Everywhere else the
+# marker lines are removed here, so they never reach a model. Only a line that
+# is exactly the marker counts; the marker inside other text is left alone.
+LLM_CACHE_BREAK='<<<llm-cache-break>>>'
+_llm_cache_marks=0
+case "$LLM_PROVIDER" in anthropic|bedrock|bedrock-invoke) [[ "${LLM_PROMPT_CACHE:-1}" != 0 ]] && _llm_cache_marks=1 ;; esac
+# jq: drop the marker lines from one string. Padding with newlines first
+# makes a marker on the first or last line match the same way as one inside.
+_LLM_JQ_STRIP_MARKS='def strip_marks: if (type == "string") and contains($m)
+    then ("\n" + . + "\n") | split("\n" + $m + "\n") | join("\n") | .[1:-1] else . end;'
+if [[ "$_llm_cache_marks" -eq 0 ]]; then
+    if [[ "$LLM_SYSTEM" == *"$LLM_CACHE_BREAK"* ]]; then
+        LLM_SYSTEM=$(printf '%s' "$LLM_SYSTEM" | jq -Rsj --arg m "$LLM_CACHE_BREAK" "$_LLM_JQ_STRIP_MARKS"' strip_marks'; printf X)
+        LLM_SYSTEM="${LLM_SYSTEM%X}"
+    fi
+    if [[ "$LLM_MESSAGES" == *"$LLM_CACHE_BREAK"* ]]; then
+        LLM_MESSAGES=$(printf '%s' "$LLM_MESSAGES" | jq -c --arg m "$LLM_CACHE_BREAK" "$_LLM_JQ_STRIP_MARKS"'
+            map(if (.content | type) == "string" then .content |= strip_marks
+                elif (.content | type) == "array" then .content |= map(if .type == "text" then .text |= strip_marks else . end)
+                else . end)')
+    fi
+fi
+
+# Cache TTL for the stable breakpoints (the system prompt and the
+# cache-break markers): LLM_CACHE_TTL=1h asks for the one-hour cache, unset
+# keeps the provider default of five minutes. Wakes sit 10 to 30 minutes apart
+# once the mind idles, so a five-minute entry for the stable head has expired
+# by the next wake and is written again at full price every time. The one-hour
+# write costs 2x base input against 1.25x for five minutes, so it pays from
+# the first reuse. Message breakpoints stay at five minutes: they move with
+# every step and are read within seconds. Sent only to models that take it
+# (Claude 4.5 and later; the 3.x family answers a ttl with a validation error).
+_llm_cache_ttl=""
+if [[ "$_llm_cache_marks" -eq 1 && -n "${LLM_CACHE_TTL:-}" ]]; then
+    case "$LLM_CACHE_TTL" in
+        1h|5m) ;;
+        *) echo "llm: warning: ignoring LLM_CACHE_TTL='$LLM_CACHE_TTL' (1h or 5m)" >&2; LLM_CACHE_TTL="" ;;
+    esac
+    case "${LLM_MODEL#*anthropic.}" in
+        claude-opus-4-[5-9]*|claude-opus-[5-9]*|claude-sonnet-4-[5-9]*|claude-sonnet-[5-9]*|claude-haiku-4-5*|claude-haiku-[5-9]*|claude-fable-*|claude-mythos-*)
+            [[ "${LLM_CACHE_TTL:-}" == 1h ]] && _llm_cache_ttl=1h ;;
+        *) [[ "${LLM_CACHE_TTL:-}" == 1h ]] && echo "llm: note: LLM_CACHE_TTL=1h ignored: $LLM_MODEL is not known to take the one-hour cache" >&2 ;;
+    esac
+    # Only a request with markers gets the TTL (see _anthropic_cache_breakpoints):
+    # a nested run that inherits LLM_CACHE_TTL but sends no markers stays on
+    # five minutes, so a one-off prompt is not written at the one-hour price.
+    [[ "$LLM_SYSTEM" == *"$LLM_CACHE_BREAK"* || "$LLM_MESSAGES" == *"$LLM_CACHE_BREAK"* ]] || _llm_cache_ttl=""
+fi
+
 # ---------------------------------------------------------------------------
 # Thinking-capability guards
 # ---------------------------------------------------------------------------
@@ -768,19 +823,61 @@ supports_gemini_thinking() {
 # each request reads everything up to it from the cache. Librarian sent no cache_control before, so every step re-sent its
 # whole 20K-40K token context at full price. Explicit breakpoints, because
 # Bedrock does not support the top-level automatic form.
+#
+# Cache-break markers (LLM_CACHE_BREAK, above) add breakpoints inside a text:
+# a system prompt or message string holding marker lines is split into text
+# blocks there, the marker lines dropped, and each block before a marker gets
+# a breakpoint. The block after the last marker gets none of its own (in a
+# system prompt the message breakpoints cover it; in a message the usual
+# last/second-to-last rule applies). The monolith's wake prompt is the first
+# message of every run, and on run A only 5 of 1,155 wake-first calls read
+# any cache: the whole ~44K-token prompt was written fresh each wake because
+# the memory pack, 7K tokens in, changes every wake. With markers the charter
+# and spec, then project-memory.md, are cached on their own and read back.
+# Anthropic and Bedrock take at most 4 breakpoints a request; past that the
+# earliest are dropped (a later breakpoint caches everything before it, so
+# the system prompt's own goes first). Blocks that would be empty or only
+# whitespace are left out: the API rejects empty text blocks.
 # LLM_PROMPT_CACHE=0 turns it off.
 _anthropic_cache_breakpoints() {
     case "$LLM_PROVIDER" in anthropic|bedrock|bedrock-invoke) ;; *) cat; return ;; esac
     [[ "${LLM_PROMPT_CACHE:-1}" == 0 ]] && { cat; return; }
-    jq '
-      def mark: . + {cache_control: {type: "ephemeral"}};
+    jq --arg m "$LLM_CACHE_BREAK" --arg ttl0 "${_llm_cache_ttl:-}" '
+      def has_marks: type == "string" and (("\n" + . + "\n") | contains("\n" + $m + "\n"));
+      def text_has_marks: has_marks or (type == "array" and any(.[]; type == "object" and .type == "text" and (.text | has_marks)));
+      # The TTL goes only on requests that carry markers (a request without
+      # any stays exactly as before), and there on the system prompt and the
+      # marker breakpoints, which all come before the moving message ones:
+      # the API wants longer TTLs ahead of shorter ones.
+      (if $ttl0 != "" and ((.system | text_has_marks) or any(.messages[]?; .content | text_has_marks)) then $ttl0 else "" end) as $ttl
+      | def mark: . + {cache_control: {type: "ephemeral"}};
+      def mark_stable: . + {cache_control: ({type: "ephemeral"} + (if $ttl == "" then {} else {ttl: $ttl} end))};
+      # A string -> text blocks split at its marker lines; every block but the
+      # last ends where a marker was and carries a breakpoint.
+      def split_marks:
+        (("\n" + . + "\n") | split("\n" + $m + "\n")) as $p
+        | ($p | length) as $n
+        | [range(0; $n) as $i
+           | ($p[$i] | if $i == 0 then .[1:] else . end
+                     | if $i == $n - 1 then .[:-1] else . + "\n" end) as $t
+           | select($t | test("\\S"))
+           | {type: "text", text: $t} | if $i < $n - 1 then mark_stable else . end];
+      def split_content:
+        if has_marks then split_marks
+        elif type == "array" then map(if .type == "text" and (.text | has_marks) then (.text | split_marks[]) else . end)
+        else . end;
       (if (.system | type) == "string" and (.system | length) > 0
-       then .system = [{type: "text", text: .system} | mark] else . end)
+       then (if (.system | has_marks) then .system |= split_marks else .system = [{type: "text", text: .system} | mark_stable] end)
+       else . end)
+      | (if (.messages | type) == "array" then .messages |= map(.content |= split_content) else . end)
       | def mark_content: if type == "string" then [{type: "text", text: .} | mark]
                          elif type == "array" and length > 0 then .[-1] |= mark
                          else . end;
         (if (.messages | length) > 0 then .messages[-1].content |= mark_content else . end)
-      | (if (.messages | length) > 1 then .messages[-2].content |= mark_content else . end)'
+      | (if (.messages | length) > 1 then .messages[-2].content |= mark_content else . end)
+      | [ path(.system | if type == "array" then .[] else empty end | select(type == "object" and has("cache_control"))),
+          path(.messages[]?.content | if type == "array" then .[] else empty end | select(type == "object" and has("cache_control"))) ] as $bp
+      | reduce ($bp[0:([($bp | length) - 4, 0] | max)][]) as $p (.; delpaths([$p + ["cache_control"]]))'
 }
 
 build_payload_anthropic() {
@@ -1236,11 +1333,24 @@ warn_truncated() {
 # explainable with the host on the record.
 _llm_served_by=""
 _llm_truncated=0
+# The part of the cache writes made at the one-hour TTL (cache_write_1h_tok on
+# the record; billed at 2x base input against 1.25x for five minutes). The
+# Messages API reports it in usage.cache_creation.ephemeral_1h_input_tokens.
+# When this call sent one-hour breakpoints and the response does not say
+# how its writes split, all of them are counted at the one-hour price: an
+# upper bound, so a dollar budget is never undercounted.
+_llm_cache_write_1h_raw=""
+_llm_cache_write_1h() {
+    [[ "${_llm_cache_write:-0}" =~ ^[1-9][0-9]*$ ]] || return 0
+    if [[ "$_llm_cache_write_1h_raw" =~ ^[0-9]+$ ]]; then printf '%s' "$_llm_cache_write_1h_raw"
+    elif [[ -n "${_llm_cache_ttl:-}" ]]; then printf '%s' "$_llm_cache_write"; fi
+}
 write_usage() {
     jq -nc --arg i "${1:-}" --arg o "${2:-}" --arg t "${3:-}" --arg c "${4:-}" --arg e "${5:-}" \
-        --arg p "$_llm_served_by" --arg tr "$_llm_truncated" --arg cw "${_llm_cache_write:-0}" '
+        --arg p "$_llm_served_by" --arg tr "$_llm_truncated" --arg cw "${_llm_cache_write:-0}" --arg cw1 "$(_llm_cache_write_1h)" '
         {}
         + (if ($cw | test("^[1-9][0-9]*$")) then {cache_write_tok: ($cw | tonumber)} else {} end)
+        + (if ($cw1 | test("^[1-9][0-9]*$")) then {cache_write_1h_tok: ($cw1 | tonumber)} else {} end)
         + (if ($i | test("^[0-9]+$")) then {in_tok: ($i | tonumber)} else {} end)
         + (if ($o | test("^[0-9]+$")) then {out_tok: ($o | tonumber)} else {} end)
         + (if ($t | test("^[0-9]+$")) then {think_tok: ($t | tonumber)} else {} end)
@@ -1274,7 +1384,7 @@ fi
 _llm_identity="${IDENTITY_NAME:-}"
 [[ -z "$_llm_identity" && -n "${IDENTITY_DIR:-}" ]] && _llm_identity=$(basename "$IDENTITY_DIR")
 # List prices, USD per million tokens: "input output cache-read" (cache writes
-# are 1.25x input). First-party Claude API rates from the claude-api skill's
+# are 1.25x input at the default five-minute TTL, 2x at one hour). First-party Claude API rates from the claude-api skill's
 # model table (cached 2026-09-25); partner platforms price separately, so
 # LLM_PRICE_SCALE scales the estimate (e.g. 1.1 for a Bedrock regional
 # endpoint). Unknown models get no estimate. Bedrock and profile ids
@@ -1305,10 +1415,10 @@ _llm_ledger_append() {
         {ts: $ts, provider: $provider, model: $model} + $u
         + (if $price == "" then {} else
              ($price | split(" ") | map(tonumber)) as [$pi, $po, $pc]
-             | ($u.cache_tok // 0) as $c | ($u.cache_write_tok // 0) as $w
+             | ($u.cache_tok // 0) as $c | ($u.cache_write_tok // 0) as $w | ([$u.cache_write_1h_tok // 0, $w] | min) as $w1
              | (if ($provider == "anthropic" or $provider == "opencode" or ($provider | startswith("bedrock")))
                 then ($u.in_tok // 0) - $w else ($u.in_tok // 0) - $c - $w end) as $fresh
-             | {cost_usd: ((($fresh * $pi + $w * $pi * 1.25 + ($u.out_tok // 0) * $po + $c * $pc) / 1e6 * $scale) * 1e6 | round / 1e6)}
+             | {cost_usd: ((($fresh * $pi + ($w - $w1) * $pi * 1.25 + $w1 * $pi * 2 + ($u.out_tok // 0) * $po + $c * $pc) / 1e6 * $scale) * 1e6 | round / 1e6)}
            end)
         + (if $identity == "" then {} else {identity: $identity} end)
         + (if $run_id == "" then {} else {run_id: $run_id} end)'         >> "$_llm_ledger" 2>/dev/null || true
@@ -1368,6 +1478,7 @@ stream_anthropic() {
                     # them in so the ledger and budgets count them.
                     _u_in=$(printf '%s' "$json" | jq -r '.message.usage | if .input_tokens == null then empty else .input_tokens + (.cache_creation_input_tokens // 0) end' 2>/dev/null) || _u_in=""
                     _llm_cache_write=$(printf '%s' "$json" | jq -r '.message.usage.cache_creation_input_tokens // 0' 2>/dev/null) || _llm_cache_write=0
+                    _llm_cache_write_1h_raw=$(printf '%s' "$json" | jq -r '.message.usage.cache_creation.ephemeral_1h_input_tokens // empty' 2>/dev/null) || _llm_cache_write_1h_raw=""
                     _u_cache=$(printf '%s' "$json" | jq -r '.message.usage.cache_read_input_tokens // empty' 2>/dev/null) || _u_cache=""
                     ;;
                 *'"message_delta"'*)
@@ -1804,6 +1915,7 @@ else
     case "$LLM_PROVIDER" in
         # opencode (Zen) speaks the Anthropic wire protocol, usage shape included.
         anthropic|opencode|bedrock|bedrock-invoke) _llm_cache_write=$(jq -r '.usage.cache_creation_input_tokens // 0' "$local_resp" 2>/dev/null) || _llm_cache_write=0
+                   _llm_cache_write_1h_raw=$(jq -r '.usage.cache_creation.ephemeral_1h_input_tokens // empty' "$local_resp" 2>/dev/null) || _llm_cache_write_1h_raw=""
                    _u=$(jq -r '[(if .usage.input_tokens == null then "" else .usage.input_tokens + (.usage.cache_creation_input_tokens // 0) end), (.usage.output_tokens // ""), "", (.usage.cache_read_input_tokens // "")] | map(tostring) | join("\u001f")' "$local_resp" 2>/dev/null) || _u="" ;;
         bedrock-converse) _llm_cache_write=$(jq -r '.usage.cacheWriteInputTokens // 0' "$local_resp" 2>/dev/null) || _llm_cache_write=0
                    _u=$(jq -r '[(if .usage.inputTokens == null then "" else .usage.inputTokens + (.usage.cacheWriteInputTokens // 0) end), (.usage.outputTokens // ""), "", (.usage.cacheReadInputTokens // "")] | map(tostring) | join("\u001f")' "$local_resp" 2>/dev/null) || _u="" ;;

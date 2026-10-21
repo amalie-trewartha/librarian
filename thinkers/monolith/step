@@ -283,6 +283,7 @@ fi
 project_section=""
 project_hints=""
 librarian_pack=""
+workspace_section=""
 if [[ "$project_mode" -eq 1 ]]; then
     # Edits since the last wake are a human's (the answer to a question, an
     # edited file): commit them as author "human" before this wake touches
@@ -336,6 +337,16 @@ if [[ "$project_mode" -eq 1 ]]; then
         printf '  project resting (%s): no model call; next check in %ss\n' "$(_project_state)" "$next_delay" >&2
         exit 0
     fi
+    # An active mind on an idle streak rests for free too, until something
+    # changes under project/, a new brief or a due item arrives, or an hour
+    # passes (see _project_should_skip_idle).
+    if _project_should_skip_idle "$wake_mode"; then
+        _project_write_summary || true
+        _project_commit "rest: idle, nothing due" || true
+        next_delay=$(_project_delay_floor 0 2>/dev/null) || next_delay=1800
+        printf '  project idle (streak %s): no model call; next check in %ss\n' "$(_project_idle_streak)" "$next_delay" >&2
+        exit 0
+    fi
     project_hints=$(_prompt_section project-signals _project_signals "$project_restored") || project_hints=""
     # The librarian (librarian/, design/librarian.md) builds this wake's memory
     # pack and runs the day's maintenance; without a store or the tool it prints
@@ -343,11 +354,16 @@ if [[ "$project_mode" -eq 1 ]]; then
     # (CAPTURE, LIBRARIAN SUGGESTION) join the routing signals.
     if [[ "${LIBRARIAN_MEMORY:-1}" != 0 ]] && command -v librarian >/dev/null 2>&1; then
         librarian_pack=$(printf '%s' "$project_hints" | _prompt_section librarian librarian runtime pre \
-            --ritual "$(_project_due_ritual)" --phase "$(_project_phase)" --budget "${LIBRARIAN_PACK_TOKENS:-8000}") || librarian_pack=""
+            --ritual "$(_project_due_ritual)" --phase "$(_project_phase)" --budget "${LIBRARIAN_PACK_TOKENS:-5000}") || librarian_pack=""
         [[ -s "$state_dir/librarian_signals" ]] && project_hints="${project_hints}$(cat "$state_dir/librarian_signals")
 "
     fi
-    project_section=$(_prompt_section project _project_section "$librarian_pack") || project_section=""
+    # The workspace section rides inside the project section, below its
+    # cache-break markers: its file counts change whenever a directory's do,
+    # and at the top of the prompt that cost the whole cached prefix.
+    workspace_section=$(_prompt_section workspace _workspace_section "$run_dir") || workspace_section=""
+    project_section=$(_prompt_section project _project_section "$librarian_pack" "$workspace_section") || project_section=""
+    workspace_section=""
 fi
 # The query for related memories is the wake's own material: the real hints
 # (before the placeholder below) and the last three stream steps.
@@ -419,9 +435,11 @@ fi
 
 # Runtime line + workspace map: stable across wakes (cached prefix), and they
 # remove the reason for the pwd/ls/find opening and the per-wake re-grep of
-# bin/ and thinkers/ that took ~64% of reasoning steps on 2026-09-04.
+# bin/ and thinkers/ that took ~64% of reasoning steps on 2026-09-04. In
+# project mode the workspace map is already inside the project section, below
+# its cache-break markers (its exact counts under 100 move with every new file).
 runtime_line=$(_prompt_section runtime _runtime_line) || runtime_line=""
-workspace_section=$(_prompt_section workspace _workspace_section "$run_dir") || workspace_section=""
+[[ "$project_mode" -eq 1 ]] || workspace_section=$(_prompt_section workspace _workspace_section "$run_dir") || workspace_section=""
 # Sent section: outbound messages of the last day with their delivery state,
 # so "did I already send this" is answered by the prompt, not by memory
 # (design/outbound_delivery.md, part 5). Sits after the recent stream, so the
@@ -526,6 +544,23 @@ if [[ "$project_mode" -eq 1 ]]; then
         --var "PROJECT_BUDGET_UNIT=$project_budget_unit" --var "PROJECT_CACHE_READ_WEIGHT=${PROJECT_CACHE_READ_WEIGHT:-0.1}")
 fi
 
+# Prompt caching across wakes (project mode). Every request's prefix is
+# shellm's system prompt and then the wake prompt, so shellm keeps its system
+# prompt the same from run to run (no run directory path, no clock: the wake
+# prompt has the clock). The stable head of the wake prompt is cached for an
+# hour (LLM_CACHE_TTL, bin/llm): wakes sit 10 to 30 minutes apart once the mind
+# idles, past the five-minute default, so with it the charter, spec and project
+# memory are read back at a twentieth of the input price instead of written
+# again at 1.25x. Amazon Bedrock documents the one-hour TTL for Claude Opus 5.5
+# on InvokeModel (docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html).
+# PROJECT_CACHE_TTL overrides it ("" = the five-minute default).
+shellm_stable_system="${SHELLM_STABLE_SYSTEM_PROMPT:-0}"
+wake_cache_ttl="${LLM_CACHE_TTL:-}"
+if [[ "$project_mode" -eq 1 ]]; then
+    shellm_stable_system="${SHELLM_STABLE_SYSTEM_PROMPT:-1}"
+    wake_cache_ttl="${PROJECT_CACHE_TTL-1h}"
+fi
+
 # shellm writes its run header's step_id here, so a fallback idle can carry
 # run_id and the timeline can pair it with the run that went quiet.
 run_id_file=$(mktemp)
@@ -590,6 +625,7 @@ SHELLM_NO_BANNER=1 \
     SHELLM_TRIGGER_STEP_ID="$trigger_step_id" \
     SHELLM_WAKE="$wake_reason" \
     SHELLM_RUN_ID_OUT="$run_id_file" \
+    SHELLM_STABLE_SYSTEM_PROMPT="$shellm_stable_system" LLM_CACHE_TTL="$wake_cache_ttl" \
     SHELLM_TOKEN_BUDGET="${project_wake_ceiling:-0}" SHELLM_TOKEN_MARK="$project_ledger_before" \
     PROJECT_BUDGET_UNIT="${project_budget_unit:-tokens}" \
     shellm --model "$run_model" --traj "$TRAJ_ID" --context-scope run \
@@ -774,6 +810,8 @@ if [[ "$project_mode" -eq 1 ]]; then
     _project_write_summary || true
     _project_commit "$(printf '%s' "${run_response:-wake $wake_reason}" | head -c 2000)
 [wake $wake_reason, rc=$run_rc]"
+    # What the idle skip compares against: this wake's time, commit and brief.
+    _project_note_real_wake || true
 fi
 _save_state
 

@@ -90,7 +90,7 @@ WAKE='{"type":"monolith-wake","content":"wake","source":"monolith-timer"}'
 run_step() {  # run_step [ENV=VAL ...]
     printf '%s' "$WAKE" | env PATH="$WORK/stub:$PATH" IDENTITY_DIR="$ID" IDENTITY_NAME=ada MEM_DIR="$ID/memories" \
         TRAJ_DIR="$ID/trajectories" TRAJ_ID="$TRAJ_ID" HOME="$WORK/home" LIBRARIAN_LLM=0 \
-        LIBRARIAN_SRC="$REPO/librarian/src" MONOLITH_TIERED_MEMORY=1 "$@" "$STEP" >> "$WORK/step.log" 2>&1
+        LIBRARIAN_SRC="$REPO/librarian/src" MONOLITH_TIERED_MEMORY=1 PROJECT_IDLE_SKIP_STREAK=0 "$@" "$STEP" >> "$WORK/step.log" 2>&1
 }
 last_episode() { L search --type episode --limit 1 --no-log | jq -r '.[0].id'; }
 episode_outcome() { L show "$1" | jq -r '.outcome.value + " | " + .outcome.criterion'; }
@@ -105,7 +105,16 @@ pos_pack=$(printf '%s\n' "$prompt" | grep -n '^\[IDENTITY: CORE\]' | head -1 | c
 pos_spec=$(printf '%s\n' "$prompt" | grep -n '^Project specification' | head -1 | cut -d: -f1)
 pos_mem=$(printf '%s\n' "$prompt" | grep -n '^Project memory (project/project-memory.md' | head -1 | cut -d: -f1)
 pos_stream=$(printf '%s\n' "$prompt" | grep -n '^Recent stream' | head -1 | cut -d: -f1)
-(( pos_spec < pos_pack && pos_pack < pos_mem && pos_mem < pos_stream )) && ok "pack sits after the spec and before project memory" || bad "pack placement" "spec=$pos_spec pack=$pos_pack mem=$pos_mem stream=$pos_stream"
+(( pos_spec < pos_mem && pos_mem < pos_pack && pos_pack < pos_stream )) && ok "pack sits after project memory, which sits after the spec" || bad "pack placement" "spec=$pos_spec pack=$pos_pack mem=$pos_mem stream=$pos_stream"
+# Cache-break markers: one after the spec block, one after project memory,
+# both above the pack (bin/llm turns them into cache breakpoints).
+mk_lines=$(printf '%s\n' "$prompt" | grep -n '^<<<llm-cache-break>>>$' | cut -d: -f1 | tr '\n' ' ')
+read -r mk1 mk2 mk3 <<<"$mk_lines"
+(( pos_spec < mk1 && mk1 < pos_mem && pos_mem < mk2 && mk2 < pos_pack )) && [[ -z "${mk3:-}" ]] \
+    && ok "two cache markers: after the spec, after project memory" || bad "cache marker placement" "markers=$mk_lines spec=$pos_spec mem=$pos_mem pack=$pos_pack"
+pos_ws=$(printf '%s\n' "$prompt" | grep -n '^Workspace: ' | head -1 | cut -d: -f1)
+(( mk2 < pos_ws && pos_ws < pos_pack )) && ok "the workspace map sits below the markers in project mode" || bad "workspace placement" "ws=$pos_ws markers=$mk_lines"
+eq "the workspace map appears once" "$(printf '%s\n' "$prompt" | grep -c '^Workspace: ')" 1
 has "project memory stays in the wake" "$prompt" "Project memory (project/project-memory.md"
 has "journal tail shrinks to two entries" "$prompt" "Last 2 journal entries"
 hasnt "life section is replaced" "$prompt" "Your life so far"
@@ -239,6 +248,24 @@ eq "a failing librarian is an error step" "$n_err" 1
 # ── 7. blind never sees the store ────────────────────────────────────────────
 has "blind runs with the librarian off" "$(cat "$REPO/bin/blind")" "LIBRARIAN_MEMORY=0"
 has "the --bin list forwards librarian" "$(sed -n '/for cmd in mem traj/p' "$REPO/thinkers/_lib/common.sh")" "librarian"
+
+# ── 8. idle rest without a model call ───────────────────────────────────────
+# Three timer wakes that change no project file, then the fourth skips the
+# model; a file a background job left under project/ brings the model back.
+# Nothing due by the real clock: close today's daily ritual if it is owed.
+due=$(export IDENTITY_DIR="$ID" IDENTITY_NAME=ada; source "$REPO/thinkers/_lib/project.sh"; _project_due_ritual)
+[[ "$due" == daily* ]] && STUB_RITUAL_FILE="daily/${due#daily }.md"
+run_step STUB_JOURNAL="work before the idle stretch" PROJECT_FREETIME=0 ${STUB_RITUAL_FILE:+STUB_RITUAL_FILE=$STUB_RITUAL_FILE}
+for i in 1 2 3; do run_step PROJECT_IDLE_SKIP_STREAK=3 PROJECT_FREETIME=0; done
+eq "idle: three idle wakes counted" "$(cat "$ID/run/project_idle_streak")" 3
+rm -f "$WORK/prompt"
+run_step PROJECT_IDLE_SKIP_STREAK=3 PROJECT_FREETIME=0
+[[ -f "$WORK/prompt" ]] && bad "idle: the fourth idle wake makes no model call" || ok "idle: the fourth idle wake makes no model call"
+has "idle: the step log says why" "$(tail -3 "$WORK/step.log")" "project idle (streak 3): no model call"
+grep -q '_project_commit "rest: idle, nothing due"' "$STEP" && ok "idle: a skip commits like a rest" || bad "idle: a skip commits like a rest"
+mkdir -p "$P/model"; printf '42\n' > "$P/model/background-result.txt"
+run_step PROJECT_IDLE_SKIP_STREAK=3 PROJECT_FREETIME=0
+[[ -f "$WORK/prompt" ]] && ok "idle: a background job's output under project/ wakes the model" || bad "idle: a background job's output under project/ wakes the model"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
