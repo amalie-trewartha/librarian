@@ -23,9 +23,15 @@ REQUEST_FILE = "librarian_request.json"
 SIGNALS_FILE = "librarian_signals"
 NO_STORE_MARKER = ".no-store-noted"
 CAPTURE_TTL_DAYS_DEFAULT = 3
+DISPUTE_TTL_HOURS_DEFAULT = 48
 REVIEW_WINDOW_DAYS_DEFAULT = 7
 RECUR_WINDOW_DAYS_DEFAULT = 7
 EXCLUDE_WAKES_DEFAULT = 1
+TRANSFER_WAKES_DEFAULT = 3
+BRIEF_HEAD_CHARS = 1500
+# Files a wake can change without doing project work: a wake that changed
+# only these (and cited nothing) is a no-op, and its episode is never packed.
+BOOKKEEPING_FILES = {"STATE", "librarian.md", "questions-summary.md"}
 SIGNAL_LINES = ("- RITUAL DUE", "- FREE TIME", "- HUMAN ANSWER", "- DEFAULT DUE", "- STALL", "- DELIVERABLE", "- DEADLINE", "- FINAL STRETCH", "- GUARD", "- THE RUN HAS ENDED")
 
 
@@ -204,6 +210,27 @@ def _late_outcomes(store: db.Store, pd: Optional[Path], project: Optional[str]) 
     return report
 
 
+def _expire_disputes(store: db.Store) -> list[str]:
+    """Daily: a dispute no human decided within the TTL is rejected (both memories kept, active again).
+
+    The mind cannot decide a dispute, so an undecided one only lingers: in the
+    2026-10 live run one waited seven days and kept surfacing in rest wakes.
+    """
+    ttl = _env_int("LIBRARIAN_DISPUTE_TTL_HOURS", DISPUTE_TTL_HOURS_DEFAULT)
+    out = []
+    for item in queue.list_items(store, "pending", "dispute"):
+        if (db.age_days(item["created"]) or 0.0) * 24 < ttl:
+            continue
+        with store.write():
+            identity.decide(store, item["id"], "reject", f"expired: no human decision within {ttl} h; both memories kept")
+            for nid in ((item.get("payload") or {}).get("a"), (item.get("payload") or {}).get("b")):
+                n = model.get_node(store, nid, with_edges=False) if nid else None
+                if n is not None and n.status == "disputed":
+                    model.set_status(store, nid, "active")
+        out.append(item["id"])
+    return out
+
+
 def maintenance(store: db.Store, ritual: Optional[str], pd: Optional[Path], project: Optional[str], use_llm: bool) -> dict:
     out: dict = {}
     if not ritual:
@@ -212,7 +239,7 @@ def maintenance(store: db.Store, ritual: Optional[str], pd: Optional[Path], proj
     kind = parts[0]
     key = parts[1] if len(parts) > 1 else "once"
     if kind == "daily" and not _maint_done(store, "daily", key):
-        rep = {"consolidate": lifecycle.consolidate(store, use_llm=use_llm), "decay": lifecycle.decay(store)}
+        rep = {"consolidate": lifecycle.consolidate(store, use_llm=use_llm), "decay": lifecycle.decay(store), "expired_disputes": _expire_disputes(store)}
         _maint_mark(store, "daily", key, rep)
         out["daily"] = key
     elif kind == "weekly" and not _maint_done(store, "weekly", key):
@@ -233,9 +260,17 @@ def maintenance(store: db.Store, ritual: Optional[str], pd: Optional[Path], proj
 # ── pre ──────────────────────────────────────────────────────────────────────
 
 
+def current_brief(spec: str) -> str:
+    """The newest project brief in the spec: from its last top-level heading to the end."""
+    heads = [m.start() for m in re.finditer(r"^# ", spec, flags=re.M)]
+    return spec[heads[-1]:] if heads else spec
+
+
 def _task_text(pd: Path, signals: list[str]) -> str:
-    spec = _read(pd / "spec.md", 20000)
-    title = next((ln.strip("# ").strip() for ln in spec.splitlines() if ln.startswith("# ")), "")
+    # The current brief's title, not the spec's first one: later briefs are
+    # appended to the same spec, and recall should follow the work in hand.
+    brief = current_brief(_read(pd / "spec.md", 200000))
+    title = next((ln.strip("# ").strip() for ln in brief.splitlines() if ln.startswith("# ")), "")
     plan = "\n".join(_read(pd / "plan.md", 20000).splitlines()[:12])
     journal = _read(pd / "journal.md", 400000)
     blocks = re.split(r"^### ", journal, flags=re.M)
@@ -281,7 +316,8 @@ def _signals_out(store: db.Store, project: Optional[str], rd: Path) -> list[str]
             lines.append(
                 f'- CAPTURE: you resolved "{row["signature"]}" (wake {row["created"]}, steps {" .. ".join(str(s)[:8] for s in span)}). '
                 f"Write it down once: `librarian propose --type skill --summary \"<when would I want this?>\" --tags {' '.join(tags) or 'area:tooling'} --body-file <f>` "
-                f"with symptom, cause, exact command, verified on. This signal stays until a skill with those tags is proposed."
+                f"with symptom, cause, exact command, verified on. This signal stays until a skill with those tags is proposed; "
+                f"if a memory already covers it, clear it instead: `librarian capture clear {row['id']} --covered-by <memory id>`."
             )
         for s in triggers.undelivered(store, project):
             mems = []
@@ -341,16 +377,24 @@ def pre(ritual: Optional[str], phase: str, budget: Optional[int], signals_text: 
             tags.append(f"ctx:ritual-{kind}")
     tags += _vocab_tags_in_text(store, task)
     exclude = _exclude_ids(store, project, _env_int("LIBRARIAN_EXCLUDE_WAKES", EXCLUDE_WAKES_DEFAULT))
+    # A project's first wakes also get earlier briefs' memories that match the brief.
+    transfer_task = ""
+    wakes = store.q1("SELECT COUNT(*) FROM requests WHERE kind = 'pack' AND project IS ?", (project,))[0]
+    if wakes < _env_int("LIBRARIAN_TRANSFER_WAKES", TRANSFER_WAKES_DEFAULT):
+        others = store.q1("SELECT 1 FROM nodes WHERE project IS NOT ? AND type IN ('skill','fact','decision','retrospective') AND status IN ('active','probationary') LIMIT 1", (project,))
+        if others is not None:
+            transfer_task = current_brief(_read(pd / "spec.md", 200000))[:BRIEF_HEAD_CHARS]
     req = pack.PackRequest(
         task=task,
         tags=tags,
         project=project,
         phase=mapped,
-        budget=int(budget or _env_int("LIBRARIAN_PACK_TOKENS", 8000)),
+        budget=int(budget or _env_int("LIBRARIAN_PACK_TOKENS", 5000)),
         exclude_ids=exclude,
         log=True,
         use_llm=use_llm,
         ritual=ritual,
+        transfer_task=transfer_task,
     )
     pk = pack.build(store, req)
     settle_captures(store, [], project, use_llm)
@@ -359,7 +403,7 @@ def pre(ritual: Optional[str], phase: str, budget: Optional[int], signals_text: 
             {
                 "request_id": pk.request_id,
                 "pack_ids": pk.ids(),
-                "task_ids": pk.ids("task"),
+                "task_ids": pk.ids("task") + pk.ids("transfer"),
                 "ritual": ritual,
                 "phase": mapped,
                 "project": project,
@@ -608,7 +652,7 @@ def post(rc: int, run_id: Optional[str], stderr_tail: str, final: str, use_llm: 
             cited=cited,
             request_ids=[req["request_id"]],
             overrides=overrides,
-            provenance={"author": "runtime", "run_id": run_id, "request_id": req["request_id"], "ritual": ritual},
+            provenance={"author": "runtime", "run_id": run_id, "request_id": req["request_id"], "ritual": ritual, "noop": not cited and set(dirty) <= BOOKKEEPING_FILES},
         )
     except ValueError as exc:
         print(f"librarian: episode not recorded: {exc}", file=sys.stderr)

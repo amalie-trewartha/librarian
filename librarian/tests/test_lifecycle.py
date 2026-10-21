@@ -347,5 +347,65 @@ class LateOutcomeTest(StoreCase):
         self.assertEqual(self.node(later).outcome["value"], "partial")
 
 
+class RunBRuntimeTest(StoreCase):
+    def _project(self, spec: str, pid: str):
+        from pathlib import Path
+        pd = self.ident / "workdir" / "project"
+        pd.mkdir(parents=True)
+        (pd / "charter.md").write_text("charter")
+        (pd / "spec.md").write_text(spec)
+        pp = self.ident / "project-pristine"
+        pp.mkdir()
+        (pp / "project_id").write_text(pid)
+        return pd
+
+    def _pre(self) -> str:
+        import io
+        from contextlib import redirect_stdout
+        from librarian import runtime
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            runtime.pre(None, "building", None, "", use_llm=False)
+        return buf.getvalue()
+
+    def test_new_project_first_wakes_get_earlier_briefs_memories(self):
+        from librarian import pack, runtime
+        spec = "# Project brief: mobility\n\nModel travel.\n\n# Project brief 2: home energy\n\nModel heat pumps using census tables.\n"
+        self._project(spec, "p-2")
+        old = self.skill("fetch census tables without an API key", ["area:data-fetch"], project="p-1")
+        self.assertTrue(runtime.current_brief(spec).startswith("# Project brief 2"))
+        outs = [self._pre() for _ in range(runtime.TRANSFER_WAKES_DEFAULT + 1)]
+        self.assertTrue(all(pack.MARK_TRANSFER in o and old in o for o in outs[:-1]))
+        self.assertNotIn(pack.MARK_TRANSFER, outs[-1])
+
+    def test_task_text_follows_the_current_brief(self):
+        from librarian import runtime
+        pd = self._project("# Project brief: mobility\n\nx\n\n# Project brief 2: home energy\n\ny\n", "p-2")
+        self.assertTrue(runtime._task_text(pd, []).startswith("Project brief 2: home energy"))
+
+    def test_undecided_dispute_expires(self):
+        from librarian import queue, runtime
+        a = self.skill("a", ["pkg:x"])
+        with self.store.write():
+            model.set_status(self.store, a, "disputed")
+            qid = queue.enqueue(self.store, "dispute", {"a": a, "b": None})
+        self.assertEqual(runtime._expire_disputes(self.store), [])
+        self.at("2026-10-03T01:00:00Z")
+        self.assertEqual(runtime._expire_disputes(self.store), [qid])
+        self.assertEqual(queue.get_item(self.store, qid)["status"], "rejected")
+        self.assertEqual(self.node(a).status, "active")
+
+    def test_credit_reversal_is_exact_at_the_floor(self):
+        # Live trial 2026-10-21: deltas were logged before the clamp, so reversing a
+        # failure that hit CONF_MIN overshot (the fix-19 repair had to replay credit).
+        a = self.skill("a", ["pkg:x"])
+        with self.store.write():
+            self.store.ex("UPDATE nodes SET confidence = 0.03 WHERE id = ?", (a,))
+        rep = self.episode("failure", [a])
+        self.assertAlmostEqual(self.node(a).confidence, lifecycle.CONF_MIN, places=6)
+        lifecycle.amend_outcome(self.store, rep.episode_id, "partial")
+        self.assertAlmostEqual(self.node(a).confidence, 0.03, places=6)
+
+
 if __name__ == "__main__":
     unittest.main()

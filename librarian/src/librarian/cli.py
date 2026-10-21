@@ -275,6 +275,7 @@ def cmd_search(args, out: Out) -> int:
     for c in cands[: args.limit]:
         n = c.node
         rows.append({"id": n.id, "type": n.type, "status": n.status, "tags": n.tags, "summary": n.summary, "confidence": round(n.confidence, 3), "last_confirmed": n.last_confirmed, "score": round(c.tag_score + c.bm25_norm + 0.5 * c.hop, 3)})
+    queued = _queue_matches(store, args.text or "") if args.text and not args.type else []
     if not args.no_log:
         rid = db.ulid()
         ts = db.now_iso()
@@ -285,8 +286,25 @@ def cmd_search(args, out: Out) -> int:
             )
             for i, r in enumerate(rows, start=1):
                 store.ex("INSERT INTO retrieval_log(request_id, node_id, source, rank, score, project, ts) VALUES (?,?,?,?,?,?,?)", (rid, r["id"], "search", i, r["score"], proj, ts))
-    out.emit(rows, _r_search)
+    out.emit(rows + queued, _r_search)
     return EXIT_OK
+
+
+def _queue_matches(store: db.Store, text: str) -> list[dict]:
+    """Pending queue items that match the search text, so an item waiting on a human is findable.
+
+    In the 2026-10 live run a dispute waited seven days for a human, and the
+    mind searched for it eight times without finding it (search covered nodes only).
+    """
+    words = [w for w in model.tokenize(text) if len(w) >= 4]
+    out = []
+    for item in queue.list_items(store, "pending"):
+        blob = (item["id"] + " " + json.dumps(item.get("payload") or {})).lower()
+        if item["id"].lower() in text.lower() or (words and sum(w in blob for w in words) >= max(1, len(words) // 2)):
+            payload = item.get("payload") or {}
+            what = payload.get("a_summary") or payload.get("summary") or payload.get("tag") or ""
+            out.append({"id": item["id"], "type": f"queue:{item['kind']}", "status": "pending (waiting on a human)", "tags": [], "summary": f"{what[:160]} (since {item['created'][:10]})", "confidence": 0.0, "last_confirmed": None, "score": 0.0})
+    return out
 
 
 def cmd_fetch(args, out: Out) -> int:
@@ -530,6 +548,27 @@ def cmd_queue(args, out: Out) -> int:
     except ValueError as exc:
         return out.error(str(exc), EXIT_USAGE)
     out.emit(res, _r_kv)
+    return EXIT_OK
+
+
+def cmd_capture(args, out: Out) -> int:
+    store = _store(args)
+    proj = args.project or _current_request().get("project")
+    if args.capture_cmd == "list":
+        rows = [db.row_dict(r) for r in store.q("SELECT id, signature, tags, created FROM pending_capture WHERE cleared IS NULL AND project IS ? ORDER BY created", (proj,))]
+        out.emit(rows, _r_kv)
+        return EXIT_OK
+    if args.capture_cmd != "clear":
+        return out.error("capture: list | clear <id or signature> --covered-by <memory id>", EXIT_USAGE)
+    nid = model.resolve_id(store, args.covered_by)
+    if not nid or model.get_node(store, nid, with_edges=False) is None:
+        return out.error(f"no memory {args.covered_by}", EXIT_NOTFOUND)
+    row = store.q1("SELECT id FROM pending_capture WHERE cleared IS NULL AND (id = ? OR signature = ?) ORDER BY created LIMIT 1", (args.ref, args.ref))
+    if row is None:
+        return out.error(f"no open capture {args.ref}", EXIT_NOTFOUND)
+    with store.write():
+        store.ex("UPDATE pending_capture SET cleared = ?, cleared_by = ? WHERE id = ?", (db.now_iso(), nid, row[0]))
+    out.emit({"id": row[0], "cleared_by": nid}, _r_kv)
     return EXIT_OK
 
 
@@ -835,6 +874,16 @@ def build_parser() -> argparse.ArgumentParser:
         c.add_argument("id")
         c.add_argument("--note")
     s.set_defaults(func=cmd_queue)
+
+    s = sub.add_parser("capture", help="open CAPTURE signals; clear one a memory already covers")
+    ss = s.add_subparsers(dest="capture_cmd")
+    c = ss.add_parser("list")
+    c.add_argument("--project")
+    c = ss.add_parser("clear")
+    c.add_argument("ref", help="capture id or its error signature")
+    c.add_argument("--covered-by", required=True, help="the memory that already covers it")
+    c.add_argument("--project")
+    s.set_defaults(func=cmd_capture)
 
     s = sub.add_parser("probe")
     ss = s.add_subparsers(dest="probe_cmd")

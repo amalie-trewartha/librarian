@@ -242,16 +242,56 @@ class PackTest(StoreCase):
         self.assertIn("disputed:", joined)
         self.assertIn("UNTRUSTED", joined)
 
-    def test_near_duplicate_episodes_packed_once(self):
+    def test_rest_episodes_never_packed(self):
         # Live trial 2026-10-15: under the day-budget cap the mind woke every few minutes to rest,
         # and 9 of 17 task rows were "Rest: day budget nearly spent ($186.39/$200) ..." variants.
         tags = ["pkg:colcon", "area:build-system"]
         rest = [self.episode("partial", [], summary=f"Rest: day budget nearly spent (${186 + i}.{i}9/$200){';' if i % 2 else '.'} STATE refreshed, no other changes.", tags=tags).episode_id for i in range(6)]
+        noop = self.episode("partial", [], summary="STATE refreshed.", tags=tags, provenance={"author": "runtime", "noop": True}).episode_id
         work = self.episode("partial", [], summary="Fixed the colcon eigen link error by pinning Eigen 3.4.", tags=tags).episode_id
         pk = pack.build(self.store, self.req(budget=8000))
         ids = pk.ids("task")
-        self.assertEqual(sum(1 for r in rest if r in ids), 1)
+        self.assertEqual([r for r in rest + [noop] if r in ids], [])
         self.assertIn(work, ids)
+
+    def test_near_duplicate_episodes_packed_once(self):
+        tags = ["pkg:colcon", "area:build-system"]
+        dups = [self.episode("partial", [], summary=f"Reran colcon build {i}: eigen link error fixed.", tags=tags).episode_id for i in range(4)]
+        pk = pack.build(self.store, self.req(budget=8000))
+        self.assertEqual(sum(1 for r in dups if r in pk.ids("task")), 1)
+
+    def test_episodes_capped_and_from_this_project_only(self):
+        # Live trial 2026-10-21: 78% of later projects' task rows were earlier projects' episodes.
+        tags = ["pkg:colcon", "area:build-system"]
+        words = "amber birch cedar dune ember fjord grove heath".split()
+        mine = [self.episode("partial", [], summary=f"Colcon eigen {w} variant built and linked.", tags=tags).episode_id for w in words[:6]]
+        other = self.episode("partial", [], summary="Colcon eigen link fixed in the earlier project.", tags=tags, project="p-0").episode_id
+        pk = pack.build(self.store, self.req(budget=8000))
+        eps = [e.node.id for e in pk.task_memories if e.node.type == "episode"]
+        self.assertEqual(len(eps), pack.EPISODES_MAX)
+        self.assertTrue(set(eps) <= set(mine))
+        self.assertNotIn(other, eps)
+
+    def test_reserved_slots_put_relevant_curated_memory_first(self):
+        tags = ["pkg:colcon", "area:build-system"]
+        for i in range(8):
+            self.episode("partial", [], summary=f"Colcon eigen link step {'abcdefgh'[i]} done.", tags=tags)
+        f = self.add("fact", "Eigen 3.4 is the colcon eigen link version that works", ["pkg:colcon"], "Source: https://eigen.tuxfamily.org release notes, verified 2026-09-01.", project="p-1")
+        pk = pack.build(self.store, self.req(budget=8000))
+        types = [e.node.type for e in pk.task_memories]
+        self.assertIn(self.s1, pk.ids("task")[:3])
+        self.assertIn(f, pk.ids("task")[:3])
+        self.assertNotEqual(types[0], "episode")
+
+    def test_transfer_section_offers_other_projects_memories(self):
+        old = self.skill("fetch census tables without an API key", ["area:data-fetch"], project="p-0")
+        same = self.skill("census download for this project", ["area:data-fetch"], project="p-1")
+        pk = pack.build(self.store, self.req(transfer_task="A new brief: home energy adoption using census tables for the city."))
+        self.assertIn(old, [e.node.id for e in pk.transfer])
+        self.assertNotIn(same, [e.node.id for e in pk.transfer])
+        text = pack.render_text(pk)
+        self.assertLess(text.index(pack.MARK_TRANSFER), text.index(pack.MARK_TASK))
+        self.assertEqual(pack.build(self.store, self.req()).transfer, [])
 
     def test_working_under_conflict_not_rendered(self):
         from librarian import queue

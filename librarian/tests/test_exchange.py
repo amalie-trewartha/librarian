@@ -123,8 +123,10 @@ class StatsEvalTest(StoreCase):
         self.episode("success", [a], request_ids=[pk.request_id])
         s = exchange.stats(self.store)
         self.assertEqual(s["nodes"]["total"], 3)
-        # Both task entries were logged under the pack and cited by the closed episode (log rows credit), so precision is 1.0.
-        self.assertEqual(s["pack_precision"], 1.0)
+        # Both task entries were packed; only a was cited by the episode itself (b has only the
+        # automatic 'log' row), so precision is 0.5 and the cited-success rate 0.5.
+        self.assertEqual(s["pack_precision"], 0.5)
+        self.assertEqual(s["pack_cited_success_rate"], 0.5)
         self.assertEqual(s["packs"], 1)
         self.assertIn("suggestions", s)
         self.assertEqual(s["librarian_spend"], {})

@@ -346,24 +346,30 @@ def stats(store: db.Store, since: Optional[str] = None, project: Optional[str] =
         tuple(params),
     )
     packed = len(rows)
+    cited = 0
     cited_success = 0
     helpful = 0
     for r in rows:
         c = store.q1(
-            "SELECT c.helpful, n.outcome FROM citations c JOIN nodes n ON n.id = c.episode_id WHERE c.node_id = ? AND c.request_id = ?",
+            "SELECT c.helpful, c.source, c.outcome_override, n.outcome FROM citations c JOIN nodes n ON n.id = c.episode_id WHERE c.node_id = ? AND c.request_id = ?",
             (r["node_id"], r["request_id"]),
         )
         if c is None:
             continue
         try:
-            oc = json.loads(c["outcome"] or "{}").get("value")
+            oc = c["outcome_override"] or json.loads(c["outcome"] or "{}").get("value")
         except ValueError:
-            oc = None
-        if oc == "success":
-            cited_success += 1
+            oc = c["outcome_override"]
+        # Precision is the share of packed rows the mind cited itself; every packed row
+        # also gets an automatic 'log' citation, which says nothing about its use.
+        if c["source"] == "cite":
+            cited += 1
+            if oc == "success":
+                cited_success += 1
         if c["helpful"]:
             helpful += 1
-    out["pack_precision"] = round(cited_success / packed, 3) if packed else None
+    out["pack_precision"] = round(cited / packed, 3) if packed else None
+    out["pack_cited_success_rate"] = round(cited_success / packed, 3) if packed else None
     out["helpful_rate"] = round(helpful / packed, 3) if packed else None
     pulls = store.q(f"SELECT covered_by_pack FROM requests WHERE kind IN ('search','fetch') AND {where}", tuple(params))  # noqa: S608
     unc = sum(1 for p in pulls if p[0] == 0)

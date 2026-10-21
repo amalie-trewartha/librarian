@@ -202,6 +202,9 @@ def assign_credit(store: db.Store, episode_id: str) -> CreditReport:
         elif effective == "unknown" and node.status == "probationary":
             unk += 1
         conf = _clamp(node.confidence + delta)
+        # Log the change actually applied, so reversal is exact at the clamp (the
+        # 2026-10 fix-19 repair had to replay credit for nodes floored at CONF_MIN).
+        delta = conf - node.confidence
         review_flag = node.review_flag
         if fss >= REVIEW_FAILURES and effective == "failure":
             review_flag = "repeated_failure"

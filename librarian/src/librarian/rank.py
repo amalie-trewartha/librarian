@@ -38,6 +38,9 @@ HALF_LIFE_DAYS: dict[str, Optional[float]] = {
 }
 
 W_TAG = 1.0
+# Episodes carry the request tags of the wake that wrote them, so their tag
+# overlap with the next wake is about 1 by construction; half weight.
+W_TAG_EPISODE = 0.5
 W_BM25 = 0.8
 W_RECENCY = 0.6
 W_REUSE = 0.5
@@ -112,7 +115,7 @@ def cut1(c: recall.Candidate, q: recall.Query, exclude: set, priors: dict, ref=N
     rec = recency(n, ref)
     reu = reuse(n)
     pr = prior(priors, n.type, q.phase)
-    score = W_TAG * tj + W_BM25 * c.bm25_norm + W_RECENCY * rec + W_REUSE * reu + pr + W_HOP * c.hop
+    score = (W_TAG_EPISODE if n.type == "episode" else W_TAG) * tj + W_BM25 * c.bm25_norm + W_RECENCY * rec + W_REUSE * reu + pr + W_HOP * c.hop
     if n.status == "probationary":
         score -= PENALTY_PROBATIONARY
     if n.id in exclude:
@@ -137,7 +140,7 @@ def llm_relevance(model_llm: llm.LLM, task: str, ranked: list[Ranked]) -> Option
         "integer 0-3 (0 irrelevant, 3 directly needed). No prose."
     )
     prompt = "Task:\n" + task.strip()[:3000] + "\n\nMemories (id | type | summary):\n" + "\n".join(lines) + "\n\nJSON:"
-    out = model_llm.complete(prompt, system=system, max_tokens=400)
+    out = model_llm.complete(prompt, system=system, max_tokens=1200)
     parsed = llm.parse_json_lenient(out)
     if not isinstance(parsed, dict):
         return None

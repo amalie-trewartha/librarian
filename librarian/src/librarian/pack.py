@@ -2,12 +2,19 @@
 
 Order: identity (core, then working; verbatim every time so the prefix
 caches), relevant group preferences, ranked task memories until the budget
-is hit, a COVERAGE line, 0–4 LIBRARIAN NOTES, and the request id.
+is hit, a COVERAGE line, 0–4 LIBRARIAN NOTES, and the request id. Task
+memories open with reserved slots for relevant curated memories (skills,
+retrospectives, decisions, facts), and episodes are capped and limited to the
+current project: in the 2026-10 live run, earlier projects' episodes took 78%
+of later projects' task rows and curated memory under 150 tokens per wake.
+On a project's first wakes, a summary-only FROM EARLIER BRIEFS section offers
+other projects' curated memories that match the brief.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Optional
@@ -22,11 +29,19 @@ PREF_CAP = 1000
 COVERAGE_EXTRA = 5
 NOTES_MAX = 4
 EPISODE_KEY_CHARS = 60
+EPISODES_MAX = 3
+# Reserved task slots per curated type, filled first from relevant candidates.
+RESERVED = {"skill": 2, "retrospective": 1, "decision": 1, "fact": 1}
+RESERVED_MIN_RELEVANCE = 2
+TRANSFER_MAX = 8
+TRANSFER_TYPES = ("skill", "fact", "decision", "retrospective")
+TRANSFER_SHARE = 8
 
 MARK_CORE = "[IDENTITY: CORE]"
 MARK_WORKING = "[IDENTITY: WORKING]"
 MARK_PREFS = "[GROUP PREFERENCES]"
 MARK_TASK = "[TASK MEMORIES]"
+MARK_TRANSFER = "[FROM EARLIER BRIEFS]"
 MARK_COVERAGE = "[COVERAGE]"
 MARK_NOTES = "[LIBRARIAN NOTES]"
 MARK_REQUEST = "[REQUEST]"
@@ -43,6 +58,9 @@ class PackRequest:
     log: bool = True
     use_llm: bool = True
     ritual: Optional[str] = None
+    # The project brief's text, on a project's first wakes only: asks for the
+    # FROM EARLIER BRIEFS section.
+    transfer_task: str = ""
 
 
 @dataclass
@@ -74,9 +92,10 @@ class Pack:
     llm_cut: bool
     phase: Optional[str] = None
     project: Optional[str] = None
+    transfer: list[Entry] = field(default_factory=list)
 
     def all_entries(self) -> list[Entry]:
-        return self.identity_core + self.identity_working + self.preferences + self.task_memories
+        return self.identity_core + self.identity_working + self.preferences + self.task_memories + self.transfer
 
     def ids(self, section: Optional[str] = None) -> list[str]:
         return [e.node.id for e in self.all_entries() if section is None or e.section == section]
@@ -145,6 +164,48 @@ def _episode_key(node: model.Node) -> str:
     """
     s = re.sub(r"[^a-z]+", " ", (node.summary or "").lower())
     return s.strip()[:EPISODE_KEY_CHARS]
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+
+
+def _noop_episode(node: model.Node) -> bool:
+    """A Rest wake or one that changed only bookkeeping files: it records nothing worth packing."""
+    return bool((node.provenance or {}).get("noop")) or (node.summary or "").lower().startswith("rest")
+
+
+def _relevant(r: rank.Ranked, qtags: set) -> bool:
+    """Good enough to take a reserved slot: the LLM cut rated it, or else it matched the
+    task text or shares a pkg:/area: tag with the request (project:/ctx: tags match everything)."""
+    if r.relevance is not None:
+        return r.relevance >= RESERVED_MIN_RELEVANCE
+    if "text" in (r.reasons or {}).get("via", []):
+        return True
+    return any(t in qtags for t in r.node.tags if t.startswith(("pkg:", "area:")))
+
+
+def _transfer(store: db.Store, req: PackRequest, budget: int) -> list[Entry]:
+    """Other projects' curated memories that match the new brief, as summaries to fetch."""
+    q = recall.Query(task=req.transfer_task, tags=[], project=req.project)
+    _, cands = recall.recall(store, q)
+    cands = [c for c in cands if c.node.type in TRANSFER_TYPES and c.node.project != req.project and c.bm25 > 0]
+    cands.sort(key=lambda c: (-c.bm25, -c.node.confidence, c.node.created))
+    out: list[Entry] = []
+    used = 0
+    for c in cands[:TRANSFER_MAX]:
+        n = c.node
+        marks = _markers(n, explicit_active=True)
+        text = f"- {n.id} · {n.type} · " + " · ".join(marks) + " · " + n.summary.strip()
+        t = model.estimate_tokens(text)
+        if used + t > budget:
+            break
+        out.append(Entry(n, "transfer", text, False, len(out) + 1, round(c.bm25, 4), {"bm25": round(c.bm25, 3)}))
+        used += t
+    return out
 
 
 def _conflicted_working(store: db.Store) -> set:
@@ -249,17 +310,35 @@ def build(store: db.Store, req: PackRequest) -> Pack:
         pused += t
     used += pused
 
-    # Task memories in rank order until the budget is hit.
+    # A new project's first wakes: earlier briefs' curated memories, summaries only.
+    transfer: list[Entry] = []
+    if req.transfer_task.strip():
+        transfer = _transfer(store, req, budget // TRANSFER_SHARE)
+        used += sum(e.tokens() for e in transfer)
+
+    # Task memories: reserved curated slots first, then rank order until the
+    # budget is hit, with at most EPISODES_MAX episodes, all from this project.
     task: list[Entry] = []
     truncated_ids: list[str] = []
-    exclude = set(req.exclude_ids)
+    exclude = set(req.exclude_ids) | {e.node.id for e in transfer}
     episode_keys: set[str] = set()
+    episodes_max = _env_int("LIBRARIAN_PACK_EPISODES", EPISODES_MAX)
     untrusted = False
-    for i, r in enumerate(ranked, start=1):
+    slots = dict(RESERVED)
+    reserved = []
+    for r in ranked:
+        if slots.get(r.node.type, 0) > 0 and r.node.id not in exclude and _relevant(r, qtags):
+            slots[r.node.type] -= 1
+            reserved.append(r)
+    reserved_ids = {r.node.id for r in reserved}
+    order = reserved + [r for r in ranked if r.node.id not in reserved_ids]
+    for r in order:
         n = r.node
         if n.id in exclude:
             continue
         if n.type == "episode":
+            if len(episode_keys) >= episodes_max or _noop_episode(n) or (req.project and n.project != req.project):
+                continue
             key = _episode_key(n)
             if key in episode_keys:
                 continue
@@ -310,6 +389,7 @@ def build(store: db.Store, req: PackRequest) -> Pack:
         llm_cut=llm_used,
         phase=req.phase,
         project=req.project,
+        transfer=transfer,
     )
     if req.log:
         with store.write():
@@ -352,6 +432,9 @@ def render_text(pack: Pack) -> str:
     out += [e.text for e in pack.identity_working]
     out.append(MARK_PREFS)
     out += [e.text for e in pack.preferences]
+    if pack.transfer:
+        out.append(f"{MARK_TRANSFER} other projects' memories that match this brief; `librarian fetch <id>` before rebuilding what they cover")
+        out += [e.text for e in pack.transfer]
     out.append(MARK_TASK)
     out += [e.text for e in pack.task_memories]
     cov = " ".join(pack.coverage) if pack.coverage else "(no tags)"
@@ -390,6 +473,7 @@ def render_json(pack: Pack) -> dict:
         "identity_working": [ent(e) for e in pack.identity_working],
         "preferences": [ent(e) for e in pack.preferences],
         "task_memories": [ent(e) for e in pack.task_memories],
+        "transfer": [ent(e) for e in pack.transfer],
         "coverage": pack.coverage,
         "notes": pack.notes,
         "truncated_ids": pack.truncated_ids,

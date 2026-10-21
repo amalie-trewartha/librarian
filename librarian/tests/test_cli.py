@@ -178,5 +178,33 @@ class ContractTest(CliCase):
         self.assertEqual(rc, 2)
 
 
+class RunBTest(CliCase):
+    def test_capture_clear_by_an_existing_memory(self):
+        # Live trial 2026-10-20: a capture cleared only on a new propose, so an existing skill
+        # drove ~25 re-fetches and a near-duplicate skill before the signal went away.
+        sk = self.skill("absolute cd before each command", ["pkg:cd", "area:tooling"], project="p-1")
+        with self.store.write():
+            self.store.ex("INSERT INTO pending_capture(id, signature, tags, project, created) VALUES ('C1', 'cd exit 1', '[\"pkg:cd\"]', 'p-1', '2026-10-01T00:00:00Z')")
+        rc, rows, _ = self.run_cli("capture", "list", "--project", "p-1")
+        self.assertEqual((rc, [r["id"] for r in rows]), (0, ["C1"]))
+        rc, res, _ = self.run_cli("capture", "clear", "cd exit 1", "--covered-by", sk)
+        self.assertEqual((rc, res["cleared_by"]), (0, sk))
+        rc, rows, _ = self.run_cli("capture", "list", "--project", "p-1")
+        self.assertEqual(rows, [])
+        rc, _, _ = self.run_cli("capture", "clear", "C1", "--covered-by", sk)
+        self.assertEqual(rc, cli.EXIT_NOTFOUND)
+
+    def test_search_finds_a_pending_queue_item(self):
+        # Live trial 2026-10-21: the mind searched eight times for a dispute waiting on a human.
+        from librarian import queue
+        with self.store.write():
+            qid = queue.enqueue(self.store, "dispute", {"a": "X", "b": None, "a_summary": "kill a background python job without killing the block"})
+        rc, rows, _ = self.run_cli("search", "--text", f"{qid} status")
+        self.assertEqual(rc, 0)
+        self.assertIn(qid, [r["id"] for r in rows])
+        rc, rows, _ = self.run_cli("search", "--text", "background python job")
+        self.assertIn(qid, [r["id"] for r in rows])
+
+
 if __name__ == "__main__":
     unittest.main()
