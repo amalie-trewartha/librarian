@@ -45,10 +45,13 @@ thirds process and one third substance.) Carry out all four steps, in order:
    9. The single most valuable next step for tomorrow, toward the
       deliverable, concretely.
 
-5. If today taught a lesson with evidence behind it, write one
-   `librarian propose --type retrospective --summary "<when would I want
-   this?>" --tags area:process ... --body-file <f>` naming the evidence.
-   Otherwise none.
+5. For each project brief whose whole answer is standing and that has no
+   retrospective memory yet, write one: `librarian propose --type
+   retrospective` (what you would do differently, and what should transfer
+   to later briefs). Beyond that, if today taught a lesson with evidence
+   behind it, write one `librarian propose --type retrospective --summary
+   "<when would I want this?>" --tags area:process ... --body-file <f>`
+   naming the evidence. Otherwise none.
 
 The runtime counts the ritual as done when project/daily/{{date}}.md
 exists, and commits project/ after the wake. Before this wake it ran the

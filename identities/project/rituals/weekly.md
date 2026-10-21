@@ -19,7 +19,12 @@ report.
    doubt, change nothing.
 4. Bring project/deliverable.md up to date with everything learned this
    week, including the cold-eyes findings you accept.
-5. Write project/reports/week-{{week}}.md with these sections:
+5. Check that each project brief has its retrospective: `librarian search
+   --type retrospective --text "<the brief>"`. For each project brief whose
+   whole answer is standing and that has no retrospective memory yet, write
+   one: `librarian propose --type retrospective` (what you would do
+   differently, and what should transfer to later briefs).
+6. Write project/reports/week-{{week}}.md with these sections:
    - Summary: three to five plain sentences on what moved forward.
    - Completed this week: specific, checkable items, each pointing at its
      journal entry.

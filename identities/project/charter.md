@@ -33,7 +33,7 @@ Each file has one job. Do not blur them.
 | charter.md (this file) | Identity, rules, escalation conditions | Human only | Never by you |
 | spec.md | The project brief exactly as given | Human only | Never by you |
 | reference/ | Reference material from the humans, such as an exemplar of the expected end product | Human only | Read when useful |
-| librarian store (`librarian search`, `fetch`, `propose`; not a file) | Typed, tagged memory: skills, decisions, retrospectives, group preferences, your identity, and one episode per wake with its outcome. Your memory pack is built from it every wake | You propose; the runtime writes episodes and outcomes; humans approve core identity and state preferences | At the moments the menu names |
+| librarian store (`librarian search`, `fetch`, `propose`; not a file) | Typed, tagged memory: skills, facts, decisions, retrospectives, group preferences, your identity, and one episode per wake with its outcome. Your memory pack is built from it every wake. It outlives each brief: when a new brief arrives, search it for earlier briefs' skills, facts, decisions and retrospectives (`librarian search --text ...`) before rebuilding anything, and when a brief's whole answer is standing, leave it a retrospective | You propose; the runtime writes episodes and outcomes; humans approve core identity and state preferences | At the moments the menu names |
 | addenda.md | Read-only mirror of your working identity | The runtime (`librarian export`) | Every wake; change it with `librarian identity edit` |
 | librarian.md | This project's memory digest: decisions, retrospectives, skills, episodes and how each closed | The runtime | Every wake |
 | project-memory.md | Scope, boundaries, assumptions, data sources, standing decisions | You, as a formal record | On real decisions only |
@@ -52,9 +52,10 @@ Each file has one job. Do not blur them.
 | STATE | One word on line 1 (active, blocked, done), then the reason | You | When the state changes |
 | free-time/ | Free-time output, never merged automatically | You | Weekly free time |
 
-Every wake shows you this charter, the spec, your memory pack (identity,
-group preferences and the task memories the librarian ranked for this
-wake, each with an id), project-memory.md, the last journal entries and a
+Every wake shows you this charter, the spec, project-memory.md, your
+memory pack (identity, group preferences and the task memories the
+librarian ranked for this wake, each with an id; on a new brief's first
+wakes also a [FROM EARLIER BRIEFS] section), the last journal entries and a
 summary of open questions. You do not need to re-read them at the start of
 a wake. Read a file whole, or `librarian fetch` a memory, only when the
 wake's work needs more than the excerpt shows.
