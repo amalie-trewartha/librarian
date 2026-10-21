@@ -37,7 +37,7 @@ humans    librarian-project queue|probe|preferences|librarian, committed to proj
 | Graph DB vs SQLite | SQLite with adjacency tables and FTS5 (Python fallback when FTS5 is missing). Standard library only, because the CLI also runs inside the shellm sandbox where only python3 is installed. |
 | Vector index | Not yet. Recall is tag match (specificity-weighted) + BM25 over summary and tags + one graph hop. The `embeddings` table and a null `EmbedProvider` are the seam. |
 | Who is the librarian | A deterministic program with optional single-call model stages, not a second agent loop. Model tiers by role: `rank` and `judge` on the fast model, `draft` and `probe-answer` on the main model, `core-check` escalates heuristic → fast → main → human queue. `LIBRARIAN_MODEL_<ROLE>` overrides; `LLM_RUN_ID=librarian:<role>` attributes spend. |
-| Default budget | `LIBRARIAN_PACK_TOKENS` = 8000 estimated tokens (chars/4). |
+| Default budget | `LIBRARIAN_PACK_TOKENS` = 5000 estimated tokens (chars/4), passed by the monolith step. |
 | Agent writes or proposes | Proposes. `librarian propose` runs the quality gate at write time; nothing bypasses it. |
 | Seeding the group model | `librarian-project init --preferences FILE` imports stated values as active, human-authored preference nodes. Observed standards come from consolidation; recurring needs from retrospectives. |
 | Multi-agent scoping | Not addressed. Blind and delegate runs are cut off from the store on purpose (see below). |
@@ -109,7 +109,7 @@ humans    librarian-project queue|probe|preferences|librarian, committed to proj
 |---|---|---|
 | `LIBRARIAN_MEMORY` | 1 | 0 turns the hooks off; the wake gets today's plain excerpt |
 | `LIBRARIAN_SRC` | `<app>/librarian/src` (init writes it to `.env`) | the package path, passed into the sandbox read-only |
-| `LIBRARIAN_PACK_TOKENS` | 8000 | pack budget in estimated tokens |
+| `LIBRARIAN_PACK_TOKENS` | 5000 | pack budget in estimated tokens (the step passes it as `--budget`) |
 | `LIBRARIAN_MODEL`, `LIBRARIAN_MODEL_RANK|JUDGE|DRAFT|CORE_CHECK|PROBE_ANSWER` | tier defaults | model per role |
 | `LIBRARIAN_LLM` | 1 | 0 skips every model stage (tests, offline runs) |
 | `LIBRARIAN_LLM_MAX_CALLS` | 4 | model calls per CLI invocation |

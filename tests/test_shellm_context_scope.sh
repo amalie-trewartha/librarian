@@ -122,6 +122,24 @@ else
     bad "a -f context brings the guideline back" "rc=$rc"
 fi
 
+# --- 3c. a stable system prompt: the same bytes on every run ----------------
+# The provider caches put the system prompt ahead of every message, so a run
+# directory path or a clock in it means no run reads what the last one cached.
+SHELLM_STABLE_SYSTEM_PROMPT=1 run_shellm --prompt-file "$WORK/p1.txt"; rc=$?
+st1="$(last_msgs)"; st1="${st1%.json}.system"
+sleep 1
+SHELLM_STABLE_SYSTEM_PROMPT=1 run_shellm --prompt-file "$WORK/p2.txt"; rc2=$?
+st2="$(last_msgs)"; st2="${st2%.json}.system"
+if [[ "$rc" -eq 0 && "$rc2" -eq 0 && "$st1" != "$st2" && -f "$st1" && -f "$st2" ]] && cmp -s "$st1" "$st2"; then
+    ok "SHELLM_STABLE_SYSTEM_PROMPT=1: two runs send the same system prompt"
+else
+    bad "SHELLM_STABLE_SYSTEM_PROMPT=1: two runs send the same system prompt" "rc=$rc/$rc2 $(diff "$st1" "$st2" 2>&1 | head -4 | tr '\n' ' ')"
+fi
+grep -q 'shellm-run\.' "$st2" && bad "stable: no run directory path" || ok "stable: no run directory path"
+grep -q 'Transient run directory: \$SHELLM_RUNDIR' "$st2" && ok "stable: the run directory is named by its variable" || bad "stable: the run directory is named by its variable"
+grep -q -- '- Date: [0-9]' "$st2" && bad "stable: no clock line" || ok "stable: no clock line"
+grep -q -- '- Date: [0-9]' "$sp3" && ok "default: the clock line stays" || bad "default: the clock line stays"
+
 # --- 4. env form and a bad value ---------------------------------------------
 SHELLM_CONTEXT_SCOPE=run run_shellm --resume --prompt-file "$WORK/p2.txt"; rc=$?
 m4=$(last_msgs)

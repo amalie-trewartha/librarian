@@ -28,6 +28,7 @@ ok()  { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 bad() { fail=$((fail+1)); printf 'FAIL %s%s\n' "$1" "${2:+ — $2}"; }
 has() { if printf '%s' "$2" | grep -F -- "$3" >/dev/null; then ok "$1"; else bad "$1" "missing '$3' in: $(printf '%s' "$2" | head -c 400)"; fi; }
 hasnt() { if printf '%s' "$2" | grep -F -- "$3" >/dev/null; then bad "$1" "unexpected '$3'"; else ok "$1"; fi; }
+eqv() { if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1" "got $2, want $3"; fi; }
 
 command -v python3 >/dev/null || { echo "FAIL python3 not found"; exit 1; }
 WORK=$(mktemp -d)
@@ -59,6 +60,8 @@ class H(http.server.BaseHTTPRequestHandler):
             self.send_response(200); self.send_header("content-type", "application/json")
             self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b); return
         usage = {"input_tokens": 120, "output_tokens": 7, "cache_read_input_tokens": 3000, "cache_creation_input_tokens": 500}
+        if "SPLIT-1H" in body:
+            usage["cache_creation"] = {"ephemeral_5m_input_tokens": 200, "ephemeral_1h_input_tokens": 300}
         if req.get("stream"):
             self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()
             ev = [("message_start", {"type": "message_start", "message": {"usage": usage}}),
@@ -83,6 +86,7 @@ mkdir -p "$WORK/reqs"
 python3 "$WORK/srv.py" "$WORK/reqs" & SRV=$!
 for _ in $(seq 1 50); do [[ -s "$WORK/port" ]] && break; sleep 0.1; done
 URL="http://127.0.0.1:$(cat "$WORK/port")/anthropic/v1/messages"
+INV_EARLY="http://127.0.0.1:$(cat "$WORK/port")/model/us.anthropic.claude-opus-5-5/invoke"
 last() { ls -t "$WORK"/reqs/req-*.json | head -1; }
 
 # ── routing and the default endpoint ─────────────────────────────────────────
@@ -131,6 +135,90 @@ ANTHROPIC_API_KEY=k LLM_API_URL="$URL" llm --no-stream -s "sys" -m claude-opus-5
 has "first-party Anthropic gets breakpoints too" "$(jq -c '.body.system' "$(last)")" 'cache_control'
 OPENAI_API_KEY=k LLM_API_URL="$URL" llm --no-stream -s "sys" -m gpt-5 "hello" >/dev/null 2>&1
 hasnt "OpenAI-format requests get no cache_control" "$(jq -c '.body' "$(last)")" 'cache_control'
+
+# ── cache-break markers ──────────────────────────────────────────────────────
+# A line holding only the marker splits a text into blocks there; the block
+# before each marker gets a breakpoint, the marker lines never reach a model.
+MK='<<<llm-cache-break>>>'
+nbp() { jq '[.. | objects | select(has("cache_control"))] | length' <<<"$1"; }
+sysm=$(printf 'charter\nspec\n%s\nproject memory\n%s\npack\nSTATE' "$MK" "$MK")
+AWS_BEARER_TOKEN_BEDROCK=t LLM_API_URL="$URL" llm --no-stream -s "$sysm" -m anthropic.claude-opus-5-5 "hello" >/dev/null 2>&1
+r=$(cat "$(last)")
+eqv "markers: system split into three blocks" "$(jq '.body.system | length' <<<"$r")" 3
+eqv "markers: the stable head is its own block" "$(jq -c '.body.system[0].text' <<<"$r")" '"charter\nspec\n"'
+eqv "markers: then project memory" "$(jq -c '.body.system[1].text' <<<"$r")" '"project memory\n"'
+eqv "markers: the tail after the last marker" "$(jq -r '.body.system[2].text' <<<"$r")" $'pack\nSTATE'
+eqv "markers: the blocks join back to the text without the marker lines" "$(jq -r '.body.system | map(.text) | join("")' <<<"$r")" $'charter\nspec\nproject memory\npack\nSTATE'
+has "markers: breakpoint on the block before the first marker" "$(jq -c '.body.system[0]' <<<"$r")" '"cache_control":{"type":"ephemeral"}'
+has "markers: breakpoint on the block before the second marker" "$(jq -c '.body.system[1]' <<<"$r")" 'cache_control'
+hasnt "markers: no breakpoint on the final system block" "$(jq -c '.body.system[2]' <<<"$r")" 'cache_control'
+hasnt "markers: no marker text sent" "$(jq -c '.body' <<<"$r")" "$MK"
+has "markers: the last message keeps its breakpoint" "$(jq -c '.body.messages[-1].content[-1]' <<<"$r")" 'cache_control'
+# The wake prompt is the run's first message, so markers there split it too.
+pm=$(jq -nc --arg t "$sysm" '[{role:"user",content:$t}]')
+AWS_BEARER_TOKEN_BEDROCK=t LLM_API_URL="$URL" llm --no-stream -s "shellm system" -M "$pm" -m anthropic.claude-opus-5-5 >/dev/null 2>&1
+r=$(cat "$(last)")
+eqv "markers in a message: split into three blocks" "$(jq '.body.messages[0].content | length' <<<"$r")" 3
+eqv "markers in a message: breakpoints on the two stable blocks and the last block, plus the system prompt" "$(nbp "$r")" 4
+hasnt "markers in a message: no marker text sent" "$(jq -c '.body' <<<"$r")" "$MK"
+# Later steps: system + 2 markers + the last two messages would be 5.
+pm3=$(jq -nc --arg t "$sysm" '[{role:"user",content:$t},{role:"assistant",content:"reply"},{role:"user",content:"output"}]')
+AWS_BEARER_TOKEN_BEDROCK=t LLM_API_URL="$URL" llm --no-stream -s "shellm system" -M "$pm3" -m anthropic.claude-opus-5-5 >/dev/null 2>&1
+r=$(cat "$(last)")
+eqv "markers: never more than 4 breakpoints" "$(nbp "$r")" 4
+hasnt "markers: the earliest (the system prompt) is the one dropped" "$(jq -c '.body.system' <<<"$r")" 'cache_control'
+has "markers: the stable head keeps its breakpoint" "$(jq -c '.body.messages[0].content[0]' <<<"$r")" 'cache_control'
+has "markers: the last message keeps its breakpoint" "$(jq -c '.body.messages[-1].content[-1]' <<<"$r")" 'cache_control'
+has "markers: the previous reply keeps its breakpoint" "$(jq -c '.body.messages[-2].content[-1]' <<<"$r")" 'cache_control'
+# Markers in both the system prompt and a message: still 4.
+AWS_BEARER_TOKEN_BEDROCK=t LLM_API_URL="$URL" llm --no-stream -s "$sysm" -M "$pm3" -m anthropic.claude-opus-5-5 >/dev/null 2>&1
+eqv "markers everywhere: still at most 4 breakpoints" "$(nbp "$(cat "$(last)")")" 4
+# No marker: exactly today's request.
+AWS_BEARER_TOKEN_BEDROCK=t LLM_API_URL="$URL" llm --no-stream -s "You are a system prompt." -m anthropic.claude-opus-5-5 "hello" >/dev/null 2>&1
+eqv "no marker: the system prompt is one marked block, as before" "$(jq -c '.body.system' "$(last)")" '[{"type":"text","text":"You are a system prompt.","cache_control":{"type":"ephemeral"}}]'
+# A marker that is not a whole line is text, not a marker.
+AWS_BEARER_TOKEN_BEDROCK=t LLM_API_URL="$URL" llm --no-stream -s "see $MK here" -m anthropic.claude-opus-5-5 "hello" >/dev/null 2>&1
+eqv "an inline marker is left alone" "$(jq -r '.body.system | length' "$(last)")" 1
+# Other providers: the marker lines are stripped.
+OPENAI_API_KEY=k LLM_API_URL="$URL" llm --no-stream -s "$sysm" -M "$pm" -m gpt-5 >/dev/null 2>&1
+r=$(cat "$(last)")
+hasnt "openai: no marker text sent" "$(jq -c '.body' <<<"$r")" "$MK"
+eqv "openai: system text without the marker lines" "$(jq -r '.body.messages[0].content' <<<"$r")" $'charter\nspec\nproject memory\npack\nSTATE'
+eqv "openai: message text without the marker lines" "$(jq -r '.body.messages[1].content' <<<"$r")" $'charter\nspec\nproject memory\npack\nSTATE'
+AWS_BEARER_TOKEN_BEDROCK=t LLM_PROMPT_CACHE=0 LLM_API_URL="$URL" llm --no-stream -s "$sysm" -M "$pm" -m anthropic.claude-opus-5-5 >/dev/null 2>&1
+r=$(cat "$(last)")
+hasnt "caching off: no marker text sent" "$(jq -c '.body' <<<"$r")" "$MK"
+hasnt "caching off: no breakpoints" "$(jq -c '.body' <<<"$r")" 'cache_control'
+AWS_BEARER_TOKEN_BEDROCK=tok-cv LLM_API_URL="${URL%/anthropic/v1/messages}/model/x/converse" llm -s "$sysm" -M "$pm" -m bedrock-converse/us.meta.llama4-maverick-17b-instruct-v1:0 >/dev/null 2>&1
+hasnt "converse: no marker text sent" "$(jq -c '.body' "$(last)")" "$MK"
+printf '%s' "$pm" > "$WORK/pm.json"
+cat > "$WORK/adapter.sh" <<EOF
+#!/usr/bin/env bash
+while [[ \$# -gt 0 ]]; do case "\$1" in --system-prompt-file) cp "\$2" "$WORK/adapter-system"; shift 2 ;; *) shift ;; esac; done
+cat > "$WORK/adapter-messages"; echo hi
+EOF
+chmod +x "$WORK/adapter.sh"
+LLM_PROVIDER=adapter LLM_ADAPTER="$WORK/adapter.sh" llm -s "$sysm" -M "$pm" -m some-model >/dev/null 2>&1
+hasnt "adapter: no marker in the system prompt" "$(cat "$WORK/adapter-system" 2>/dev/null)" "$MK"
+hasnt "adapter: no marker in the messages" "$(cat "$WORK/adapter-messages" 2>/dev/null)" "$MK"
+has "adapter: the text itself arrives" "$(cat "$WORK/adapter-messages" 2>/dev/null)" "project memory"
+
+# ── cache TTL ────────────────────────────────────────────────────────────────
+AWS_BEARER_TOKEN_BEDROCK=t LLM_CACHE_TTL=1h LLM_API_URL="$URL" llm --no-stream -s "shellm system" -M "$pm3" -m anthropic.claude-opus-5-5 >/dev/null 2>&1
+r=$(cat "$(last)")
+has "ttl 1h: on the marker breakpoints" "$(jq -c '.body.messages[0].content[0].cache_control' <<<"$r")" '"ttl":"1h"'
+hasnt "ttl 1h: not on the moving message breakpoints" "$(jq -c '.body.messages[-1].content[-1].cache_control' <<<"$r")" 'ttl'
+AWS_BEARER_TOKEN_BEDROCK=t LLM_CACHE_TTL=1h LLM_API_URL="$URL" llm --no-stream -s "shellm system" -M "$pm" -m anthropic.claude-opus-5-5 >/dev/null 2>&1
+has "ttl 1h: on the system breakpoint ahead of the markers" "$(jq -c '.body.system[0].cache_control' "$(last)")" '"ttl":"1h"'
+hasnt "ttl 1h: the first call's last block stays on five minutes" "$(jq -c '.body.messages[0].content[-1].cache_control' "$(last)")" 'ttl'
+AWS_BEARER_TOKEN_BEDROCK=t LLM_CACHE_TTL=1h LLM_API_URL="$URL" llm --no-stream -s "sys" -m anthropic.claude-opus-5-5 "hi" >/dev/null 2>&1
+hasnt "ttl 1h: a request without markers stays on the default" "$(jq -c '.body' "$(last)")" 'ttl'
+AWS_BEARER_TOKEN_BEDROCK=t LLM_API_URL="$URL" llm --no-stream -s "sys" -m anthropic.claude-opus-5-5 "hi" >/dev/null 2>&1
+hasnt "ttl unset: the provider default" "$(jq -c '.body' "$(last)")" 'ttl'
+AWS_BEARER_TOKEN_BEDROCK=t LLM_CACHE_TTL=1h LLM_API_URL="$URL" llm --no-stream -s "sys" -M "$pm" -m anthropic.claude-3-7-sonnet-20250219-v1:0 >/dev/null 2>&1
+hasnt "ttl 1h: not sent to a model that rejects it" "$(jq -c '.body' "$(last)")" 'ttl'
+AWS_BEARER_TOKEN_BEDROCK=t LLM_CACHE_TTL=1h LLM_API_URL="$INV_EARLY" llm -s "sys" -M "$pm" -m us.anthropic.claude-opus-5-5 >/dev/null 2>&1
+has "ttl 1h: survives the InvokeModel reshaping" "$(jq -c '.body.messages[0].content[0]' "$(last)")" '"ttl":"1h"'
 
 # ── SigV4, streamed response, thinking ───────────────────────────────────────
 out=$(AWS_ACCESS_KEY_ID=AKIDEXAMPLE AWS_SECRET_ACCESS_KEY=sekret/xyz AWS_SESSION_TOKEN=sess-tok AWS_REGION=us-west-2 \
@@ -196,12 +284,24 @@ hasnt "shellm masks the token from the file" "$masked" "tok-file-B"
 AWS_BEARER_TOKEN_BEDROCK=t LLM_API_URL="$URL" llm --no-stream -m anthropic.claude-opus-5-5 "x" >/dev/null 2>&1
 rec=$(tail -1 "$LLM_USAGE_LEDGER")
 has "cache writes recorded apart" "$rec" '"cache_write_tok":500'
-eqv() { if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1" "got $2, want $3"; fi; }
 eqv "cost estimate at list prices" "$(jq -r '.cost_usd' <<<"$rec")" "0.00372"
 AWS_BEARER_TOKEN_BEDROCK=t LLM_PRICE_SCALE=1.1 LLM_API_URL="$URL" llm --no-stream -m anthropic.claude-opus-5-5 "x" >/dev/null 2>&1
 eqv "LLM_PRICE_SCALE scales it" "$(tail -1 "$LLM_USAGE_LEDGER" | jq -r '.cost_usd')" "0.004092"
 AWS_BEARER_TOKEN_BEDROCK=t LLM_API_URL="$INV" llm -m us.anthropic.claude-haiku-4-5-20251001-v1:0 "x" >/dev/null 2>&1
 eqv "profile ids map to the base model price (Haiku: 120+625+35+300)" "$(tail -1 "$LLM_USAGE_LEDGER" | jq -r '.cost_usd')" "0.00108"
+# One-hour cache writes cost 2x input. Split reported: 200 at 1.25x, 300 at
+# 2x: 480 + 1000 + 2400 + 140 + 600. Not reported, with the one-hour cache
+# asked for: all 500 at 2x (an upper bound): 480 + 4000 + 140 + 600.
+AWS_BEARER_TOKEN_BEDROCK=t LLM_CACHE_TTL=1h LLM_API_URL="$URL" llm --no-stream -s sys -m anthropic.claude-opus-5-5 "SPLIT-1H" >/dev/null 2>&1
+rec=$(tail -1 "$LLM_USAGE_LEDGER")
+has "1h writes recorded apart" "$rec" '"cache_write_1h_tok":300'
+eqv "1h writes priced at 2x input" "$(jq -r '.cost_usd' <<<"$rec")" "0.00462"
+AWS_BEARER_TOKEN_BEDROCK=t LLM_CACHE_TTL=1h LLM_API_URL="$URL" llm -s sys -m anthropic.claude-opus-5-5 "SPLIT-1H" >/dev/null 2>&1
+has "streamed: 1h writes recorded apart" "$(tail -1 "$LLM_USAGE_LEDGER")" '"cache_write_1h_tok":300'
+AWS_BEARER_TOKEN_BEDROCK=t LLM_CACHE_TTL=1h LLM_API_URL="$URL" llm --no-stream -s "$sysm" -m anthropic.claude-opus-5-5 "x" >/dev/null 2>&1
+eqv "1h sent, split not reported: every write at the 1h price" "$(tail -1 "$LLM_USAGE_LEDGER" | jq -r '.cost_usd')" "0.00522"
+AWS_BEARER_TOKEN_BEDROCK=t LLM_CACHE_TTL=1h LLM_API_URL="$URL" llm --no-stream -s sys -m anthropic.claude-opus-5-5 "x" >/dev/null 2>&1
+hasnt "1h asked but no markers, so none sent: no 1h writes on the record" "$(tail -1 "$LLM_USAGE_LEDGER")" 'cache_write_1h_tok'
 
 # ── bedrock-converse: any Bedrock model ─────────────────────────────────────
 CV="http://127.0.0.1:$(cat "$WORK/port")/model/us.meta.llama4-maverick-17b-instruct-v1:0/converse"
