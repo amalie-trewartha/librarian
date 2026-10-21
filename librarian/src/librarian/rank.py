@@ -50,6 +50,11 @@ PENALTY_EXCLUDED = 1.0
 W_LLM = 2.0
 LLM_MIN_SURVIVORS = 8
 LLM_TOP = 30
+# Curated memories all go to the LLM cut (up to recall.CURATED_ALL_MAX), on top
+# of the LLM_TOP best others: in the 2026-10 live run the cut parsed in 4 of
+# 1,095 packs (replies cut at max_tokens), so curated memory was ranked on tags
+# that matched nearly everything.
+LLM_MAX_TOKENS = 1500
 
 
 @dataclass
@@ -108,10 +113,21 @@ def reuse(node: model.Node) -> float:
     return (math.log1p(s + f) / math.log1p(10)) * (0.5 + 0.5 * share)
 
 
-def cut1(c: recall.Candidate, q: recall.Query, exclude: set, priors: dict, ref=None) -> tuple[float, dict]:
+def weighted_jaccard(a: set, b: set, idf: Optional[dict]) -> float:
+    """Jaccard with each tag weighted by its IDF: a tag on nearly every node counts for little."""
+    if not a and not b:
+        return 0.0
+    if not idf:
+        return model.jaccard(a, b)
+    w = lambda tags: sum(idf.get(t, 1.0) for t in tags)  # noqa: E731
+    union = w(a | b)
+    return w(a & b) / union if union else 0.0
+
+
+def cut1(c: recall.Candidate, q: recall.Query, exclude: set, priors: dict, ref=None, idf: Optional[dict] = None) -> tuple[float, dict]:
     n = c.node
     qt = set(model.parse_tags(q.tags))
-    tj = model.jaccard(qt, n.tags) if qt else 0.0
+    tj = weighted_jaccard(qt, set(n.tags), idf) if qt else 0.0
     rec = recency(n, ref)
     reu = reuse(n)
     pr = prior(priors, n.type, q.phase)
@@ -133,25 +149,31 @@ def cut1(c: recall.Candidate, q: recall.Query, exclude: set, priors: dict, ref=N
 
 
 def llm_relevance(model_llm: llm.LLM, task: str, ranked: list[Ranked]) -> Optional[dict[str, int]]:
-    """One call: rate each (id, type, summary) 0–3 for the task; lenient JSON parse."""
-    lines = [f"{r.node.id} | {r.node.type} | {r.node.summary}" for r in ranked]
+    """One call: rate each numbered (type, summary) 0–3 for the task; lenient JSON parse.
+
+    Short numbers instead of 26-character ids keep the reply small (one 400-token
+    reply limit truncated 438 of 467 calls in the 2026-10 live run).
+    """
+    lines = [f"{i} | {r.node.type} | {r.node.summary}" for i, r in enumerate(ranked, start=1)]
     system = (
-        "You rank memory summaries for relevance to a task. Answer with one JSON object mapping each id to an "
-        "integer 0-3 (0 irrelevant, 3 directly needed). No prose."
+        "You rank memory summaries for relevance to a task. Answer with one JSON object mapping the number of "
+        "each memory that is relevant to an integer 1-3 (1 marginal, 2 useful, 3 directly needed); leave out "
+        "irrelevant ones. No prose."
     )
-    prompt = "Task:\n" + task.strip()[:3000] + "\n\nMemories (id | type | summary):\n" + "\n".join(lines) + "\n\nJSON:"
-    out = model_llm.complete(prompt, system=system, max_tokens=1200)
+    prompt = "Task:\n" + task.strip()[:3000] + "\n\nMemories (number | type | summary):\n" + "\n".join(lines) + "\n\nJSON:"
+    out = model_llm.complete(prompt, system=system, max_tokens=LLM_MAX_TOKENS)
     parsed = llm.parse_json_lenient(out)
     if not isinstance(parsed, dict):
         return None
-    result: dict[str, int] = {}
+    result: dict[str, int] = {r.node.id: 0 for r in ranked}
     for k, v in parsed.items():
         try:
-            iv = int(v)
+            i, iv = int(str(k).strip()), int(v)
         except (TypeError, ValueError):
             continue
-        result[str(k).strip().upper()] = max(0, min(3, iv))
-    return result or None
+        if 1 <= i <= len(ranked):
+            result[ranked[i - 1].node.id] = max(0, min(3, iv))
+    return result
 
 
 def rank(
@@ -166,23 +188,33 @@ def rank(
     exclude = set(exclude_ids or ())
     priors = load_priors(store)
     ref = db.now()
+    idf = recall.tag_idf(store, recall.status_scope(q))
     out: list[Ranked] = []
     for c in cands:
-        s, reasons = cut1(c, q, exclude, priors, ref)
+        s, reasons = cut1(c, q, exclude, priors, ref, idf)
         out.append(Ranked(c.node, s, s, None, reasons))
     out.sort(key=lambda r: (-r.score, -r.node.confidence, r.node.body_tokens))
     llm_used = False
     note = None
     survivors = [r for r in out if r.node.id not in exclude]
-    if use_llm and len(survivors) >= LLM_MIN_SURVIVORS:
+    judged = [r for r in survivors if r.node.type in recall.CURATED_TYPES][: recall.CURATED_ALL_MAX]
+    judged_ids = {r.node.id for r in judged}
+    judged += [r for r in survivors if r.node.id not in judged_ids][:top]
+    if not use_llm:
+        note = "llm relevance cut off"
+    elif len(survivors) < LLM_MIN_SURVIVORS:
+        note = f"llm relevance cut skipped ({len(survivors)} candidates, fewer than {LLM_MIN_SURVIVORS})"
+    else:
         m = llm.get_llm("rank")
-        if m is not None:
-            rel = llm_relevance(m, q.task, survivors[:top])
+        if m is None:
+            note = "llm relevance cut skipped (no rank model)"
+        else:
+            rel = llm_relevance(m, q.task, judged)
             if rel is None:
                 note = "llm relevance cut skipped (no parsable answer)"
             else:
                 llm_used = True
-                for r in survivors[:top]:
+                for r in judged:
                     if r.node.id in rel:
                         r.relevance = rel[r.node.id]
                         r.score = r.cut1 + W_LLM * (r.relevance / 3.0)

@@ -300,7 +300,7 @@ def _exclude_ids(store: db.Store, project: Optional[str], wakes: int) -> list[st
 def _vocab_tags_in_text(store: db.Store, text: str) -> list[str]:
     words = set(model.tokenize(text))
     out = []
-    for r in store.q("SELECT tag FROM tag_vocab WHERE status = 'active' AND namespace IN ('pkg','area')"):
+    for r in store.q("SELECT tag FROM tag_vocab WHERE status = 'active' AND namespace IN ('pkg','area','topic','data','method')"):
         free = model.tag_free(r[0])
         if free in words or free.replace("-", " ") in text.lower():
             out.append(r[0])
@@ -657,6 +657,16 @@ def post(rc: int, run_id: Optional[str], stderr_tail: str, final: str, use_llm: 
     except ValueError as exc:
         print(f"librarian: episode not recorded: {exc}", file=sys.stderr)
         report = None
+    if report is not None:
+        # Memories proposed during this wake were derived from its episode, so
+        # a hop from a lesson reaches the wake that learned it, and decay can
+        # retire the episode once its lessons are active.
+        with store.write():
+            for r in store.q(
+                "SELECT id FROM nodes WHERE type IN ('skill','fact','decision','retrospective') AND json_extract(provenance, '$.run_id') = ?",
+                (req["request_id"],),
+            ):
+                model.add_edge(store, r[0], report.episode_id, "derived_from", 1.0, {"by": "runtime"})
     prog = triggers.evaluate(
         store,
         triggers.Progress(status=final or criterion, tags=req.get("tags", []), phase=phase, project=project, tool_calls=tool_calls, errors=sigs, run_id=run_id),

@@ -394,6 +394,34 @@ def vocab_status(store: db.Store, tag: str) -> Optional[str]:
     return None if row is None else row[0]
 
 
+# Words that make a memory findable but rarely sit in its summary: acronyms
+# (datasets and agencies: NHTS, ACS, FARS), web domains, file names and
+# commands. In the 2026-10 live run the index held summary and tags only.
+_KW_ACRONYM = re.compile(r"\b[A-Z][A-Z0-9]{1,7}\b")
+_KW_DOMAIN = re.compile(r"https?://(?:www\d?\.)?([a-z0-9.-]+\.[a-z]{2,})", re.I)
+_KW_FILE = re.compile(r"\b[\w-]+\.(?:py|sh|csv|json|md|html|parquet|xlsx?|pdf|zip|gz|txt|ya?ml|sql)\b", re.I)
+_KW_STOP = {"I", "OK", "A", "AN", "OR", "AND", "THE", "TO", "IN", "ON", "OF", "IS", "IT", "NO", "ID", "IDS", "FINAL", "TRUNCATED", "PROBATIONARY", "ACTIVE", "JUDGMENT", "ASSUMED", "PLACEHOLDER"}
+KEYWORDS_MAX = 40
+
+
+def keywords(text: str) -> list[str]:
+    """Deterministic keywords from a body: acronyms, web domains, file names."""
+    out: list[str] = []
+    for m in _KW_DOMAIN.finditer(text or ""):
+        out += [m.group(1).lower()] + m.group(1).lower().split(".")[:-1]
+    for m in _KW_FILE.finditer(text or ""):
+        out.append(m.group(0).lower())
+    for m in _KW_ACRONYM.finditer(text or ""):
+        if m.group(0) not in _KW_STOP and not m.group(0).isdigit():
+            out.append(m.group(0).lower())
+    return list(dict.fromkeys(out))[:KEYWORDS_MAX]
+
+
+def fts_row(node_id: str, summary: str, body: str, tags: Iterable[str]) -> tuple:
+    tag_text = " ".join(tag_free(t).replace("-", " ") + " " + t for t in tags)
+    return (node_id, summary, tag_text, " ".join(keywords(body or "")), (body or "")[:8000])
+
+
 def insert_node(store: db.Store, node: Node) -> str:
     """Insert a node with its tags, FTS row and vocab entries. Caller holds the write."""
     if node.type not in NODE_TYPES:
@@ -448,10 +476,7 @@ def insert_node(store: db.Store, node: Node) -> str:
         store.ex("INSERT OR IGNORE INTO tags(node_id, tag) VALUES (?, ?)", (node.id, t))
         upsert_vocab(store, t, "seen")
     if store.fts_mode == "fts5":
-        store.ex(
-            "INSERT INTO nodes_fts(node_id, summary, tags) VALUES (?, ?, ?)",
-            (node.id, node.summary, " ".join(tag_free(t).replace("-", " ") + " " + t for t in node.tags)),
-        )
+        store.ex("INSERT INTO nodes_fts(node_id, summary, tags, keywords, body) VALUES (?, ?, ?, ?, ?)", fts_row(node.id, node.summary, node.body, node.tags))
     for e in node.edges:
         add_edge(store, node.id, e["to"], e["type"], float(e.get("weight", 1.0)), e.get("provenance"))
     return node.id

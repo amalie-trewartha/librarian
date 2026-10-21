@@ -200,18 +200,95 @@ def split_body(body: str, max_tokens: int = model.CHUNK_MAX_TOKENS) -> list[str]
     return chunks or [body]
 
 
+# Tag hygiene (2026-10 live run: 36 curated tags, 24 used once; junk such as
+# pkg:p and pkg:p2; near-duplicates such as area:data / area:data-fetch).
+TAG_NAMESPACES_OPEN = ("pkg", "area", "topic", "data", "method")
+TAG_ACTIVATE_USES = 2
+_JUNK_PKG = re.compile(r"^(p\d*(-.*)?|project.*|brief.*|blind)$")
+
+
+def _edit_distance(a: str, b: str) -> int:
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, start=1):
+        cur = [i]
+        for j, cb in enumerate(b, start=1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def normalize_tags(store: db.Store, tags: list[str]) -> tuple[list[str], list[str]]:
+    """Map a new tag to a close existing one in its namespace; drop junk pkg: values.
+
+    Returns (tags, notes). Tags already in the vocabulary pass unchanged.
+    """
+    out: list[str] = []
+    notes: list[str] = []
+    for t in tags:
+        ns, free = model.tag_namespace(t), model.tag_free(t)
+        if ns not in TAG_NAMESPACES_OPEN or model.vocab_status(store, t) is not None:
+            out.append(t)
+            continue
+        if ns == "pkg" and _JUNK_PKG.match(free):
+            notes.append(f"dropped tag {t}: pkg: names a package or tool, not a project or brief")
+            continue
+        close = None
+        if len(free) >= 5:
+            for r in store.q("SELECT tag FROM tag_vocab WHERE namespace = ? AND status IN ('active','seen')", (ns,)):
+                if _edit_distance(free, model.tag_free(r[0])) <= 2:
+                    close = r[0]
+                    break
+        if close:
+            notes.append(f"tag {t} written as the existing {close}")
+            t = close
+        if t not in out:
+            out.append(t)
+    return out, notes
+
+
+def _activate_used_tags(store: db.Store, tags: list[str]) -> None:
+    """A tag becomes active (usable in wake requests) once two curated memories carry it.
+
+    Before, new tags waited for a human approval that never came: in the live run
+    every tag the mind made stayed 'seen', so wakes never matched on them.
+    """
+    for t in tags:
+        if model.tag_namespace(t) not in TAG_NAMESPACES_OPEN or model.vocab_status(store, t) == "active":
+            continue
+        n = store.q1(
+            "SELECT COUNT(DISTINCT n.id) FROM tags g JOIN nodes n ON n.id = g.node_id WHERE g.tag = ? AND n.type IN ('skill','fact','decision','retrospective')",
+            (t,),
+        )[0]
+        if n >= TAG_ACTIVATE_USES:
+            store.ex("UPDATE tag_vocab SET status = 'active', note = ? WHERE tag = ?", (f"auto: used by {n} memories", t))
+
+
+def _informed_edges(store: db.Store, node_id: str, body: str) -> int:
+    """A memory whose body cites another memory's id was informed by it."""
+    n = 0
+    for nid in set(re.findall(r"\b[0-9A-HJKMNP-TV-Z]{26}\b", body or "")):
+        if nid != node_id and model.get_node(store, nid, with_edges=False) is not None:
+            model.add_edge(store, nid, node_id, "informed", 1.0, {"by": "gate", "cited_in_body": True})
+            n += 1
+    return n
+
+
 def apply(store: db.Store, cand: Candidate) -> GateResult:
     """Run the checks, decide on duplicates, write. One write transaction."""
     reasons = check(store, cand)
     if reasons:
         return GateResult(False, "rejected", reasons=reasons)
     tags = model.parse_tags(cand.tags)
+    tag_notes: list[str] = []
+    if cand.type != "episode":
+        tags, tag_notes = normalize_tags(store, tags)
     if cand.project and f"project:{cand.project}" not in tags:
         tags.append(f"project:{cand.project}")
     if cand.untrusted or str(cand.provenance.get("source_kind", "")) in ("web", "external"):
         if "src:untrusted" not in tags:
             tags.append("src:untrusted")
     result = GateResult(True, "stored")
+    result.notes += tag_notes
     # Episodes are records of what happened, not claims awaiting confirmation.
     status = "active" if cand.type == "episode" else "probationary"
     if cand.status and cand.status != "probationary" and cand.type != "episode":
@@ -237,12 +314,8 @@ def apply(store: db.Store, cand: Candidate) -> GateResult:
             elif cand.supersedes is None:
                 result.linked.append(best_id)
                 result.notes.append(f"near-duplicate of {best_id} (summary {s_sum}); linked co_retrieved")
-        # New area: tags are accepted but queued for review.
-        for t in tags:
-            if model.tag_namespace(t) == "area" and model.vocab_status(store, t) != "active":
-                qid = queue.enqueue(store, "new_area_tag", {"tag": t, "summary": cand.summary}, dedupe_key=f"area:{t}")
-                if qid:
-                    result.queued.append(qid)
+        # New tags are accepted as 'seen' and activate on their second use
+        # (_activate_used_tags), without waiting on a human.
         body = (cand.body or "").strip()
         chunks = [body]
         if body and model.estimate_tokens(body) > model.BODY_MAX_TOKENS:
@@ -268,6 +341,9 @@ def apply(store: db.Store, cand: Candidate) -> GateResult:
         if cand.type == "episode" and node.outcome is None:
             node.outcome = {"value": "unknown", "criterion": "not recorded", "recorded": db.now_iso()}
         model.insert_node(store, node)
+        if cand.type != "episode":
+            _activate_used_tags(store, tags)
+            _informed_edges(store, node_id, body)
         if cand.supersedes:
             model.supersede(store, node_id, cand.supersedes, {"by": cand.author or "main", "reason": "proposal"})
             result.action = "superseded"

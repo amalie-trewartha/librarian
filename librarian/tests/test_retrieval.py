@@ -151,11 +151,15 @@ class RankTest(StoreCase):
                 self.answer = answer
 
             def complete(self, prompt, system="", max_tokens=0):
+                # The cut numbers the memories; answer with the number of "skill 7".
+                if self.answer is None:
+                    n = next(ln.split(" | ")[0] for ln in prompt.splitlines() if "skill 7 about" in ln)
+                    return '```json\n{"%s": 3}\n```' % n
                 return self.answer
 
         orig = rank.llm.get_llm
         try:
-            rank.llm.get_llm = lambda role, allow=True: Fake('```json\n{"%s": 3}\n```' % ids[7])
+            rank.llm.get_llm = lambda role, allow=True: Fake(None)
             ranked, used, note = rank.rank(self.store, cands, recall.Query(tags=["pkg:x"], task="x"))
             self.assertTrue(used)
             self.assertEqual(ranked[0].node.id, ids[7])
@@ -300,6 +304,63 @@ class PackTest(StoreCase):
             queue.enqueue(self.store, "working_conflict", {"node_id": self.w1, "summary": "x", "core_id": self.c1})
         pk = pack.build(self.store, self.req())
         self.assertEqual(pk.identity_working, [])
+
+
+class RunBRecallTest(StoreCase):
+    def test_body_keywords_are_searchable(self):
+        # Live run 2026-10: the index held summary and tags only, so a skill whose
+        # body named the dataset and site was invisible to a search for them.
+        from librarian import model
+        a = self.skill("When I need a table without an API key", ["area:data-fetch"], body="Fetch from https://www2.census.gov/programs-surveys/acs/ with curl; ACS 5-year; verified 2026-10-18.")
+        self.assertIn("census.gov", model.keywords(self.node(a).body))
+        self.assertIn("acs", model.keywords(self.node(a).body))
+        _, cands = recall.recall(self.store, recall.Query(task="download ACS census tables"))
+        self.assertIn(a, [c.node.id for c in cands])
+
+    def test_all_curated_reach_the_llm_cut_and_unjudged_stay_out(self):
+        from librarian import pack
+        far = self.skill("pandas groupby observed flag", ["pkg:pandas"])
+        near = [self.skill(f"colcon eigen fix {w}", ["pkg:colcon"]) for w in ("amber", "birch", "cedar", "dune", "ember", "fjord", "grove", "heath")]
+        seen = {}
+
+        class Fake:
+            model = "fake"
+
+            def complete(self, prompt, system="", max_tokens=0):
+                seen["prompt"] = prompt
+                n = next(ln.split(" | ")[0] for ln in prompt.splitlines() if "pandas groupby" in ln)
+                return '{"%s": 0}' % n
+
+        orig = rank.llm.get_llm
+        try:
+            rank.llm.get_llm = lambda role, allow=True: Fake()
+            pk = pack.build(self.store, pack.PackRequest(task="colcon eigen link errors", tags=["pkg:colcon"], project=None, phase="debugging", budget=8000, log=True, use_llm=True))
+        finally:
+            rank.llm.get_llm = orig
+        self.assertIn("pandas groupby", seen["prompt"])
+        self.assertNotIn(far, pk.ids("task"))
+        row = self.store.q1("SELECT llm_cut, llm_note FROM requests WHERE request_id = ?", (pk.request_id,))
+        self.assertEqual(row[0], 1)
+        pk2 = pack.build(self.store, pack.PackRequest(task="colcon eigen link errors", tags=["pkg:colcon"], budget=8000, log=True, use_llm=False))
+        self.assertNotIn(far, pk2.ids("task"))
+        self.assertEqual(self.store.q1("SELECT llm_note FROM requests WHERE request_id = ?", (pk2.request_id,))[0], "llm relevance cut off")
+
+    def test_migration_to_schema_3_rebuilds_the_index(self):
+        from librarian import db
+        a = self.skill("When I need a table without an API key", ["area:data-fetch"], body="Fetch from https://www2.census.gov/ ACS; verified 2026-10-18.")
+        with self.store.write():
+            self.store.ex("DROP TABLE nodes_fts")
+            self.store.ex("CREATE VIRTUAL TABLE nodes_fts USING fts5(node_id UNINDEXED, summary, tags, tokenize='porter unicode61')")
+            self.store.ex("INSERT INTO nodes_fts(node_id, summary, tags) SELECT id, summary, '' FROM nodes")
+            self.store.ex("ALTER TABLE requests DROP COLUMN llm_note")
+            self.store.meta_set("schema_version", "2")
+        path = self.store.path
+        self.store.close()
+        self.store = db.Store.open(path)
+        self.assertEqual(self.store.meta_get("schema_version"), "3")
+        self.assertIn("llm_note", {r[1] for r in self.store.q("PRAGMA table_info(requests)")})
+        _, cands = recall.recall(self.store, recall.Query(task="census"))
+        self.assertIn(a, [c.node.id for c in cands])
 
 
 if __name__ == "__main__":

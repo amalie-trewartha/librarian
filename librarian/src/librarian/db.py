@@ -21,7 +21,7 @@ from typing import Any, Iterator, Optional
 
 # 2: nodes.type gains 'fact' (a sourced, checkable finding). Store.open
 # migrates a version-1 store in place (_migrate).
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class StoreError(Exception):
@@ -304,6 +304,7 @@ CREATE TABLE IF NOT EXISTS requests (
   truncated INTEGER NOT NULL DEFAULT 0,
   coverage TEXT,
   llm_cut INTEGER NOT NULL DEFAULT 0,
+  llm_note TEXT,
   covered_by_pack INTEGER,
   ritual TEXT,
   ts TEXT NOT NULL
@@ -468,7 +469,7 @@ CREATE TABLE IF NOT EXISTS embeddings (
 
 FTS_SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
-  node_id UNINDEXED, summary, tags, tokenize='porter unicode61'
+  node_id UNINDEXED, summary, tags, keywords, body, tokenize='porter unicode61'
 );
 """
 
@@ -542,6 +543,22 @@ class Store:
                         if bad:
                             raise StoreError(f"migration to schema 2 broke {len(bad)} foreign keys; rolled back")
                     self.meta_set("schema_version", "2")
+                if v < 3:
+                    # 2 → 3: requests.llm_note (why the rank cut was skipped) and the FTS
+                    # index gains keywords and body columns (FTS5 tables cannot be
+                    # altered: drop, recreate, refill from nodes).
+                    cols = {r[1] for r in self.conn.execute("PRAGMA table_info(requests)")}
+                    if "llm_note" not in cols:
+                        self.conn.execute("ALTER TABLE requests ADD COLUMN llm_note TEXT")
+                    if self.meta_get("fts_mode") == "fts5":
+                        from . import model
+
+                        self.conn.execute("DROP TABLE IF EXISTS nodes_fts")
+                        self.conn.execute(FTS_SCHEMA)
+                        tags = model.tags_for_nodes(self, [r[0] for r in self.conn.execute("SELECT id FROM nodes")])
+                        for r in self.conn.execute("SELECT id, summary, body FROM nodes").fetchall():
+                            self.conn.execute("INSERT INTO nodes_fts(node_id, summary, tags, keywords, body) VALUES (?,?,?,?,?)", model.fts_row(r[0], r[1], r[2], tags.get(r[0], [])))
+                    self.meta_set("schema_version", "3")
         finally:
             self.conn.execute("PRAGMA foreign_keys=ON")
 

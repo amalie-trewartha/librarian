@@ -640,7 +640,13 @@ def _promote(store: db.Store, dry_run: bool) -> dict:
 
 
 def _co_retrieved(store: db.Store, dry_run: bool) -> dict:
-    rows = store.q("SELECT episode_id, node_id FROM citations ORDER BY episode_id")
+    # Explicit cites between curated memories only: automatic 'log' rows mean
+    # "packed together", so linking them made packing reinforce itself (12,850
+    # of 12,928 edges in the 2026-10 live run, mostly episode pairs).
+    rows = store.q(
+        "SELECT c.episode_id, c.node_id FROM citations c JOIN nodes n ON n.id = c.node_id "
+        "WHERE c.source = 'cite' AND n.type IN ('skill','fact','decision','retrospective') ORDER BY c.episode_id"
+    )
     by_ep: dict[str, list[str]] = {}
     for r in rows:
         by_ep.setdefault(r[0], []).append(r[1])

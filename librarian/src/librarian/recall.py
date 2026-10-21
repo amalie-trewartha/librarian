@@ -19,7 +19,9 @@ from . import db, model
 RECALL_CAP = 200
 TEXT_K = 100
 HOP_SEEDS = 50
-HOP_EDGES = ("applies_to", "co_retrieved", "informed")
+HOP_EDGES = ("applies_to", "co_retrieved", "informed", "derived_from")
+CURATED_TYPES = ("skill", "fact", "decision", "retrospective")
+CURATED_ALL_MAX = 150
 
 
 @dataclass
@@ -31,6 +33,9 @@ class Query:
     type: Optional[str] = None
     include_probationary: bool = True
     include_history: bool = False
+    # Put every curated memory (not episodes) in the candidate pool, so the LLM
+    # cut judges them all, while the store is small enough for one call.
+    include_all_curated: bool = False
 
 
 @dataclass
@@ -119,7 +124,7 @@ def text_match(store: db.Store, text: str, scope: tuple, k: int = TEXT_K) -> dic
         match = " OR ".join(f'"{t}"' for t in safe)
         try:
             rows = store.q(
-                f"SELECT f.node_id, bm25(nodes_fts, 0, 1.0, 0.5) AS s FROM nodes_fts f "  # noqa: S608
+                f"SELECT f.node_id, bm25(nodes_fts, 0, 1.0, 0.5, 0.8, 0.3) AS s FROM nodes_fts f "  # noqa: S608
                 f"JOIN nodes n ON n.id = f.node_id WHERE nodes_fts MATCH ? AND {_scope_sql(scope)} "
                 f"ORDER BY s LIMIT ?",
                 (match, *scope, k),
@@ -127,10 +132,10 @@ def text_match(store: db.Store, text: str, scope: tuple, k: int = TEXT_K) -> dic
             return {r[0]: -float(r[1]) for r in rows}
         except db.sqlite3.OperationalError:
             pass  # fall through to the Python path on a bad MATCH
-    rows = store.q(f"SELECT id, summary FROM nodes WHERE {_scope_sql(scope)}", scope)  # noqa: S608
+    rows = store.q(f"SELECT id, summary, body FROM nodes WHERE {_scope_sql(scope)}", scope)  # noqa: S608
     ids = [r[0] for r in rows]
     tags_by = model.tags_for_nodes(store, ids)
-    docs = {r[0]: r[1] + " " + " ".join(model.tag_free(t).replace("-", " ") for t in tags_by.get(r[0], [])) for r in rows}
+    docs = {r[0]: r[1] + " " + " ".join(model.tag_free(t).replace("-", " ") for t in tags_by.get(r[0], [])) + " " + " ".join(model.keywords(r[2] or "")) for r in rows}
     scores = python_bm25(docs, terms)
     return dict(sorted(scores.items(), key=lambda kv: -kv[1])[:k])
 
@@ -211,7 +216,11 @@ def recall(store: db.Store, q: Query, cap: int = RECALL_CAP) -> tuple[list[model
     pre = {nid: tscores.get(nid, 0.0) + ((bscores[nid] - bmin) / span if nid in bscores else 0.0) for nid in set(tscores) | set(bscores)}
     seeds = [nid for nid, _ in sorted(pre.items(), key=lambda kv: -kv[1])[:HOP_SEEDS]]
     hops = graph_hop(store, seeds, scope)
-    all_ids = list(set(pre) | set(hops))
+    curated: set = set()
+    if q.include_all_curated:
+        marks = ",".join("?" for _ in CURATED_TYPES)
+        curated = {r[0] for r in store.q(f"SELECT id FROM nodes WHERE type IN ({marks}) AND {_scope_sql(scope)} ORDER BY created DESC LIMIT ?", (*CURATED_TYPES, *scope, CURATED_ALL_MAX))}  # noqa: S608
+    all_ids = list(set(pre) | set(hops) | curated)
     if not all_ids:
         return always_included(store), []
     rows: list = []
@@ -237,6 +246,11 @@ def recall(store: db.Store, q: Query, cap: int = RECALL_CAP) -> tuple[list[model
         if node.id in hops:
             c.hop = hops[node.id]
             c.via.add("hop")
+        if node.id in curated and not c.via:
+            c.via.add("all-curated")
         union[node.id] = c
     ranked = sorted(union.values(), key=lambda c: -(c.tag_score + c.bm25_norm + 0.5 * c.hop))
-    return always_included(store), ranked[:cap]
+    top = ranked[:cap]
+    # The all-curated pool survives the cap: those are the nodes it exists to keep.
+    top += [c for c in ranked[cap:] if c.node.id in curated]
+    return always_included(store), top

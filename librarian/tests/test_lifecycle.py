@@ -406,6 +406,34 @@ class RunBRuntimeTest(StoreCase):
         lifecycle.amend_outcome(self.store, rep.episode_id, "partial")
         self.assertAlmostEqual(self.node(a).confidence, 0.03, places=6)
 
+    def test_memory_proposed_in_a_wake_is_derived_from_its_episode(self):
+        import io, json
+        from contextlib import redirect_stdout
+        from librarian import gate, runtime
+        self._project("# Project brief: mobility\n\nModel travel.\n", "p-1")
+        self._pre()
+        req = json.loads((self.ident / "run" / runtime.REQUEST_FILE).read_text())
+        res = gate.apply(self.store, gate.Candidate(type="skill", summary="when curl gets a 403 from the BLS site", body="Use the API endpoint; verified 2026-10-01 on rig-1.", tags=["pkg:curl"], provenance={"author": "main", "run_id": req["request_id"]}, project="p-1"))
+        with redirect_stdout(io.StringIO()) as out:
+            runtime.post(0, None, "", "Fixed the BLS fetch.", use_llm=False)
+        ep = json.loads(out.getvalue())["episode"]["episode_id"]
+        self.assertIsNotNone(self.store.q1("SELECT 1 FROM edges WHERE from_id = ? AND to_id = ? AND type = 'derived_from'", (res.id, ep)))
+
+    def test_co_retrieved_only_from_explicit_cites_of_curated(self):
+        a = self.skill("a", ["pkg:x"])
+        b = self.skill("b", ["pkg:x"])
+        c = self.skill("c", ["pkg:x"])
+        for _ in range(3):
+            self.episode("partial", [a, b])
+        with self.store.write():
+            for _ in range(3):
+                e = self.episode("partial", []).episode_id
+                self.store.ex("INSERT INTO citations(episode_id, node_id, source) VALUES (?,?,'log'),(?,?,'log')", (e, a, e, c))
+            lifecycle._co_retrieved(self.store, dry_run=False)
+        pairs = {(x[0], x[1]) for x in self.store.q("SELECT from_id, to_id FROM edges WHERE type = 'co_retrieved' AND provenance LIKE '%retrieval_log%'")}
+        self.assertIn((a, b), pairs)
+        self.assertNotIn((a, c), pairs)
+
 
 if __name__ == "__main__":
     unittest.main()

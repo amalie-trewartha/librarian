@@ -99,6 +99,7 @@ episode_outcome() { L show "$1" | jq -r '.outcome.value + " | " + .outcome.crite
 run_step STUB_JOURNAL="first entry"; eq "wake 1 runs" "$?" 0
 prompt=$(cat "$WORK/prompt")
 has "pack is in the prompt" "$prompt" "Your memory pack (from the librarian store"
+has "pack intro asks to check memories before acting" "$prompt" "Before you start this wake's step, check which of these bear on it"
 has "pack carries core identity" "$prompt" "I flag safety-relevant uncertainty"
 has "pack carries the seeded skill" "$prompt" "$SK · skill · PROBATIONARY"
 pos_pack=$(printf '%s\n' "$prompt" | grep -n '^\[IDENTITY: CORE\]' | head -1 | cut -d: -f1)

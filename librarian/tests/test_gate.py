@@ -46,15 +46,31 @@ class GateRules(StoreCase):
         self.assertFalse(gate.apply(self.store, cand(tags=["ctx:made-up"])).accepted)
         self.assertTrue(gate.apply(self.store, cand(tags=["ctx:debugging"])).accepted)
 
-    def test_new_area_tag_accepted_and_queued(self):
+    def test_new_tag_activates_on_second_use(self):
+        # Live run 2026-10: new tags waited for a human approval that never came, so
+        # every tag the mind made stayed 'seen' and wakes never matched on it.
         res = gate.apply(self.store, cand(tags=["area:novel-thing"]))
         self.assertTrue(res.accepted)
-        self.assertEqual(len(res.queued), 1)
-        items = queue.list_items(self.store, "pending", "new_area_tag")
-        self.assertEqual(items[0]["payload"]["tag"], "area:novel-thing")
-        # The same tag again does not queue twice.
-        res2 = gate.apply(self.store, cand(summary="another thing about eigen on arm64", tags=["area:novel-thing"]))
-        self.assertEqual(res2.queued, [])
+        self.assertEqual(res.queued, [])
+        self.assertEqual(queue.list_items(self.store, "pending", "new_area_tag"), [])
+        self.assertEqual(model.vocab_status(self.store, "area:novel-thing"), "seen")
+        gate.apply(self.store, cand(summary="another thing about eigen on arm64", tags=["area:novel-thing"]))
+        self.assertEqual(model.vocab_status(self.store, "area:novel-thing"), "active")
+
+    def test_tags_normalized_to_existing_and_junk_dropped(self):
+        gate.apply(self.store, cand(tags=["area:calibration"]))
+        res = gate.apply(self.store, cand(summary="another thing about eigen on arm64", tags=["area:calibrations", "pkg:p2", "pkg:jq"]))
+        n = model.get_node(self.store, res.id)
+        self.assertIn("area:calibration", n.tags)
+        self.assertNotIn("area:calibrations", n.tags)
+        self.assertNotIn("pkg:p2", n.tags)
+        self.assertIn("pkg:jq", n.tags)
+
+    def test_body_citing_a_memory_adds_informed_edge(self):
+        a = gate.apply(self.store, cand(tags=["pkg:colcon"])).id
+        b = gate.apply(self.store, cand(summary="decision on eigen pin for arm64", body=f"Chose the pin; rests on {a}. Verified 2026-09-01 on rig-7.", tags=["pkg:colcon"])).id
+        e = self.store.q1("SELECT 1 FROM edges WHERE from_id = ? AND to_id = ? AND type = 'informed'", (a, b))
+        self.assertIsNotNone(e)
 
     def test_specifics_required_only_for_distilled_types(self):
         self.assertFalse(gate.apply(self.store, cand(body="Always be careful.")).accepted)
