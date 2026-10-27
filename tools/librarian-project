@@ -97,7 +97,7 @@ _end_epoch() {
 }
 
 cmd_init() {
-    local ident="" spec="" charter="" keep=0 force=0 tokens=2000000 days=14 end="" total="" scale=1 dusd="" tusd="" fresh=0
+    local ident="" spec="" charter="" keep=0 force=0 tokens=2000000 days=14 end="" total="" scale=1 dusd="" tusd="" fresh=0 nomem=0
     local -a refs=() prefs=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -112,6 +112,7 @@ cmd_init() {
             --reference) refs+=("${2:?--reference needs a file}"); shift 2 ;;
             --preferences) prefs+=("${2:?--preferences needs a file}"); shift 2 ;;
             --fresh-memory) fresh=1; shift ;;
+            --no-memory) nomem=1; shift ;;
             --end) end="${2:?--end needs YYYY-MM-DD}"; shift 2 ;;
             --keep-persona) keep=1; shift ;;
             --force) force=1; shift ;;
@@ -131,6 +132,13 @@ cmd_init() {
     [[ -z "$charter" || -f "$charter" ]] || die "no such charter: $charter"
     local r; for r in ${refs[@]+"${refs[@]}"}; do [[ -f "$r" ]] || die "no such reference file: $r"; done
     for r in ${prefs[@]+"${prefs[@]}"}; do [[ -f "$r" ]] || die "no such preferences file: $r"; done
+    # --no-memory: a control run without the librarian. The memory-free
+    # template (same files, the charter and rituals without librarian steps),
+    # no store, LIBRARIAN_MEMORY=0 in .env (no pack, no episodes, and the CLI
+    # refuses), and the core identity and preferences kept as plain files the
+    # wake prompt shows every wake (design/long_autonomy.md).
+    (( nomem )) && [[ -z "${LIBRARIAN_PROJECT_TEMPLATE:-}" ]] && TEMPLATE="$APP/identities/project-nomemory"
+    (( nomem && fresh )) && die "--no-memory and --fresh-memory do not go together"
     [[ -d "$TEMPLATE" ]] || die "template not found: $TEMPLATE"
     local name pd pp today
     name=$(grep '^name=' "$id/info.txt" | cut -d= -f2-)
@@ -170,7 +178,14 @@ cmd_init() {
     # projects (--fresh-memory wipes it). Core identity is seeded from the
     # template, stated group values from --preferences, as human-authored.
     local lib_note="librarian not on PATH; no memory store"
-    if command -v librarian >/dev/null 2>&1; then
+    if (( nomem )); then
+        lib_note="off (--no-memory): no store; core identity and preferences shown as files"
+        cp "$TEMPLATE/identity-core.md" "$pp/identity-core.md"
+        mkdir -p "$pp/preferences"
+        for r in ${prefs[@]+"${prefs[@]}"}; do cp "$r" "$pp/preferences/"; done
+        find "$pp/identity-core.md" "$pp/preferences" -type f -exec chmod a-w {} +
+        rm -rf "$pd/skills"
+    elif command -v librarian >/dev/null 2>&1; then
         if [[ "$fresh" -eq 1 && -d "$id/librarian" ]]; then
             mv "$id/librarian" "$id/librarian.old-$(date +%Y%m%d%H%M%S)"
         fi
@@ -212,7 +227,7 @@ EOF
     fi
     touch "$id/.env"
     {
-        grep -vE '^(PROJECT_DAILY_TOKENS|PROJECT_TOTAL_TOKENS|PROJECT_DAILY_USD|PROJECT_TOTAL_USD|PROJECT_TIME_SCALE|LIBRARIAN_SRC|LIBRARIAN_PACK_TOKENS)=' "$id/.env" || true
+        grep -vE '^(PROJECT_DAILY_TOKENS|PROJECT_TOTAL_TOKENS|PROJECT_DAILY_USD|PROJECT_TOTAL_USD|PROJECT_TIME_SCALE|LIBRARIAN_SRC|LIBRARIAN_PACK_TOKENS|LIBRARIAN_MEMORY)=' "$id/.env" || true
         printf 'PROJECT_DAILY_TOKENS=%s\n' "$tokens"
         printf 'LIBRARIAN_SRC=%s\n' "$APP/librarian/src"
         printf 'LIBRARIAN_PACK_TOKENS=%s\n' "${LIBRARIAN_PACK_TOKENS:-5000}"
@@ -220,6 +235,7 @@ EOF
         if [[ -n "$dusd" ]]; then printf 'PROJECT_DAILY_USD=%s\n' "$dusd"; fi
         if [[ -n "$tusd" ]]; then printf 'PROJECT_TOTAL_USD=%s\n' "$tusd"; fi
         if [[ "$scale" != 1 ]]; then printf 'PROJECT_TIME_SCALE=%s\n' "$scale"; fi
+        if (( nomem )); then printf 'LIBRARIAN_MEMORY=0\n'; fi
     } > "$id/.env.tmp" && mv "$id/.env.tmp" "$id/.env"
     printf 'Project mode is set up for %s.\n  files:    %s\n  pristine: %s (edit there, then run update-pristine)\n  memory:   %s\n' "$name" "$pd" "$pp" "$lib_note"
     if [[ -n "$dusd$tusd" ]]; then

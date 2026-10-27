@@ -356,7 +356,7 @@ Read from the environment or the identity's `.env`:
 | `PROJECT_DAILY_USD` / `PROJECT_TOTAL_USD` / `PROJECT_WAKE_USD` | unset (`init --daily-usd`, `--total-usd`) | Budgets in estimated dollars instead of tokens. They replace the token caps when set |
 | `LLM_PRICE_SCALE` | 1 | Scales the per-call cost estimate (list prices are first-party; e.g. 1.1 for a Bedrock regional endpoint) |
 | `PROJECT_FALLBACK_USD_PER_MTOK` | 5 | Dollar rate assumed for a call with no cost estimate (an unpriced model) |
-| `LIBRARIAN_MEMORY` | 1 | 0 turns the librarian hooks off; wakes get the plain project excerpt |
+| `LIBRARIAN_MEMORY` | 1 | 0 turns the librarian off: no pack, no episodes, and `tools/librarian` refuses every command (exit 3). `librarian-project init --no-memory` sets it and builds a control run: the `identities/project-nomemory` template (the same files; charter, rituals and addenda without librarian steps), `prompt-project-nomemory.md`, no store, and the core identity and preferences shown from project-pristine files in the cached prefix. The control differs from a memory run in memory only; journal.md and project-memory.md stay (tests/test_project_nomemory.sh) |
 | `LIBRARIAN_SRC` | `<app>/librarian/src` (set by init) | The librarian package, mounted read-only into the sandbox |
 | `LIBRARIAN_PACK_TOKENS` | 5000 | Memory pack budget per wake, in estimated tokens |
 | `LIBRARIAN_MODEL`, `LIBRARIAN_MODEL_<ROLE>`, `LIBRARIAN_LLM` | tier defaults | Models for the librarian's optional stages, per role; `LIBRARIAN_LLM=0` skips them all (design/librarian.md) |

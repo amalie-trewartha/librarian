@@ -382,6 +382,9 @@ $hints"
 
 prompt_file="$SCRIPT_DIR/prompt.md"
 [[ "$project_mode" -eq 1 ]] && prompt_file="$SCRIPT_DIR/prompt-project.md"
+# A no-memory control run (librarian-project init --no-memory) gets the same
+# prompt without the librarian's instructions.
+[[ "$project_mode" -eq 1 && "${LIBRARIAN_MEMORY:-1}" == 0 ]] && prompt_file="$SCRIPT_DIR/prompt-project-nomemory.md"
 [[ -f "$prompt_file" ]] || { printf 'monolith/step: error: prompt.md not found at %s\n' "$prompt_file" >&2; exit 1; }
 goals=$(get_goals "$MEM_DIR")
 think_prompt=$(load_prompt "$prompt_file" "$IDENTITY_NAME" "$goals")
@@ -644,7 +647,7 @@ rm -f "$run_err_tmp"
 # the project diff, the run's steps), credit the memories it cited, feed the
 # progress triggers, and refresh the mirrors before the commit below. Keyed on
 # the request file the pre hook wrote, so a wake without a pack closes nothing.
-if [[ "$project_mode" -eq 1 && -f "$state_dir/librarian_request.json" ]] && command -v librarian >/dev/null 2>&1; then
+if [[ "$project_mode" -eq 1 && "${LIBRARIAN_MEMORY:-1}" != 0 && -f "$state_dir/librarian_request.json" ]] && command -v librarian >/dev/null 2>&1; then
     printf '%s' "$run_response" | librarian runtime post --rc "$run_rc" --run-id "$(cat "$run_id_file" 2>/dev/null)" \
         --stderr-tail "$run_err_tail" >/dev/null 2>>"$state_dir/librarian.log" || true
 fi

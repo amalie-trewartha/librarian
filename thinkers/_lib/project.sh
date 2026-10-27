@@ -495,6 +495,23 @@ _project_section() {  # _project_section [librarian-pack] [workspace-section]
     local refs
     refs=$(cd "$d" 2>/dev/null && find reference -type f ! -name '.*' 2>/dev/null | sort | tr '\n' ' ')
     [[ -n "$refs" ]] && printf '\n\nReference material from the humans (read-only; read a file when it would help, not every wake): %s' "$refs"
+    # Without the librarian (LIBRARIAN_MEMORY=0, init --no-memory) the core
+    # identity and the humans' preferences, which a memory pack would carry,
+    # come from plain files. They change only when a human edits them, so
+    # they sit in the cached prefix.
+    if [[ "${LIBRARIAN_MEMORY:-1}" == 0 ]]; then
+        local pp="${IDENTITY_DIR:-$(dirname "$(dirname "$d")")}/project-pristine"
+        if [[ -f "$pp/identity-core.md" ]]; then
+            printf '\n\nYour core identity (human-approved; never contradict it):\n\n'
+            awk '/^### / { on = 1; next } on && NF { print "- " $0 }' "$pp/identity-core.md"
+        fi
+        local pf
+        for pf in "$pp"/preferences/*; do
+            [[ -f "$pf" ]] || continue
+            printf '\n\nThe humans'"'"' stated preferences (%s, in their words):\n\n' "$(basename "$pf")"
+            cat "$pf"
+        done
+    fi
     printf '\n%s\n' "$_PJ_CACHE_BREAK"
     printf '\nProject memory (project/project-memory.md, your formal record):\n\n'
     head -c "$mem_max" "$d/project-memory.md" 2>/dev/null
@@ -533,7 +550,11 @@ _project_signals() {
             "$(_pj_scale)" "$(_pj_date "$now" '%A %Y-%m-%d %H:%M %Z')"
     fi
     if [[ -n "$restored" ]]; then
-        printf -- '- GUARD: these read-only files had changed and were restored from the pristine copy: %s. Never edit them; revise how you work with `librarian identity edit`.\n' "$(printf '%s' "$restored" | tr '\n' ' ')"
+        if [[ "${LIBRARIAN_MEMORY:-1}" == 0 ]]; then
+            printf -- '- GUARD: these read-only files had changed and were restored from the pristine copy: %s. Never edit them.\n' "$(printf '%s' "$restored" | tr '\n' ' ')"
+        else
+            printf -- '- GUARD: these read-only files had changed and were restored from the pristine copy: %s. Never edit them; revise how you work with `librarian identity edit`.\n' "$(printf '%s' "$restored" | tr '\n' ' ')"
+        fi
     fi
     ritual=$(_project_due_ritual)
     if [[ -n "$ritual" ]]; then

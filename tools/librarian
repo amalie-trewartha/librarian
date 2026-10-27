@@ -18,6 +18,13 @@ done; unset _le
 
 set -euo pipefail
 
+# A no-memory control run (LIBRARIAN_MEMORY=0) has no store, and nothing may
+# create one: every command refuses, loudly, so an attempt shows in the logs.
+if [[ "${LIBRARIAN_MEMORY:-1}" == 0 ]]; then
+    printf 'librarian: memory is off in this run (LIBRARIAN_MEMORY=0); there is no memory store. Keep what you need in your project files.\n' >&2
+    exit 3
+fi
+
 src="${LIBRARIAN_SRC:-}"
 if [[ -z "$src" || ! -d "$src/librarian" ]]; then
     here="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")")" && pwd)"
