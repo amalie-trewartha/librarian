@@ -18,6 +18,8 @@ ULID_RE = re.compile(r"\b[0-9A-HJKMNP-TV-Z]{26}\b")
 _VERDICT_RE = re.compile(r"\b(SURVIVES|BROKEN|UNVERIFIABLE)\b")
 # A review that judged several claims names each verdict's memories on its own line.
 _MEMORIES_LINE_RE = re.compile(r"^\s*Memories\s+(SURVIVES|BROKEN|UNVERIFIABLE)\s*:(.*)$", re.M)
+# A claims file sent for review names the lessons its work applied, before any verdict exists.
+_LESSONS_LINE_RE = re.compile(r"^\s*Lessons applied\s*:(.*)$", re.M | re.I)
 # shellm's own death when the model API gives up (HTTP 429/5xx after its retries): an outage, not the mind's work.
 _MODEL_API_FAILURE_RE = re.compile(r"\bllm failed\b|\bAPI error \(HTTP (?:429|5\d\d)\)|transient API failure")
 
@@ -113,6 +115,28 @@ def review_verdicts(files: dict[str, str]) -> list[dict]:
         verdict = "BROKEN" if "BROKEN" in verdicts else "SURVIVES" if "SURVIVES" in verdicts else "UNVERIFIABLE"
         out.append({"file": path, "verdict": verdict, "ids": find_ulids(text)})
     return out
+
+
+def applied_lessons(text: str) -> list[str]:
+    """The ids on a text's ``Lessons applied:`` lines."""
+    out: list[str] = []
+    for rest in _LESSONS_LINE_RE.findall(text or ""):
+        for i in find_ulids(rest):
+            if i not in out:
+                out.append(i)
+    return out
+
+
+def review_outcome(verdicts: list[dict]) -> Optional[str]:
+    """One review file's verdicts as an outcome for the lessons its work applied:
+    success when every judged claim survived, failure when every one broke, else none
+    (a mixed review says nothing about how the work was done)."""
+    vs = {v["verdict"] for v in verdicts} - {"UNVERIFIABLE"}
+    if vs == {"SURVIVES"}:
+        return "success"
+    if vs == {"BROKEN"}:
+        return "failure"
+    return None
 
 
 # ── trajectory reading ───────────────────────────────────────────────────────

@@ -9,6 +9,11 @@ current project: in the 2026-10 live run, earlier projects' episodes took 78%
 of later projects' task rows and curated memory under 150 tokens per wake.
 On a project's first wakes, a summary-only FROM EARLIER BRIEFS section offers
 other projects' curated memories that match the brief.
+
+A LESSONS section (runtime wakes) offers up to three process lessons chosen by
+the wake's situation, not by the brief's words: in run B (2026-10) the brief-1
+retrospective "what I would redo" never reached a pack, because a battery
+brief shares no words with a lesson about how to run a brief.
 """
 
 from __future__ import annotations
@@ -36,12 +41,17 @@ RESERVED_MIN_RELEVANCE = 2
 TRANSFER_MAX = 8
 TRANSFER_TYPES = ("skill", "fact", "decision", "retrospective")
 TRANSFER_SHARE = 8
+LESSONS_MAX = 3
+LESSON_SHARE = 10
+# Confidence is bucketed before rotation, so lessons of similar standing take turns.
+LESSON_CONF_BUCKET = 0.1
 
 MARK_CORE = "[IDENTITY: CORE]"
 MARK_WORKING = "[IDENTITY: WORKING]"
 MARK_PREFS = "[GROUP PREFERENCES]"
 MARK_TASK = "[TASK MEMORIES]"
 MARK_TRANSFER = "[FROM EARLIER BRIEFS]"
+MARK_LESSONS = "[LESSONS]"
 MARK_COVERAGE = "[COVERAGE]"
 MARK_NOTES = "[LIBRARIAN NOTES]"
 MARK_REQUEST = "[REQUEST]"
@@ -61,6 +71,9 @@ class PackRequest:
     # The project brief's text, on a project's first wakes only: asks for the
     # FROM EARLIER BRIEFS section.
     transfer_task: str = ""
+    # Ask for the LESSONS section; brief_start marks a project's first wakes.
+    lessons: bool = False
+    brief_start: bool = False
 
 
 @dataclass
@@ -94,9 +107,10 @@ class Pack:
     phase: Optional[str] = None
     project: Optional[str] = None
     transfer: list[Entry] = field(default_factory=list)
+    lessons: list[Entry] = field(default_factory=list)
 
     def all_entries(self) -> list[Entry]:
-        return self.identity_core + self.identity_working + self.preferences + self.task_memories + self.transfer
+        return self.identity_core + self.identity_working + self.preferences + self.lessons + self.task_memories + self.transfer
 
     def ids(self, section: Optional[str] = None) -> list[str]:
         return [e.node.id for e in self.all_entries() if section is None or e.section == section]
@@ -209,6 +223,59 @@ def _transfer(store: db.Store, req: PackRequest, budget: int) -> list[Entry]:
     return out
 
 
+def is_lesson(node: model.Node) -> bool:
+    """A retrospective, or a skill or decision about how to work (area:process)."""
+    return node.type == "retrospective" or (node.type in ("skill", "decision") and "area:process" in node.tags)
+
+
+def _situation(node: model.Node, req: PackRequest) -> int:
+    """How well a lesson fits this wake: its ctx: tags against the phase and ritual, and a brief's start."""
+    score = 0
+    if req.phase and f"ctx:{req.phase}" in node.tags:
+        score += 2
+    kind = (req.ritual or "").split(" ", 1)[0]
+    if kind and f"ctx:ritual-{kind}" in node.tags:
+        score += 2
+    if req.brief_start:
+        # ctx:planning is how a lesson says it is for starting a brief; any other brief's retrospective comes next.
+        if "ctx:planning" in node.tags:
+            score += 2
+        if node.type == "retrospective" and node.project != req.project:
+            score += 1
+    return score
+
+
+def _lessons(store: db.Store, req: PackRequest, budget: int) -> list[Entry]:
+    """Up to LESSONS_MAX lessons from any project: best situation fit, then confidence,
+    then the one shown longest ago (never shown first, so lessons of equal standing take turns), newest first."""
+    nodes = [n for n in model.nodes_where(store, "type IN ('retrospective','skill','decision') AND status IN ('active','probationary')") if is_lesson(n)]
+    if not nodes:
+        return []
+    marks = ",".join("?" for _ in nodes)
+    shown = {
+        r[0]: r[1]
+        for r in store.q(
+            f"SELECT node_id, MAX(id) FROM retrieval_log WHERE section = 'lesson' AND node_id IN ({marks}) GROUP BY node_id",  # noqa: S608
+            tuple(n.id for n in nodes),
+        )
+    }
+    nodes.sort(key=lambda n: n.created, reverse=True)
+    nodes.sort(key=lambda n: (-_situation(n, req), -round(n.confidence / LESSON_CONF_BUCKET), shown.get(n.id, 0)))
+    out: list[Entry] = []
+    used = 0
+    for n in nodes:
+        if len(out) >= LESSONS_MAX:
+            break
+        marks_ = _markers(n, explicit_active=True)
+        text = f"- {n.id} · {n.type} · " + " · ".join(marks_) + " · " + n.summary.strip()
+        t = model.estimate_tokens(text)
+        if used + t > budget:
+            continue
+        out.append(Entry(n, "lesson", text, False, len(out) + 1, float(_situation(n, req)), {"situation": _situation(n, req)}))
+        used += t
+    return out
+
+
 def _conflicted_working(store: db.Store) -> set:
     out = set()
     for item in queue.list_items(store, "pending", "working_conflict"):
@@ -309,17 +376,24 @@ def build(store: db.Store, req: PackRequest) -> Pack:
         pused += t
     used += pused
 
+    # Process lessons by situation, summaries only.
+    lessons: list[Entry] = []
+    if req.lessons:
+        lessons = _lessons(store, req, budget // LESSON_SHARE)
+        used += sum(e.tokens() for e in lessons)
+    lesson_ids = {e.node.id for e in lessons}
+
     # A new project's first wakes: earlier briefs' curated memories, summaries only.
     transfer: list[Entry] = []
     if req.transfer_task.strip():
-        transfer = _transfer(store, req, budget // TRANSFER_SHARE)
+        transfer = [e for e in _transfer(store, req, budget // TRANSFER_SHARE) if e.node.id not in lesson_ids]
         used += sum(e.tokens() for e in transfer)
 
     # Task memories: reserved curated slots first, then rank order until the
     # budget is hit, with at most EPISODES_MAX episodes, all from this project.
     task: list[Entry] = []
     truncated_ids: list[str] = []
-    exclude = set(req.exclude_ids) | {e.node.id for e in transfer}
+    exclude = set(req.exclude_ids) | {e.node.id for e in transfer} | lesson_ids
     episode_keys: set[str] = set()
     episodes_max = _env_int("LIBRARIAN_PACK_EPISODES", EPISODES_MAX)
     untrusted = False
@@ -395,6 +469,7 @@ def build(store: db.Store, req: PackRequest) -> Pack:
         phase=req.phase,
         project=req.project,
         transfer=transfer,
+        lessons=lessons,
     )
     if req.log:
         with store.write():
@@ -438,6 +513,9 @@ def render_text(pack: Pack) -> str:
     out += [e.text for e in pack.identity_working]
     out.append(MARK_PREFS)
     out += [e.text for e in pack.preferences]
+    if pack.lessons:
+        out.append(f"{MARK_LESSONS} how earlier work went, for this kind of step; name the ones you will apply in the journal entry (`librarian fetch <id>` for the evidence)")
+        out += [e.text for e in pack.lessons]
     if pack.transfer:
         out.append(f"{MARK_TRANSFER} other projects' memories that match this brief; `librarian fetch <id>` before rebuilding what they cover")
         out += [e.text for e in pack.transfer]
@@ -480,6 +558,7 @@ def render_json(pack: Pack) -> dict:
         "preferences": [ent(e) for e in pack.preferences],
         "task_memories": [ent(e) for e in pack.task_memories],
         "transfer": [ent(e) for e in pack.transfer],
+        "lessons": [ent(e) for e in pack.lessons],
         "coverage": pack.coverage,
         "notes": pack.notes,
         "truncated_ids": pack.truncated_ids,

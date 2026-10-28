@@ -21,7 +21,8 @@ from typing import Any, Iterator, Optional
 
 # 2: nodes.type gains 'fact' (a sourced, checkable finding). Store.open
 # migrates a version-1 store in place (_migrate).
-SCHEMA_VERSION = 4
+# 5: the pending_lesson table (LESSON DUE signals).
+SCHEMA_VERSION = 5
 
 
 class StoreError(Exception):
@@ -463,6 +464,20 @@ CREATE TABLE IF NOT EXISTS pending_capture (
   cleared_by TEXT
 );
 
+-- A moment that may hold a lesson (a BROKEN review, a closed brief): the next
+-- wakes get a LESSON DUE signal until a lesson is proposed or the row expires.
+CREATE TABLE IF NOT EXISTS pending_lesson (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('review','brief')),
+  ref TEXT NOT NULL,
+  project TEXT,
+  created TEXT NOT NULL,
+  delivered INTEGER NOT NULL DEFAULT 0,
+  last_request TEXT,
+  cleared TEXT,
+  cleared_by TEXT
+);
+
 CREATE TABLE IF NOT EXISTS consolidation_log (
   id INTEGER PRIMARY KEY,
   ts TEXT NOT NULL,
@@ -577,6 +592,12 @@ class Store:
                         if "dismissals" in st and st.strip():
                             self.conn.execute(st)
                     self.meta_set("schema_version", "4")
+                if v < 5:
+                    # 4 → 5: the pending_lesson table.
+                    for st in SCHEMA.split(";"):
+                        if "pending_lesson" in st and st.strip():
+                            self.conn.execute(st)
+                    self.meta_set("schema_version", "5")
         finally:
             self.conn.execute("PRAGMA foreign_keys=ON")
 

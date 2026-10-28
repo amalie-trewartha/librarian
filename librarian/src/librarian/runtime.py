@@ -28,6 +28,8 @@ REVIEW_WINDOW_DAYS_DEFAULT = 7
 RECUR_WINDOW_DAYS_DEFAULT = 7
 EXCLUDE_WAKES_DEFAULT = 1
 TRANSFER_WAKES_DEFAULT = 3
+# A closed brief's LESSON DUE signal shows on this many wakes at most.
+BRIEF_LESSON_WAKES_DEFAULT = 3
 BRIEF_HEAD_CHARS = 1500
 # Files a wake can change without doing project work: a wake that changed
 # only these (and cited nothing) is a no-op, and its episode is never packed.
@@ -307,8 +309,8 @@ def _vocab_tags_in_text(store: db.Store, text: str) -> list[str]:
     return out[:10]
 
 
-def _signals_out(store: db.Store, project: Optional[str], rd: Path) -> list[str]:
-    lines: list[str] = []
+def _signals_out(store: db.Store, project: Optional[str], rd: Path, extra: Optional[list[str]] = None) -> list[str]:
+    lines: list[str] = list(extra or [])
     with store.write():
         for row in store.q("SELECT * FROM pending_capture WHERE cleared IS NULL AND project IS ? ORDER BY created", (project,)):
             tags = json.loads(row["tags"] or "[]")
@@ -380,7 +382,11 @@ def pre(ritual: Optional[str], phase: str, budget: Optional[int], signals_text: 
     # A project's first wakes also get earlier briefs' memories that match the brief.
     transfer_task = ""
     wakes = store.q1("SELECT COUNT(*) FROM requests WHERE kind = 'pack' AND project IS ?", (project,))[0]
-    if wakes < _env_int("LIBRARIAN_TRANSFER_WAKES", TRANSFER_WAKES_DEFAULT):
+    brief_start = wakes < _env_int("LIBRARIAN_TRANSFER_WAKES", TRANSFER_WAKES_DEFAULT)
+    lessons_on = os.environ.get("LIBRARIAN_LESSONS", "1").strip() != "0"
+    if lessons_on:
+        _open_brief_lesson(store, project)
+    if brief_start:
         others = store.q1("SELECT 1 FROM nodes WHERE project IS NOT ? AND type IN ('skill','fact','decision','retrospective') AND status IN ('active','probationary') LIMIT 1", (project,))
         if others is not None:
             transfer_task = current_brief(_read(pd / "spec.md", 200000))[:BRIEF_HEAD_CHARS]
@@ -395,6 +401,8 @@ def pre(ritual: Optional[str], phase: str, budget: Optional[int], signals_text: 
         use_llm=use_llm,
         ritual=ritual,
         transfer_task=transfer_task,
+        lessons=lessons_on,
+        brief_start=brief_start,
     )
     pk = pack.build(store, req)
     settle_captures(store, [], project, use_llm)
@@ -403,7 +411,7 @@ def pre(ritual: Optional[str], phase: str, budget: Optional[int], signals_text: 
             {
                 "request_id": pk.request_id,
                 "pack_ids": pk.ids(),
-                "task_ids": pk.ids("task") + pk.ids("transfer"),
+                "task_ids": pk.ids("task") + pk.ids("transfer") + pk.ids("lesson"),
                 "ritual": ritual,
                 "phase": mapped,
                 "project": project,
@@ -413,9 +421,129 @@ def pre(ritual: Optional[str], phase: str, budget: Optional[int], signals_text: 
             }
         )
     )
-    _signals_out(store, project, rd)
+    _signals_out(store, project, rd, _lesson_signals(store, project, pk.request_id, mapped) if lessons_on else [])
     sys.stdout.write(pack.render_text(pk) + "\n")
     return 0
+
+
+# ── lessons ──────────────────────────────────────────────────────────────────
+
+
+def _lesson_proposed(store: db.Store, request_id: str) -> Optional[str]:
+    """The id of a lesson proposed during the wake whose pack was ``request_id``."""
+    for n in model.nodes_where(store, "type IN ('retrospective','skill','decision') AND json_extract(provenance, '$.run_id') = ?", (request_id,)):
+        if pack.is_lesson(n):
+            return n.id
+    return None
+
+
+def _open_brief_lesson(store: db.Store, project: Optional[str]) -> None:
+    """On a project's first wake: if the brief before it left no retrospective, open a LESSON DUE."""
+    if not project:
+        return
+    if store.q1("SELECT 1 FROM requests WHERE kind = 'pack' AND project IS ?", (project,)) is not None:
+        return
+    prev = store.q1("SELECT project FROM requests WHERE kind = 'pack' AND project IS NOT NULL AND project != ? ORDER BY ts DESC LIMIT 1", (project,))
+    if prev is None:
+        return
+    prev = prev[0]
+    has_retro = store.q1(
+        "SELECT 1 FROM nodes n WHERE n.type = 'retrospective' AND n.status IN ('active','probationary') AND (n.project = ? OR EXISTS (SELECT 1 FROM tags t WHERE t.node_id = n.id AND t.tag = ?))",
+        (prev, f"project:{prev}"),
+    )
+    if has_retro is not None or store.q1("SELECT 1 FROM pending_lesson WHERE kind = 'brief' AND ref = ?", (prev,)) is not None:
+        return
+    with store.write():
+        store.ex("INSERT INTO pending_lesson(id, kind, ref, project, created) VALUES (?,?,?,?,?)", ("L" + db.ulid()[-8:], "brief", prev, project, db.now_iso()))
+
+
+def _open_review_lesson(store: db.Store, project: Optional[str], verdicts: list[dict]) -> None:
+    """A review that broke a claim may hold a lesson: one LESSON DUE for the next wake."""
+    files = sorted({v["file"] for v in verdicts if v["verdict"] == "BROKEN"})
+    if not files:
+        return
+    # A review file is often edited again later (its Memories lines); it holds one lesson moment.
+    seen: set = set()
+    for r in store.q("SELECT ref FROM pending_lesson WHERE kind = 'review' AND project IS ?", (project,)):
+        seen |= set(json.loads(r[0]))
+    files = [f for f in files if f not in seen]
+    if not files:
+        return
+    with store.write():
+        row = store.q1("SELECT id, ref FROM pending_lesson WHERE kind = 'review' AND project IS ? AND cleared IS NULL AND delivered = 0", (project,))
+        if row is not None:
+            ref = sorted(set(json.loads(row["ref"])) | set(files))
+            store.ex("UPDATE pending_lesson SET ref = ? WHERE id = ?", (json.dumps(ref), row["id"]))
+            return
+        store.ex("INSERT INTO pending_lesson(id, kind, ref, project, created) VALUES (?,?,?,?,?)", ("L" + db.ulid()[-8:], "review", json.dumps(files), project, db.now_iso()))
+
+
+def _lesson_signals(store: db.Store, project: Optional[str], request_id: str, phase: str) -> list[str]:
+    """LESSON DUE lines for this wake; marks each row delivered to this wake's pack."""
+    lines: list[str] = []
+    with store.write():
+        for row in store.q("SELECT * FROM pending_lesson WHERE cleared IS NULL AND project IS ? ORDER BY created", (project,)):
+            if row["kind"] == "brief":
+                lines.append(
+                    f"- LESSON DUE ({row['id']}): the previous brief ({row['ref']}) closed without a retrospective. Before this brief's work, write one: "
+                    f'`librarian propose --type retrospective --summary "When starting a modeling brief: <what to do differently>" --tags area:process ctx:planning --body-file <f>`, '
+                    "with what you would redo, what cost the most and what should carry to later briefs, each with its evidence (review files, commits). "
+                    "It is shown in [LESSONS] on later briefs' first wakes."
+                )
+            else:
+                files = ", ".join(json.loads(row["ref"]))
+                lines.append(
+                    f"- LESSON DUE ({row['id']}): {files} found BROKEN claims. If a break shows a way of working you could have avoided (not just a wrong number), "
+                    f'write one lesson: `librarian propose --type retrospective --summary "When <situation>: <what to do>" --tags area:process ctx:{phase} --body-file <f>` naming the review as evidence. '
+                    "If it was a one-off, write none. This signal shows once."
+                )
+            store.ex("UPDATE pending_lesson SET delivered = delivered + 1, last_request = ? WHERE id = ?", (request_id, row["id"]))
+    return lines
+
+
+def _settle_lessons(store: db.Store, request_id: str) -> list[dict]:
+    """After a wake: clear the LESSON DUE rows it was shown, by the lesson it proposed or by expiry."""
+    out = []
+    limit = _env_int("LIBRARIAN_BRIEF_LESSON_WAKES", BRIEF_LESSON_WAKES_DEFAULT)
+    proposed = _lesson_proposed(store, request_id)
+    with store.write():
+        for row in store.q("SELECT * FROM pending_lesson WHERE cleared IS NULL AND last_request = ?", (request_id,)):
+            by = proposed or ("none" if row["kind"] == "review" else "expired" if row["delivered"] >= limit else None)
+            if by is None:
+                continue
+            store.ex("UPDATE pending_lesson SET cleared = ?, cleared_by = ? WHERE id = ?", (db.now_iso(), by, row["id"]))
+            out.append({"id": row["id"], "kind": row["kind"], "cleared_by": by})
+    return out
+
+
+def _claims_path(review: str) -> str:
+    """reviews/x-adversary.md → reviews/x-claims.md: the file the review was asked to judge."""
+    return re.sub(r"-(adversary|review|verdicts?)\.md$", "", review) + "-claims.md"
+
+
+def lesson_credit(store: db.Store, pd: Path, verdicts: list[dict]) -> dict[str, str]:
+    """Lessons a reviewed piece of work applied → that review's outcome.
+
+    The ``Lessons applied:`` line must already be committed (in the claims file, or
+    the review file as an earlier wake left it), so the lessons were named before
+    the verdict was known. A lesson named by several reviews this wake takes the
+    worst outcome.
+    """
+    by_file: dict[str, list[dict]] = {}
+    for v in verdicts:
+        by_file.setdefault(v["file"], []).append(v)
+    out: dict[str, str] = {}
+    for f, vs in by_file.items():
+        oc = outcome.review_outcome(vs)
+        if oc is None:
+            continue
+        text = _git(pd, "show", f"HEAD:{_claims_path(f)}") + "\n" + _git(pd, "show", f"HEAD:{f}")
+        for i in outcome.applied_lessons(text):
+            n = model.get_node(store, i, with_edges=False)
+            if n is None or not pack.is_lesson(n) or out.get(n.id) == "failure":
+                continue
+            out[n.id] = oc
+    return out
 
 
 # ── post ─────────────────────────────────────────────────────────────────────
@@ -630,6 +758,7 @@ def post(rc: int, run_id: Optional[str], stderr_tail: str, final: str, use_llm: 
         cited_ids=cited,
     )
     oc, criterion, overrides = outcome.decide_outcome(ev)
+    lessons = lesson_credit(store, pd, verdicts) if (pd / ".git").exists() else {}
     dismissed = [r[0] for r in store.q("SELECT DISTINCT node_id FROM dismissals WHERE request_id = ?", (req["request_id"],))]
     cited = [i for i in cited if i not in dismissed]
     body_parts = [f"FINAL: {final.strip()[:1500]}" if final.strip() else "FINAL: (none)"]
@@ -656,6 +785,7 @@ def post(rc: int, run_id: Optional[str], stderr_tail: str, final: str, use_llm: 
             overrides=overrides,
             provenance={"author": "runtime", "run_id": run_id, "request_id": req["request_id"], "ritual": ritual, "noop": not cited and set(dirty) <= BOOKKEEPING_FILES},
             dismissed=dismissed,
+            lessons=lessons,
         )
     except ValueError as exc:
         print(f"librarian: episode not recorded: {exc}", file=sys.stderr)
@@ -670,6 +800,9 @@ def post(rc: int, run_id: Optional[str], stderr_tail: str, final: str, use_llm: 
                 (req["request_id"],),
             ):
                 model.add_edge(store, r[0], report.episode_id, "derived_from", 1.0, {"by": "runtime"})
+    settled_lessons = _settle_lessons(store, req["request_id"])
+    if os.environ.get("LIBRARIAN_LESSONS", "1").strip() != "0":
+        _open_review_lesson(store, project, verdicts)
     prog = triggers.evaluate(
         store,
         triggers.Progress(status=final or criterion, tags=req.get("tags", []), phase=phase, project=project, tool_calls=tool_calls, errors=sigs, run_id=run_id),
@@ -691,6 +824,7 @@ def post(rc: int, run_id: Optional[str], stderr_tail: str, final: str, use_llm: 
         "cited": cited,
         "suggestion": prog.get("suggestion"),
         "capture": cap,
+        "lessons": {"credited": lessons, "settled": settled_lessons},
         "export": export_report,
     }
     sys.stdout.write(json.dumps(out) + "\n")

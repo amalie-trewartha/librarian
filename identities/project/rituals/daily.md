@@ -50,7 +50,7 @@ thirds process and one third substance.) Carry out all four steps, in order:
    retrospective` (what you would do differently, and what should transfer
    to later briefs). Beyond that, if today taught a lesson with evidence
    behind it, write one `librarian propose --type retrospective --summary
-   "<when would I want this?>" --tags area:process ... --body-file <f>`
+   "<when would I want this?>" --tags area:process ctx:<situation> ... --body-file <f>`
    naming the evidence. Otherwise none.
 
 The runtime counts the ritual as done when project/daily/{{date}}.md

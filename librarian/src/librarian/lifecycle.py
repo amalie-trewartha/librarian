@@ -4,6 +4,12 @@ Confirmation comes from outcomes, not opinions (spec, "Confirmation"). An
 episode's outcome moves the confidence of every memory it cited; the
 agent's own helpful rating is a tie-breaker only. Nothing is deleted:
 nodes move to ``archived`` or ``superseded``.
+
+A memory with a per-id outcome (a review verdict that names it, or a lesson
+its work applied) is judged on its own, so it takes the full step split only
+among the memories so judged; the rest of the wake's citations share the
+wake's outcome. In run B (2026-10) a SURVIVES line moved a fact by 0.01,
+split with the eight memories the pack logged.
 """
 
 from __future__ import annotations
@@ -90,11 +96,14 @@ def close_episode(
     overrides: Optional[dict[str, str]] = None,
     provenance: Optional[dict] = None,
     dismissed: Optional[list[str]] = None,
+    lessons: Optional[dict[str, str]] = None,
 ) -> CreditReport:
     """Record (or create) an episode with its outcome and run credit assignment.
 
     Memories the mind dismissed this wake get no citation: it judged them not
-    to apply, so the wake's outcome says nothing about them.
+    to apply, so the wake's outcome says nothing about them. ``lessons`` maps
+    lessons a reviewed piece of work applied to that review's outcome; they are
+    cited with source 'lesson'.
     """
     if outcome not in model.OUTCOMES:
         raise ValueError(f"bad outcome {outcome}")
@@ -138,10 +147,14 @@ def close_episode(
         for i in logged_ids(store, request_ids or []):
             if i not in ids and i != episode_id and i not in skip:
                 ids.append(i)
+        lessons = lessons or {}
+        for i in lessons:
+            if i not in ids and i != episode_id and i not in skip:
+                ids.append(i)
         helpful_set = {model.resolve_id(store, h) or h for h in (helpful or [])}
         for nid in ids:
-            src = "cite" if nid in (cited or []) else "log"
-            ov = (overrides or {}).get(nid)
+            src = "cite" if nid in (cited or []) else "lesson" if nid in lessons else "log"
+            ov = (overrides or {}).get(nid) or lessons.get(nid)
             if ov and ov not in model.OUTCOMES:
                 ov = None
             store.ex(
@@ -173,9 +186,10 @@ def assign_credit(store: db.Store, episode_id: str) -> CreditReport:
     recorded = (ep.outcome or {}).get("recorded") or db.now_iso()
     cits = store.q("SELECT node_id, outcome_override FROM citations WHERE episode_id = ?", (episode_id,))
     report = CreditReport(episode_id, outcome, criterion)
-    n = len(cits)
-    if n == 0:
+    if not cits:
         return report
+    judged = sum(1 for c in cits if c["outcome_override"])
+    shares = {True: judged, False: len(cits) - judged}
     ts = db.now_iso()
     for c in cits:
         nid = c["node_id"]
@@ -183,6 +197,7 @@ def assign_credit(store: db.Store, episode_id: str) -> CreditReport:
         if node is None:
             continue
         effective = c["outcome_override"] or outcome
+        n = shares[bool(c["outcome_override"])]
         before = node.status
         delta = 0.0
         confirmed = 0

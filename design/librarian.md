@@ -72,6 +72,24 @@ humans    librarian-project queue|probe|preferences|librarian, committed to proj
   the skill itself from the trajectory span (main model, probationary,
   provenance `auto-draft`), or archives the row as `undrafted` without a
   model. Same fail-safe shape as rituals keyed to output files.
+- **Lessons are chosen by situation, asked for at the moment, and judged by reviews (run D).**
+  In run B (2026-10) only 3 of 49 FROM EARLIER BRIEFS rows were cited, and the brief-1
+  "what I would redo" retrospective never reached a pack: transfer ranks by the
+  brief's words, and a lesson about how to run a brief shares none with a battery
+  brief. Three changes:
+  - Every runtime pack carries a `[LESSONS]` section: up to 3 retrospectives (or
+    skills and decisions tagged `area:process`) from any project. They are ranked by
+    `ctx:` tag against the wake's phase and ritual; at a brief's start, `ctx:planning`
+    lessons come first, then other briefs' retrospectives. Ties go to confidence,
+    then to the lesson shown longest ago.
+  - A `pending_lesson` row opens when a brief closes without a retrospective
+    (signal shown up to 3 wakes) and when a review breaks a claim (shown once).
+    Each one shows as a LESSON DUE signal until a lesson is proposed or it expires.
+  - A claims file's committed `Lessons applied: <ids>` line lets that review judge
+    those lessons. Every claim SURVIVES gives `success`, every claim BROKEN gives
+    `failure`, and a mixed review gives nothing. These are cited with source `lesson`.
+    A memory with a per-id outcome now takes the full step, split only among the
+    memories so judged. Before, a SURVIVES line moved its fact by 0.01.
 - **Episodes enter `active`, not `probationary`.** They are records of
   outcomes, not claims awaiting confirmation; probation is for the distilled
   types. They are never deduplicated.
@@ -97,7 +115,7 @@ humans    librarian-project queue|probe|preferences|librarian, committed to proj
 | `<identity>/librarian/store.sqlite` | the store (WAL; one writer at a time, 5 s busy timeout) |
 | `<identity>/librarian/export/lib-<type>-<ulid>.md` | identity-wide markdown mirror, `bin/mem`-shaped frontmatter |
 | `<identity>/run/librarian_request.json` | this wake's request: id, packed ids, ritual, phase (written by `pre`, consumed by `post` and by `fetch`) |
-| `<identity>/run/librarian_signals` | CAPTURE, LIBRARIAN SUGGESTION and queue notices for this wake |
+| `<identity>/run/librarian_signals` | CAPTURE, LESSON DUE, LIBRARIAN SUGGESTION and queue notices for this wake |
 | `<identity>/run/librarian.log` | stderr of `runtime post` |
 | `<identity>/project-pristine/project_id` | `p-<YYYYMMDD>-<slug>`, the `project:` tag for this run |
 | `<identity>/project-pristine/probes.md` | the consistency probes |
@@ -114,6 +132,8 @@ humans    librarian-project queue|probe|preferences|librarian, committed to proj
 | `LIBRARIAN_LLM` | 1 | 0 skips every model stage (tests, offline runs) |
 | `LIBRARIAN_LLM_MAX_CALLS` | 4 | model calls per CLI invocation |
 | `LIBRARIAN_EXCLUDE_WAKES` | 1 | how many previous packs' task memories are excluded from the next |
+| `LIBRARIAN_LESSONS` | 1 | 0 drops the [LESSONS] section and LESSON DUE signals |
+| `LIBRARIAN_BRIEF_LESSON_WAKES` | 3 | wakes a closed brief's LESSON DUE signal is shown |
 | `LIBRARIAN_CAPTURE_TTL_DAYS` | 3 | days before an uncaptured resolved failure is auto-drafted or archived |
 | `LIBRARIAN_REVIEW_WINDOW_DAYS` | 7 | window for late outcome upgrades on the weekly ritual |
 | `LIBRARIAN_RECUR_WINDOW_DAYS` | 7 | days without recurrence that upgrade a partial episode |
