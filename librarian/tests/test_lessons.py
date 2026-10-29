@@ -352,6 +352,18 @@ class FailureClassRuntimeTest(LessonRuntimeCase):
         self.assertIn("happened again", self.signals())
         self.assertIn(guard, self.signals())
 
+    def test_a_lesson_written_after_the_review_is_not_named_as_a_guard(self):
+        # Run D's trial: a lesson the mind wrote after the review was named as one that
+        # "should have caught" the review's break.
+        self.at("2026-10-02T00:00:00Z")
+        self.land("x-adversary.md", "BROKEN: kWh read as MWh\n- C1: BROKEN [basis] kWh read as MWh\n")
+        self.at("2026-10-02T01:00:00Z")
+        later = self.retro("When converting energy units: carry units in column names", ["area:process", "fail:basis"], project="p-2")
+        self.pre()
+        self.assertIn("LESSON DUE", self.signals())
+        self.assertNotIn("happened again", self.signals())
+        self.assertNotIn(later, self.signals())
+
     def test_surviving_review_records_nothing(self):
         res = self.land("y-adversary.md", "SURVIVES: all numbers trace\n- C1: SURVIVES\n")
         self.assertEqual(res["failures"], {})

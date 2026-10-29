@@ -490,7 +490,11 @@ def _guarding_lessons(store: db.Store, classes: list[str]) -> dict[str, list[str
     for c in classes:
         if c == "other":
             continue
-        ids = [n.id for n in model.nodes_where(store, "status IN ('active','probationary') AND id IN (SELECT node_id FROM tags WHERE tag = ?)", (f"fail:{c}",)) if pack.is_lesson(n)]
+        ids = [
+            n.id
+            for n in model.nodes_where(store, "status IN ('active','probationary') AND id IN (SELECT node_id FROM tags WHERE tag = ?)", (f"fail:{c}",))
+            if pack.is_lesson(n)
+        ]
         if ids:
             out[c] = ids
     return out
@@ -518,17 +522,26 @@ def _open_review_lesson(store: db.Store, project: Optional[str], verdicts: list[
         return
     cls = sorted({c for f in files for c in (classes or {}).get(f, [])})
     unblamed = _unblamed(store, [f for f in files if f in (classes or {})], verdicts)
+    # The guards are the lessons that existed when the review landed, not ones written after it
+    # (run D's trial named a lesson written in answer to this very review).
+    guarded = _guarding_lessons(store, cls)
     with store.write():
         row = store.q1("SELECT id, ref, detail FROM pending_lesson WHERE kind = 'review' AND cleared IS NULL AND delivered = 0")
         if row is not None:
             old = json.loads(row["detail"] or "{}")
             ref = sorted(set(json.loads(row["ref"])) | set(files))
-            detail = {"classes": sorted(set(cls) | set(old.get("classes", []))), "unblamed": sorted(set(unblamed) | set(old.get("unblamed", [])))}
+            merged = {c: sorted(set(ids) | set(guarded.get(c, []))) for c, ids in old.get("guarded", {}).items()}
+            merged.update({c: ids for c, ids in guarded.items() if c not in merged})
+            detail = {
+                "classes": sorted(set(cls) | set(old.get("classes", []))),
+                "unblamed": sorted(set(unblamed) | set(old.get("unblamed", []))),
+                "guarded": merged,
+            }
             store.ex("UPDATE pending_lesson SET ref = ?, detail = ? WHERE id = ?", (json.dumps(ref), json.dumps(detail), row["id"]))
             return
         store.ex(
             "INSERT INTO pending_lesson(id, kind, ref, project, created, detail) VALUES (?,?,?,?,?,?)",
-            ("L" + db.ulid()[-8:], "review", json.dumps(files), project, db.now_iso(), json.dumps({"classes": cls, "unblamed": unblamed})),
+            ("L" + db.ulid()[-8:], "review", json.dumps(files), project, db.now_iso(), json.dumps({"classes": cls, "unblamed": unblamed, "guarded": guarded})),
         )
 
 
@@ -555,7 +568,7 @@ def _lesson_signals(store: db.Store, project: Optional[str], request_id: str, ph
                     + ". If a break shows a way of working you could have avoided (not just a wrong number), "
                     f'write one lesson: `librarian propose --type retrospective --summary "When <situation>: <what to do>" --tags area:process ctx:{phase} {fail_tags} --body-file <f>` naming the review as evidence. '
                 )
-                guarded = _guarding_lessons(store, classes)
+                guarded = {c: ids for c, ids in detail["guarded"].items() if c in classes} if "guarded" in detail else _guarding_lessons(store, classes)
                 if guarded:
                     named = "; ".join(f"{c}: {' '.join(ids)}" for c, ids in guarded.items())
                     line += (
