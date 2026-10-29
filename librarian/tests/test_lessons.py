@@ -184,6 +184,18 @@ class ReviewLessonTest(LessonRuntimeCase):
         self.pre()
         self.assertNotIn("LESSON DUE", self.signals())
 
+    def test_review_straddling_a_brief_switch_is_still_delivered(self):
+        # Trial of run D: a review's wake started under brief 1 and ended after brief 2
+        # arrived; its LESSON DUE was stored under the old project and never shown.
+        self.land_review("x-adversary.md", "BROKEN")
+        self.project("p-2")
+        self.pre()
+        self.assertIn("reviews/x-adversary.md", self.signals())
+        self.post()
+        self.land_review("x-adversary.md", "BROKEN", "Memories BROKEN: (none)\n")
+        self.pre()
+        self.assertNotIn("reviews/x-adversary.md", self.signals())
+
     def test_surviving_review_asks_nothing(self):
         self.land_review("y-adversary.md", "SURVIVES")
         self.pre()

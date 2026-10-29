@@ -508,8 +508,10 @@ def _open_review_lesson(store: db.Store, project: Optional[str], verdicts: list[
     if not files:
         return
     # A review file is often edited again later (its Memories lines); it holds one lesson moment.
+    # Review rows ignore the project: a lesson is about how the mind works, not one brief, and a
+    # review's wake can start under one brief and end under the next (run D's trial).
     seen: set = set()
-    for r in store.q("SELECT ref FROM pending_lesson WHERE kind = 'review' AND project IS ?", (project,)):
+    for r in store.q("SELECT ref FROM pending_lesson WHERE kind = 'review'"):
         seen |= set(json.loads(r[0]))
     files = [f for f in files if f not in seen]
     if not files:
@@ -517,7 +519,7 @@ def _open_review_lesson(store: db.Store, project: Optional[str], verdicts: list[
     cls = sorted({c for f in files for c in (classes or {}).get(f, [])})
     unblamed = _unblamed(store, [f for f in files if f in (classes or {})], verdicts)
     with store.write():
-        row = store.q1("SELECT id, ref, detail FROM pending_lesson WHERE kind = 'review' AND project IS ? AND cleared IS NULL AND delivered = 0", (project,))
+        row = store.q1("SELECT id, ref, detail FROM pending_lesson WHERE kind = 'review' AND cleared IS NULL AND delivered = 0")
         if row is not None:
             old = json.loads(row["detail"] or "{}")
             ref = sorted(set(json.loads(row["ref"])) | set(files))
@@ -534,7 +536,7 @@ def _lesson_signals(store: db.Store, project: Optional[str], request_id: str, ph
     """LESSON DUE lines for this wake; marks each row delivered to this wake's pack."""
     lines: list[str] = []
     with store.write():
-        for row in store.q("SELECT * FROM pending_lesson WHERE cleared IS NULL AND project IS ? ORDER BY created", (project,)):
+        for row in store.q("SELECT * FROM pending_lesson WHERE cleared IS NULL AND (project IS ? OR kind = 'review') ORDER BY created", (project,)):
             if row["kind"] == "brief":
                 lines.append(
                     f"- LESSON DUE ({row['id']}): the previous brief ({row['ref']}) closed without a retrospective. Before this brief's work, write one: "
