@@ -22,8 +22,9 @@ class OutcomeRuleTest(unittest.TestCase):
         self.assertEqual(outcome.decide_outcome(ev(rc=1, stderr_tail=api))[:2], ("partial", "run cut off by model API failure (rc=1)"))
         self.assertEqual(outcome.decide_outcome(ev(rc=1, stderr_tail="Traceback: API error (HTTP 404) from my script"))[:2], ("failure", "run failed (rc=1)"))
         oc, crit, ov = outcome.decide_outcome(ev(recurred=[{"signature": "boom", "skill_id": "C" * 26}], final="x"))
-        self.assertEqual((oc, crit), ("failure", "failure recurred: boom"))
-        self.assertEqual(ov, {"C" * 26: "failure"})
+        # A recurred signature is reported, never credited (run B: a guard's MISS blamed the pack).
+        self.assertEqual((oc, crit), ("partial", "FINAL without journal entry"))
+        self.assertEqual(ov, {})
         self.assertEqual(outcome.decide_outcome(ev(journal_dirty=True, final="Did things"))[:2], ("partial", "journal entry + FINAL (unverified)"))
         self.assertEqual(outcome.decide_outcome(ev(final="Did things"))[:2], ("partial", "FINAL without journal entry"))
         self.assertEqual(outcome.decide_outcome(ev())[:2], ("unknown", "no measurable artifact"))

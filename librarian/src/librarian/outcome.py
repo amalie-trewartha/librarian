@@ -66,8 +66,6 @@ def decide_outcome(ev: WakeEvidence) -> tuple[str, str, dict]:
                 overrides.setdefault(nid, "success")
             elif v["verdict"] == "BROKEN":
                 overrides[nid] = "failure"
-    for r in ev.recurred:
-        overrides[r["skill_id"]] = "failure"
     if ev.ritual and ev.ritual_output_written:
         kind = ev.ritual.split(" ", 1)[0]
         return "success", f"ritual {kind} output written", overrides
@@ -88,8 +86,8 @@ def decide_outcome(ev: WakeEvidence) -> tuple[str, str, dict]:
         return "partial", f"run cut off by model API failure (rc={ev.rc})", overrides
     if ev.rc != 0:
         return "failure", f"run failed (rc={ev.rc})", overrides
-    if ev.recurred:
-        return "failure", f"failure recurred: {ev.recurred[0]['signature']}", overrides
+    # A recurred error signature gives no credit: in run B its only hit was a guard script's
+    # intended MISS line, which blamed the whole pack. It is reported, not scored.
     if ev.journal_dirty and ev.final.strip():
         return "partial", "journal entry + FINAL (unverified)", overrides
     if ev.final.strip():

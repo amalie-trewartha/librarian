@@ -946,6 +946,7 @@ def post(rc: int, run_id: Optional[str], stderr_tail: str, final: str, use_llm: 
         "capture": cap,
         "lessons": {"credited": lessons, "settled": settled_lessons},
         "failures": failures,
+        "recurred": recurred,
         "export": export_report,
     }
     sys.stdout.write(json.dumps(out) + "\n")

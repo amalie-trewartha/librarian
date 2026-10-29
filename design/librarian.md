@@ -56,12 +56,14 @@ humans    librarian-project queue|probe|preferences|librarian, committed to proj
   adversary review that cites a packed memory → `success` or `failure` for
   that memory (per-id override on the citation), while the wake itself closes
   `partial` so the rest of its pack is not credited for an earlier claim; step cap hit or a failed run
-  → `failure`; an error signature that recurred after a skill for it was
-  packed → `failure` for that skill; a journal entry plus FINAL → `partial`;
+  → `failure`; a journal entry plus FINAL → `partial`;
   FINAL alone → `partial`; nothing → `unknown`. The agent's own activity is
   never evidence of success. Late upgrades run on the weekly ritual: a
   failure signature that never recurred → `success`; a human edit to the
-  deliverable inside the review window → `failure`.
+  deliverable inside the review window → `failure`. An error signature that
+  recurs after a skill cleared it is reported in the post output (`recurred`)
+  but not credited: run B's only hit was a guard script's intended MISS line,
+  and it blamed the whole pack.
 - **`partial` is a real outcome.** The charter makes the journal entry the
   definition of a finished work wake; a FINAL without one is the "appearance
   of progress" case. Neither moves confidence.
