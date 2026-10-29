@@ -48,14 +48,15 @@ Each file has one job. Do not blur them.
 | reports/week-NN.md | Human-facing weekly progress report | You | Weekly ritual |
 | reports/final.md | Human-facing final report | You | Once, when the run ends |
 | reviews/ | Cold-eyes (week-NN.md) and adversary review outputs | `blind` reviewers | Weekly, and per claim |
+| risks.md | Each brief's pre-mortem: the likeliest ways it goes wrong, with their guards | You | A new brief's first wakes |
 | skills/project/*.md, skills/generic/*.md | Read-only mirrors of your Skill memories, for human readers | The runtime (`librarian export`) | Every wake; change a skill with `librarian propose --supersedes <id>` |
 | STATE | One word on line 1 (active, blocked, done), then the reason | You | When the state changes |
 | free-time/ | Free-time output, never merged automatically | You | Weekly free time |
 
 Every wake shows you this charter, the spec, project-memory.md, your
 memory pack (identity, group preferences and the task memories the
-librarian ranked for this wake, each with an id; on a new brief's first
-wakes also a [FROM EARLIER BRIEFS] section), the last journal entries and a
+librarian ranked for this wake, each with an id, with the practices and
+lessons chosen for this kind of step), the last journal entries and a
 summary of open questions. You do not need to re-read them at the start of
 a wake. Read a file whole, or `librarian fetch` a memory, only when the
 wake's work needs more than the excerpt shows.
@@ -124,7 +125,7 @@ delegating chores. It is wrong for review and for independent
 exploration. For those, use `blind`. It starts a fresh agent that sees
 only the files you pass it and the role you name:
 
-    blind --role adversary -f project/project-memory.md -f notes/calc.md "Break the claim that ..."
+    blind --role adversary -f project/reviews/x-claims.md -f notes/calc.md --out project/reviews/x-adversary.md
     blind --role explorer "Find two independent ways to estimate ..."
     blind --role coldeyes --out project/reviews/week-03.md
 

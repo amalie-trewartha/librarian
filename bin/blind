@@ -73,6 +73,12 @@ fi
 # role files: from inside project/ it otherwise lands in project/project/ (a
 # live weekly ritual's cold-eyes review did, and had to be recovered).
 if [[ "$out" == project/* ]]; then out="$(dirname "$project")/$out"; fi
+# An adversary review is always saved, so the runtime can read its claim
+# verdicts: in run B, 5 of 81 review files held only a pointer or a stub.
+if [[ "$role" == adversary && -z "$out" ]]; then
+    out="$project/reviews/$(date -u +%Y-%m-%dT%H%M%SZ)-adversary.md"
+    printf 'blind: no --out given; the review is saved to %s\n' "reviews/${out##*/}" >&2
+fi
 
 # A wake's token ceiling covers its subagents (PROJECT_WAKE_TOKENS, with the
 # ledger position the wake started at in PROJECT_LEDGER_MARK; both set by the
@@ -90,6 +96,7 @@ work=$(mktemp -d "$project/.blind/run.XXXXXX")
 trap 'rm -rf "$work/files"' EXIT
 mkdir -p "$work/files"
 listing=""
+lessons_src=()
 for f in ${files[@]+"${files[@]}"}; do
     # Role files name paths like project/spec.md, relative to the workspace
     # that holds project/. Resolve them from there too, so a caller who has
@@ -99,9 +106,15 @@ for f in ${files[@]+"${files[@]}"}; do
         f="$(dirname "$project")/$f"
     fi
     [[ -f "$f" ]] || die "no such file: $f"
+    # Which lessons the work applied is for the runtime, not the reviewer: a
+    # -lessons.md sidecar is never handed over, and "Lessons applied:" lines are
+    # cut from every copy. Both are recorded in the ledger below, before the verdict.
+    lessons_src+=("$f")
+    case "$f" in *-claims.md) [[ -f "${f%-claims.md}-lessons.md" ]] && lessons_src+=("${f%-claims.md}-lessons.md") ;; esac
+    case "$f" in *-lessons.md) continue ;; esac
     rel="${f#"$(dirname "$project")"/}"; rel="${rel#"$PWD"/}"; rel="${rel#/}"; rel="${rel#./}"
     mkdir -p "$work/files/$(dirname "$rel")"
-    cp "$f" "$work/files/$rel"
+    grep -viE '^[^[:alnum:]]*Lessons applied[^[:alnum:]]*:' "$f" > "$work/files/$rel" || true
     listing="${listing}- $rel
 "
 done
@@ -130,6 +143,18 @@ answer=$(cd "$work/files" && env -u _SHELLM_PARENT_TRAJ_ID -u _SHELLM_PARENT_RUN
     --workdir "$work/files" --traj-dir "$work/traj" --prompt-file "$work/prompt.md") \
     || die "subagent failed (rc=$?); its trajectory is in $work/traj"
 printf '%s\n' "$answer" > "$work/answer.md"
+if [[ "$role" == adversary ]] && ! grep -qE '^[^[:alnum:]]*C[0-9]+[a-z]?[^[:alnum:]]+(SURVIVES|BROKEN|WEAKENED|UNVERIFIABLE)' <<< "$answer"; then
+    printf 'blind: the review has no Claim verdicts lines; the reviewer'"'"'s full trajectory is in %s\n' "${work#"$PWD"/}/traj" >&2
+fi
+lesson_ids=$(cat ${lessons_src[@]+"${lessons_src[@]}"} /dev/null 2>/dev/null | grep -iE '^[^[:alnum:]]*Lessons applied[^[:alnum:]]*:' | grep -oE '\b[0-9A-HJKMNP-TV-Z]{26}\b' | awk '!seen[$0]++' | tr '\n' ' ' || true)
+if [[ -n "$lesson_ids" ]]; then
+    verdict=$(printf '%s\n' "$answer" | grep -m1 -E '^[^[:alnum:]]*(SURVIVES|BROKEN|UNVERIFIABLE)\b' || true)
+    BL_ROLE="${role:-adhoc}" BL_OUT="$out" BL_VERDICT="$verdict" BL_IDS="$lesson_ids" python3 -c '
+import json, os, datetime
+print(json.dumps({"ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "role": os.environ["BL_ROLE"],
+    "out": os.environ["BL_OUT"], "verdict": os.environ["BL_VERDICT"].strip(), "lessons": os.environ["BL_IDS"].split()}))' >> "$project/.blind/lessons.jsonl" \
+        || printf 'blind: could not record the lessons ledger\n' >&2
+fi
 if [[ -n "$out" ]]; then
     mkdir -p "$(dirname "$out")"
     printf '%s\n' "$answer" > "$out"

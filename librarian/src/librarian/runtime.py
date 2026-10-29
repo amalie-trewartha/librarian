@@ -30,6 +30,10 @@ EXCLUDE_WAKES_DEFAULT = 1
 TRANSFER_WAKES_DEFAULT = 3
 # A closed brief's LESSON DUE signal shows on this many wakes at most.
 BRIEF_LESSON_WAKES_DEFAULT = 3
+# blind writes one line per review run here: the lessons named before the verdict existed.
+BLIND_LEDGER = ".blind/lessons.jsonl"
+RISKS_FILE = "risks.md"
+LEDGER_VERDICT_MIN = 20
 BRIEF_HEAD_CHARS = 1500
 # Files a wake can change without doing project work: a wake that changed
 # only these (and cited nothing) is a no-op, and its episode is never packed.
@@ -411,7 +415,7 @@ def pre(ritual: Optional[str], phase: str, budget: Optional[int], signals_text: 
             {
                 "request_id": pk.request_id,
                 "pack_ids": pk.ids(),
-                "task_ids": pk.ids("task") + pk.ids("transfer") + pk.ids("lesson"),
+                "task_ids": pk.ids("task") + pk.ids("transfer") + pk.ids("lesson") + pk.ids("practice"),
                 "ritual": ritual,
                 "phase": mapped,
                 "project": project,
@@ -421,7 +425,8 @@ def pre(ritual: Optional[str], phase: str, budget: Optional[int], signals_text: 
             }
         )
     )
-    _signals_out(store, project, rd, _lesson_signals(store, project, pk.request_id, mapped) if lessons_on else [])
+    extra = (_lesson_signals(store, project, pk.request_id, mapped) + _premortem_signal(pd, project, brief_start)) if lessons_on else []
+    _signals_out(store, project, rd, extra)
     sys.stdout.write(pack.render_text(pk) + "\n")
     return 0
 
@@ -457,9 +462,49 @@ def _open_brief_lesson(store: db.Store, project: Optional[str]) -> None:
         store.ex("INSERT INTO pending_lesson(id, kind, ref, project, created) VALUES (?,?,?,?,?)", ("L" + db.ulid()[-8:], "brief", prev, project, db.now_iso()))
 
 
-def _open_review_lesson(store: db.Store, project: Optional[str], verdicts: list[dict]) -> None:
+def record_claims(store: db.Store, project: Optional[str], verdicts: list[dict], reviews: dict[str, str]) -> dict[str, list[str]]:
+    """Store the reviewer's claim verdicts, once per review file and claim; return, for each
+    file that broke or weakened a claim, its failure classes (most frequent first)."""
+    out: dict[str, list[str]] = {}
+    ts = db.now_iso()
+    broken_files = {v["file"] for v in verdicts if v["verdict"] == "BROKEN"}
+    with store.write():
+        for f, text in sorted(reviews.items()):
+            claims = outcome.claim_verdicts(text)
+            if not claims and f in broken_files:
+                # No claim lines (an older review form): one row for the whole file.
+                claims = [{"claim": "*", "verdict": "BROKEN", "class": c} for c in (outcome.failure_classes(text) or ["other"])][:1]
+            for c in claims:
+                store.ex(
+                    "INSERT OR IGNORE INTO review_claim(file, claim, verdict, class, project, ts) VALUES (?,?,?,?,?,?)",
+                    (f, c["claim"], c["verdict"], c["class"], project, ts),
+                )
+            if any(c["verdict"] in outcome.NOT_STANDING for c in claims):
+                out[f] = outcome.failure_classes(text) or ["other"]
+    return out
+
+
+def _guarding_lessons(store: db.Store, classes: list[str]) -> dict[str, list[str]]:
+    """For each failure class, the lessons already tagged as guarding against it."""
+    out: dict[str, list[str]] = {}
+    for c in classes:
+        if c == "other":
+            continue
+        ids = [n.id for n in model.nodes_where(store, "status IN ('active','probationary') AND id IN (SELECT node_id FROM tags WHERE tag = ?)", (f"fail:{c}",)) if pack.is_lesson(n)]
+        if ids:
+            out[c] = ids
+    return out
+
+
+def _unblamed(store: db.Store, files: list[str], verdicts: list[dict]) -> list[str]:
+    """Review files whose reviewer broke a claim but whose Memories lines name no BROKEN memory."""
+    blamed = {v["file"] for v in verdicts if v["verdict"] == "BROKEN" and v.get("ids")}
+    return [f for f in files if f not in blamed]
+
+
+def _open_review_lesson(store: db.Store, project: Optional[str], verdicts: list[dict], classes: Optional[dict[str, list[str]]] = None) -> None:
     """A review that broke a claim may hold a lesson: one LESSON DUE for the next wake."""
-    files = sorted({v["file"] for v in verdicts if v["verdict"] == "BROKEN"})
+    files = sorted({v["file"] for v in verdicts if v["verdict"] == "BROKEN"} | set(classes or {}))
     if not files:
         return
     # A review file is often edited again later (its Memories lines); it holds one lesson moment.
@@ -469,13 +514,20 @@ def _open_review_lesson(store: db.Store, project: Optional[str], verdicts: list[
     files = [f for f in files if f not in seen]
     if not files:
         return
+    cls = sorted({c for f in files for c in (classes or {}).get(f, [])})
+    unblamed = _unblamed(store, [f for f in files if f in (classes or {})], verdicts)
     with store.write():
-        row = store.q1("SELECT id, ref FROM pending_lesson WHERE kind = 'review' AND project IS ? AND cleared IS NULL AND delivered = 0", (project,))
+        row = store.q1("SELECT id, ref, detail FROM pending_lesson WHERE kind = 'review' AND project IS ? AND cleared IS NULL AND delivered = 0", (project,))
         if row is not None:
+            old = json.loads(row["detail"] or "{}")
             ref = sorted(set(json.loads(row["ref"])) | set(files))
-            store.ex("UPDATE pending_lesson SET ref = ? WHERE id = ?", (json.dumps(ref), row["id"]))
+            detail = {"classes": sorted(set(cls) | set(old.get("classes", []))), "unblamed": sorted(set(unblamed) | set(old.get("unblamed", [])))}
+            store.ex("UPDATE pending_lesson SET ref = ?, detail = ? WHERE id = ?", (json.dumps(ref), json.dumps(detail), row["id"]))
             return
-        store.ex("INSERT INTO pending_lesson(id, kind, ref, project, created) VALUES (?,?,?,?,?)", ("L" + db.ulid()[-8:], "review", json.dumps(files), project, db.now_iso()))
+        store.ex(
+            "INSERT INTO pending_lesson(id, kind, ref, project, created, detail) VALUES (?,?,?,?,?,?)",
+            ("L" + db.ulid()[-8:], "review", json.dumps(files), project, db.now_iso(), json.dumps({"classes": cls, "unblamed": unblamed})),
+        )
 
 
 def _lesson_signals(store: db.Store, project: Optional[str], request_id: str, phase: str) -> list[str]:
@@ -492,11 +544,28 @@ def _lesson_signals(store: db.Store, project: Optional[str], request_id: str, ph
                 )
             else:
                 files = ", ".join(json.loads(row["ref"]))
-                lines.append(
-                    f"- LESSON DUE ({row['id']}): {files} found BROKEN claims. If a break shows a way of working you could have avoided (not just a wrong number), "
-                    f'write one lesson: `librarian propose --type retrospective --summary "When <situation>: <what to do>" --tags area:process ctx:{phase} --body-file <f>` naming the review as evidence. '
-                    "If it was a one-off, write none. This signal shows once."
+                detail = json.loads(row["detail"] or "{}")
+                classes = [c for c in detail.get("classes", []) if c != "other"]
+                fail_tags = " ".join(f"fail:{c}" for c in classes) or "fail:<class>"
+                line = (
+                    f"- LESSON DUE ({row['id']}): {files} found BROKEN claims"
+                    + (f" (failure classes: {', '.join(classes)})" if classes else "")
+                    + ". If a break shows a way of working you could have avoided (not just a wrong number), "
+                    f'write one lesson: `librarian propose --type retrospective --summary "When <situation>: <what to do>" --tags area:process ctx:{phase} {fail_tags} --body-file <f>` naming the review as evidence. '
                 )
+                guarded = _guarding_lessons(store, classes)
+                if guarded:
+                    named = "; ".join(f"{c}: {' '.join(ids)}" for c, ids in guarded.items())
+                    line += (
+                        f"This kind of mistake happened again although lessons guard against it ({named}). If you followed the lesson and it still broke, "
+                        "sharpen it (`librarian propose --supersedes <id>`); if you did not follow it, say why in the journal. "
+                    )
+                if detail.get("unblamed"):
+                    line += (
+                        f"The reviewer broke claims in {', '.join(detail['unblamed'])}, but no `Memories BROKEN:` line there names a memory: "
+                        "if a memory or episode held a broken value, add that line with its id. "
+                    )
+                lines.append(line + "If it was a one-off, write none. This signal shows once.")
             store.ex("UPDATE pending_lesson SET delivered = delivered + 1, last_request = ? WHERE id = ?", (request_id, row["id"]))
     return lines
 
@@ -516,33 +585,83 @@ def _settle_lessons(store: db.Store, request_id: str) -> list[dict]:
     return out
 
 
+def _premortem_signal(pd: Path, project: Optional[str], brief_start: bool) -> list[str]:
+    """On a brief's first wakes, until project/risks.md has a section for this brief."""
+    if not project or not brief_start:
+        return []
+    if re.search(rf"^#+\s.*{re.escape(project)}", _read(pd / RISKS_FILE), re.M):
+        return []
+    return [
+        f"- PREMORTEM DUE: before this brief's first piece of work, append to project/{RISKS_FILE} a section headed `## {project}` with the three ways "
+        "this brief is most likely to go wrong, each with its failure class (fail:<class>) and the lesson or practice id that guards against it, or `none`. "
+        "Later reviews will show which ones happened."
+    ]
+
+
+def _ledger_lessons(pd: Path, review: str, review_text: str) -> list[str]:
+    """Lessons blind recorded when it ran the review saved as ``review``: by its --out
+    path, or by its verdict line when that is long enough to tell reviews apart."""
+    out: list[str] = []
+    for line in _read(pd / BLIND_LEDGER, 2_000_000).splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        v = str(row.get("verdict") or "").strip()
+        dest = str(row.get("out") or "").strip()
+        if (dest and (dest == review or dest.endswith("/" + review))) or (len(v) >= LEDGER_VERDICT_MIN and v in review_text):
+            out += [i for i in row.get("lessons", []) if i not in out]
+    return out
+
+
 def _claims_path(review: str) -> str:
     """reviews/x-adversary.md → reviews/x-claims.md: the file the review was asked to judge."""
     return re.sub(r"-(adversary|review|verdicts?)\.md$", "", review) + "-claims.md"
 
 
-def lesson_credit(store: db.Store, pd: Path, verdicts: list[dict]) -> dict[str, str]:
+def lesson_credit(store: db.Store, pd: Path, verdicts: list[dict], reviews: Optional[dict[str, str]] = None) -> dict[str, str]:
     """Lessons a reviewed piece of work applied → that review's outcome.
 
-    The ``Lessons applied:`` line must already be committed (in the claims file, or
-    the review file as an earlier wake left it), so the lessons were named before
-    the verdict was known. A lesson named by several reviews this wake takes the
-    worst outcome.
+    The lessons must have been named before the verdict was known: on a ``Lessons
+    applied:`` line that blind recorded when it ran the review (its ledger, matched
+    by the verdict line), or one already committed in the claims file, its
+    ``-lessons.md`` sidecar or the review file as an earlier wake left it. A lesson
+    named by several reviews this wake takes the worst outcome.
+
+    The reviewer's claim verdicts decide: every claim survived → success; none stood →
+    failure; mixed → failure only for a lesson tagged against (fail:) a class the review
+    found, else nothing. Each review judges each lesson once.
     """
     by_file: dict[str, list[dict]] = {}
     for v in verdicts:
         by_file.setdefault(v["file"], []).append(v)
     out: dict[str, str] = {}
+    judged: list[tuple[str, str, str]] = []
     for f, vs in by_file.items():
-        oc = outcome.review_outcome(vs)
-        if oc is None:
+        text = (reviews or {}).get(f) or _read(pd / f)
+        claims = outcome.claim_verdicts(text)
+        oc = outcome.review_outcome(vs, claims)
+        found = {c["class"] for c in claims if c["class"]}
+        if oc is None and not found:
             continue
-        text = _git(pd, "show", f"HEAD:{_claims_path(f)}") + "\n" + _git(pd, "show", f"HEAD:{f}")
-        for i in outcome.applied_lessons(text):
+        claims = _claims_path(f)
+        text = "\n".join(_git(pd, "show", f"HEAD:{x}") for x in (claims, claims.removesuffix("-claims.md") + "-lessons.md", f))
+        named = outcome.applied_lessons(text)
+        named += [i for i in _ledger_lessons(pd, f, _read(pd / f)) if i not in named]
+        for i in named:
             n = model.get_node(store, i, with_edges=False)
             if n is None or not pack.is_lesson(n) or out.get(n.id) == "failure":
                 continue
-            out[n.id] = oc
+            if store.q1("SELECT 1 FROM lesson_judged WHERE file = ? AND node_id = ?", (f, n.id)) is not None:
+                continue
+            noc = oc if oc is not None else ("failure" if any(t.startswith("fail:") and t[5:] in found for t in n.tags) else None)
+            if noc is None:
+                continue
+            out[n.id] = noc
+            judged.append((f, n.id, noc))
+    with store.write():
+        for f, nid, oc in judged:
+            store.ex("INSERT OR IGNORE INTO lesson_judged(file, node_id, outcome, ts) VALUES (?,?,?,?)", (f, nid, oc, db.now_iso()))
     return out
 
 
@@ -758,7 +877,7 @@ def post(rc: int, run_id: Optional[str], stderr_tail: str, final: str, use_llm: 
         cited_ids=cited,
     )
     oc, criterion, overrides = outcome.decide_outcome(ev)
-    lessons = lesson_credit(store, pd, verdicts) if (pd / ".git").exists() else {}
+    lessons = lesson_credit(store, pd, verdicts, reviews) if (pd / ".git").exists() else {}
     dismissed = [r[0] for r in store.q("SELECT DISTINCT node_id FROM dismissals WHERE request_id = ?", (req["request_id"],))]
     cited = [i for i in cited if i not in dismissed]
     body_parts = [f"FINAL: {final.strip()[:1500]}" if final.strip() else "FINAL: (none)"]
@@ -801,8 +920,9 @@ def post(rc: int, run_id: Optional[str], stderr_tail: str, final: str, use_llm: 
             ):
                 model.add_edge(store, r[0], report.episode_id, "derived_from", 1.0, {"by": "runtime"})
     settled_lessons = _settle_lessons(store, req["request_id"])
+    failures = record_claims(store, project, verdicts, reviews)
     if os.environ.get("LIBRARIAN_LESSONS", "1").strip() != "0":
-        _open_review_lesson(store, project, verdicts)
+        _open_review_lesson(store, project, verdicts, failures)
     prog = triggers.evaluate(
         store,
         triggers.Progress(status=final or criterion, tags=req.get("tags", []), phase=phase, project=project, tool_calls=tool_calls, errors=sigs, run_id=run_id),
@@ -825,6 +945,7 @@ def post(rc: int, run_id: Optional[str], stderr_tail: str, final: str, use_llm: 
         "suggestion": prog.get("suggestion"),
         "capture": cap,
         "lessons": {"credited": lessons, "settled": settled_lessons},
+        "failures": failures,
         "export": export_report,
     }
     sys.stdout.write(json.dumps(out) + "\n")

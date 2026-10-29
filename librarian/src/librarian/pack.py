@@ -45,6 +45,13 @@ LESSONS_MAX = 3
 LESSON_SHARE = 10
 # Confidence is bucketed before rotation, so lessons of similar standing take turns.
 LESSON_CONF_BUCKET = 0.1
+# A lesson that reviews confirmed in PRACTICE_BRIEFS briefs, and whose latest
+# judged use succeeded, is shown in every wake as a practice; a failure demotes it.
+PRACTICES_MAX = 8
+PRACTICE_BRIEFS = 2
+PRACTICE_SHARE = 10
+# A failure class seen in at least this many reviews makes lessons against it rank higher.
+FAIL_FREQUENT = 2
 
 MARK_CORE = "[IDENTITY: CORE]"
 MARK_WORKING = "[IDENTITY: WORKING]"
@@ -52,6 +59,7 @@ MARK_PREFS = "[GROUP PREFERENCES]"
 MARK_TASK = "[TASK MEMORIES]"
 MARK_TRANSFER = "[FROM EARLIER BRIEFS]"
 MARK_LESSONS = "[LESSONS]"
+MARK_PRACTICES = "[PRACTICES]"
 MARK_COVERAGE = "[COVERAGE]"
 MARK_NOTES = "[LIBRARIAN NOTES]"
 MARK_REQUEST = "[REQUEST]"
@@ -108,9 +116,10 @@ class Pack:
     project: Optional[str] = None
     transfer: list[Entry] = field(default_factory=list)
     lessons: list[Entry] = field(default_factory=list)
+    practices: list[Entry] = field(default_factory=list)
 
     def all_entries(self) -> list[Entry]:
-        return self.identity_core + self.identity_working + self.preferences + self.lessons + self.task_memories + self.transfer
+        return self.identity_core + self.identity_working + self.preferences + self.practices + self.lessons + self.task_memories + self.transfer
 
     def ids(self, section: Optional[str] = None) -> list[str]:
         return [e.node.id for e in self.all_entries() if section is None or e.section == section]
@@ -207,7 +216,8 @@ def _transfer(store: db.Store, req: PackRequest, budget: int) -> list[Entry]:
     """Other projects' curated memories that match the new brief, as summaries to fetch."""
     q = recall.Query(task=req.transfer_task, tags=[], project=req.project)
     _, cands = recall.recall(store, q)
-    cands = [c for c in cands if c.node.type in TRANSFER_TYPES and c.node.project != req.project and c.bm25 > 0]
+    types = tuple(t.strip() for t in os.environ.get("LIBRARIAN_TRANSFER_TYPES", ",".join(TRANSFER_TYPES)).split(",") if t.strip())
+    cands = [c for c in cands if c.node.type in types and c.node.project != req.project and c.bm25 > 0]
     cands.sort(key=lambda c: (-c.bm25, -c.node.confidence, c.node.created))
     out: list[Entry] = []
     used = 0
@@ -228,9 +238,43 @@ def is_lesson(node: model.Node) -> bool:
     return node.type == "retrospective" or (node.type in ("skill", "decision") and "area:process" in node.tags)
 
 
-def _situation(node: model.Node, req: PackRequest) -> int:
-    """How well a lesson fits this wake: its ctx: tags against the phase and ritual, and a brief's start."""
+def practice_ids(store: db.Store) -> list[str]:
+    """Lessons that earned a place in every pack: judged a success (a review verdict on a
+    "Lessons applied" line or a Memories line) in PRACTICE_BRIEFS different briefs, with the
+    latest judgment a success. Most briefs first, then confidence; at most PRACTICES_MAX."""
+    rows = store.q(
+        "SELECT c.node_id, e.project, c.outcome_override FROM citations c "
+        "JOIN nodes e ON e.id = c.episode_id JOIN nodes n ON n.id = c.node_id "
+        "WHERE c.outcome_override IN ('success','failure') AND n.status IN ('active','probationary') "
+        "AND n.type IN ('retrospective','skill','decision') ORDER BY e.created, e.id"
+    )
+    briefs: dict[str, set] = {}
+    last: dict[str, str] = {}
+    for r in rows:
+        last[r[0]] = r[2]
+        if r[2] == "success" and r[1]:
+            briefs.setdefault(r[0], set()).add(r[1])
+    out = []
+    for nid, bs in briefs.items():
+        if len(bs) < PRACTICE_BRIEFS or last.get(nid) != "success":
+            continue
+        n = model.get_node(store, nid, with_edges=False)
+        if n is not None and is_lesson(n):
+            out.append((len(bs), n.confidence, nid))
+    out.sort(key=lambda x: (-x[0], -x[1], x[2]))
+    return [x[2] for x in out[:PRACTICES_MAX]]
+
+
+def _frequent_failures(store: db.Store) -> set:
+    return {r[0] for r in store.q("SELECT class FROM review_claim WHERE class IS NOT NULL AND class != 'other' GROUP BY class HAVING COUNT(*) >= ?", (FAIL_FREQUENT,))}
+
+
+def _situation(node: model.Node, req: PackRequest, frequent: frozenset = frozenset()) -> int:
+    """How well a lesson fits this wake: its ctx: tags against the phase and ritual, a brief's
+    start, and whether it guards against a mistake reviews keep finding (fail: tags)."""
     score = 0
+    if any(t.startswith("fail:") and t[5:] in frequent for t in node.tags):
+        score += 1
     if req.phase and f"ctx:{req.phase}" in node.tags:
         score += 2
     kind = (req.ritual or "").split(" ", 1)[0]
@@ -245,12 +289,13 @@ def _situation(node: model.Node, req: PackRequest) -> int:
     return score
 
 
-def _lessons(store: db.Store, req: PackRequest, budget: int) -> list[Entry]:
+def _lessons(store: db.Store, req: PackRequest, budget: int, skip: frozenset = frozenset()) -> list[Entry]:
     """Up to LESSONS_MAX lessons from any project: best situation fit, then confidence,
     then the one shown longest ago (never shown first, so lessons of equal standing take turns), newest first."""
-    nodes = [n for n in model.nodes_where(store, "type IN ('retrospective','skill','decision') AND status IN ('active','probationary')") if is_lesson(n)]
+    nodes = [n for n in model.nodes_where(store, "type IN ('retrospective','skill','decision') AND status IN ('active','probationary')") if is_lesson(n) and n.id not in skip]
     if not nodes:
         return []
+    frequent = frozenset(_frequent_failures(store))
     marks = ",".join("?" for _ in nodes)
     shown = {
         r[0]: r[1]
@@ -260,7 +305,7 @@ def _lessons(store: db.Store, req: PackRequest, budget: int) -> list[Entry]:
         )
     }
     nodes.sort(key=lambda n: n.created, reverse=True)
-    nodes.sort(key=lambda n: (-_situation(n, req), -round(n.confidence / LESSON_CONF_BUCKET), shown.get(n.id, 0)))
+    nodes.sort(key=lambda n: (-_situation(n, req, frequent), -round(n.confidence / LESSON_CONF_BUCKET), shown.get(n.id, 0)))
     out: list[Entry] = []
     used = 0
     for n in nodes:
@@ -271,7 +316,8 @@ def _lessons(store: db.Store, req: PackRequest, budget: int) -> list[Entry]:
         t = model.estimate_tokens(text)
         if used + t > budget:
             continue
-        out.append(Entry(n, "lesson", text, False, len(out) + 1, float(_situation(n, req)), {"situation": _situation(n, req)}))
+        sit = _situation(n, req, frequent)
+        out.append(Entry(n, "lesson", text, False, len(out) + 1, float(sit), {"situation": sit}))
         used += t
     return out
 
@@ -376,12 +422,23 @@ def build(store: db.Store, req: PackRequest) -> Pack:
         pused += t
     used += pused
 
-    # Process lessons by situation, summaries only.
+    # Practices (lessons proven in two briefs) in every wake, then process lessons by situation; summaries only.
+    practices: list[Entry] = []
     lessons: list[Entry] = []
     if req.lessons:
-        lessons = _lessons(store, req, budget // LESSON_SHARE)
+        pused = 0
+        for nid in practice_ids(store):
+            n = model.get_node(store, nid, with_edges=False)
+            text = f"- {n.id} · {n.type} · " + " · ".join(_markers(n, explicit_active=True)) + " · " + n.summary.strip()
+            t = model.estimate_tokens(text)
+            if pused + t > budget // PRACTICE_SHARE:
+                break
+            practices.append(Entry(n, "practice", text, False, len(practices) + 1, 0.0, {}))
+            pused += t
+        used += pused
+        lessons = _lessons(store, req, budget // LESSON_SHARE, frozenset(e.node.id for e in practices))
         used += sum(e.tokens() for e in lessons)
-    lesson_ids = {e.node.id for e in lessons}
+    lesson_ids = {e.node.id for e in lessons} | {e.node.id for e in practices}
 
     # A new project's first wakes: earlier briefs' curated memories, summaries only.
     transfer: list[Entry] = []
@@ -470,6 +527,7 @@ def build(store: db.Store, req: PackRequest) -> Pack:
         project=req.project,
         transfer=transfer,
         lessons=lessons,
+        practices=practices,
     )
     if req.log:
         with store.write():
@@ -513,6 +571,9 @@ def render_text(pack: Pack) -> str:
     out += [e.text for e in pack.identity_working]
     out.append(MARK_PREFS)
     out += [e.text for e in pack.preferences]
+    if pack.practices:
+        out.append(f"{MARK_PRACTICES} how you work: lessons that reviews confirmed in more than one brief; name the ones you follow in `Lessons applied:` like any lesson")
+        out += [e.text for e in pack.practices]
     if pack.lessons:
         out.append(f"{MARK_LESSONS} how earlier work went, for this kind of step; name the ones you will apply in the journal entry (`librarian fetch <id>` for the evidence)")
         out += [e.text for e in pack.lessons]
@@ -559,6 +620,7 @@ def render_json(pack: Pack) -> dict:
         "task_memories": [ent(e) for e in pack.task_memories],
         "transfer": [ent(e) for e in pack.transfer],
         "lessons": [ent(e) for e in pack.lessons],
+        "practices": [ent(e) for e in pack.practices],
         "coverage": pack.coverage,
         "notes": pack.notes,
         "truncated_ids": pack.truncated_ids,

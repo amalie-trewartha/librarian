@@ -9,6 +9,7 @@ raises a detector's threshold when its suggestions keep getting dismissed.
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Optional
@@ -258,6 +259,11 @@ def new_tags(store: db.Store, p: Progress) -> list[str]:
     return out
 
 
+def _off() -> set:
+    """Detectors switched off for a run: LIBRARIAN_TRIGGERS_OFF="decision_point,deviation"."""
+    return {t.strip() for t in os.environ.get("LIBRARIAN_TRIGGERS_OFF", "").split(",") if t.strip()}
+
+
 def evaluate(store: db.Store, p: Progress, use_llm: bool = True) -> dict:
     """Record the update, run the detectors in priority order, emit at most one suggestion."""
     with store.write():
@@ -276,18 +282,18 @@ def evaluate(store: db.Store, p: Progress, use_llm: bool = True) -> dict:
             if ids:
                 result["suggestion"] = _suggest(store, "repeated_failure", ids, f'the error "{sig}" appeared in {count} wakes', p.project)
                 return result
-        if detect_decision_point(store, p):
+        if "decision_point" not in _off() and detect_decision_point(store, p):
             tags = set(model.parse_tags(p.tags))
             decisions = [n for n in model.nodes_where(store, "type = 'decision' AND status IN ('active','probationary','disputed')") if tags & set(n.tags)]
             if decisions:
                 ids = [n.id for n in sorted(decisions, key=lambda n: -n.confidence)[:3]]
                 result["suggestion"] = _suggest(store, "decision_point", ids, "you are weighing alternatives; prior decisions on these tags, with their outcomes", p.project)
                 return result
-        dev = detect_deviation(store, p, use_llm)
+        dev = detect_deviation(store, p, use_llm) if "deviation" not in _off() else None
         if dev is not None:
             result["suggestion"] = _suggest(store, "deviation", [dev.id], f"this wake's report reads against {dev.type} {dev.id}: {dev.summary[:120]}", p.project)
             return result
-        drift = detect_phase_drift(store, p)
+        drift = detect_phase_drift(store, p) if "phase_drift" not in _off() else None
         if drift is not None:
             n, elapsed, expected = drift
             result["suggestion"] = _suggest(store, "phase_drift", [n.id], f"{p.phase} has run {elapsed:.1f}h against an expectation of {expected:.0f}h", p.project)

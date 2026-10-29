@@ -20,6 +20,11 @@ _VERDICT_RE = re.compile(r"\b(SURVIVES|BROKEN|UNVERIFIABLE)\b")
 _MEMORIES_LINE_RE = re.compile(r"^\s*Memories\s+(SURVIVES|BROKEN|UNVERIFIABLE)\s*:(.*)$", re.M)
 # A claims file sent for review names the lessons its work applied, before any verdict exists.
 _LESSONS_LINE_RE = re.compile(r"^\s*Lessons applied\s*:(.*)$", re.M | re.I)
+# The reviewer's verdict on each claim: "- C2: BROKEN [basis] posted fare used as paid fare".
+_CLAIM_LINE_RE = re.compile(r"^[ \t>*|-]*\**(C\d+[a-z]?)\**[ \t]*[:.)|-][ \t]*\**(SURVIVES|BROKEN|WEAKENED|UNVERIFIABLE)\**[ \t]*(?:\|[ \t]*)?(?:\[[ \t]*(?:fail:)?([A-Za-z-]+)[ \t]*\]|(?:fail:)?([a-z-]+)[ \t]*\|)?", re.M)
+# An older form: one "Failure class: basis, stale" line for the whole review.
+_FAILURE_LINE_RE = re.compile(r"^\W*Failure class(?:es)?\W*:(.*)$", re.M | re.I)
+NOT_STANDING = ("BROKEN", "WEAKENED")
 # shellm's own death when the model API gives up (HTTP 429/5xx after its retries): an outage, not the mind's work.
 _MODEL_API_FAILURE_RE = re.compile(r"\bllm failed\b|\bAPI error \(HTTP (?:429|5\d\d)\)|transient API failure")
 
@@ -127,10 +132,57 @@ def applied_lessons(text: str) -> list[str]:
     return out
 
 
-def review_outcome(verdicts: list[dict]) -> Optional[str]:
-    """One review file's verdicts as an outcome for the lessons its work applied:
-    success when every judged claim survived, failure when every one broke, else none
-    (a mixed review says nothing about how the work was done)."""
+def _fail_class(raw: str) -> Optional[str]:
+    c = model.normalize_tag((raw or "").strip(" `*_.").split("(")[0].strip().removeprefix("fail:"))
+    if not c or c in ("none", "n-a", "na"):
+        return None
+    return c if c in model.DEFAULT_FAIL else "other"
+
+
+def claim_verdicts(text: str) -> list[dict]:
+    """The reviewer's per-claim verdicts: [{claim, verdict, class}], each claim once (its first line).
+    A claim that does not stand (BROKEN, WEAKENED) without a known class gets 'other'."""
+    out: dict[str, dict] = {}
+    for claim, verdict, cls, cell in _CLAIM_LINE_RE.findall(text or ""):
+        cls = cls or cell
+        if claim in out:
+            continue
+        c = _fail_class(cls) if cls else None
+        if verdict in NOT_STANDING and c is None:
+            c = "other"
+        out[claim] = {"claim": claim, "verdict": verdict, "class": c if verdict in NOT_STANDING else None}
+    return list(out.values())
+
+
+def failure_classes(text: str) -> list[str]:
+    """The failure classes a review names, most frequent first, each once: from its claim
+    verdicts, else from a "Failure class:" line; an unknown name counts as 'other'."""
+    counts: dict[str, int] = {}
+    for v in claim_verdicts(text):
+        if v["class"]:
+            counts[v["class"]] = counts.get(v["class"], 0) + 1
+    if counts:
+        return [c for c, _ in sorted(counts.items(), key=lambda kv: -kv[1])]
+    out: list[str] = []
+    for m in _FAILURE_LINE_RE.finditer(text or ""):
+        for raw in re.split(r"[,;/|]| and ", m.group(1)):
+            c = _fail_class(raw)
+            if c and c not in out:
+                out.append(c)
+    return out
+
+
+def review_outcome(verdicts: list[dict], claims: Optional[list[dict]] = None) -> Optional[str]:
+    """One review file's result for the lessons its work applied: success when every claim
+    the reviewer judged survived, failure when none stood, else none (mixed). The reviewer's
+    claim verdicts decide when there are any; else the file's verdict lines."""
+    if claims:
+        vs = {c["verdict"] for c in claims} - {"UNVERIFIABLE"}
+        if vs == {"SURVIVES"}:
+            return "success"
+        if vs and vs <= set(NOT_STANDING):
+            return "failure"
+        return None
     vs = {v["verdict"] for v in verdicts} - {"UNVERIFIABLE"}
     if vs == {"SURVIVES"}:
         return "success"
@@ -164,7 +216,11 @@ def error_signatures(steps: list[dict]) -> list[str]:
         if not pick and lines:
             pick = lines[-1]
         sig = normalize_signature(pick)
-        if sig and sig not in sigs:
+        # A line that was only a number or a path normalizes to "<n>": it names no error
+        # (run B's one such capture cleared on a skill about something else).
+        if len(re.sub(r"<\w+>|[^A-Za-z]", "", sig or "")) < 3:
+            continue
+        if sig not in sigs:
             sigs.append(sig)
     return sigs
 

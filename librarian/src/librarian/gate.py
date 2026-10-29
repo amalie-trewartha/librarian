@@ -118,6 +118,8 @@ def check(store: db.Store, cand: Candidate) -> list[str]:
         ns = model.tag_namespace(t)
         if ns == "ctx" and model.vocab_status(store, t) != "active":
             reasons.append(f"'{t}' is not in the closed ctx: list (librarian tags --namespace ctx)")
+        if ns == "fail" and model.vocab_status(store, t) != "active":
+            reasons.append(f"'{t}' is not in the closed fail: list (librarian tags --namespace fail)")
         if ns and ns not in model.TAG_NAMESPACES and ns not in ("tag",):
             # Unknown namespace: allowed as a free tag, but normalize so it does not drift.
             pass

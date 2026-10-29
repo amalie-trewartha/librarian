@@ -45,7 +45,11 @@ EDGE_TYPES = (
 )
 AUTHORS = ("main", "librarian", "human", "runtime")
 
-TAG_NAMESPACES = ("pkg", "area", "ctx", "project", "person", "team", "src", "scope", "expect")
+TAG_NAMESPACES = ("pkg", "area", "ctx", "project", "person", "team", "src", "scope", "expect", "fail")
+# The closed fail: list: the kinds of mistake an adversary review names on its
+# "Failure class:" lines, and a lesson's tag for the mistake it guards against.
+# Derived from run B's BROKEN reviews (run-b/EVAL-B.md).
+DEFAULT_FAIL = ("basis", "inference", "calc", "stale", "robustness", "band", "unsourced", "caveat", "artifact", "other")
 DEFAULT_CTX = (
     "code-review",
     "incident",
@@ -387,6 +391,8 @@ def seed_vocab(store: db.Store) -> None:
         upsert_vocab(store, f"ctx:{c}", "active")
     for a in DEFAULT_AREA:
         upsert_vocab(store, f"area:{a}", "active")
+    for f in DEFAULT_FAIL:
+        upsert_vocab(store, f"fail:{f}", "active")
 
 
 def vocab_status(store: db.Store, tag: str) -> Optional[str]:

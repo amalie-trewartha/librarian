@@ -22,7 +22,9 @@ from typing import Any, Iterator, Optional
 # 2: nodes.type gains 'fact' (a sourced, checkable finding). Store.open
 # migrates a version-1 store in place (_migrate).
 # 5: the pending_lesson table (LESSON DUE signals).
-SCHEMA_VERSION = 5
+# 6: the review_claim table (the reviewer's per-claim verdicts and failure classes) and
+#    pending_lesson.detail; lesson_judged (one judgment per review and lesson).
+SCHEMA_VERSION = 6
 
 
 class StoreError(Exception):
@@ -464,6 +466,29 @@ CREATE TABLE IF NOT EXISTS pending_capture (
   cleared_by TEXT
 );
 
+-- The reviewer's own verdict on each claim of a review ("Claim verdicts:" lines),
+-- with the failure class of each claim it did not let stand: how often each kind
+-- of mistake happens, brief by brief, without relying on the mind's Memories lines.
+CREATE TABLE IF NOT EXISTS review_claim (
+  file TEXT NOT NULL,
+  claim TEXT NOT NULL,
+  verdict TEXT NOT NULL,
+  class TEXT,
+  project TEXT,
+  ts TEXT NOT NULL,
+  PRIMARY KEY (file, claim)
+);
+
+-- A review's verdict on a lesson its work applied, once: a review file edited
+-- again in a later wake (its Memories lines) must not judge the lesson twice.
+CREATE TABLE IF NOT EXISTS lesson_judged (
+  file TEXT NOT NULL,
+  node_id TEXT NOT NULL,
+  outcome TEXT NOT NULL,
+  ts TEXT NOT NULL,
+  PRIMARY KEY (file, node_id)
+);
+
 -- A moment that may hold a lesson (a BROKEN review, a closed brief): the next
 -- wakes get a LESSON DUE signal until a lesson is proposed or the row expires.
 CREATE TABLE IF NOT EXISTS pending_lesson (
@@ -475,7 +500,8 @@ CREATE TABLE IF NOT EXISTS pending_lesson (
   delivered INTEGER NOT NULL DEFAULT 0,
   last_request TEXT,
   cleared TEXT,
-  cleared_by TEXT
+  cleared_by TEXT,
+  detail TEXT
 );
 
 CREATE TABLE IF NOT EXISTS consolidation_log (
@@ -598,6 +624,19 @@ class Store:
                         if "pending_lesson" in st and st.strip():
                             self.conn.execute(st)
                     self.meta_set("schema_version", "5")
+                if v < 6:
+                    # 5 → 6: review_claim, lesson_judged, pending_lesson.detail and the fail: tags.
+                    for st in SCHEMA.split(";"):
+                        if ("review_claim" in st or "lesson_judged" in st) and st.strip():
+                            self.conn.execute(st)
+                    cols = {r[1] for r in self.conn.execute("PRAGMA table_info(pending_lesson)")}
+                    if "detail" not in cols:
+                        self.conn.execute("ALTER TABLE pending_lesson ADD COLUMN detail TEXT")
+                    from . import model
+
+                    for f in model.DEFAULT_FAIL:
+                        model.upsert_vocab(self, f"fail:{f}", "active")
+                    self.meta_set("schema_version", "6")
         finally:
             self.conn.execute("PRAGMA foreign_keys=ON")
 

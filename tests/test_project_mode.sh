@@ -557,6 +557,38 @@ has "blind hides the parent trajectory" "$out" "parent=none traj=none"
 has "blind passes only the given file" "$out" "files: ./project/project-memory.md "
 has "blind uses the role prompt" "$out" "1"
 has "blind --out writes the answer" "$(cat project/reviews/claim.md 2>/dev/null)" "parent=none"
+# Run D: the lessons a piece of work applied are hidden from the reviewer and
+# recorded, before the verdict, in .blind/lessons.jsonl.
+mkdir -p "$FAKE/l"
+cat > "$FAKE/l/shellm" <<'EOF'
+#!/usr/bin/env bash
+echo "BROKEN: the fleet total double counts PHEVs in the 2030 cohort"
+echo "seen: $(find . -type f | sort | tr '\n' ' ') lessons-lines=$(find . -type f -exec cat {} + | grep -ci 'lessons applied')"
+EOF
+chmod +x "$FAKE/l/shellm"
+L1=01JA0000000000000000000001; L2=01JA0000000000000000000002
+printf 'C1. The fleet is 42.\nLessons applied: %s\n' "$L1" > project/reviews/f-claims.md
+printf 'Lessons applied: %s\n' "$L2" > project/reviews/f-lessons.md
+rm -f project/.blind/lessons.jsonl
+out=$(PATH="$FAKE/l:$PATH" blind --role adversary -f project/reviews/f-claims.md -f project/reviews/f-lessons.md \
+    --out project/reviews/f-adversary.md "The fleet is 42" 2>/dev/null); rc=$?
+eq "blind with lessons runs" "$rc" 0
+has "the reviewer gets the claims file" "$out" "./project/reviews/f-claims.md"
+has "the reviewer never sees a Lessons applied line" "$out" "lessons-lines=0"
+case "$out" in *f-lessons.md*) bad "the -lessons.md sidecar is not handed over" "$out" ;; *) ok "the -lessons.md sidecar is not handed over" ;; esac
+led=$(cat project/.blind/lessons.jsonl 2>/dev/null)
+has "ledger names the claims file's lesson" "$led" "$L1"
+has "ledger names the sidecar's lesson" "$led" "$L2"
+has "ledger keeps the verdict line" "$led" "BROKEN: the fleet total double counts PHEVs"
+has "ledger keeps the --out path" "$led" "project/reviews/f-adversary.md"
+rm -f project/reviews/f-claims.md project/reviews/f-lessons.md project/reviews/f-adversary.md project/.blind/lessons.jsonl
+out=$(PATH="$FAKE/l:$PATH" blind --role adversary -f project/project-memory.md "x" 2>/dev/null)
+[[ ! -e project/.blind/lessons.jsonl ]] && ok "no ledger line when no lessons were named" || bad "no ledger line when no lessons were named"
+saved=$(ls project/reviews/*-adversary.md 2>/dev/null | head -1)
+[[ -n "$saved" ]] && grep -q "BROKEN: the fleet total" "$saved" && ok "an adversary review without --out is saved under reviews/" || bad "an adversary review without --out is saved under reviews/" "$(ls project/reviews)"
+err=$(PATH="$FAKE/l:$PATH" blind --role adversary -f project/project-memory.md "x" 2>&1 >/dev/null)
+has "a review without Claim verdicts lines is flagged" "$err" "has no Claim verdicts lines"
+rm -f project/reviews/*-adversary.md
 out=$(PATH="$FAKE:$PATH" blind --role coldeyes 2>/dev/null)
 has "coldeyes gets its default files" "$out" "./project/deliverable.md ./project/journal.md ./project/project-memory.md ./project/questions.md ./project/spec.md"
 out=$(PATH="$FAKE:$PATH" LLM_USAGE_LEDGER="$WORK/wl.jsonl" PROJECT_LEDGER_MARK=1 PROJECT_WAKE_TOKENS=1000 \

@@ -85,11 +85,36 @@ humans    librarian-project queue|probe|preferences|librarian, committed to proj
   - A `pending_lesson` row opens when a brief closes without a retrospective
     (signal shown up to 3 wakes) and when a review breaks a claim (shown once).
     Each one shows as a LESSON DUE signal until a lesson is proposed or it expires.
-  - A claims file's committed `Lessons applied: <ids>` line lets that review judge
-    those lessons. Every claim SURVIVES gives `success`, every claim BROKEN gives
-    `failure`, and a mixed review gives nothing. These are cited with source `lesson`.
-    A memory with a per-id outcome now takes the full step, split only among the
-    memories so judged. Before, a SURVIVES line moved its fact by 0.01.
+  - A `Lessons applied: <ids>` line lets a review judge those lessons. `blind`
+    cuts the line (and any `<name>-lessons.md` sidecar) from what the reviewer
+    sees, and records the ids in `project/.blind/lessons.jsonl` when the review
+    runs, so they were named before the verdict. A line already committed in the
+    claims file, its sidecar or the review file also counts. The reviewer's own
+    `Claim verdicts:` block decides, never the mind's Memories lines: in run B,
+    29 of the 66 reviews that broke a claim carried only SURVIVES lines. Every
+    claim SURVIVES gives `success`; none standing (BROKEN, WEAKENED) gives
+    `failure`; a mixed review blames only a lesson tagged `fail:<class>` for a
+    class it found. Each review judges each lesson once (`lesson_judged`). These
+    are cited with source `lesson`. A memory with a per-id outcome takes the full
+    step, split only among the memories so judged. Before, a SURVIVES line moved
+    its fact by 0.01.
+  - **Failure classes.** The adversary role names a class on every BROKEN or
+    WEAKENED claim, from a closed list derived from run B's 134 broken claims
+    (basis, inference, calc, stale, robustness, band, unsourced, caveat,
+    artifact, other; `fail:` tags). `review_claim` keeps every claim verdict.
+    LESSON DUE names the classes and asks for `fail:` tags. When a class recurs
+    although a lesson guards against it, the signal names that lesson. Lessons
+    against a class seen in 2 or more claims rank first. A review that broke
+    claims but names no BROKEN memory gets a nudge.
+  - **Practices.** A lesson judged a success in 2 different briefs, with its
+    latest judgment a success, is shown in every pack under `[PRACTICES]` (at most
+    8, computed from citations, no state). A failure demotes it.
+  - **Pre-mortem.** A brief's first wakes get PREMORTEM DUE until
+    `project/risks.md` has a `## <project id>` section: the likeliest failures,
+    each with its class and guard.
+  - **blind always saves an adversary review** (under reviews/ when no --out is
+    given) and warns when it has no claim verdicts: 5 of run B's 81 review files
+    were pointers or stubs.
 - **Episodes enter `active`, not `probationary`.** They are records of
   outcomes, not claims awaiting confirmation; probation is for the distilled
   types. They are never deduplicated.
@@ -134,6 +159,8 @@ humans    librarian-project queue|probe|preferences|librarian, committed to proj
 | `LIBRARIAN_EXCLUDE_WAKES` | 1 | how many previous packs' task memories are excluded from the next |
 | `LIBRARIAN_LESSONS` | 1 | 0 drops the [LESSONS] section and LESSON DUE signals |
 | `LIBRARIAN_BRIEF_LESSON_WAKES` | 3 | wakes a closed brief's LESSON DUE signal is shown |
+| `LIBRARIAN_TRANSFER_TYPES` | skill,fact,decision,retrospective | node types the FROM EARLIER BRIEFS section offers; empty turns it off |
+| `LIBRARIAN_TRIGGERS_OFF` | (none) | comma-separated detectors to skip: decision_point, deviation, phase_drift |
 | `LIBRARIAN_CAPTURE_TTL_DAYS` | 3 | days before an uncaptured resolved failure is auto-drafted or archived |
 | `LIBRARIAN_REVIEW_WINDOW_DAYS` | 7 | window for late outcome upgrades on the weekly ritual |
 | `LIBRARIAN_RECUR_WINDOW_DAYS` | 7 | days without recurrence that upgrade a partial episode |
