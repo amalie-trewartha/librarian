@@ -1,0 +1,4 @@
+- A claim we checked ourselves is worth more than one copied from a paper; say which is which.
+- Prefer a short, honest answer with stated gaps over a long one that hides them.
+- Cite primary sources (the dataset's own page or paper), not summaries of them.
+- When a choice depends on a judgment call, write down the call and why, so a reviewer can disagree with it.
