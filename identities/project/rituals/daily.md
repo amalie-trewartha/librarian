@@ -16,13 +16,13 @@ thirds process and one third substance.) Carry out all four steps, in order:
    that every open question has a Default-by line and still reads clearly
    to a human who has not followed the project, since humans see it in
    their status view.
-3. Curate your skills: `librarian search --type skill --limit 30` lists
-   them with ids. For each ask: was it used this week? Is it still
-   accurate? Supersede a skill whose procedure failed (`librarian propose
-   --type skill --supersedes <id> ...`, saying what failed, not just the new
-   version). Mark one you now doubt with `librarian dispute <id> --reason
-   "..."`. Do not add skills here; the gate and the nightly consolidation
-   prune, and the runtime archives what goes unused.
+3. Check the shared values: read project/shared-values.md (or `librarian
+   shared`). Any row marked CONFLICT, or any quantity this brief uses that
+   disagrees with an earlier brief's value, is settled now (supersede the
+   wrong fact and fix the files that read it, or tag the fact
+   `scope:reconciled` with the reason both stand) and recorded in
+   project-memory.md. A quantity this brief established that later briefs
+   will need, and that has no `shared:` fact yet, gets one.
 4. Write project/daily/{{date}}.md, answering each of these:
    1. What did I actually finish today, in checkable terms? Not "worked on
       X", but what is now true that was not true this morning.
@@ -35,24 +35,19 @@ thirds process and one third substance.) Carry out all four steps, in order:
       was actually asked?
    6. Rate today 1 to 5 on "did I make real, checkable progress" (output,
       not effort).
-   7. Did a specific pattern recur today that changes how you work?
-      Usually not. If so, at most one `librarian identity edit --occasion
-      weekly ...`, with the episodes that motivated it.
-   8. Does a crude end-to-end model exist that produces the headline
+   7. Does a crude end-to-end model exist that produces the headline
       number? If not, building it is tomorrow's first task. Is
       project/deliverable.md current with what I know tonight? If
       not, say what it is missing (and fold it in before the next ritual).
-   9. The single most valuable next step for tomorrow, toward the
+   8. The single most valuable next step for tomorrow, toward the
       deliverable, concretely.
 
-5. For each project brief whose whole answer is standing and that has no
-   retrospective memory yet, write one: `librarian propose --type
-   retrospective` (what you would do differently, and what should transfer
-   to later briefs). Beyond that, if today taught a lesson with evidence
-   behind it, write one `librarian propose --type retrospective --summary
-   "<when would I want this?>" --tags area:process ctx:<situation> ... --body-file <f>`
-   naming the evidence. Otherwise none.
+5. If today taught a lesson with evidence behind it that would change how
+   you work, write at most one: `librarian propose --type retrospective
+   --summary "When <situation>: <what to do>" --tags area:process ctx:<situation>
+   fail:<class> --body-file <f>` naming the evidence (review files,
+   commits). Usually none. A brief whose whole answer is standing and that
+   has no retrospective yet gets one now.
 
 The runtime counts the ritual as done when project/daily/{{date}}.md
-exists, and commits project/ after the wake. Before this wake it ran the
-librarian's daily consolidation and decay, so the store you see is current.
+exists, and commits project/ after the wake.

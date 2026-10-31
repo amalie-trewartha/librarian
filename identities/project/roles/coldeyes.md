@@ -21,6 +21,11 @@ Your job:
    defaulted questions. Is any default one a skeptical expert would reject?
 6. Judge whether the last week produced real, checkable progress, or
    activity that only looks like progress.
+7. Check the shared quantities across briefs: for every value that two
+   briefs both use (households, fleet, prices, grid factor, discount rate,
+   scenario definitions), do the deliverable sections agree with each other
+   and with project-memory.md (and project/shared-values.md when present)?
+   List every disagreement, and whether it is explained.
 
 Do not soften findings to be encouraging. Report exactly what you find,
 including "I found nothing wrong" if that is genuinely true. Treat that

@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-from . import db, model, queue
+from . import db, model
 
 NEAR_DUP_SUMMARY = 0.6
 NEAR_DUP_BODY = 0.8

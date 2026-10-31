@@ -888,9 +888,27 @@ _start_dispatcher() {
         # the monolith's old per-step `setsid` background timer, which never ran
         # on macOS (no setsid) so spontaneity silently died. Generic over any
         # thinker; the monolith is the only current writer.
+        # If the monolith is active, idle, and has had no wake_at file for
+        # WAKE_REARM_SECONDS (default 900), fire a wake anyway: a step that died
+        # before re-arming (disk full, kill) otherwise leaves the mind asleep
+        # until a human writes the file (both runs C and D, 2026-10-30).
+        _wake_rearm_seen=$(date +%s)
         _scheduled_wake_check() {
             local _wf _wname _wat _now
             _now=$(date +%s)
+            if grep -qx monolith "$run_dir/active_thinkers" 2>/dev/null; then
+                if [[ -f "$run_dir/monolith.wake_at" ]] || _thinker_busy monolith; then
+                    _wake_rearm_seen=$_now
+                elif (( _now - _wake_rearm_seen > ${WAKE_REARM_SECONDS:-900} )); then
+                    _count_active_steps
+                    if [[ "$_active_step_count" -lt "$THINKERS_MAX_CONCURRENT" ]]; then
+                        _wake_rearm_seen=$_now
+                        printf '%s [dispatcher]   no wake_at for %ss: re-arming the monolith\n' "$(date -u +%FT%TZ)" "${WAKE_REARM_SECONDS:-900}" >&2
+                        _dispatch_step monolith "$(jq -nc --arg source monolith-timer \
+                            '{type:"monolith-wake", content:"wake (re-armed: no wake_at file)", source:$source}')"
+                    fi
+                fi
+            fi
             for _wf in "$run_dir"/*.wake_at; do
                 [[ -f "$_wf" ]] || continue
                 _wname=$(basename "$_wf" .wake_at)

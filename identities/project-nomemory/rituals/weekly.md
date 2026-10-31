@@ -8,9 +8,14 @@ report.
        blind --role coldeyes --out project/reviews/week-{{week}}.md
    The reviewer sees only spec.md, project-memory.md, journal.md and
    questions.md. Do not add your own commentary to its file.
-2. Bring project/deliverable.md up to date with everything learned this
+2. Reconcile the shared values across every brief so far: list every
+   quantity two briefs share, with the value each uses, settle every
+   disagreement, and check that each brief's deliverable section uses the
+   settled value (or states why it differs). Record what changed in
+   project-memory.md.
+3. Bring project/deliverable.md up to date with everything learned this
    week, including the cold-eyes findings you accept.
-3. Write project/reports/week-{{week}}.md with these sections:
+4. Write project/reports/week-{{week}}.md with these sections:
    - Summary: three to five plain sentences on what moved forward.
    - Completed this week: specific, checkable items, each pointing at its
      journal entry.
@@ -19,6 +24,8 @@ report.
      default was used, and what it changed (project/questions-summary.md
      has the full list). Every default applied and every interpretation
      call made this week, with its risk.
+   - Shared values: which quantities the briefs share, which were
+     reconciled this week and how.
    - Open questions: blocking ones first, each with its Default-by date
      and the default that will apply.
    - Self-assessed confidence: what you are sure of and what is tentative.

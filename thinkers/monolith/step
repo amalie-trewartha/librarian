@@ -354,7 +354,7 @@ if [[ "$project_mode" -eq 1 ]]; then
     # (CAPTURE, LIBRARIAN SUGGESTION) join the routing signals.
     if [[ "${LIBRARIAN_MEMORY:-1}" != 0 ]] && command -v librarian >/dev/null 2>&1; then
         librarian_pack=$(printf '%s' "$project_hints" | _prompt_section librarian librarian runtime pre \
-            --ritual "$(_project_due_ritual)" --phase "$(_project_phase)" --budget "${LIBRARIAN_PACK_TOKENS:-5000}") || librarian_pack=""
+            --ritual "$(_project_due_ritual)" --phase "$(_project_phase)" --budget "${LIBRARIAN_PACK_TOKENS:-2000}") || librarian_pack=""
         [[ -s "$state_dir/librarian_signals" ]] && project_hints="${project_hints}$(cat "$state_dir/librarian_signals")
 "
     fi

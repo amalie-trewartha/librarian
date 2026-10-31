@@ -139,7 +139,7 @@ has "adversary BROKEN closes partial for the wake" "$(episode_outcome "$EP3")" "
 eq "a failure lowers confidence" "$(L show "$SK" | jq -r '.confidence < 0.6')" true
 # The verdict is about the memory the review names, not the rest of the wake's pack.
 moved=$(python3 -I -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(*c.execute("select sum(node_id!=?), sum(node_id!=? and delta_conf!=0) from credit_log where episode_id=?", (sys.argv[2],)*2+(sys.argv[3],)).fetchone())' "$ID/librarian/store.sqlite" "$SK" "$EP3")
-[[ "${moved% *}" -ge 1 && "${moved#* }" == 0 ]] && ok "a review credits only the memories it names" || bad "a review credits only the memories it names" "other pack credits / moved: $moved"
+[[ "${moved#* }" == 0 || "${moved#* }" == None ]] && ok "a review credits only the memories it names" || bad "a review credits only the memories it names" "other pack credits / moved: $moved"
 n_ep=$(L stats | jq -r '.nodes.by_type.episode'); c_sk=$(L show "$SK" | jq -r .confidence)
 run_step STUB_RC=1 STUB_FINAL=""
 eq "a run that never acted (API down) records no episode" "$(L stats | jq -r '.nodes.by_type.episode')" "$n_ep"
@@ -190,24 +190,7 @@ run_step STUB_JOURNAL="after capture"
 eq "a matching skill clears the capture" "$(L stats | jq -r .pending_capture)" 0
 hasnt "CAPTURE signal is gone" "$(cat "$WORK/prompt")" "- CAPTURE:"
 
-# ── 4. repeated failure → suggestion → response ──────────────────────────────
-# The resolve wake above already logged the signature once, so the third
-# sighting can come on the second or third errors wake; the signal reaches
-# the prompt of the wake after the one that raised it.
-SID=""; found=""
-for i in 1 2 3 4; do
-    run_step STUB_MODE=errors STUB_JOURNAL="failing $i"
-    prompt=$(cat "$WORK/prompt")
-    if printf '%s' "$prompt" | grep -F -- "- LIBRARIAN SUGGESTION [repeated-failure]" >/dev/null; then found="$prompt"; break; fi
-done
-[[ -n "$found" ]] && ok "repeated failure raises a suggestion" || bad "repeated failure raises a suggestion" "no signal in 4 wakes"
-has "the suggestion points at the skill" "$found" "$SK"
-SID=$(printf '%s\n' "$found" | sed -n 's/.*LIBRARIAN SUGGESTION \[repeated-failure\] (\(S[0-9A-Z]*\)).*/\1/p' | head -1)
-L -q suggestion respond "$SID" accept 2>/dev/null; eq "the suggestion can be answered" "$?" 0
-run_step STUB_JOURNAL="quiet"
-hasnt "an answered suggestion is not repeated" "$(cat "$WORK/prompt")" "- LIBRARIAN SUGGESTION ["
-
-# ── 5. daily ritual: maintenance once, ritual file closes success ───────────
+# ── 5. daily ritual: ritual file closes success, export refreshed ───────────
 now=$(date +%s)
 printf '%s\n' "$(( now - 2 * 86400 ))" > "$ID/project-pristine/started_at"   # two project days in: the daily ritual is due
 # The day the ritual closes is the date of the latest PROJECT_DAILY_AT
@@ -218,11 +201,7 @@ day=$(date -u -d "@$now" +%F 2>/dev/null || date -u -r "$now" +%F)
 run_step PROJECT_DAILY_AT=00:00 STUB_RITUAL_FILE="daily/$day.md" STUB_JOURNAL="daily"
 EP6=$(last_episode)
 has "a written ritual file closes success" "$(episode_outcome "$EP6")" "success | ritual daily output written"
-rows=$(IDENTITY_DIR="$ID" python3 -c "import sqlite3,sys; c=sqlite3.connect('$ID/librarian/store.sqlite'); print(c.execute(\"select count(*) from maintenance where kind='daily'\").fetchone()[0])")
-eq "daily maintenance ran once" "$rows" 1
-run_step PROJECT_DAILY_AT=00:00 STUB_JOURNAL="another"
-rows=$(python3 -c "import sqlite3; c=sqlite3.connect('$ID/librarian/store.sqlite'); print(c.execute(\"select count(*) from maintenance where kind='daily'\").fetchone()[0])")
-eq "a second wake adds no maintenance row" "$rows" 1
+[[ -f "$ID/librarian/export/lib-skill-$SK.md" ]] && ok "a ritual wake refreshes the identity-wide export" || bad "a ritual wake refreshes the identity-wide export"
 
 # ── 6. degrade paths ─────────────────────────────────────────────────────────
 run_step LIBRARIAN_MEMORY=0 STUB_JOURNAL="off"

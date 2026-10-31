@@ -11,7 +11,49 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from . import model
-from .triggers import normalize_signature
+
+_SIG_NUM = re.compile(r"\b\d+(?:\.\d+)?\b")
+_SIG_HEX = re.compile(r"\b(?:0x)?[0-9a-f]{6,}\b", re.I)
+_SIG_PATH = re.compile(r"(?:/[\w.\-]+){2,}")
+_SIG_WS = re.compile(r"\s+")
+# A claims file's numbered claims: "C1: ...", "C1. ...", "- C1 ...", "**C1**: ...".
+_CLAIM_TEXT_RE = re.compile(r"^[ \t>*|-]*\**(C\d+[a-z]?)\**[ \t]*[:.)|-]?[ \t]*(.+?)[ \t]*$", re.M)
+
+
+def normalize_signature(line: str) -> str:
+    """First meaningful line of an error, with digits, hex and paths normalized."""
+    first = ""
+    for ln in (line or "").splitlines():
+        if ln.strip():
+            first = ln.strip()
+            break
+    first = _SIG_PATH.sub("<path>", first)
+    first = _SIG_HEX.sub("<hex>", first)
+    first = _SIG_NUM.sub("<n>", first)
+    return _SIG_WS.sub(" ", first)[:200]
+
+
+def parse_claims(text: str) -> dict[str, str]:
+    """A claims file's claims by label: the first line of each "C<n>" item, with any
+    continuation lines up to the next item or blank line."""
+    out: dict[str, str] = {}
+    lines = (text or "").splitlines()
+    cur: Optional[str] = None
+    for ln in lines:
+        m = _CLAIM_TEXT_RE.match(ln)
+        if m and m.group(2) and not re.match(r"^(SURVIVES|BROKEN|WEAKENED|UNVERIFIABLE)\b", m.group(2)):
+            cur = m.group(1)
+            if cur not in out:
+                out[cur] = m.group(2).strip()
+            else:
+                cur = None
+            continue
+        if cur and ln.strip() and not ln.strip().startswith(("#", "Lessons applied")):
+            if len(out[cur]) < 1200:
+                out[cur] += " " + ln.strip()
+        else:
+            cur = None
+    return out
 
 PHASE_MAP = {"build": "building", "harden": "reviewing", "final": "handoff", "ended": "handoff", "open": "building"}
 ULID_RE = re.compile(r"\b[0-9A-HJKMNP-TV-Z]{26}\b")

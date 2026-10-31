@@ -79,21 +79,6 @@ class ContractTest(CliCase):
         self.assertIn("request_id", d)
         self.assertEqual(self.store.q1("SELECT COUNT(*) FROM requests")[0], 1)
 
-    def test_episode_close_credits_and_amend(self):
-        _, out, _ = self.propose()
-        nid = out["id"]
-        _, pk, _ = self.run_cli("pack", "--task", "eigen", "--tags", "pkg:colcon", "--project", "p-1", "--budget", "2000")
-        rc, rep, _ = self.run_cli("episode", "close", "--summary", "fixed", "--body", "FINAL: fixed", "--tags", "project:p-1", "--outcome", "success", "--criterion", "test", "--request", pk["request_id"], "--project", "p-1")
-        self.assertEqual(rc, 0)
-        self.assertEqual([c["id"] for c in rep["cited"]], [nid])
-        self.assertEqual(rep["cited"][0]["status_after"], "active")
-        rc, rep2, _ = self.run_cli("outcome", "amend", rep["episode_id"], "--outcome", "failure", "--criterion", "human corrected")
-        self.assertEqual(rc, 0)
-        self.assertEqual(rep2["reversed"], 1)
-        self.assertEqual(self.node(nid).status, "probationary")
-        rc, _, _ = self.run_cli("endorse", nid, "--by", "amalie")
-        self.assertEqual(self.node(nid).status, "active")
-
     def test_fetch_logs_under_current_request_file(self):
         _, out, _ = self.propose()
         nid = out["id"]
@@ -103,49 +88,8 @@ class ContractTest(CliCase):
         self.assertEqual(row[0], "01J9ZZZZZZZZZZZZZZZZZZZZZZ")
         self.assertIsNotNone(self.node(nid).last_used)
 
-    def test_identity_queue_flow_exit_5(self):
-        c = self.core("No unsourced number ever stands in for a sourced one; a placeholder is labeled as one.")
-        ep = self.episode("success", []).episode_id
-        rc, out, _ = self.run_cli("identity", "edit", "--summary", "I scaffold tests first.", "--body", "I scaffold tests first.", "--occasion", "weekly", "--occasion-key", "w1", "--reason", "r", "--episodes", ep, "--no-llm")
-        self.assertEqual(rc, 0)
-        rc, out, _ = self.run_cli("identity", "edit", "--summary", "I read the spec twice.", "--body", "I read the spec twice.", "--occasion", "weekly", "--occasion-key", "w1", "--reason", "r", "--episodes", ep, "--no-llm")
-        self.assertEqual(rc, 5)
-        self.assertIn("refused_reason=rate_limit", out["notes"])
-        rc, out, _ = self.run_cli("identity", "edit", "--summary", "I never label a placeholder number; unsourced numbers are fine when sourced ones are slow.", "--body", "I never label a placeholder number; unsourced numbers are fine when sourced ones are slow.", "--occasion", "weekly", "--occasion-key", "w2", "--reason", "r", "--episodes", ep, "--no-llm")
-        self.assertEqual(rc, 5)
-        rc, items, _ = self.run_cli("queue", "list")
-        self.assertEqual(items[0]["kind"], "working_conflict")
-        rc, res, _ = self.run_cli("queue", "reject", items[0]["id"], "--note", "no")
-        self.assertEqual(rc, 0)
-        self.assertEqual(self.run_cli("queue", "list")[1], [])
-        rc, d, _ = self.run_cli("identity", "list", "--working")
-        self.assertEqual(d["working_count"], 1)
-        rc, d, _ = self.run_cli("identity", "propose", "--summary", "I lead with the answer.", "--body", "I lead with the answer.")
-        self.assertIsNotNone(d["queue_id"])
-        rc, res, _ = self.run_cli("queue", "approve", d["queue_id"])
-        self.assertTrue(res["effects"]["core"]["accepted"])
-        self.assertEqual(self.run_cli("queue", "approve", "QNOPE")[0], 4)
-
-    def test_progress_suggestion_respond(self):
+    def test_tags_stats_export_import(self):
         self.propose()
-        sig = "ModuleNotFoundError: No module named 'pint'"
-        for _ in range(3):
-            rc, res, _ = self.run_cli("progress", "--status", "failed again", "--tags", "project:p-1,pkg:colcon", "--project", "p-1", "--error", sig, "--tool-calls", "3", "--no-llm")
-        self.assertIsNotNone(res["suggestion"])
-        sid = res["suggestion"]["id"]
-        rc, out, _ = self.run_cli("suggestion", "respond", sid, "accept")
-        self.assertEqual(rc, 0)
-        rc, rows, _ = self.run_cli("suggestion", "list", "--project", "p-1")
-        self.assertEqual(rows[0]["response"], "accept")
-        self.assertEqual(self.run_cli("suggestion", "respond", "SNOPE", "accept")[0], 4)
-
-    def test_consolidate_decay_tags_stats_export_import(self):
-        self.propose()
-        rc, d, _ = self.run_cli("consolidate", "--no-llm", "--dry-run")
-        self.assertEqual(rc, 0)
-        self.assertIn("steps", d)
-        rc, d, _ = self.run_cli("decay", "--dry-run")
-        self.assertEqual(rc, 0)
         rc, d, _ = self.run_cli("tags", "--namespace", "ctx")
         self.assertTrue(all(t["namespace"] == "ctx" for t in d["tags"]))
         rc, d, _ = self.run_cli("stats")
@@ -158,10 +102,9 @@ class ContractTest(CliCase):
         prefs.write_text("- Prefer boring, well-understood tools.\n")
         rc, d, _ = self.run_cli("import", "--preferences", str(prefs), "--tags", "team:x")
         self.assertEqual(d["counts"]["stored"], 1)
-        rc, d, _ = self.run_cli("dispute", self.store.q1("SELECT id FROM nodes WHERE type = 'skill'")[0], "--reason", "stale")
-        self.assertEqual(d["status"], "disputed")
-        rc, d, _ = self.run_cli("project", "close", "p-1")
-        self.assertEqual(rc, 0)
+        self.assertTrue((pd / "shared-values.md").exists())
+        rc, rows, _ = self.run_cli("shared")
+        self.assertEqual((rc, rows), (0, []))
 
     def test_init_with_seeds(self):
         core = self.ident / "core.md"
@@ -171,7 +114,7 @@ class ContractTest(CliCase):
         self.assertEqual(rc, 0)
         self.assertEqual(d["core"][0]["action"], "stored")
         rc, d, _ = self.run_cli("identity", "list", "--core")
-        self.assertEqual(len(d["nodes"]), 1)
+        self.assertEqual(len(d), 1)
 
     def test_help_and_usage(self):
         rc, _, _ = self.run_cli()
@@ -192,41 +135,6 @@ class RunBTest(CliCase):
         rc, rows, _ = self.run_cli("capture", "list", "--project", "p-1")
         self.assertEqual(rows, [])
         rc, _, _ = self.run_cli("capture", "clear", "C1", "--covered-by", sk)
-        self.assertEqual(rc, cli.EXIT_NOTFOUND)
-
-    def test_search_finds_a_pending_queue_item(self):
-        # Live trial 2026-10-21: the mind searched eight times for a dispute waiting on a human.
-        from librarian import queue
-        with self.store.write():
-            qid = queue.enqueue(self.store, "dispute", {"a": "X", "b": None, "a_summary": "kill a background python job without killing the block"})
-        rc, rows, _ = self.run_cli("search", "--text", f"{qid} status")
-        self.assertEqual(rc, 0)
-        self.assertIn(qid, [r["id"] for r in rows])
-        rc, rows, _ = self.run_cli("search", "--text", "background python job")
-        self.assertIn(qid, [r["id"] for r in rows])
-
-    def test_dismiss_logs_no_credit_and_ranks_lower(self):
-        from librarian import lifecycle, rank, recall
-        a = self.skill("colcon eigen fix amber", ["pkg:colcon"], project="p-1")
-        b = self.skill("colcon eigen fix birch", ["pkg:colcon"], project="p-1")
-        rid = "01M00000000000000000000REQ"
-        (self.ident / "run" / "librarian_request.json").write_text(json.dumps({"request_id": rid, "project": "p-1", "tags": ["pkg:colcon"]}))
-        rc, rows, _ = self.run_cli("dismiss", a, "--reason", "about arm64, this is x86")
-        self.assertEqual((rc, rows[0]["id"]), (0, a))
-        self.assertEqual(self.store.q1("SELECT project, reason FROM dismissals WHERE node_id = ?", (a,))[:], ("p-1", "about arm64, this is x86"))
-        rep = lifecycle.close_episode(self.store, outcome="success", criterion="t", summary="s", body="FINAL: x", project="p-1", cited=[a, b], dismissed=[a])
-        self.assertEqual({c["id"] for c in rep.cited}, {b})
-        q = recall.Query(task="colcon eigen fix", tags=["pkg:colcon"], project="p-1")
-        _, cands = recall.recall(self.store, q)
-        ranked, _, _ = rank.rank(self.store, cands, q, use_llm=False)
-        self.assertEqual(ranked[0].node.id, b)
-        self.assertEqual(next(r for r in ranked if r.node.id == a).reasons["dismissed"], rank.W_DISMISS)
-        self.assertEqual(rank.dismissal_penalty(self.store, "p-2"), {})
-        # A later explicit cite clears it.
-        self.at("2026-10-01T01:00:00Z")
-        lifecycle.close_episode(self.store, outcome="partial", criterion="t", summary="s2", body="FINAL: y", project="p-1", cited=[a])
-        self.assertEqual(rank.dismissal_penalty(self.store, "p-1"), {})
-        rc, _, _ = self.run_cli("dismiss", "01M00000000000000000000NONE", "--reason", "x")
         self.assertEqual(rc, cli.EXIT_NOTFOUND)
 
 

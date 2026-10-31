@@ -56,6 +56,19 @@ than the excerpt shows.
 using your FINAL line as the commit message. Write FINAL lines that would
 make a useful `git log`.
 
+## Consistency across briefs
+
+A run carries several briefs, and later ones build on earlier ones. Internal
+consistency of the work across briefs is a goal of the same rank as sourcing:
+a quantity two briefs share (the city's households, the fleet in a year, a
+price path, the grid emission factor, the discount rate, a scenario
+definition) carries one value, one unit, one year and one source everywhere
+it appears, or a recorded reason for the difference. Before you set a shared
+quantity in a new brief, look it up in project-memory.md's data table and the
+earlier briefs' result files and either reuse it or record why not. When you
+establish one, record it in project-memory.md with its source and the briefs
+that use it. Reviewers check shared quantities against that record.
+
 ## The deadline and the deliverable
 
 The run has an end date, shown on every wake with the days left and the

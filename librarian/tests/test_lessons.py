@@ -1,22 +1,21 @@
-"""Run D: lessons that compound across briefs.
+"""Lessons, shared values and reviewer-confirmed facts: the v2 runtime.
 
-Run B (2026-10) wrote six retrospectives, but the brief-1 "what I would redo"
-lesson never reached a pack (transfer ranks by the brief's words), lessons were
-written only at the daily ritual, and credit almost never moved them. These
-tests pin the three changes: a [LESSONS] section chosen by situation, LESSON DUE
-signals at the moments a lesson is learned, and review verdicts crediting the
-lessons a piece of work named before it was reviewed.
+Lessons live in a [LESSONS] section chosen by situation and are judged at a
+brief's close by whether the failure class they guard against recurred (not by
+claim-level verdicts, which in run D went 36 failures to 1 success because the
+reviewer always finds something). Facts the reviewer marked SURVIVES are written
+by the runtime. Shared quantities that disagree across briefs raise a
+CONSISTENCY signal until reconciled.
 """
 
 import io
 import json
-import os
 import subprocess
 import unittest
 from contextlib import redirect_stdout
 
 from helpers import StoreCase
-from librarian import db, gate, lifecycle, outcome, pack, runtime, triggers
+from librarian import consistency, model, pack, runtime
 
 
 def _git(pd, *args):
@@ -25,53 +24,46 @@ def _git(pd, *args):
 
 class LessonPackTest(StoreCase):
     def req(self, **kw) -> pack.PackRequest:
-        base = dict(task="battery second life retirements recycling", tags=["project:p-4"], project="p-4", phase="building", budget=5000, log=True, use_llm=False, lessons=True)
+        base = dict(task="battery second life retirements recycling", tags=["project:p-4"], project="p-4", phase="building", budget=3000, log=True, use_llm=False, lessons=True)
         base.update(kw)
         return pack.PackRequest(**base)
 
     def test_lesson_with_no_shared_words_reaches_a_new_brief(self):
-        # The run-B case: a process lesson from brief 1 shares no words with brief 4.
-        redo = self.retro("When starting a new modeling brief: bundle reviews, decide ownership early", ["area:process"], project="p-1")
-        pk = pack.build(self.store, self.req(brief_start=True, transfer_task="EV battery retirements, second life and recycling for the city."))
-        self.assertIn(redo, pk.ids("lesson"))
-        self.assertNotIn(redo, pk.ids("transfer"))
-        self.assertNotIn(redo, pk.ids("task"))
+        lesson = self.retro("When starting a modeling brief: one rerun script on day 1", ["area:process", "ctx:planning"], project="p-1")
+        pk = pack.build(self.store, self.req(brief_start=True))
+        self.assertIn(lesson, pk.ids("lesson"))
         text = pack.render_text(pk)
         self.assertLess(text.index(pack.MARK_LESSONS), text.index(pack.MARK_TASK))
-        self.assertEqual(pack.build(self.store, self.req(lessons=False)).lessons, [])
+        self.assertIn("shown 0", text)
 
-    def test_brief_start_puts_starting_lessons_first(self):
-        start = self.retro("When starting a modeling brief: fix the price basis on day 1", ["area:process", "ctx:planning"], project="p-2")
-        newer = [self.retro(f"When doing step {w}: lesson {w}", ["area:process"], project="p-3") for w in ("alpha", "beta", "gamma")]
-        self.assertEqual(pack.build(self.store, self.req(brief_start=True)).ids("lesson")[0], start)
+    def test_situation_outranks_age(self):
+        old_fit = self.retro("When starting a modeling brief: source the headline parameters first", ["area:process", "ctx:planning"], project="p-1")
+        self.at("2026-10-05T00:00:00Z")
+        for w in ("alpha", "beta", "gamma"):
+            self.retro(f"When reviewing: lesson {w}", ["area:process", "ctx:reviewing"], project="p-2")
+        pk = pack.build(self.store, self.req(brief_start=True, phase="planning"))
+        self.assertEqual(pk.ids("lesson")[0], old_fit)
 
-    def test_only_lessons_qualify(self):
-        tool = self.skill("When playwright screenshots fail on a headless box", ["pkg:playwright"])
-        how = self.skill("When a background job writes tracked outputs: write atomically", ["area:process", "pkg:git"])
-        fact = self.add("fact", "When I need the US EV pack price in 2024", ["area:prices"], "123 $/kWh, BNEF 2024, https://about.bnef.com, verified 2026-10-01.")
-        ids = pack.build(self.store, self.req()).ids("lesson")
-        self.assertIn(how, ids)
-        self.assertNotIn(tool, ids)
-        self.assertNotIn(fact, ids)
-
-    def test_situation_outranks_confidence(self):
-        fit = self.retro("When reviewing a report: check prose against outputs", ["area:process", "ctx:reviewing"])
-        others = [self.retro(f"When doing step {w}: lesson {w}", ["area:process"]) for w in ("alpha", "beta", "gamma")]
-        with self.store.write():
-            for o in others:
-                self.store.ex("UPDATE nodes SET confidence = 0.8 WHERE id = ?", (o,))
-        self.assertEqual(pack.build(self.store, self.req(phase="reviewing")).ids("lesson")[0], fit)
-        self.assertNotIn(fit, pack.build(self.store, self.req(phase="building")).ids("lesson"))
-
-    def test_equal_lessons_take_turns(self):
+    def test_only_lessons_qualify_and_they_take_turns(self):
+        self.skill("colcon eigen fix", ["pkg:colcon"], project="p-1")
         ids = [self.retro(f"When doing step {w}: lesson {w}", ["area:process"]) for w in ("alpha", "beta", "gamma", "delta", "ember")]
         first = pack.build(self.store, self.req()).ids("lesson")
         second = pack.build(self.store, self.req()).ids("lesson")
         self.assertEqual(len(first), pack.LESSONS_MAX)
-        self.assertTrue(set(ids) - set(first) <= set(second))  # the two not shown come next
+        self.assertTrue(set(first) <= set(ids))
+        self.assertTrue(set(ids) - set(first) <= set(second))
+
+    def test_frequent_failure_class_of_this_brief_ranks_first(self):
+        plain = self.retro("When building: lesson plain", ["area:process", "ctx:building"], project="p-1")
+        guard = self.retro("When building: guard every hand-typed number", ["area:process", "ctx:building", "fail:stale"], project="p-1")
+        with self.store.write():
+            for i in range(2):
+                self.store.ex("INSERT INTO review_claim(file, claim, verdict, class, project, ts) VALUES (?,?,?,?,?,?)", (f"reviews/r{i}.md", "C1", "BROKEN", "stale", "p-4", "2026-10-01T00:00:00Z"))
+        pk = pack.build(self.store, self.req())
+        self.assertEqual(pk.ids("lesson")[:2], [guard, plain])
 
 
-class LessonRuntimeCase(StoreCase):
+class RuntimeCase(StoreCase):
     def project(self, pid: str, spec: str = "# Project brief 2: home energy\n\nModel heat pumps.\n"):
         pd = self.ident / "workdir" / "project"
         (pd / "reviews").mkdir(parents=True, exist_ok=True)
@@ -89,7 +81,7 @@ class LessonRuntimeCase(StoreCase):
 
     def commit(self):
         _git(self.pd, "add", "-A")
-        _git(self.pd, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-qm", "wake")
+        _git(self.pd, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "wake")
 
     def pre(self) -> str:
         buf = io.StringIO()
@@ -110,28 +102,28 @@ class LessonRuntimeCase(StoreCase):
         self.commit()
         return json.loads(out.getvalue())
 
-    def propose_lesson(self, summary: str) -> str:
+    def propose_lesson(self, summary: str, tags=("area:process",)) -> str:
         body = "Brief 1 overran by 2 days: 4 of 9 reviews in reviews/ found the price basis BROKEN; fix it on day 1."
-        return self.add("retrospective", summary, ["area:process"], body, provenance={"author": "main", "run_id": self.request_id()}, project=runtime.project_id())
+        return self.add("retrospective", summary, list(tags), body, provenance={"author": "main", "run_id": self.request_id()}, project=runtime.project_id())
 
 
-class BriefLessonTest(LessonRuntimeCase):
+class BriefCloseTest(RuntimeCase):
     def setUp(self):
         super().setUp()
         pack.build(self.store, pack.PackRequest(task="mobility", tags=[], project="p-1", budget=2000, log=True, use_llm=False))
         self.at("2026-10-02T00:00:00Z")
         self.project("p-2")
 
-    def test_closed_brief_without_retrospective_asks_for_one_until_written(self):
+    def test_closed_brief_without_retrospective_asks_until_written(self):
         self.pre()
         self.assertIn("LESSON DUE", self.signals())
         self.assertIn("p-1", self.signals())
         self.post()
         self.pre()
-        self.assertIn("LESSON DUE", self.signals())  # still due: nothing proposed
-        rid = self.propose_lesson("When starting a modeling brief: fix the price basis on day 1")
-        res = self.post()
-        self.assertEqual(res["lessons"]["settled"][0]["cleared_by"], rid)
+        self.assertIn("LESSON DUE", self.signals())
+        lesson = self.propose_lesson("When starting a modeling brief: build the rerun script on day 1")
+        self.post()
+        self.assertEqual(self.store.q1("SELECT cleared_by FROM pending_lesson")[0], lesson)
         self.pre()
         self.assertNotIn("LESSON DUE", self.signals())
 
@@ -144,392 +136,152 @@ class BriefLessonTest(LessonRuntimeCase):
         self.assertNotIn("LESSON DUE", self.signals())
         self.assertEqual(self.store.q1("SELECT cleared_by FROM pending_lesson")[0], "expired")
 
+    def test_retrospective_answering_an_earlier_lesson_due_does_not_count_for_this_brief(self):
+        # Brief 1 closed without a retrospective; the mind wrote it during brief 2. When brief 2
+        # closes, that retrospective is brief 1's, so brief 2 still gets a LESSON DUE.
+        self.pre()
+        self.propose_lesson("When starting a modeling brief: brief 1's lesson")
+        self.post()
+        self.at("2026-10-03T00:00:00Z")
+        pack.build(self.store, pack.PackRequest(task="x", tags=[], project="p-2", budget=2000, log=True, use_llm=False))
+        self.project("p-3", "# Project brief 3: emissions\n\nCount them.\n")
+        self.pre()
+        self.assertIn("LESSON DUE", self.signals())
+        self.assertIn("p-2", self.signals())
+
     def test_no_signal_when_the_brief_left_a_retrospective(self):
-        self.retro("When starting a brief after mobility: what I would redo", ["area:process"], project="p-1")
+        self.retro("When closing brief 1: what I would redo", ["area:process"], project="p-1")
         self.pre()
         self.assertNotIn("LESSON DUE", self.signals())
 
-    def test_lessons_off(self):
-        os.environ["LIBRARIAN_LESSONS"] = "0"
-        out = self.pre()
-        self.assertNotIn("LESSON DUE", self.signals())
-        self.assertNotIn(pack.MARK_LESSONS, out)
-
-
-class ReviewLessonTest(LessonRuntimeCase):
-    def setUp(self):
-        super().setUp()
-        self.project("p-1", "# Project brief: mobility\n\nModel travel.\n")
-
-    def land_review(self, name: str, verdict: str, extra: str = "") -> dict:
-        self.pre()
-        (self.pd / "reviews" / name).write_text(f"C1: {verdict}\n{extra}")
-        return self.post("Acted on the review.")
-
-    def test_broken_review_asks_once(self):
-        self.land_review("x-adversary.md", "BROKEN")
-        self.pre()
-        self.assertIn("LESSON DUE", self.signals())
-        self.assertIn("reviews/x-adversary.md", self.signals())
-        res = self.post()
-        self.assertEqual(res["lessons"]["settled"][0]["cleared_by"], "none")
-        self.pre()
-        self.assertNotIn("LESSON DUE", self.signals())
-
-    def test_same_review_edited_again_does_not_ask_again(self):
-        self.land_review("x-adversary.md", "BROKEN")
-        self.pre()
-        self.post()
-        self.land_review("x-adversary.md", "BROKEN", "Memories BROKEN: (none)\n")
-        self.pre()
-        self.assertNotIn("LESSON DUE", self.signals())
-
-    def test_review_straddling_a_brief_switch_is_still_delivered(self):
-        # Trial of run D: a review's wake started under brief 1 and ended after brief 2
-        # arrived; its LESSON DUE was stored under the old project and never shown.
-        self.land_review("x-adversary.md", "BROKEN")
-        self.project("p-2")
-        self.pre()
-        self.assertIn("reviews/x-adversary.md", self.signals())
-        self.post()
-        self.land_review("x-adversary.md", "BROKEN", "Memories BROKEN: (none)\n")
-        self.pre()
-        self.assertNotIn("reviews/x-adversary.md", self.signals())
-
-    def test_surviving_review_asks_nothing(self):
-        self.land_review("y-adversary.md", "SURVIVES")
-        self.pre()
-        self.assertNotIn("LESSON DUE", self.signals())
-
-
-class LessonCreditTest(LessonRuntimeCase):
-    def setUp(self):
-        super().setUp()
-        self.project("p-1", "# Project brief: mobility\n\nModel travel.\n")
-        self.lesson = self.retro("When a report hand-cites outputs: key every number to its output", ["area:process"])
-
-    def claims(self, name: str, ids: str, committed: bool = True):
-        (self.pd / "reviews" / name).write_text(f"C1. The fleet is 42.\n\nLessons applied: {ids}\n")
-        if committed:
-            self.commit()
-
-    def land(self, name: str, verdict: str) -> dict:
-        self.pre()
-        (self.pd / "reviews" / name).write_text(f"C1: {verdict}\n")
-        return self.post("Acted on the review.")
-
-    def test_surviving_review_confirms_the_lessons_its_work_applied(self):
-        self.claims("p-claims.md", self.lesson)
-        res = self.land("p-adversary.md", "SURVIVES")
-        self.assertEqual(res["lessons"]["credited"], {self.lesson: "success"})
-        n = self.node(self.lesson)
-        self.assertEqual(n.status, "active")
-        self.assertAlmostEqual(n.confidence, 0.5 + lifecycle.STEP, places=3)
-        self.assertEqual(self.store.q1("SELECT source FROM citations WHERE node_id = ?", (self.lesson,))[0], "lesson")
-
-    def test_broken_review_counts_against_them(self):
-        self.claims("p-claims.md", self.lesson)
-        self.land("p-adversary.md", "BROKEN")
-        self.assertAlmostEqual(self.node(self.lesson).confidence, 0.5 - lifecycle.STEP, places=3)
-
-    def test_lessons_named_after_the_verdict_earn_nothing(self):
-        self.claims("p-claims.md", self.lesson, committed=False)
-        res = self.land("p-adversary.md", "SURVIVES")
-        self.assertEqual(res["lessons"]["credited"], {})
-        self.assertAlmostEqual(self.node(self.lesson).confidence, 0.5, places=3)
-
-    def test_mixed_review_and_non_lessons_earn_nothing(self):
-        fact = self.add("fact", "When I need the city fleet size", ["area:fleet"], "42 vehicles, DMV 2024, https://dmv.example/2024, verified 2026-10-01.")
-        self.claims("p-claims.md", f"{self.lesson} {fact}")
-        self.pre()
-        (self.pd / "reviews" / "p-adversary.md").write_text("Memories SURVIVES: \nMemories BROKEN: \nC1: SURVIVES\nC2: BROKEN\n")
-        res = self.post()
-        self.assertEqual(res["lessons"]["credited"], {})
-
-
-class JudgedCreditTest(StoreCase):
-    def test_a_verdict_judges_its_memory_at_full_weight(self):
-        # Run B: a SURVIVES line moved its fact by 0.01, split with eight logged memories.
-        judged = self.skill("judged", ["pkg:x"])
-        logged = [self.skill(f"logged {w}", ["pkg:x"]) for w in ("a", "b", "c")]
-        self.episode("partial", [judged, *logged], overrides={judged: "success"})
-        self.assertAlmostEqual(self.node(judged).confidence, 0.5 + lifecycle.STEP, places=3)
-        for nid in logged:
-            self.assertAlmostEqual(self.node(nid).confidence, 0.5, places=3)
-
-
-class MigrationTest(StoreCase):
-    def test_v4_store_gains_pending_lesson(self):
-        with self.store.write():
-            self.store.ex("DROP TABLE pending_lesson")
-            self.store.meta_set("schema_version", "4")
-        self.store.close()
-        self.store = db.Store.open()
-        self.assertEqual(self.store.meta_get("schema_version"), str(db.SCHEMA_VERSION))
-        self.assertIsNotNone(self.store.q1("SELECT name FROM sqlite_master WHERE name = 'pending_lesson'"))
-
-
-# ── run D, second round: failure classes, the review-time ledger, practices, pre-mortem ──
-
-
-class FailureClassParseTest(StoreCase):
-    REVIEW = (
-        "BROKEN: two of five claims do not stand\n"
-        "Claim verdicts:\n"
-        "- C1: BROKEN [basis] posted fare used where the elasticity needs paid fare\n"
-        "- **C2**: SURVIVES\n"
-        "| C3 | WEAKENED | [fail:robustness] |\n"
-        "| C4 | BROKEN | stale |\n"
-        "- C5: BROKEN\n"
-        "Problems:\n- C1: BROKEN [calc] repeated in the list, the first line counts\n"
-    )
-
-    def test_claim_verdicts_from_lines_and_table_rows(self):
-        got = {c["claim"]: (c["verdict"], c["class"]) for c in outcome.claim_verdicts(self.REVIEW)}
-        self.assertEqual(got, {"C1": ("BROKEN", "basis"), "C2": ("SURVIVES", None), "C3": ("WEAKENED", "robustness"), "C4": ("BROKEN", "stale"), "C5": ("BROKEN", "other")})
-        self.assertEqual(outcome.failure_classes(self.REVIEW)[:1], ["basis"])
-        self.assertIsNone(outcome.review_outcome([], outcome.claim_verdicts(self.REVIEW)))
-        self.assertEqual(outcome.review_outcome([], outcome.claim_verdicts("- C1: SURVIVES\n- C2: UNVERIFIABLE\n")), "success")
-        self.assertEqual(outcome.review_outcome([], outcome.claim_verdicts("- C1: BROKEN [calc]\n- C2: WEAKENED [band]\n")), "failure")
-
-    def test_reviewer_claims_beat_the_minds_lines(self):
-        # Run B: 29 of 66 reviews that broke a claim carry only "Memories SURVIVES" lines.
-        text = "- C1: BROKEN [stale] x\n- C2: SURVIVES\nMemories SURVIVES: 01JA0000000000000000000001\n"
-        self.assertIsNone(outcome.review_outcome([{"verdict": "SURVIVES"}], outcome.claim_verdicts(text)))
-
-    def test_older_failure_class_line(self):
-        self.assertEqual(outcome.failure_classes("BROKEN: x\nFailure class: calc, stale\n"), ["calc", "stale"])
-        self.assertEqual(outcome.failure_classes("**Failure class:** fail:basis; caveat (missing)"), ["basis", "caveat"])
-        self.assertEqual(outcome.failure_classes("Failure classes: vibes"), ["other"])
-        self.assertEqual(outcome.failure_classes("Failure class: none\nSURVIVES"), [])
-        self.assertEqual(outcome.failure_classes("no such line"), [])
-
-    def test_fail_tags_are_a_closed_list(self):
-        ok_ = gate.check(self.store, gate.Candidate(type="retrospective", summary="When a rerun changes inputs: rescan the prose", body="Run B: 3 stale figures in `deliverable.md` after rerun 7.", tags=["area:process", "fail:stale"], provenance={"author": "main"}))
-        bad = gate.check(self.store, gate.Candidate(type="retrospective", summary="When a rerun changes inputs: rescan the prose", body="Run B: 3 stale figures in `deliverable.md` after rerun 7.", tags=["area:process", "fail:vibes"], provenance={"author": "main"}))
-        self.assertFalse(any("fail:" in r for r in ok_))
-        self.assertTrue(any("closed fail: list" in r for r in bad))
-
-
-class FailureClassRuntimeTest(LessonRuntimeCase):
-    def setUp(self):
-        super().setUp()
-        self.project("p-2")
-
-    def land(self, name: str, text: str) -> dict:
-        self.pre()
-        (self.pd / "reviews" / name).write_text(text)
-        return self.post("Acted on the review.")
-
-    def test_broken_review_records_its_claims_and_asks_for_a_tagged_lesson(self):
-        res = self.land("x-adversary.md", "BROKEN: the 2030 fleet double counts PHEVs\n- C1: BROKEN [calc] double count\n- C2: WEAKENED [inference] causal reading\n- C3: SURVIVES\n")
-        self.assertEqual(sorted(res["failures"]["reviews/x-adversary.md"]), ["calc", "inference"])
-        rows = self.store.q("SELECT claim, verdict, class, project FROM review_claim ORDER BY claim")
-        self.assertEqual([tuple(r) for r in rows], [("C1", "BROKEN", "calc", "p-2"), ("C2", "WEAKENED", "inference", "p-2"), ("C3", "SURVIVES", None, "p-2")])
-        self.pre()
-        sig = self.signals()
-        self.assertIn("failure classes: calc, inference", sig)
-        self.assertIn("fail:calc fail:inference", sig)
-        self.assertIn("no `Memories BROKEN:` line there names a memory", sig)
-        self.assertNotIn("happened again", sig)
-
-    def test_a_named_broken_memory_needs_no_nudge(self):
-        fact = self.add("fact", "When I need the city fleet size", ["area:fleet"], "42 vehicles, DMV 2024, https://dmv.example/2024, verified 2026-10-01.")
-        self.land("x-adversary.md", f"BROKEN: x\n- C1: BROKEN [calc] y\nMemories BROKEN: {fact}\n")
-        self.pre()
-        self.assertNotIn("no `Memories BROKEN:` line", self.signals())
-
-    def test_reviewer_breaks_without_the_word_in_mind_lines_still_asks(self):
-        # Only SURVIVES on the mind's line, but the reviewer weakened a claim.
-        self.land("w-adversary.md", "- C1: WEAKENED [robustness] floor claimed\n- C2: SURVIVES\nMemories SURVIVES: \n")
-        self.pre()
-        self.assertIn("LESSON DUE", self.signals())
-
-    def test_recurring_class_names_the_lesson_that_should_have_caught_it(self):
-        guard = self.retro("When converting energy units: carry units in column names", ["area:process", "fail:basis"], project="p-1")
-        self.land("x-adversary.md", "BROKEN: kWh read as MWh\n- C1: BROKEN [basis] kWh read as MWh\n")
-        self.pre()
-        self.assertIn("happened again", self.signals())
-        self.assertIn(guard, self.signals())
-
-    def test_a_lesson_written_after_the_review_is_not_named_as_a_guard(self):
-        # Run D's trial: a lesson the mind wrote after the review was named as one that
-        # "should have caught" the review's break.
-        self.at("2026-10-02T00:00:00Z")
-        self.land("x-adversary.md", "BROKEN: kWh read as MWh\n- C1: BROKEN [basis] kWh read as MWh\n")
-        self.at("2026-10-02T01:00:00Z")
-        later = self.retro("When converting energy units: carry units in column names", ["area:process", "fail:basis"], project="p-2")
-        self.pre()
-        self.assertIn("LESSON DUE", self.signals())
-        self.assertNotIn("happened again", self.signals())
-        self.assertNotIn(later, self.signals())
-
-    def test_surviving_review_records_nothing(self):
-        res = self.land("y-adversary.md", "SURVIVES: all numbers trace\n- C1: SURVIVES\n")
-        self.assertEqual(res["failures"], {})
-        self.assertEqual(self.store.q1("SELECT verdict FROM review_claim")[0], "SURVIVES")
-
-    def test_lessons_against_frequent_mistakes_rank_first(self):
-        others = [self.retro(f"When doing step {w}: lesson {w}", ["area:process"]) for w in ("alpha", "beta", "gamma")]
-        guard = self.retro("When a rerun changes inputs: rescan prose numbers", ["area:process", "fail:stale"])
-        with self.store.write():
-            for o in others:
-                self.store.ex("UPDATE nodes SET confidence = 0.8 WHERE id = ?", (o,))
-            for f in ("a", "b"):
-                self.store.ex("INSERT INTO review_claim(file, claim, verdict, class, project, ts) VALUES (?, 'C1', 'BROKEN', 'stale', 'p-1', ?)", (f"reviews/{f}.md", db.now_iso()))
-        pk = pack.build(self.store, pack.PackRequest(task="x", tags=[], project="p-2", phase="building", budget=5000, log=False, use_llm=False, lessons=True))
-        self.assertEqual(pk.ids("lesson")[0], guard)
-
-
-class LedgerCreditTest(LessonRuntimeCase):
-    def setUp(self):
-        super().setUp()
-        self.project("p-1", "# Project brief: mobility\n\nModel travel.\n")
-        self.lesson = self.retro("When a report hand-cites outputs: key every number to its output", ["area:process"])
-        (self.pd / ".blind").mkdir(exist_ok=True)
-
-    def ledger(self, **row):
-        with open(self.pd / ".blind" / "lessons.jsonl", "a") as f:
-            f.write(json.dumps({"ts": "2026-10-01T00:00:00Z", "role": "adversary", "lessons": [self.lesson], **row}) + "\n")
-
-    def land(self, name: str, text: str) -> dict:
-        self.pre()
-        (self.pd / "reviews" / name).write_text(text)
-        return self.post("Acted on the review.")
-
-    def test_lessons_blind_recorded_in_the_same_wake_count(self):
-        # Claims written and reviewed in one wake: nothing committed yet, the ledger holds the lessons.
-        self.ledger(out="project/reviews/p-adversary.md", verdict="SURVIVES: x")
-        res = self.land("p-adversary.md", "SURVIVES: x\n")
-        self.assertEqual(res["lessons"]["credited"], {self.lesson: "success"})
-
-    def test_matched_by_verdict_line_without_out(self):
-        self.ledger(out="", verdict="BROKEN: the bus speed ignores dwell time at stops")
-        res = self.land("q-adversary.md", "BROKEN: the bus speed ignores dwell time at stops\nFailure class: base\n")
-        self.assertEqual(res["lessons"]["credited"], {self.lesson: "failure"})
-
-    def test_short_verdict_lines_do_not_match_other_reviews(self):
-        self.ledger(out="", verdict="SURVIVES")
-        res = self.land("r-adversary.md", "SURVIVES\n")
-        self.assertEqual(res["lessons"]["credited"], {})
-
-    def test_a_review_judges_a_lesson_once(self):
-        self.ledger(out="project/reviews/p-adversary.md", verdict="SURVIVES: x")
-        self.land("p-adversary.md", "SURVIVES: x\n")
-        res = self.land("p-adversary.md", "SURVIVES: x\nMemories SURVIVES: (none)\n")
-        self.assertEqual(res["lessons"]["credited"], {})
-        self.assertAlmostEqual(self.node(self.lesson).confidence, 0.5 + lifecycle.STEP, places=3)
-
-    def test_mixed_review_blames_only_lessons_against_the_class_it_found(self):
-        guard = self.retro("When a rerun changes inputs: rescan prose numbers", ["area:process", "fail:stale"])
-        other = self.retro("When quoting a band: cite the band's sources", ["area:process", "fail:band"])
-        with open(self.pd / ".blind" / "lessons.jsonl", "a") as f:
-            f.write(json.dumps({"out": "reviews/m-adversary.md", "verdict": "", "lessons": [guard, other, self.lesson]}) + "\n")
-        res = self.land("m-adversary.md", "BROKEN: one figure is stale\n- C1: BROKEN [stale] 0.433 vs 0.441\n- C2: SURVIVES\n")
-        self.assertEqual(res["lessons"]["credited"], {guard: "failure"})
-
-    def test_a_committed_sidecar_counts(self):
-        (self.pd / "reviews" / "s-lessons.md").write_text(f"Lessons applied: {self.lesson}\n")
-        self.commit()
-        res = self.land("s-adversary.md", "SURVIVES: x\n")
-        self.assertEqual(res["lessons"]["credited"], {self.lesson: "success"})
-
-
-class PracticeTest(StoreCase):
-    def judge(self, nid: str, oc: str, project: str):
-        self.episode("partial", [nid], project=project, overrides={nid: oc})
-
-    def req(self) -> pack.PackRequest:
-        return pack.PackRequest(task="x", tags=[], project="p-3", phase="building", budget=5000, log=True, use_llm=False, lessons=True)
-
-    def test_confirmed_in_two_briefs_becomes_a_practice(self):
-        lesson = self.retro("When starting a brief: build the crude end-to-end answer first", ["area:process", "ctx:planning"])
-        self.judge(lesson, "success", "p-1")
-        self.assertNotIn(lesson, pack.practice_ids(self.store))
-        self.at("2026-10-03T00:00:00Z")
-        self.judge(lesson, "success", "p-1")
-        self.assertNotIn(lesson, pack.practice_ids(self.store))  # two wins in one brief are not two briefs
-        self.at("2026-10-04T00:00:00Z")
-        self.judge(lesson, "success", "p-2")
-        pk = pack.build(self.store, self.req())
-        self.assertEqual(pk.ids("practice"), [lesson])
-        self.assertNotIn(lesson, pk.ids("lesson"))
-        text = pack.render_text(pk)
-        self.assertLess(text.index(pack.MARK_PRACTICES), text.index(pack.MARK_TASK))
-        self.assertEqual(self.store.q1("SELECT section FROM retrieval_log WHERE node_id = ? AND request_id = ?", (lesson, pk.request_id))[0], "practice")
-
-    def test_a_failure_demotes_it(self):
-        lesson = self.retro("When starting a brief: build the crude end-to-end answer first", ["area:process"])
-        self.judge(lesson, "success", "p-1")
-        self.at("2026-10-03T00:00:00Z")
-        self.judge(lesson, "success", "p-2")
-        self.assertIn(lesson, pack.practice_ids(self.store))
-        self.at("2026-10-05T00:00:00Z")
-        self.judge(lesson, "failure", "p-3")
-        self.assertNotIn(lesson, pack.practice_ids(self.store))
-        self.assertIn(lesson, pack.build(self.store, self.req()).ids("lesson"))
-
-    def test_only_lessons_become_practices(self):
-        fact = self.add("fact", "When I need the US EV pack price in 2024", ["area:prices"], "123 $/kWh, BNEF 2024, https://about.bnef.com, verified 2026-10-01.")
-        self.judge(fact, "success", "p-1")
-        self.at("2026-10-03T00:00:00Z")
-        self.judge(fact, "success", "p-2")
-        self.assertEqual(pack.practice_ids(self.store), [])
-
-
-class PremortemTest(LessonRuntimeCase):
-    def test_first_wakes_of_a_brief_ask_for_risks_until_written(self):
-        self.project("p-2")
+    def test_premortem_until_risks_section_exists(self):
         self.pre()
         self.assertIn("PREMORTEM DUE", self.signals())
-        self.assertIn("## p-2", self.signals())
+        (self.pd / "risks.md").write_text("## p-2\n- stale figures (fail:stale): guard script\n")
         self.post()
-        (self.pd / "risks.md").write_text("## p-2 risks\n1. stale figures (fail:stale) - none\n")
         self.pre()
         self.assertNotIn("PREMORTEM DUE", self.signals())
 
-    def test_not_after_the_brief_start(self):
-        self.project("p-2")
-        for _ in range(runtime.TRANSFER_WAKES_DEFAULT):
-            self.pre()
-            self.post()
+    def test_no_review_lesson_due(self):
+        # Run D asked for a lesson after every broken review and got 19 footnotes in a day.
         self.pre()
-        self.assertNotIn("PREMORTEM DUE", self.signals())
+        (self.pd / "reviews" / "x-claims.md").write_text("C1: the fare is 1.50 USD\n")
+        (self.pd / "reviews" / "x-adversary.md").write_text("BROKEN posted fare\n\nClaim verdicts:\n- C1: BROKEN [basis] posted vs paid\n")
+        self.post()
+        self.assertEqual(self.store.q1("SELECT COUNT(*) FROM pending_lesson WHERE kind = 'review'")[0], 0)
 
 
-class SignatureTest(StoreCase):
-    def test_a_bare_number_is_not_an_error_signature(self):
-        steps = [{"type": "shell-output", "exit": 1, "stderr": "", "stdout": "42\n"}, {"type": "shell-output", "exit": 1, "stderr": "KeyError: 'fleet_2030'"}]
-        self.assertEqual(outcome.error_signatures(steps), [outcome.error_signatures(steps[1:])[0]])
-        self.assertEqual(len(outcome.error_signatures(steps)), 1)
-
-
-class TriggersOffTest(StoreCase):
-    def test_decision_point_can_be_switched_off(self):
-        os.environ["LIBRARIAN_TRIGGERS_OFF"] = "decision_point"
-        try:
-            self.assertIn("decision_point", triggers._off())
-        finally:
-            del os.environ["LIBRARIAN_TRIGGERS_OFF"]
-        self.assertEqual(triggers._off(), set())
-
-
-class MigrationV6Test(StoreCase):
-    def test_v5_store_gains_failures_ledger_and_fail_tags(self):
+class ClassRecurrenceTest(RuntimeCase):
+    def claims(self, project, n_reviews, broken_stale):
         with self.store.write():
-            self.store.ex("DROP TABLE review_claim")
-            self.store.ex("DROP TABLE lesson_judged")
-            self.store.ex("DROP TABLE pending_lesson")
-            self.store.ex("CREATE TABLE pending_lesson (id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('review','brief')), ref TEXT NOT NULL, project TEXT, created TEXT NOT NULL, delivered INTEGER NOT NULL DEFAULT 0, last_request TEXT, cleared TEXT, cleared_by TEXT)")
-            self.store.ex("DELETE FROM tag_vocab WHERE namespace = 'fail'")
-            self.store.meta_set("schema_version", "5")
-        self.store.close()
-        self.store = db.Store.open()
-        self.assertEqual(self.store.meta_get("schema_version"), "6")
-        for t in ("review_claim", "lesson_judged"):
-            self.assertIsNotNone(self.store.q1("SELECT name FROM sqlite_master WHERE name = ?", (t,)))
-        self.assertIn("detail", {r[1] for r in self.store.q("PRAGMA table_info(pending_lesson)")})
-        self.assertEqual(self.store.q1("SELECT status FROM tag_vocab WHERE tag = 'fail:calc'")[0], "active")
+            for i in range(n_reviews):
+                f = f"reviews/{project}-{i}.md"
+                self.store.ex("INSERT INTO review_claim(file, claim, verdict, class, project, ts) VALUES (?,?,?,?,?,?)", (f, "C1", "SURVIVES", None, project, "2026-10-01T00:00:00Z"))
+                if i < broken_stale:
+                    self.store.ex("INSERT INTO review_claim(file, claim, verdict, class, project, ts) VALUES (?,?,?,?,?,?)", (f, "C2", "BROKEN", "stale", project, "2026-10-01T00:00:00Z"))
+
+    def test_lesson_confirmed_when_its_class_falls_and_recurred_when_it_rises(self):
+        guard = self.retro("When writing prose numbers: generate them from outputs", ["area:process", "fail:stale"], project="p-1")
+        basis = self.retro("When setting a parameter: match the source's basis", ["area:process", "fail:basis"], project="p-1")
+        self.claims("p-1", 4, 3)
+        self.claims("p-2", 4, 1)
+        out = runtime.judge_lessons(self.store, "p-2", "p-1")
+        by = {o["lesson"]: o["outcome"] for o in out}
+        self.assertEqual(by.get(guard), "confirmed")
+        self.assertNotIn(basis, by)  # basis never appeared: no evidence either way
+        self.assertEqual(self.node(guard).status, "active")
+        self.assertEqual(pack.lesson_judgments(self.store, [guard])[guard], 1)
+        self.claims("p-3", 4, 3)
+        out = runtime.judge_lessons(self.store, "p-3", "p-2")
+        self.assertEqual({o["lesson"]: o["outcome"] for o in out}.get(guard), "recurred")
+        self.assertEqual(pack.lesson_judgments(self.store, [guard])[guard], 0)
+
+    def test_too_few_reviews_judge_nothing(self):
+        self.retro("When writing prose numbers: generate them", ["area:process", "fail:stale"], project="p-1")
+        self.claims("p-1", 2, 2)
+        self.claims("p-2", 2, 0)
+        self.assertEqual(runtime.judge_lessons(self.store, "p-2", "p-1"), [])
+
+
+class ConfirmedFactsTest(RuntimeCase):
+    def setUp(self):
+        super().setUp()
+        self.project("p-1", "# Project brief 1: mobility\n\nBuild a model.\n")
+
+    def test_survived_claims_become_active_facts_with_review_provenance(self):
+        self.pre()
+        (self.pd / "reviews" / "fare-claims.md").write_text("Claims for review.\n\nC1: The mean paid fare is 1.08 USD per linked trip (FY2024 audit, data/fare.txt).\nC2: Ridership fell 12% in 2020.\nC3: Buses are blue.\n")
+        (self.pd / "reviews" / "fare-adversary.md").write_text("SURVIVES mostly\n\nClaim verdicts:\n- C1: SURVIVES\n- C2: WEAKENED [band] one year only\n- C3: SURVIVES\n")
+        out = self.post("Reviewed fares.")
+        self.assertEqual(len(out["facts"]), 1)  # C3 has no number
+        fid = out["facts"][0]["id"]
+        n = self.node(fid)
+        self.assertEqual((n.type, n.status, n.project), ("fact", "active", "p-1"))
+        self.assertIn("1.08 USD", n.summary)
+        self.assertEqual(n.provenance["method"], "review")
+        self.assertIn("area:review", n.tags)
+        self.assertEqual(self.store.q1("SELECT COUNT(*) FROM review_claim")[0], 3)
+        # The same review a second time writes nothing new.
+        self.pre()
+        out = self.post("Touched the review again.")
+        self.assertEqual(out["facts"], [])
+
+    def test_shared_tag_in_a_claim_carries_to_the_fact(self):
+        self.pre()
+        (self.pd / "reviews" / "b" ).mkdir()
+        (self.pd / "reviews" / "b" / "claims.md").write_text("- C1 shared:fleet-2035 — the 2035 light-duty fleet is 61,200 vehicles (model/results.json).\n")
+        (self.pd / "reviews" / "b" / "adversary.md").write_text("SURVIVES\n\nClaim verdicts:\n- C1: SURVIVES\n")
+        out = self.post("Reviewed the fleet.")
+        n = self.node(out["facts"][0]["id"])
+        self.assertIn("shared:fleet-2035", n.tags)
+        self.assertEqual(consistency.shared_facts(self.store)[0].quantity, "fleet-2035")
+        self.assertTrue((self.pd / "shared-values.md").exists())
+
+
+class SharedValuesTest(RuntimeCase):
+    def setUp(self):
+        super().setUp()
+        self.project("p-2")
+
+    def fact(self, summary, project, tags=("shared:fleet-2035", "area:modeling")):
+        n = project[-1]
+        checks = {"1": "cross-checked with the ACS B08201 vehicle counts and the county assessor file", "2": "taken as given from brief 1 and reconciled with the AFDC registration series for 2024"}
+        return self.add("fact", summary, list(tags), f"Read from p{n}/model/results.json (run of 2026-10-0{n}); {checks.get(n, 'checked')}.", provenance={"author": "main", "source": "results.json"}, project=project)
+
+    def test_conflict_signal_until_reconciled(self):
+        a = self.fact("The 2035 light-duty fleet is 61,200 vehicles", "p-1")
+        b = self.fact("The 2035 light-duty fleet is 58,900 vehicles", "p-2")
+        self.assertEqual([c["quantity"] for c in consistency.conflicts(self.store)], ["fleet-2035"])
+        self.pre()
+        self.assertIn("CONSISTENCY", self.signals())
+        self.assertIn("fleet-2035", self.signals())
+        pk_text = self.pre()
+        self.assertIn(pack.MARK_SHARED, pk_text)
+        self.assertIn(a, pk_text)
+        self.assertIn(b, pk_text)
+        with self.store.write():
+            model.set_status(self.store, b, "superseded")
+        self.pre()
+        self.assertNotIn("CONSISTENCY", self.signals())
+
+    def test_agreeing_values_and_reconciled_tag_raise_nothing(self):
+        self.fact("The 2035 light-duty fleet is 61,200 vehicles", "p-1")
+        self.fact("The 2035 fleet is 61,400 light-duty vehicles", "p-2")
+        self.assertEqual(consistency.conflicts(self.store), [])
+        self.fact("Discount rate 3% real for public costs", "p-1", ("shared:discount-rate",))
+        self.fact("Discount rate 7% real, the household view, differs from p1 on purpose", "p-2", ("shared:discount-rate", "scope:reconciled"))
+        self.assertEqual(consistency.conflicts(self.store), [])
+        ledger = consistency.render_ledger(self.store, "p-2")
+        self.assertIn("discount-rate", ledger)
+        self.assertIn("61,200", ledger)
+
+    def test_shared_rows_only_when_the_wake_touches_the_quantity(self):
+        a = self.fact("The 2035 light-duty fleet is 61,200 vehicles", "p-1")
+        self.fact("Discount rate 3% real", "p-1", ("shared:discount-rate",))
+        rows = consistency.pack_rows(self.store, "charging load from the fleet in 2035", brief_start=False)
+        self.assertEqual([n.id for n in rows], [a])
+        self.assertEqual(len(consistency.pack_rows(self.store, "anything", brief_start=True)), 2)
+        self.assertEqual(consistency.pack_rows(self.store, "unrelated words", brief_start=False), [])
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@ Daily ritual for {{date}}. This is the one function of this wake, and it
 outranks normal work. It is bookkeeping, not research: do it in a few
 steps (aim for five or fewer), touch only what changed today, and get back
 to the work. (A cold-eyes review of an earlier run judged its week two
-thirds process and one third substance.) Carry out all three steps, in order:
+thirds process and one third substance.) Carry out all four steps, in order:
 
 1. Curate project/journal.md. Merge or trim redundant entries from today.
    For each entry marked done, check that it meets the definition of done
@@ -16,7 +16,13 @@ thirds process and one third substance.) Carry out all three steps, in order:
    that every open question has a Default-by line and still reads clearly
    to a human who has not followed the project, since humans see it in
    their status view.
-3. Write project/daily/{{date}}.md, answering each of these:
+3. Check the shared values: for every quantity this brief uses that an
+   earlier brief also used (project-memory.md's data table and the earlier
+   briefs' result files), make sure the values agree or the difference is
+   recorded with its reason. Settle any disagreement now and record the
+   call in project-memory.md. A quantity this brief established that later
+   briefs will need gets a row in project-memory.md with its source.
+4. Write project/daily/{{date}}.md, answering each of these:
    1. What did I actually finish today, in checkable terms? Not "worked on
       X", but what is now true that was not true this morning.
    2. What in today's work am I least confident about, and why?

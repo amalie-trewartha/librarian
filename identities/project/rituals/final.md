@@ -12,10 +12,10 @@ drafted before the end is only a draft: start from it, but do every step.
 3. Finalize project/deliverable.md. Every number sourced or marked as a
    placeholder, every default applied without a human named as such, and
    a Status section that says plainly what is solid and what is not.
-3a. Retrospectives for the next project: two to five `librarian propose
-    --type retrospective` (what went well, what went badly, what to do
-    differently), each with its evidence file or journal entry, tagged
-    area:process and the areas it touches. They outlive this run.
+3a. One retrospective for each brief that still has none (`librarian
+    propose --type retrospective`, tagged area:process, its ctx: and the
+    fail: classes its reviews found), each with its evidence. They outlive
+    this run.
 
 4. Write project/reports/final.md for the humans who asked:
    - The answer, in three to five plain sentences, with its uncertainty.

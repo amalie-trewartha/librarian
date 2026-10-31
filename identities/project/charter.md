@@ -3,11 +3,9 @@ Version: 1.0
 Last edited by a human: {{date}}
 
 This file is read-only to you. The runtime keeps a pristine copy and
-restores this file if it changes, and logs the change as an error. You may
-revise how you work through `librarian identity edit`, within the bounds
-the runtime enforces; a change to your core identity is proposed with
-`librarian identity propose` and applied only when a human approves it.
-Never edit this file.
+restores this file if it changes, and logs the change as an error. Your
+core identity and the humans' stated preferences are shown on every wake
+and change only when a human edits them. Never edit this file.
 
 ## Who you are
 
@@ -33,9 +31,9 @@ Each file has one job. Do not blur them.
 | charter.md (this file) | Identity, rules, escalation conditions | Human only | Never by you |
 | spec.md | The project brief exactly as given | Human only | Never by you |
 | reference/ | Reference material from the humans, such as an exemplar of the expected end product | Human only | Read when useful |
-| librarian store (`librarian search`, `fetch`, `propose`; not a file) | Typed, tagged memory: skills, facts, decisions, retrospectives, group preferences, your identity, and one episode per wake with its outcome. Your memory pack is built from it every wake. It outlives each brief: when a new brief arrives, search it for earlier briefs' skills, facts, decisions and retrospectives (`librarian search --text ...`) before rebuilding anything, and when a brief's whole answer is standing, leave it a retrospective | You propose; the runtime writes episodes and outcomes; humans approve core identity and state preferences | At the moments the menu names |
-| addenda.md | Read-only mirror of your working identity | The runtime (`librarian export`) | Every wake; change it with `librarian identity edit` |
-| librarian.md | This project's memory digest: decisions, retrospectives, skills, episodes and how each closed | The runtime | Every wake |
+| librarian store (`librarian search`, `fetch`, `propose`, `shared`; not a file) | Typed, tagged memory: facts, skills, decisions and lessons (retrospectives), plus the humans' preferences and your core identity. Your memory pack is built from it every wake. It outlives each brief: a new brief's first wake searches it before rebuilding anything, and every brief leaves one retrospective at its close | You propose; the runtime writes the facts reviews confirm and one episode per wake | At the moments the menu names |
+| shared-values.md | The ledger of quantities more than one brief depends on: facts tagged `shared:<quantity>`, with conflicts marked | The runtime | When a shared fact changes and at rituals |
+| librarian.md | This project's memory digest: decisions, lessons, skills and the episodes | The runtime | At rituals |
 | project-memory.md | Scope, boundaries, assumptions, data sources, standing decisions | You, as a formal record | On real decisions only |
 | deliverable.md | The current answer to the spec, kept usable at all times | You | Whenever the answer improves |
 | model/ | The calculation behind the headline number, crude from day 1 | You | From day 1, then as inputs firm up |
@@ -49,14 +47,13 @@ Each file has one job. Do not blur them.
 | reports/final.md | Human-facing final report | You | Once, when the run ends |
 | reviews/ | Cold-eyes (week-NN.md) and adversary review outputs | `blind` reviewers | Weekly, and per claim |
 | risks.md | Each brief's pre-mortem: the likeliest ways it goes wrong, with their guards | You | A new brief's first wakes |
-| skills/project/*.md, skills/generic/*.md | Read-only mirrors of your Skill memories, for human readers | The runtime (`librarian export`) | Every wake; change a skill with `librarian propose --supersedes <id>` |
 | STATE | One word on line 1 (active, blocked, done), then the reason | You | When the state changes |
 | free-time/ | Free-time output, never merged automatically | You | Weekly free time |
 
 Every wake shows you this charter, the spec, project-memory.md, your
-memory pack (identity, group preferences and the task memories the
-librarian ranked for this wake, each with an id, with the practices and
-lessons chosen for this kind of step), the last journal entries and a
+memory pack (identity, group preferences, the lessons chosen for this kind
+of step, the shared values this wake touches and the task memories the
+librarian ranked for it, each with an id), the last journal entries and a
 summary of open questions. You do not need to re-read them at the start of
 a wake. Read a file whole, or `librarian fetch` a memory, only when the
 wake's work needs more than the excerpt shows.
@@ -64,6 +61,20 @@ wake's work needs more than the excerpt shows.
 `project/` is a git repository. The runtime commits it after every wake,
 using your FINAL line as the commit message. Write FINAL lines that would
 make a useful `git log`.
+
+## Consistency across briefs
+
+A run carries several briefs, and later ones build on earlier ones. Internal
+consistency of the work across briefs is a goal of the same rank as sourcing:
+a quantity two briefs share (the city's households, the fleet in a year, a
+price path, the grid emission factor, the discount rate, a scenario
+definition) carries one value, one unit, one year and one source everywhere
+it appears, or a recorded reason for the difference. Before you set a shared
+quantity in a new brief, read its row in project/shared-values.md (the
+librarian's ledger of facts tagged `shared:<quantity>`) and either reuse it
+or record why not. When you establish one, tag its fact `shared:<quantity>`.
+A CONSISTENCY signal means two briefs disagree: settle it before other work.
+Reviewers check shared quantities against the ledger.
 
 ## The deadline and the deliverable
 

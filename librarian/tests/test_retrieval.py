@@ -85,17 +85,10 @@ class RankTest(StoreCase):
         s = self.skill("fresh skill", ["pkg:x"])
         n = self.node(s)
         self.assertAlmostEqual(rank.recency(n), 1.0, places=3)
-        self.at("2027-10-01T00:00:00Z")
+        self.at("2026-10-08T00:00:00Z")
         self.assertAlmostEqual(rank.recency(self.node(s)), 0.5, places=2)
         p = self.pref("a preference")
         self.assertEqual(rank.recency(self.node(p)), 1.0)
-
-    def test_decision_decays_toward_valid_to(self):
-        d = self.decision("provisional", ["pkg:x"], valid_to="2026-10-11T00:00:00Z")
-        self.at("2026-10-06T00:00:00Z")
-        self.assertAlmostEqual(rank.recency(self.node(d)), 0.5, places=2)
-        self.at("2026-10-12T00:00:00Z")
-        self.assertEqual(rank.recency(self.node(d)), 0.0)
 
     def test_reuse_and_exclude_and_tiebreak(self):
         a = self.skill("skill a", ["pkg:x"], body="Run `a` v1; verified 2026-01-01.")
@@ -114,16 +107,6 @@ class RankTest(StoreCase):
         ranked, _, _ = rank.rank(self.store, cands, recall.Query(tags=["pkg:y"]))
         self.assertEqual(ranked[0].node.id, c)
 
-    def test_reuse_counts_only_uses_with_evidence(self):
-        packed = self.skill("skill packed often", ["pkg:x"])
-        proven = self.skill("skill proven once", ["pkg:x"])
-        for _ in range(5):
-            self.episode("partial", [packed])
-        self.episode("success", [proven])
-        self.assertEqual(self.node(packed).use_count, 5)
-        self.assertEqual(rank.reuse(self.node(packed)), 0.0)
-        self.assertGreater(rank.reuse(self.node(proven)), 0.0)
-
     def test_fact_has_phase_prior(self):
         f = self.add("fact", "fare elasticity -0.40 (TRL593 Table 6.4)", ["area:transit"], body="Source: TRL593 Table 6.4, p. 112.")
         e = self.add("episode", "fare elasticity -0.40 (TRL593 Table 6.4)", ["area:transit"], body="Source: TRL593 Table 6.4, p. 112.")
@@ -139,37 +122,6 @@ class RankTest(StoreCase):
         pri = rank.load_priors(self.store)
         self.assertEqual(pri["skill"]["planning"], 5.0)
         self.assertEqual(pri["decision"]["reviewing"], rank.PRIORS["decision"]["reviewing"])
-
-    def test_llm_cut_with_fake_model(self):
-        ids = [self.skill(f"skill {i} about thing-{i}", ["pkg:x"], body=f"Run `t{i}`; verified 2026-01-0{i % 9 + 1}.") for i in range(10)]
-        _, cands = recall.recall(self.store, recall.Query(tags=["pkg:x"]))
-
-        class Fake:
-            model = "fake"
-
-            def __init__(self, answer):
-                self.answer = answer
-
-            def complete(self, prompt, system="", max_tokens=0):
-                # The cut numbers the memories; answer with the number of "skill 7".
-                if self.answer is None:
-                    n = next(ln.split(" | ")[0] for ln in prompt.splitlines() if "skill 7 about" in ln)
-                    return '```json\n{"%s": 3}\n```' % n
-                return self.answer
-
-        orig = rank.llm.get_llm
-        try:
-            rank.llm.get_llm = lambda role, allow=True: Fake(None)
-            ranked, used, note = rank.rank(self.store, cands, recall.Query(tags=["pkg:x"], task="x"))
-            self.assertTrue(used)
-            self.assertEqual(ranked[0].node.id, ids[7])
-            self.assertEqual(ranked[0].relevance, 3)
-            rank.llm.get_llm = lambda role, allow=True: Fake("no json here")
-            ranked, used, note = rank.rank(self.store, cands, recall.Query(tags=["pkg:x"], task="x"))
-            self.assertFalse(used)
-            self.assertIn("skipped", note)
-        finally:
-            rank.llm.get_llm = orig
 
 
 class PackTest(StoreCase):
@@ -190,9 +142,9 @@ class PackTest(StoreCase):
 
     def test_layout_markers_in_order_and_ids_on_entries(self):
         text = pack.render_text(pack.build(self.store, self.req()))
-        pos = [text.index(m) for m in (pack.MARK_CORE, pack.MARK_WORKING, pack.MARK_PREFS, pack.MARK_TASK, pack.MARK_COVERAGE, pack.MARK_NOTES, pack.MARK_REQUEST)]
+        pos = [text.index(m) for m in (pack.MARK_CORE, pack.MARK_PREFS, pack.MARK_TASK, pack.MARK_COVERAGE, pack.MARK_REQUEST)]
         self.assertEqual(pos, sorted(pos))
-        for line in text.splitlines():
+        for line in text[text.index(pack.MARK_TASK):text.index(pack.MARK_COVERAGE)].splitlines():
             if line.startswith("- "):
                 self.assertRegex(line, r"^- [0-9A-HJKMNP-TV-Z]{26} · ")
         self.assertIn("PROBATIONARY", text)
@@ -211,7 +163,7 @@ class PackTest(StoreCase):
         a = pack.build(self.store, self.req())
         self.at("2026-10-05T00:00:00Z")
         b = pack.build(self.store, self.req(task="something else entirely"))
-        self.assertEqual([e.text for e in a.identity_core + a.identity_working], [e.text for e in b.identity_core + b.identity_working])
+        self.assertEqual([e.text for e in a.identity_core], [e.text for e in b.identity_core])
 
     def test_budget_never_exceeded_and_truncation_marker(self):
         long_body = ("Step: run `make` with FLAG=1 and check the output carefully. " * 40).strip()
@@ -237,45 +189,6 @@ class PackTest(StoreCase):
         logged = {r[0] for r in self.store.q("SELECT node_id FROM retrieval_log WHERE request_id = ?", (pk.request_id,))}
         self.assertEqual(logged, set(pk.ids()))
 
-    def test_notes_disputed_and_untrusted(self):
-        s3 = self.skill("contradicting eigen trick", ["pkg:colcon"], project="p-1", untrusted=True)
-        with self.store.write():
-            model.add_edge(self.store, self.s1, s3, "contradicts", 1.0)
-        pk = pack.build(self.store, self.req())
-        joined = " ".join(pk.notes)
-        self.assertIn("disputed:", joined)
-        self.assertIn("UNTRUSTED", joined)
-
-    def test_rest_episodes_never_packed(self):
-        # Live trial 2026-10-15: under the day-budget cap the mind woke every few minutes to rest,
-        # and 9 of 17 task rows were "Rest: day budget nearly spent ($186.39/$200) ..." variants.
-        tags = ["pkg:colcon", "area:build-system"]
-        rest = [self.episode("partial", [], summary=f"Rest: day budget nearly spent (${186 + i}.{i}9/$200){';' if i % 2 else '.'} STATE refreshed, no other changes.", tags=tags).episode_id for i in range(6)]
-        noop = self.episode("partial", [], summary="STATE refreshed.", tags=tags, provenance={"author": "runtime", "noop": True}).episode_id
-        work = self.episode("partial", [], summary="Fixed the colcon eigen link error by pinning Eigen 3.4.", tags=tags).episode_id
-        pk = pack.build(self.store, self.req(budget=8000))
-        ids = pk.ids("task")
-        self.assertEqual([r for r in rest + [noop] if r in ids], [])
-        self.assertIn(work, ids)
-
-    def test_near_duplicate_episodes_packed_once(self):
-        tags = ["pkg:colcon", "area:build-system"]
-        dups = [self.episode("partial", [], summary=f"Reran colcon build {i}: eigen link error fixed.", tags=tags).episode_id for i in range(4)]
-        pk = pack.build(self.store, self.req(budget=8000))
-        self.assertEqual(sum(1 for r in dups if r in pk.ids("task")), 1)
-
-    def test_episodes_capped_and_from_this_project_only(self):
-        # Live trial 2026-10-21: 78% of later projects' task rows were earlier projects' episodes.
-        tags = ["pkg:colcon", "area:build-system"]
-        words = "amber birch cedar dune ember fjord grove heath".split()
-        mine = [self.episode("partial", [], summary=f"Colcon eigen {w} variant built and linked.", tags=tags).episode_id for w in words[:6]]
-        other = self.episode("partial", [], summary="Colcon eigen link fixed in the earlier project.", tags=tags, project="p-0").episode_id
-        pk = pack.build(self.store, self.req(budget=8000))
-        eps = [e.node.id for e in pk.task_memories if e.node.type == "episode"]
-        self.assertEqual(len(eps), pack.EPISODES_MAX)
-        self.assertTrue(set(eps) <= set(mine))
-        self.assertNotIn(other, eps)
-
     def test_reserved_slots_put_relevant_curated_memory_first(self):
         tags = ["pkg:colcon", "area:build-system"]
         for i in range(8):
@@ -286,24 +199,6 @@ class PackTest(StoreCase):
         self.assertIn(self.s1, pk.ids("task")[:3])
         self.assertIn(f, pk.ids("task")[:3])
         self.assertNotEqual(types[0], "episode")
-
-    def test_transfer_section_offers_other_projects_memories(self):
-        old = self.skill("fetch census tables without an API key", ["area:data-fetch"], project="p-0")
-        same = self.skill("census download for this project", ["area:data-fetch"], project="p-1")
-        pk = pack.build(self.store, self.req(transfer_task="A new brief: home energy adoption using census tables for the city."))
-        self.assertIn(old, [e.node.id for e in pk.transfer])
-        self.assertNotIn(same, [e.node.id for e in pk.transfer])
-        text = pack.render_text(pk)
-        self.assertLess(text.index(pack.MARK_TRANSFER), text.index(pack.MARK_TASK))
-        self.assertEqual(pack.build(self.store, self.req()).transfer, [])
-
-    def test_working_under_conflict_not_rendered(self):
-        from librarian import queue
-
-        with self.store.write():
-            queue.enqueue(self.store, "working_conflict", {"node_id": self.w1, "summary": "x", "core_id": self.c1})
-        pk = pack.build(self.store, self.req())
-        self.assertEqual(pk.identity_working, [])
 
 
 class RunBRecallTest(StoreCase):
@@ -316,34 +211,6 @@ class RunBRecallTest(StoreCase):
         self.assertIn("acs", model.keywords(self.node(a).body))
         _, cands = recall.recall(self.store, recall.Query(task="download ACS census tables"))
         self.assertIn(a, [c.node.id for c in cands])
-
-    def test_all_curated_reach_the_llm_cut_and_unjudged_stay_out(self):
-        from librarian import pack
-        far = self.skill("pandas groupby observed flag", ["pkg:pandas"])
-        near = [self.skill(f"colcon eigen fix {w}", ["pkg:colcon"]) for w in ("amber", "birch", "cedar", "dune", "ember", "fjord", "grove", "heath")]
-        seen = {}
-
-        class Fake:
-            model = "fake"
-
-            def complete(self, prompt, system="", max_tokens=0):
-                seen["prompt"] = prompt
-                n = next(ln.split(" | ")[0] for ln in prompt.splitlines() if "pandas groupby" in ln)
-                return '{"%s": 0}' % n
-
-        orig = rank.llm.get_llm
-        try:
-            rank.llm.get_llm = lambda role, allow=True: Fake()
-            pk = pack.build(self.store, pack.PackRequest(task="colcon eigen link errors", tags=["pkg:colcon"], project=None, phase="debugging", budget=8000, log=True, use_llm=True))
-        finally:
-            rank.llm.get_llm = orig
-        self.assertIn("pandas groupby", seen["prompt"])
-        self.assertNotIn(far, pk.ids("task"))
-        row = self.store.q1("SELECT llm_cut, llm_note FROM requests WHERE request_id = ?", (pk.request_id,))
-        self.assertEqual(row[0], 1)
-        pk2 = pack.build(self.store, pack.PackRequest(task="colcon eigen link errors", tags=["pkg:colcon"], budget=8000, log=True, use_llm=False))
-        self.assertNotIn(far, pk2.ids("task"))
-        self.assertEqual(self.store.q1("SELECT llm_note FROM requests WHERE request_id = ?", (pk2.request_id,))[0], "llm relevance cut off")
 
     def test_migration_to_schema_3_rebuilds_the_index(self):
         from librarian import db

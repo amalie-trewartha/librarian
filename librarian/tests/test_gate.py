@@ -1,7 +1,7 @@
 import unittest
 
 from helpers import StoreCase
-from librarian import gate, model, queue
+from librarian import gate, model
 
 
 def cand(**kw) -> gate.Candidate:
@@ -52,7 +52,6 @@ class GateRules(StoreCase):
         res = gate.apply(self.store, cand(tags=["area:novel-thing"]))
         self.assertTrue(res.accepted)
         self.assertEqual(res.queued, [])
-        self.assertEqual(queue.list_items(self.store, "pending", "new_area_tag"), [])
         self.assertEqual(model.vocab_status(self.store, "area:novel-thing"), "seen")
         gate.apply(self.store, cand(summary="another thing about eigen on arm64", tags=["area:novel-thing"]))
         self.assertEqual(model.vocab_status(self.store, "area:novel-thing"), "active")

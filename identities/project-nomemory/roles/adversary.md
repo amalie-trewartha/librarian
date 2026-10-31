@@ -13,6 +13,14 @@ Check, at least:
 - Logic: does the conclusion follow from the inputs, or does it lean on an
   unstated assumption?
 - Sensitivity: would a plausible change in one input flip the conclusion?
+- Consistency across briefs: a quantity that an earlier brief also used
+  (households, fleet, prices, grid factor, discount rate, scenario
+  definitions) must carry the same value, unit, year and source here, or a
+  stated reason for the difference. Check it against project/shared-values.md
+  when that file is among the files you were given, else against
+  project-memory.md and the earlier briefs' result files. A silent
+  difference is BROKEN with class `stale` (same source, different vintage
+  or file) or `basis` (a different quantity, unit or population).
 
 Number the claims C1, C2, ... in the order you were given them (a single
 claim is C1). End with exactly one verdict line, first word SURVIVES, BROKEN

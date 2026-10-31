@@ -115,10 +115,14 @@ def now(env: Optional[dict] = None) -> dt.datetime:
     real = e.get("PROJECT_REAL_NOW", "").strip()
     real_s = float(real) if real.isdigit() else time.time()
     scale = e.get("PROJECT_TIME_SCALE", "1").strip()
-    if scale.isdigit() and int(scale) > 1:
+    try:
+        k = float(scale) if scale else 1.0
+    except ValueError:
+        k = 1.0
+    if k > 0 and k != 1.0:
         start = _started_at(e)
         if start is not None:
-            return dt.datetime.fromtimestamp(start + (real_s - start) * int(scale), tz=_UTC)
+            return dt.datetime.fromtimestamp(start + (real_s - start) * k, tz=_UTC)
         if not _warned_scale:
             _warned_scale = True
             import sys

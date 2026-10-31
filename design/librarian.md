@@ -1,206 +1,169 @@
-# The Librarian: memory and context for project mode
+# The Librarian: memory and context for project mode (v2)
 
-Status: implemented (all four phases of the spec), exercised offline only.
-Spec: `Librarian Memory & Context System for a Long-Running Autonomous
-Agent.md` in the repository root (Amalie Trewartha, 2026-10-09). Code:
+Status: v2, implemented on branch `librarian-v2` (2026-10-31) from what
+the A to D trials showed (design/librarian_trials_retrospective.md). Code:
 `librarian/` (Python, standard library only), `tools/librarian` (wrapper),
-hooks in `thinkers/monolith/step` and `thinkers/_lib/project.sh`, commands
-in `tools/librarian-project`, templates in `identities/project/`. Tests:
-`librarian/tests/`, `tests/test_librarian_py.sh`, `tests/test_librarian_cli.sh`,
-`tests/test_librarian_wake.sh`.
+hooks in `thinkers/monolith/step`, commands in `tools/librarian-project`,
+templates in `identities/project/`. Tests: `librarian/tests/`,
+`tests/test_librarian_py.sh`, `tests/test_librarian_cli.sh`,
+`tests/test_librarian_recipes.sh`, `tests/test_librarian_wake.sh`. The
+original spec is `Librarian Memory & Context System for a Long-Running
+Autonomous Agent.md` in the repository root; v1's decisions and their
+measured results are in the retrospective.
 
-This note records what the spec left open, what Librarian decided, and where
-the implementation deviates from the spec and why. The spec itself is the
-reference for the memory model, the ranking signals and the lifecycle.
+## Design rule
 
-## What it is in Librarian terms
+Every mechanism either changes what the mind sees in its prompt or is
+gone. Bookkeeping that only moved a confidence number is out: in v1,
+confidence never entered the ranking score, 96% of credit rows were zero,
+and the two times the sign was decisive it was wrong.
 
-A project-mode mind runs for weeks. Every wake, the monolith step asks the
-librarian for a **context pack** before the model runs, and tells it what
-happened after. The pack replaces the "life so far" rollups and the
-related-memories section in project wakes; `project-memory.md` stays, as
-task state. The store is per identity (`<identity>/librarian/store.sqlite`),
-so what one project teaches is available to the next.
+## Goals
+
+1. Carry across briefs what files do not: sourced facts about shared
+   inputs, tooling skills, decisions, and lessons about how to work.
+2. **Internal consistency of the work across briefs.** A quantity two
+   briefs share carries one value, unit, year and source everywhere, or
+   a recorded reason for the difference. The charter states it, the
+   store tags it (`shared:<quantity>`), the pack shows it, the runtime
+   checks it, and the reviewers are told to check it.
+3. Low overhead: no model call in `runtime pre` or `post`, a pack of about
+   2,000 tokens, and the main model spending its tokens on the work, not
+   on memory chores.
+
+## What happens on a wake
 
 ```
-pre-run   librarian runtime pre   → maintenance (daily/weekly), context request, pack, signal lines
-          (the pack goes into the project section: charter → spec → references → pack → project memory → journal tail → clock → STATE)
-post-run  librarian runtime post  → outcome from artifacts → episode → credit → progress/triggers → captures → export mirrors
-model     librarian search/fetch/propose/identity edit/suggestion respond, from its own bash
-humans    librarian-project queue|probe|preferences|librarian, committed to project/ as author human
+pre    librarian runtime pre  → task text (brief title, plan head, last journal entry, signals)
+                              → pack: identity, preferences, [LESSONS], [SHARED VALUES], [TASK MEMORIES]
+                              → signals: LESSON DUE (brief close), PREMORTEM DUE (brief start),
+                                CONSISTENCY (shared values disagree), CAPTURE (resolved repeated failure)
+                              → on a brief's first wake: judge the closed brief's lessons, refresh the files
+model  librarian search / fetch / propose / shared / capture clear, from its own bash
+post   librarian runtime post → outcome from artifacts → episode + citations → review_claim rows
+                              → facts from SURVIVES claims → captures → ledger and digest when they changed
 ```
 
-## Decisions
+### Pack
 
-| Question (spec) | Decision |
-|---|---|
-| Graph DB vs SQLite | SQLite with adjacency tables and FTS5 (Python fallback when FTS5 is missing). Standard library only, because the CLI also runs inside the shellm sandbox where only python3 is installed. |
-| Vector index | Not yet. Recall is tag match (specificity-weighted) + BM25 over summary and tags + one graph hop. The `embeddings` table and a null `EmbedProvider` are the seam. |
-| Who is the librarian | A deterministic program with optional single-call model stages, not a second agent loop. Model tiers by role: `rank` and `judge` on the fast model, `draft` and `probe-answer` on the main model, `core-check` escalates heuristic → fast → main → human queue. `LIBRARIAN_MODEL_<ROLE>` overrides; `LLM_RUN_ID=librarian:<role>` attributes spend. |
-| Default budget | `LIBRARIAN_PACK_TOKENS` = 5000 estimated tokens (chars/4), passed by the monolith step. |
-| Agent writes or proposes | Proposes. `librarian propose` runs the quality gate at write time; nothing bypasses it. |
-| Seeding the group model | `librarian-project init --preferences FILE` imports stated values as active, human-authored preference nodes. Observed standards come from consolidation; recurring needs from retrospectives. |
-| Multi-agent scoping | Not addressed. Blind and delegate runs are cut off from the store on purpose (see below). |
+Fixed order so the stable prefix caches. Identity core and preferences
+verbatim (seeded at init). [LESSONS]: up to 3 retrospectives (or
+`area:process` skills and decisions) from any brief, ranked by situation
+(`ctx:` tag against the phase and ritual, `ctx:planning` and other
+briefs' retrospectives at a brief's start, a `fail:` tag the current
+brief's reviews keep finding), then by net judgment, then the one shown
+longest ago. [SHARED VALUES]: facts tagged `shared:` whose quantity words
+occur in the task text, all of them on a brief's first wakes, conflicting
+ones first. [TASK MEMORIES]: up to 8 facts, skills and decisions by a
+transparent score: IDF-weighted tag overlap, BM25 over summary, tags and
+body keywords, recency with half-lives of 5 to 7 days, cited-when-shown
+rate, and a type-by-phase prior. A candidate with no tag, text or graph
+evidence is not packed. Rows the last pack showed and the mind neither
+cited nor fetched are excluded once. Every row shows `shown N cited M`
+and, when a review judged it, `reviews +k/-b`. No episodes: the journal
+tail is the record of recent wakes. The model ranking cut is off
+(`LIBRARIAN_RANK_LLM=1` turns it on; an omission then only demotes).
 
-## Deviations from the spec, and why
+### Writing
 
-- **One wake is one episode, and the progress feed is per wake.** The spec
-  streams progress every N tool calls. Librarian's model runs one bash block
-  per step inside a sandbox the host cannot interrupt, so the librarian sees
-  the run's steps after the fact. Suggestions therefore land as routing
-  signals on the next wake, and the cooldown counts project time or tool
-  calls across wakes.
-- **Outcomes need exogenous evidence.** The spec's "verification passed"
-  signal has no test suite in research work. The runtime decides from
-  artifacts, in this order: a ritual's output file written → `success`; an
-  adversary review that cites a packed memory → `success` or `failure` for
-  that memory (per-id override on the citation), while the wake itself closes
-  `partial` so the rest of its pack is not credited for an earlier claim; step cap hit or a failed run
-  → `failure`; a journal entry plus FINAL → `partial`;
-  FINAL alone → `partial`; nothing → `unknown`. The agent's own activity is
-  never evidence of success. Late upgrades run on the weekly ritual: a
-  failure signature that never recurred → `success`; a human edit to the
-  deliverable inside the review window → `failure`. An error signature that
-  recurs after a skill cleared it is reported in the post output (`recurred`)
-  but not credited: run B's only hit was a guard script's intended MISS line,
-  and it blamed the whole pack.
-- **`partial` is a real outcome.** The charter makes the journal entry the
-  definition of a finished work wake; a FINAL without one is the "appearance
-  of progress" case. Neither moves confidence.
-- **Resolved failures are detected by the runtime.** When a command family
-  fails twice and then succeeds, a `pending_capture` row opens and every
-  following wake carries a CAPTURE signal until a skill with matching tags
-  is proposed. After `LIBRARIAN_CAPTURE_TTL_DAYS` (3) the librarian drafts
-  the skill itself from the trajectory span (main model, probationary,
-  provenance `auto-draft`), or archives the row as `undrafted` without a
-  model. Same fail-safe shape as rituals keyed to output files.
-- **Lessons are chosen by situation, asked for at the moment, and judged by reviews (run D).**
-  In run B (2026-10) only 3 of 49 FROM EARLIER BRIEFS rows were cited, and the brief-1
-  "what I would redo" retrospective never reached a pack: transfer ranks by the
-  brief's words, and a lesson about how to run a brief shares none with a battery
-  brief. Three changes:
-  - Every runtime pack carries a `[LESSONS]` section: up to 3 retrospectives (or
-    skills and decisions tagged `area:process`) from any project. They are ranked by
-    `ctx:` tag against the wake's phase and ritual; at a brief's start, `ctx:planning`
-    lessons come first, then other briefs' retrospectives. Ties go to confidence,
-    then to the lesson shown longest ago.
-  - A `pending_lesson` row opens when a brief closes without a retrospective
-    (signal shown up to 3 wakes) and when a review breaks a claim (shown once).
-    Each one shows as a LESSON DUE signal until a lesson is proposed or it expires.
-  - A `Lessons applied: <ids>` line lets a review judge those lessons. `blind`
-    cuts the line (and any `<name>-lessons.md` sidecar) from what the reviewer
-    sees, and records the ids in `project/.blind/lessons.jsonl` when the review
-    runs, so they were named before the verdict. A line already committed in the
-    claims file, its sidecar or the review file also counts. The reviewer's own
-    `Claim verdicts:` block decides, never the mind's Memories lines: in run B,
-    29 of the 66 reviews that broke a claim carried only SURVIVES lines. Every
-    claim SURVIVES gives `success`; none standing (BROKEN, WEAKENED) gives
-    `failure`; a mixed review blames only a lesson tagged `fail:<class>` for a
-    class it found. Each review judges each lesson once (`lesson_judged`). These
-    are cited with source `lesson`. A memory with a per-id outcome takes the full
-    step, split only among the memories so judged. Before, a SURVIVES line moved
-    its fact by 0.01.
-  - **Failure classes.** The adversary role names a class on every BROKEN or
-    WEAKENED claim, from a closed list derived from run B's 134 broken claims
-    (basis, inference, calc, stale, robustness, band, unsourced, caveat,
-    artifact, other; `fail:` tags). `review_claim` keeps every claim verdict.
-    LESSON DUE names the classes and asks for `fail:` tags. When a class recurs
-    although a lesson guards against it, the signal names that lesson. Lessons
-    against a class seen in 2 or more claims rank first. A review that broke
-    claims but names no BROKEN memory gets a nudge.
-  - **Practices.** A lesson judged a success in 2 different briefs, with its
-    latest judgment a success, is shown in every pack under `[PRACTICES]` (at most
-    8, computed from citations, no state). A failure demotes it.
-  - **Pre-mortem.** A brief's first wakes get PREMORTEM DUE until
-    `project/risks.md` has a `## <project id>` section: the likeliest failures,
-    each with its class and guard.
-  - **blind always saves an adversary review** (under reviews/ when no --out is
-    given) and warns when it has no claim verdicts: 5 of run B's 81 review files
-    were pointers or stubs.
-- **Episodes enter `active`, not `probationary`.** They are records of
-  outcomes, not claims awaiting confirmation; probation is for the distilled
-  types. They are never deduplicated.
-- **Working-identity rate limit is per project week.** The spec says one
-  edit per project close. Librarian projects run for weeks, so the weekly
-  ritual counts as a close (`--occasion weekly`, keyed on the project
-  week), the final ritual as `project-close`, plus one edit per accepted
-  repeated-failure suggestion.
-- **Blind and delegate never see the store.** A pack would hand the
-  adversary the favored approach and the explorer the prior decisions.
-  `bin/blind` runs with `LIBRARIAN_MEMORY=0`; verdicts flow back through
-  the outcome rule.
-- **Skills are nodes; files are mirrors.** `project/skills/**`, `addenda.md`
-  and `project/librarian.md` are regenerated by `librarian export` every
-  wake and committed with `project/`. The identity-wide mirror under
-  `<identity>/librarian/export/lib-*.md` is what the dashboard's Memories
-  page reads.
+- The mind proposes skills (after a resolved failure), decisions, and
+  lessons (one retrospective per brief at its close, at most one more at
+  a daily ritual), through the quality gate.
+- The runtime writes a `fact` for every claim the adversary marks
+  SURVIVES, from the claims file's text, with the review as provenance,
+  the wake's tags, `area:review` and any `shared:` tag the claim carried.
+  Status active. The mind need not propose what the reviewer confirmed.
+- Facts tagged `shared:<quantity>` are the shared values. The runtime
+  renders `project/shared-values.md` from them when one changes and at
+  rituals.
+
+### Lessons
+
+One lesson moment per brief: on a new brief's first wake, if the closed
+brief left no retrospective, LESSON DUE shows for up to 3 wakes. Lessons
+are judged at the next brief's close by class recurrence: for each
+`fail:<class>` tag on a lesson written before the closed brief, the
+closed brief's rate of not-standing claims of that class per review is
+compared with the brief before; fell → `confirmed` (and the lesson
+leaves probation), rose → `recurred`. At least 3 reviews on both sides.
+No judgment from single reviews: in run D the reviewer always found
+something, and claim-level judging went 36 failures to 1 success.
+
+### Consistency
+
+`consistency.py`: facts tagged `shared:` grouped by quantity; the number
+in a summary (skipping bare years) is its value; two briefs whose values
+differ by more than 1% and that carry no `scope:reconciled` tag are a
+conflict. Conflicts raise a CONSISTENCY signal every wake until one fact
+is superseded or one is re-proposed with `scope:reconciled` and the
+reason. `librarian shared` lists the ledger; `librarian-project banner`
+counts conflicts; the cold-eyes reviewer receives the ledger file; the
+adversary role checks shared quantities and classes a silent difference
+`stale` or `basis`.
+
+### Outcomes and credit
+
+`outcome.decide_outcome` is unchanged: a ritual file written → success;
+a review names ids → per-id overrides, wake partial; step cap or rc≠0 →
+failure; journal + FINAL → partial. `lifecycle.close_episode` records
+the episode and citations and keeps the per-node counters (use, success,
+failure), which the pack shows. Confidence is still stored for
+compatibility but nothing reads it for ranking. Recurred error
+signatures are not scored.
+
+## Removed from v1, and why
+
+| Mechanism | Measured | Removed |
+|---|---|---|
+| Episodes in the pack | 50% of tokens, 6% cited | yes |
+| Transfer section (BM25 on brief text) | 5% cited | yes |
+| Practices | never formed | yes (lessons carry `reviews +k/-b`) |
+| LESSON DUE per broken review | 19 lessons in a day | yes (one per brief) |
+| Reviewer-judged lessons via `Lessons applied` | 36 failures / 1 success | replaced by class recurrence |
+| Haiku rank cut | 93-99% of packs; omission vetoed tag hits | off by default |
+| Confidence as ranking input, decay, late upgrades | never in the score | gone |
+| Consolidation (merge, generalize, promote), disputes, probes, identity edits, check-in queue | 0-1 uses in 14 days | gone |
+| Decision-point and other suggestions | 13% accepted | gone |
+| Per-wake export of every node | O(store) per wake | at rituals and on change |
+| Capture auto-draft (model call) | 0 useful | gone (captures expire) |
 
 ## Where things live
 
 | Path | What |
 |---|---|
-| `<identity>/librarian/store.sqlite` | the store (WAL; one writer at a time, 5 s busy timeout) |
-| `<identity>/librarian/export/lib-<type>-<ulid>.md` | identity-wide markdown mirror, `bin/mem`-shaped frontmatter |
-| `<identity>/run/librarian_request.json` | this wake's request: id, packed ids, ritual, phase (written by `pre`, consumed by `post` and by `fetch`) |
-| `<identity>/run/librarian_signals` | CAPTURE, LESSON DUE, LIBRARIAN SUGGESTION and queue notices for this wake |
+| `<identity>/librarian/store.sqlite` | the store (WAL) |
+| `<identity>/librarian/export/lib-*.md` | identity-wide markdown mirror, refreshed at rituals |
+| `<identity>/run/librarian_request.json` | this wake's request: id, packed ids, task ids, ritual, phase, project |
+| `<identity>/run/librarian_signals` | the wake's signal lines |
 | `<identity>/run/librarian.log` | stderr of `runtime post` |
-| `<identity>/project-pristine/project_id` | `p-<YYYYMMDD>-<slug>`, the `project:` tag for this run |
-| `<identity>/project-pristine/probes.md` | the consistency probes |
-| `project/addenda.md`, `project/skills/**`, `project/librarian.md` | generated mirrors |
+| `project/shared-values.md`, `project/librarian.md` | generated: the ledger and the digest |
+| `project/risks.md` | the mind's pre-mortems, one section per brief |
 
 ## Configuration
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `LIBRARIAN_MEMORY` | 1 | 0 turns the hooks off; the wake gets today's plain excerpt |
-| `LIBRARIAN_SRC` | `<app>/librarian/src` (init writes it to `.env`) | the package path, passed into the sandbox read-only |
-| `LIBRARIAN_PACK_TOKENS` | 5000 | pack budget in estimated tokens (the step passes it as `--budget`) |
-| `LIBRARIAN_MODEL`, `LIBRARIAN_MODEL_RANK|JUDGE|DRAFT|CORE_CHECK|PROBE_ANSWER` | tier defaults | model per role |
-| `LIBRARIAN_LLM` | 1 | 0 skips every model stage (tests, offline runs) |
-| `LIBRARIAN_LLM_MAX_CALLS` | 4 | model calls per CLI invocation |
-| `LIBRARIAN_EXCLUDE_WAKES` | 1 | how many previous packs' task memories are excluded from the next |
-| `LIBRARIAN_LESSONS` | 1 | 0 drops the [LESSONS] section and LESSON DUE signals |
-| `LIBRARIAN_BRIEF_LESSON_WAKES` | 3 | wakes a closed brief's LESSON DUE signal is shown |
-| `LIBRARIAN_TRANSFER_TYPES` | skill,fact,decision,retrospective | node types the FROM EARLIER BRIEFS section offers; empty turns it off |
-| `LIBRARIAN_TRIGGERS_OFF` | (none) | comma-separated detectors to skip: decision_point, deviation, phase_drift |
-| `LIBRARIAN_CAPTURE_TTL_DAYS` | 3 | days before an uncaptured resolved failure is auto-drafted or archived |
-| `LIBRARIAN_REVIEW_WINDOW_DAYS` | 7 | window for late outcome upgrades on the weekly ritual |
-| `LIBRARIAN_RECUR_WINDOW_DAYS` | 7 | days without recurrence that upgrade a partial episode |
-| `LIBRARIAN_NOW`, `PROJECT_NOW`, `PROJECT_TIME_SCALE` | | the clock (tests and accelerated runs); durations are project seconds |
-| `LIBRARIAN_STORE` | `$IDENTITY_DIR/librarian/store.sqlite` | store path override |
-| `LIBRARIAN_FTS` | | `python` forces the BM25 fallback |
-
-## Operator runbook
-
-```bash
-librarian-project init ada --spec brief.md --preferences values.md   # store, core identity, stated values
-librarian-project status ada            # ... librarian: N nodes (...); queue K; captures open C
-librarian-project queue ada             # core proposals, refused working edits, disputes, new area: tags
-librarian-project queue ada approve Q7  # applied as author human, committed to project/
-librarian-project probe ada             # consistency probes against the identity nodes
-librarian-project preferences ada add "Prefer boring, well-understood tools."
-librarian-project librarian ada stats   # any librarian command against the identity's store
-librarian-project librarian ada eval --set librarian/tests/eval   # the offline ranking regression
-```
-
-## Phase gates (from the spec), to check on live runs
-
-| Phase | Gate | Where to read it |
-|---|---|---|
-| Store & capture | gate-passing nodes appear; every wake has an episode with an outcome | `librarian stats`, `project/librarian.md` |
-| Librarian v1 | pack precision ≥ 50%; uncovered-pull rate falling | `stats.pack_precision`, `stats.uncovered_pull_rate`; `librarian eval` offline |
-| Lifecycle | suggestion acceptance ≥ 40%; duplicate pairs trending to zero | `stats.suggestions`, `stats.duplicate_pairs_last_run` |
-| Identity & group | probe drift under threshold; every identity change traceable | `probe compare`, `identity list --history`, the queue |
+| `LIBRARIAN_MEMORY` | 1 | 0 turns the hooks off (the control arm) |
+| `LIBRARIAN_PACK_TOKENS` | 2000 | pack budget in estimated tokens |
+| `LIBRARIAN_LESSONS` | 1 | 0 drops [LESSONS], LESSON DUE and PREMORTEM DUE |
+| `LIBRARIAN_SHARED` | 1 | 0 drops [SHARED VALUES] and CONSISTENCY |
+| `LIBRARIAN_RANK_LLM` | 0 | 1 adds the model relevance cut to the task ranking |
+| `LIBRARIAN_EXCLUDE_WAKES` | 1 | how many previous packs' uncited task rows are excluded |
+| `LIBRARIAN_BRIEF_START_WAKES` | 3 | wakes that count as a brief's start |
+| `LIBRARIAN_BRIEF_LESSON_WAKES` | 3 | wakes a closed brief's LESSON DUE is shown |
+| `LIBRARIAN_CAPTURE_TTL_DAYS` | 3 | days before an uncaptured resolved failure expires |
+| `LIBRARIAN_NOW`, `PROJECT_NOW`, `PROJECT_TIME_SCALE` | | the clock; the scale may be fractional |
+| `SHELLM_SCRATCH_DIR` | | a host directory mounted as the container's /tmp (capped per kit) |
 
 ## Known limits
 
-- The outcome rule is only as good as the artifacts: a project that never
-  runs adversary reviews confirms nothing until the weekly non-recurrence
-  upgrade.
-- The core-contradiction heuristic (stemmed overlap plus negation parity or
-  an antonym pair) is weak without a model; conflicts it misses are caught
-  later by probes, conflicts it invents go to the queue, never lost.
-- Token estimates are chars/4; the pack keeps 5% headroom.
-- No embeddings, so recall misses paraphrases that share no tag or term.
-- The librarian's model stages run on the host inside the wake and count
-  against the project budget; the daily ritual wake carries consolidation.
+- The value of a shared fact is the first non-year number in its
+  summary; a quantity whose summary leads with another number needs a
+  summary that leads with the value.
+- Lesson judgment needs three reviews per brief on both sides; briefs
+  with fewer reviews judge nothing.
+- No embeddings: recall misses paraphrases that share no tag or term.
+- Facts from SURVIVES claims are only as good as the claims file: a
+  claim without a number is skipped, and a claims file the runtime cannot
+  find next to the review (`<name>-claims.md` or `claims.md` in the
+  review's directory) yields none.

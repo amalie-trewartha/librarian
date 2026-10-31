@@ -5,26 +5,21 @@ report.
 
 1. Cold-eyes review. If project/reviews/week-{{week}}.md does not exist,
    create it with:
-       blind --role coldeyes --out project/reviews/week-{{week}}.md
-   The reviewer sees only spec.md, project-memory.md, journal.md and
-   questions.md. Do not add your own commentary to its file.
-2. Promote a project skill to generic only if it is genuinely
-   project-agnostic: `librarian propose --type skill --tags scope:generic
-   ... --supersedes <project skill id>`, reworded away from any
-   project-specific assumption. Lean toward cutting.
-3. Introspect on your working identity (`librarian identity list
-   --working`). For each node, ask whether it has actually changed your
-   behavior or is only aspirational. Retire or supersede with `librarian
-   identity edit --occasion weekly ...` (one edit per week at most). When in
-   doubt, change nothing.
-4. Bring project/deliverable.md up to date with everything learned this
+       blind --role coldeyes -f project/spec.md -f project/deliverable.md -f project/project-memory.md -f project/journal.md -f project/questions.md -f project/shared-values.md --out project/reviews/week-{{week}}.md
+   The reviewer sees only those files. Do not add your own commentary to
+   its file.
+2. Reconcile the shared values across every brief so far: read
+   project/shared-values.md whole, settle every CONFLICT row, and check
+   that each brief's deliverable section uses the ledger's values (or
+   states why it differs). Record what changed in project-memory.md.
+3. Bring project/deliverable.md up to date with everything learned this
    week, including the cold-eyes findings you accept.
-5. Check that each project brief has its retrospective: `librarian search
-   --type retrospective --text "<the brief>"`. For each project brief whose
-   whole answer is standing and that has no retrospective memory yet, write
-   one: `librarian propose --type retrospective` (what you would do
-   differently, and what should transfer to later briefs).
-6. Write project/reports/week-{{week}}.md with these sections:
+4. Check that each brief has its retrospective (`librarian search --type
+   retrospective`). A brief whose whole answer is standing and that has
+   none gets one: what you would redo, what cost the most, which shared
+   values and methods carry to later briefs, and the failure classes its
+   reviews found most.
+5. Write project/reports/week-{{week}}.md with these sections:
    - Summary: three to five plain sentences on what moved forward.
    - Completed this week: specific, checkable items, each pointing at its
      journal entry.
@@ -36,9 +31,9 @@ report.
    - Open questions: blocking ones first, each with its Default-by date
      and the default that will apply.
    - Self-assessed confidence: what you are sure of and what is tentative.
-   - Changes to memory and working identity: what `librarian stats --week
-     {{week}}` shows (memories proposed, confirmed, disputed; suggestions
-     accepted), what changed and why, or "none".
+   - Memory and shared values: what `librarian stats --week {{week}}`
+     shows (facts, skills, lessons written; shared values and conflicts),
+     which shared quantities were reconciled this week and how.
    - Cold-eyes review result: a summary of reviews/week-{{week}}.md,
      including anything it flagged that you disagree with and why. Turn
      each finding you accept into a journal entry with Status: in-progress.

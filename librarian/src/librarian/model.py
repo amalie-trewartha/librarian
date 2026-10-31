@@ -45,7 +45,7 @@ EDGE_TYPES = (
 )
 AUTHORS = ("main", "librarian", "human", "runtime")
 
-TAG_NAMESPACES = ("pkg", "area", "ctx", "project", "person", "team", "src", "scope", "expect", "fail")
+TAG_NAMESPACES = ("pkg", "area", "ctx", "project", "person", "team", "src", "scope", "expect", "fail", "shared")
 # The closed fail: list: the kinds of mistake an adversary review names on its
 # "Failure class:" lines, and a lesson's tag for the mistake it guards against.
 # Derived from run B's BROKEN reviews (run-b/EVAL-B.md).

@@ -31,7 +31,9 @@ _pj_left() { local s="$1"; if (( s >= 86400 )); then printf '%sd %sh' $(( s / 86
 # runs: days, weeks, rituals, the deadline, staleness, pacing and the budget
 # window all follow it. 1 (the default) is real time. PROJECT_NOW pins the
 # project clock and PROJECT_REAL_NOW the real one, in tests.
-_pj_scale() { local k="${PROJECT_TIME_SCALE:-1}"; [[ "$k" =~ ^[1-9][0-9]*$ ]] || k=1; printf '%s' "$k"; }
+# The scale may be fractional (2.3333 runs a 7-day project week in 72 real hours).
+_pj_scale() { local k="${PROJECT_TIME_SCALE:-1}"; [[ "$k" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk -v k="$k" 'BEGIN { exit !(k > 0) }' || k=1; [[ "$k" == 1.0 || "$k" == 1.00 ]] && k=1; printf '%s' "$k"; }
+_pj_mul() { awk -v s="$1" -v d="$2" -v k="$3" 'BEGIN { printf "%d", s + (d - s) * k }'; }  # _pj_mul <start> <real> <k>
 _pj_real() {
     if [[ -n "${PROJECT_REAL_NOW:-}" ]]; then printf '%s' "$PROJECT_REAL_NOW"
     elif [[ -n "${PROJECT_NOW:-}" && "$(_pj_scale)" == 1 ]]; then printf '%s' "$PROJECT_NOW"
@@ -41,13 +43,13 @@ _pj_vtime() {  # _pj_vtime <real-epoch> -> project epoch
     local k; k=$(_pj_scale)
     if [[ "$k" == 1 ]]; then printf '%s' "$1"; return 0; fi
     local s; s=$(_project_started_at)
-    printf '%s' $(( s + ($1 - s) * k ))
+    if [[ "$k" =~ ^[0-9]+$ ]]; then printf '%s' $(( s + ($1 - s) * k )); else _pj_mul "$s" "$1" "$k"; fi
 }
 _pj_now() {
     if [[ -n "${PROJECT_NOW:-}" ]]; then printf '%s' "$PROJECT_NOW"; else _pj_vtime "$(_pj_real)"; fi
 }
 # Real seconds for a span of project seconds (at least 30 when scaled).
-_pj_real_span() { local k; k=$(_pj_scale); local r=$(( $1 / k )); (( k > 1 && r < 30 )) && r=30; printf '%s' "$r"; }
+_pj_real_span() { local k; k=$(_pj_scale); local r; r=$(awk -v s="$1" -v k="$k" 'BEGIN { printf "%d", s / k }'); [[ "$k" != 1 ]] && (( r < 30 )) && r=30; printf '%s' "$r"; }
 _pj_mtime() {  # _pj_mtime <file> -> its mtime in project time (empty if missing)
     local m; m=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null) || return 0
     _pj_vtime "$m"

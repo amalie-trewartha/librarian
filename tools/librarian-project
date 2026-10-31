@@ -20,8 +20,6 @@ set -euo pipefail
 #   librarian-project answer <identity> <Qn> "<answer>"   (or the answer on stdin)
 #   librarian-project banner <identity>       just the open-questions block
 #   librarian-project deadline <identity> [--days N | --end YYYY-MM-DD]
-#   librarian-project queue <identity> [list|approve|reject <id> [note]]
-#   librarian-project probe <identity>
 #   librarian-project preferences <identity> [list|add "<text>"]
 #   librarian-project librarian <identity> <librarian args...>
 #   librarian-project update-pristine <identity>
@@ -49,7 +47,7 @@ set -euo pipefail
 # (PROJECT_DAILY_USD / PROJECT_TOTAL_USD), so a cheaper model also costs less
 # budget; dollar caps replace the token caps.
 # --time-scale N runs the project clock N times faster than real time
-# (PROJECT_TIME_SCALE), for accelerated test runs: --days 8 --time-scale 24
+# (PROJECT_TIME_SCALE, may be fractional), for accelerated runs: --days 8 --time-scale 24
 # is an eight-day project in eight hours.
 #
 # answer records a human's answer to an open question and commits it as
@@ -125,7 +123,7 @@ cmd_init() {
     [[ -z "$total" || "$total" =~ ^[0-9]+$ ]] || die "--total-tokens must be a number"
     [[ -z "$dusd" || "$dusd" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "--daily-usd must be an amount like 50 or 12.5"
     [[ -z "$tusd" || "$tusd" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "--total-usd must be an amount like 500"
-    [[ "$scale" =~ ^[1-9][0-9]*$ ]] || die "--time-scale must be a positive whole number"
+    [[ "$scale" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk -v k="$scale" 'BEGIN { exit !(k > 0) }' || die "--time-scale must be a positive number (2.3333 runs a 7-day week in 72 hours)"
     [[ "$scale" == 1 || -z "$end" ]] || die "--end is a calendar date; with --time-scale use --days"
     local end_at; end_at=$(_end_epoch "$days" "$end")
     [[ -n "$spec" && -f "$spec" ]] || die "--spec FILE is required (the project brief, verbatim)"
@@ -166,7 +164,6 @@ cmd_init() {
     # The project id tags every memory this run writes to the librarian store.
     local title; title=$(grep -m1 '^# ' "$spec" | sed 's/^# *//' | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-' | sed 's/^-*//; s/-*$//; s/--*/-/g' | cut -c1-32)
     printf 'p-%s-%s\n' "$(date -u +%Y%m%d)" "${title:-project}" > "$pp/project_id"
-    cp "$TEMPLATE/probes.md" "$pp/probes.md" 2>/dev/null || true
     cp -R "$pp/charter.md" "$pp/spec.md" "$pp/roles" "$pp/reference" "$pd/"
     # Files read-only, directories left writable: the guard must be able to
     # restore a deleted role, and a human must be able to remove the project.
@@ -193,7 +190,7 @@ cmd_init() {
         local -a seed_args=(); (( existed )) || seed_args=(--seed "$TEMPLATE/identity-core.md")
         if IDENTITY_DIR="$id" IDENTITY_NAME="$name" LIBRARIAN_SRC="$APP/librarian/src" librarian -q init \
             ${seed_args[@]+"${seed_args[@]}"} \
-            --import-skills "$pd/skills" --import-addenda "$pd/addenda.md" --project "$(cat "$pp/project_id")"; then
+            --import-skills "$pd/skills" --project "$(cat "$pp/project_id")"; then
             for r in ${prefs[@]+"${prefs[@]}"}; do
                 IDENTITY_DIR="$id" LIBRARIAN_SRC="$APP/librarian/src" librarian -q import --preferences "$r" \
                     --tags "team:$(basename "${r%.*}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-')" --author human || true
@@ -230,7 +227,7 @@ EOF
         grep -vE '^(PROJECT_DAILY_TOKENS|PROJECT_TOTAL_TOKENS|PROJECT_DAILY_USD|PROJECT_TOTAL_USD|PROJECT_TIME_SCALE|LIBRARIAN_SRC|LIBRARIAN_PACK_TOKENS|LIBRARIAN_MEMORY)=' "$id/.env" || true
         printf 'PROJECT_DAILY_TOKENS=%s\n' "$tokens"
         printf 'LIBRARIAN_SRC=%s\n' "$APP/librarian/src"
-        printf 'LIBRARIAN_PACK_TOKENS=%s\n' "${LIBRARIAN_PACK_TOKENS:-5000}"
+        printf 'LIBRARIAN_PACK_TOKENS=%s\n' "${LIBRARIAN_PACK_TOKENS:-2000}"
         if [[ -n "$total" ]]; then printf 'PROJECT_TOTAL_TOKENS=%s\n' "$total"; fi
         if [[ -n "$dusd" ]]; then printf 'PROJECT_DAILY_USD=%s\n' "$dusd"; fi
         if [[ -n "$tusd" ]]; then printf 'PROJECT_TOTAL_USD=%s\n' "$tusd"; fi
@@ -244,7 +241,7 @@ EOF
         printf '  budget:   %s tokens per 24h, cache reads counted at a tenth (PROJECT_DAILY_TOKENS in %s/.env)\n' "$tokens" "$id"
     fi
     [[ -n "$total" ]] && printf '  run cap:  %s tokens in total\n' "$total"
-    [[ "$scale" != 1 ]] && printf '  clock:    %sx real time: the %s-day run takes %s real hours\n' "$scale" "$days" $(( days * 24 / scale ))
+    [[ "$scale" != 1 ]] && printf '  clock:    %sx real time: the %s-day run takes %s real hours\n' "$scale" "$days" "$(awk -v d="$days" -v k="$scale" 'BEGIN { printf "%.1f", d * 24 / k }')"
     printf '  ends:     %s (move it with: librarian-project deadline %s --days N)\n' "$(date -d "@$end_at" '+%Y-%m-%d %H:%M %Z' 2>/dev/null || date -r "$end_at" '+%Y-%m-%d %H:%M %Z')" "$name"
     printf 'Restart the mind to pick it up: persona %s stop; persona %s start\n' "$name" "$name"
 }
@@ -325,38 +322,10 @@ _lib_on() { command -v librarian >/dev/null 2>&1 && [[ -f "$ID/librarian/store.s
 cmd_banner() {
     _load "${1:-}"; _project_question_banner brief
     if _lib_on; then
-        local n; n=$(_lib queue list 2>/dev/null | jq 'length' 2>/dev/null) || n=0
-        (( n > 0 )) && printf '!!! Librarian check-in queue: %s item(s) need a human — librarian-project queue %s\n' "$n" "$IDENTITY_NAME"
+        local n; n=$(_lib shared 2>/dev/null | jq '[.[] | select(.conflict)] | length' 2>/dev/null) || n=0
+        (( n > 0 )) && printf '!!! Shared values in conflict across briefs: %s row(s) — librarian-project librarian %s --text shared\n' "$n" "$IDENTITY_NAME"
     fi
     return 0
-}
-
-# Human decisions on the librarian's check-in queue (core identity proposals,
-# refused working edits, disputes, new area: tags). Decisions are applied
-# with author human and committed to project/ like an answer.
-cmd_queue() {
-    local ident="${1:-}" action="${2:-list}" qid="${3:-}"; shift $(( $# > 3 ? 3 : $# ))
-    _load "$ident"; _lib_on || die "no librarian store for $IDENTITY_NAME"
-    case "$action" in
-        list) _lib --text queue list --status "${qid:-pending}" ;;
-        approve|reject)
-            [[ -n "$qid" ]] || die "usage: librarian-project queue <identity> approve|reject <id> [note]"
-            _lib --text queue "$action" "$qid" ${1:+--note "$*"}
-            _lib -q export --project-dir "$PD" --project "$(cat "$ID/project-pristine/project_id" 2>/dev/null)" || true
-            if [[ -d "$PD/.git" ]]; then
-                git -C "$PD" add -A >/dev/null 2>&1 || true
-                git -C "$PD" -c user.name=human -c user.email=human@librarian.local commit -q -m "human ${action}d librarian queue item $qid" >/dev/null 2>&1 || true
-            fi ;;
-        *) die "usage: librarian-project queue <identity> [list|approve|reject] [id] [note]" ;;
-    esac
-}
-
-# Identity consistency probes: answers from the agent's own model with only
-# its identity nodes loaded, compared with the previous run.
-cmd_probe() {
-    _load "${1:-}"; _lib_on || die "no librarian store for $IDENTITY_NAME"
-    local set="$ID/project-pristine/probes.md"; [[ -f "$set" ]] || set="$TEMPLATE/probes.md"
-    _lib --text probe run --set "$set" --auto-revert
 }
 
 # A stated group value, the human's own words, as an active preference node.
@@ -483,7 +452,7 @@ cmd_status() {
     if _lib_on; then
         local st; st=$(_lib stats --project "$(cat "$ID/project-pristine/project_id" 2>/dev/null)" 2>/dev/null) || st=""
         if [[ -n "$st" ]]; then
-            printf 'librarian: %s\n' "$(printf '%s' "$st" | jq -r '"\(.nodes.total) nodes (\(.nodes.by_status.active // 0) active, \(.nodes.by_status.probationary // 0) probationary); packs \(.packs); precision \(.pack_precision // "n/a"); queue \(.queue_pending); captures open \(.pending_capture)"' 2>/dev/null)"
+            printf 'librarian: %s\n' "$(printf '%s' "$st" | jq -r '"\(.nodes.total) nodes (\(.nodes.by_status.active // 0) active, \(.nodes.by_status.probationary // 0) probationary); packs \(.packs); precision \(.pack_precision // "n/a"); shared values \(.shared_values.facts) (\(.shared_values.conflicts) in conflict); captures open \(.pending_capture)"' 2>/dev/null)"
         fi
     else
         printf 'librarian: no store\n'
@@ -502,10 +471,8 @@ case "${1:-}" in
     banner) shift; cmd_banner "$@" ;;
     deadline) shift; cmd_deadline "$@" ;;
     update-pristine) shift; cmd_update_pristine "$@" ;;
-    queue) shift; cmd_queue "$@" ;;
-    probe) shift; cmd_probe "$@" ;;
     preferences) shift; cmd_preferences "$@" ;;
     librarian) shift; cmd_librarian "$@" ;;
     ""|-h|--help|help) sed -n '3,40p' "$0" | sed 's/^# \{0,1\}//' ;;
-    *) die "unknown command '$1' (init, status, questions, answer, banner, deadline, update-pristine, queue, probe, preferences, librarian)" ;;
+    *) die "unknown command '$1' (init, status, questions, answer, banner, deadline, update-pristine, preferences, librarian)" ;;
 esac

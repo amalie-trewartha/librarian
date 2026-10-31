@@ -89,15 +89,11 @@ run "show <id>" 0 show "$DEC"
 run "fetching the pack's request id is a clean not-found" 4 fetch REQ-RECIPES
 
 # ── review and identity (daily and weekly rituals) ───────────────────────────
-run "daily ritual: dispute <id> --reason" 0 dispute "$DEC" --reason "LODES 2021 is the latest year; the body says 2022"
-run "identity list --working" 0 identity list --working
 # 5 = refused (a bound or a core conflict), a valid outcome; a usage error is not.
-run "identity edit recipe" "0 5" identity edit --summary "I script data probes before deciding" \
-    --body "I script data probes for every candidate before deciding." --occasion weekly \
-    --reason "week 1 probe took 3 wakes" --episodes "$DEC"
-run "identity propose" 0 identity propose --summary "I state uncertainty as ranges." --body "I state uncertainty as ranges."
-run "suggestion list" 0 suggestion list
-run "suggestion respond <id> accept parses (unknown id is not-found)" 4 suggestion respond NOPE accept
+run "shared ledger recipe: librarian shared" 0 shared
+run "shared quantity recipe: propose fact --tags shared:<q>" 0 propose --type fact \
+    --summary "The 2035 light-duty fleet is 61,200 vehicles" --tags shared:fleet-2035 area:modeling project:$P --body "Read from model/results.json (run 2026-10-13); checked against ACS B08201 vehicle counts."
+run "capture list recipe" 0 capture list
 run "weekly ritual: stats --week 01" 0 stats --week 01
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

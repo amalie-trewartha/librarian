@@ -1261,6 +1261,13 @@ docker_setup() {
             ;;
     esac
 
+    # SHELLM_SCRATCH_DIR: a host directory mounted as the container's /tmp, so a
+    # run's scratch lives on a filesystem the operator can cap (a loop-mounted
+    # image per kit). Two 2026-10 trials ended when container /tmp filled the
+    # VM's root disk.
+    if [[ -n "${SHELLM_SCRATCH_DIR:-}" && -d "$SHELLM_SCRATCH_DIR" ]]; then
+        extra_mounts+=(-v "$SHELLM_SCRATCH_DIR:/tmp")
+    fi
     _SHELLM_CONTAINER=$(docker run -d \
         "${docker_run_flags[@]}" \
         "${extra_mounts[@]+"${extra_mounts[@]}"}" \
